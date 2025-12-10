@@ -1,0 +1,31 @@
+cubits:
+  - x1
+  - x2
+  - x3
+  - x4
+  ...
+
+gates:
+  - name: h
+    depth: 0.1 # depth between 0 (the inputs) and 1 (the output)
+    inputs:
+      - x1
+
+  - name: r
+    depth: 0.15
+    inputs:
+      - x2
+    parameters:
+      theta: 2.3923
+      phi: 1.923
+
+  - name: cnot
+    depth: 0.2
+    inputs:
+      - x3
+      - x4
+    target:
+      - x3 # could also be x4
+
+  ...
+
