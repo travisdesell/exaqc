@@ -8,7 +8,15 @@ from src.circuits.gate_specifications import gate_specifications
 
 
 @pytest.mark.parametrize("gate_method_name", gate_specifications)
-def test_gate_specification(gate_method_name):
+def test_gate_specification(gate_method_name: str):
+    '''
+    This uses python reflection to ensure that the gate specfications provided
+    (gate method names, qubit and parameter arguments) are correct.
+
+    Args:
+        gate_method_name: is the qiskit gate method name that can be applied
+            to the QuantumCircuit object.
+    '''
     print(f"testing gate: {gate_method_name}, type: {type(gate_method_name)}")
 
     specification = gate_specifications[gate_method_name]
