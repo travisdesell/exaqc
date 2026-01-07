@@ -1,215 +1,228 @@
+'''
+The following dict provides information about all the possible gates that can
+be applied to a QuantumCircuit.
 
+The key for an entry is the method name to be used on the QuantumCircuit object.
+ * 'name' for an entry is a long form name for the gate.
+ * if 'parameters' is present, it specifies the parameter names taken by the gate
+    method. These need to be in the same order that the gate method accepts these
+    arguments (which typically come before any qubit arguments).
+ * 'qubits' specfies the qubit argument names. These need to be in the same order
+    as the game method that accepts them (and they typically come after any
+    qubit arguments).
+'''
 
 gate_specifications = {
     'ccx': {
         'name' : 'Toffoli',
-        'n_qubits' : 3,
+        'qubits' : ['control_qubit1', 'control_qubit2', 'target_qubit'],
     },
 
     'ccz': {
         'name' : 'Symmetric',
-        'n_qubits' : 3,
+        'qubits' : ['control_qubit1', 'control_qubit2', 'target_qubit'],
     },
 
     'ch': {
         'name' : 'Controlled Hadamard',
-        'n_qubits' : 2,
+        'qubits' : ['control_qubit', 'target_qubit'],
     },
 
     'cp': {
         'name' : 'Controlled Phase',
-        'n_qubits' : 2,
         'parameters' : ['theta'],
+        'qubits' : ['control_qubit', 'target_qubit'],
     },
 
     'crx': {
         'name' : 'Controlled RX',
-        'n_qubits' : 2,
         'parameters' : ['theta'],
+        'qubits' : ['control_qubit', 'target_qubit'],
     },
 
     'cry': {
         'name' : 'Controlled RY',
-        'n_qubits' : 2,
         'parameters' : ['theta'],
+        'qubits' : ['control_qubit', 'target_qubit'],
     },
 
     'crz': {
         'name' : 'Controlled RZ',
-        'n_qubits' : 2,
         'parameters' : ['theta'],
+        'qubits' : ['control_qubit', 'target_qubit'],
     },
 
     'cs': {
         'name' : 'Controlled S',
-        'n_qubits' : 2,
+        'qubits' : ['control_qubit', 'target_qubit'],
     },
 
     'csdg': {
         'name' : 'Controlled S^dagger',
-        'n_qubits' : 2,
+        'qubits' : ['control_qubit', 'target_qubit'],
     },
 
     'cswap': {
         'name' : 'Controlled SWAP (Fredkin)',
-        'n_qubits' : 3,
+        'qubits' : ['control_qubit', 'target_qubit1', 'target_qubit2'],
     },
 
     'csx': {
         'name' : 'Controlled sqrt X',
-        'n_qubits' : 2,
+        'qubits' : ['control_qubit', 'target_qubit'],
     },
 
     'cu': {
         'name' : 'Controlled U',
-        'n_qubits' : 2,
         'parameters' : ['theta', 'phi', 'lam', 'gamma'],
+        'qubits' : ['control_qubit', 'target_qubit'],
     },
 
     'cx': {
         'name' : 'Controlled X',
-        'n_qubits' : 2,
+        'qubits' : ['control_qubit', 'target_qubit'],
     },
 
     'cy': {
         'name' : 'Controlled Y',
-        'n_qubits' : 2,
+        'qubits' : ['control_qubit', 'target_qubit'],
     },
 
     'cz': {
         'name' : 'Controlled Z',
-        'n_qubits' : 2,
+        'qubits' : ['control_qubit', 'target_qubit'],
     },
 
     'dcx': {
         'name' : 'Double CNOT',
-        'n_qubits' : 2,
+        'qubits' : ['qubit1', 'qubit2'],
     },
 
     'ecr': {
         'name' : 'Echoed Cross-Resonance',
-        'n_qubits' : 2,
+        'qubits' : ['qubit1', 'qubit2'],
     },
 
     'h': {
         'name' : 'Hadamard',
-        'n_qubits' : 1,
+        'qubits' : ['qubit'],
     },
 
     'id': {
         'name' : 'Identity',
-        'n_qubits' : 1,
+        'qubits' : ['qubit'],
     },
 
     'iswap': {
         'name' : 'iSWAP',
-        'n_qubits' : 2,
+        'qubits' : ['qubit1', 'qubit2'],
     },
 
     'mcp': {
         'needs_validaton' : True,
         'name' : 'Multi-Controlled Phase',
-        'n_qubits' : 0,
         'parameters' : ['lam'],
+        'qubits' : ['control_qubits...', 'target_qubit'],
     },
 
     'mcrx': {
         'needs_validaton' : True,
         'name' : 'Multi-Controlled X Rotation',
-        'n_qubits' : 0,
         'parameters' : ['theta'],
+        'qubits' : ['q_controls...', 'q_target'],
     },
 
     'mcry': {
         'needs_validaton' : True,
         'name' : 'Multi-Controlled Y Rotation',
-        'n_qubits' : 0,
         'parameters' : ['theta'],
+        'qubits' : ['q_controls...', 'q_target'],
     },
 
     'mcrz': {
         'needs_validaton' : True,
         'name' : 'Multi-Controlled Z Rotation',
-        'n_qubits' : 0,
         'parameters' : ['theta'],
+        'qubits' : ['q_controls...', 'q_target'],
     },
 
     'mcx': {
         'needs_validaton' : True,
-        'name' : 'Multi-Controlled Z Rotation',
-        'n_qubits' : 0,
+        'name' : 'Multi-Controlled X',
         'parameters' : ['theta'],
+        'qubits' : ['control_qubits...', 'target_qubit'],
     },
 
     'ms': {
         'needs_validaton' : True,
         'name' : 'Mølmer–Sørensen',
-        'n_qubits' : 0,
+        'parameters' : ['theta'],
+        'qubits' : ['qubits...'],
     },
 
     'p': {
         'name' : 'Phase',
-        'n_qubits' : 1,
         'parameters' : ['theta'],
+        'qubits' : ['qubit'],
     },
 
     'pauli': {
         'needs_validaton' : True,
         'name' : 'Pauli',
-        'n_qubits' : 1,
         'parameters' : ['pauli_string'],
+        'qubits' : ['qubits...'],
     },
 
     'r': {
         'name' : 'R',
-        'n_qubits' : 1,
         'parameters' : ['theta', 'phi'],
+        'qubits' : ['qubit'],
     },
 
     'rcccx': {
         'name' : 'Simplified 3-Controlled Toffoli',
-        'n_qubits' : 4,
+        'qubits' : ['control_qubit1', 'control_qubit2', 'control_qubit3', 'target_qubit'],
     },
 
     'rccx': {
         'name' : 'Simplified Toffoli (Margolus)',
-        'n_qubits' : 3,
+        'qubits' : ['control_qubit1', 'control_qubit2', 'target_qubit'],
     },
 
     'rv': {
         'name' : 'RV',
-        'n_qubits' : 1,
         'parameters' : ['vx', 'vy', 'vz'],
+        'qubits' : ['qubit'],
     },
 
     'rx': {
         'name' : 'RX',
-        'n_qubits' : 1,
         'parameters' : ['theta'],
+        'qubits' : ['qubit'],
     },
 
     'rxx': {
         'name' : 'RXX',
-        'n_qubits' : 2,
         'parameters' : ['theta'],
+        'qubits' : ['qubit1', 'qubit2'],
     },
 
     'ry': {
         'name' : 'RY',
-        'n_qubits' : 1,
         'parameters' : ['theta'],
+        'qubits' : ['qubit'],
     },
 
     'ryy': {
         'name' : 'RYY',
-        'n_qubits' : 2,
         'parameters' : ['theta'],
+        'qubits' : ['qubit1', 'qubit2'],
     },
 
     'rz': {
         'name' : 'RZ',
-        'n_qubits' : 1,
         'parameters' : ['phi'],
+        'qubits' : ['qubit'],
     },
 
     'rzx': {
@@ -220,64 +233,64 @@ gate_specifications = {
 
     'rzz': {
         'name' : 'RZZ',
-        'n_qubits' : 2,
         'parameters' : ['theta'],
+        'qubits' : ['qubit1', 'qubit2'],
     },
 
     's': {
         'name' : 'S',
-        'n_qubits' : 1,
+        'qubits' : ['qubit'],
     },
 
     'sdg': {
         'name' : 'S-adjoint',
-        'n_qubits' : 1,
+        'qubits' : ['qubit'],
     },
 
     'swap': {
         'name' : 'SWAP',
-        'n_qubits' : 2,
+        'qubits' : ['qubit1', 'qubit2'],
     },
 
     'sx': {
         'name' : 'sqrt X',
-        'n_qubits' : 1,
+        'qubits' : ['qubit'],
     },
 
     'sxdg': {
         'name' : 'inverse sqrt X',
-        'n_qubits' : 1,
+        'qubits' : ['qubit'],
     },
 
     't': {
         'name' : 'T',
-        'n_qubits' : 1,
+        'qubits' : ['qubit'],
     },
 
     'tdg': {
         'name' : 'T-adjoint',
-        'n_qubits' : 1,
+        'qubits' : ['qubit'],
     },
 
     'u': {
         'name' : 'U',
-        'n_qubits' : 1,
         'parameters' : ['theta', 'phi', 'lam'],
+        'qubits' : ['qubit'],
     },
 
     'x': {
         'name' : 'X',
-        'n_qubits' : 1,
+        'qubits' : ['qubit'],
     },
 
     'y': {
         'name' : 'Y',
-        'n_qubits' : 1,
+        'qubits' : ['qubit'],
     },
 
     'z': {
         'name' : 'z',
-        'n_qubits' : 1,
+        'qubits' : ['qubit'],
     },
 
 }

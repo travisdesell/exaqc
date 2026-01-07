@@ -38,6 +38,17 @@ class Gate:
         self.qubits = qubits
         self.parameters = parameters
 
+        self.specs = gate_specifications[self.method_name]
+
+        # the number of parameters and number of qubits provided need to be the
+        # same as in the specifications
+        assert len(self.qubits) == len(self.specs['qubits'])
+
+        if 'parameters' not in self.specs:
+            assert len(self.parameters) == 0
+        else:
+            assert len(self.parameters) == len(self.specs['parameters'])
+
         self.enabled = True
 
     def add_to_circuit(self, registers: dict[str, QuantumRegister], circuit: QuantumCircuit):
@@ -53,18 +64,18 @@ class Gate:
 
         gate_method = getattr(circuit, self.method_name)
 
-        qubit_args = []
+        qubit_args = {}
 
-        for qubit in self.qubits:
+        for i, qubit in enumerate(self.qubits):
             qubit_name = qubit[0]
             qubit_index = qubit[1]
-            print(f"\tappending qubit {qubit_name}[{qubit_index}]")
-            if qubit_index is None:
-                # if the index is None the method takes the register instead
-                qubit_args.append(registers[qubit_name])
-            else:
-                qubit_args.append(registers[qubit_name][qubit_index])
+            argument_name = self.specs['qubits'][i]
+            print(f"\tsetting argument '{argument_name}' = '{qubit_name}[{qubit_index}]'")
 
-        gate_method(*qubit_args, **self.parameters)
+            # assign the values for the qubit arguments to the method
+            # name
+            qubit_args[argument_name] = registers[qubit_name][qubit_index]
+
+        gate_method(**self.parameters, **qubit_args)
 
 

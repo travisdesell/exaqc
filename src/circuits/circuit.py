@@ -64,13 +64,12 @@ class CircuitGenome:
         for gate in self.gates:
             gate.add_to_circuit(quantum_registers, circuit)
 
-        for classical_register in classical_registers:
-            circuit.measure(classical_register)
+        for name, classical_register in classical_registers.items():
+            circuit.measure(quantum_registers[name], classical_register)
 
         return circuit
 
 
-'''
 qc = CircuitGenome(genome_number=1, registers={"a" : 3, "b" : 5})
 
 qc.add_gate(depth=0.05, method_name='x', qubits=[('a', 1)])
@@ -78,8 +77,8 @@ qc.add_gate(depth=0.10, method_name='x', qubits=[('b', 1)])
 qc.add_gate(depth=0.15, method_name='x', qubits=[('b', 2)])
 qc.add_gate(depth=0.20, method_name='x', qubits=[('b', 4)])
 
-qc.add_gate(depth=0.25, method_name='h', qubits=[('a', None)])
-qc.add_gate(depth=0.30, method_name='h', qubits=[('b', None)])
+qc.add_gate(depth=0.25, method_name='h', qubits=[('a', 0)])
+qc.add_gate(depth=0.30, method_name='h', qubits=[('b', 1)])
 
 qc.add_gate(depth=0.31, method_name='rx', qubits=[('b', 1)], parameters={'theta': 0.2})
 
@@ -94,7 +93,6 @@ circuit = qc.generate_qiskit_circuit()
 circuit.draw(output="mpl")
 
 plt.show()
-'''
 
 
 # Draw a new circuit with barriers and more registers
