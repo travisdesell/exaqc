@@ -119,42 +119,42 @@ gate_specifications = {
     },
 
     'mcp': {
-        'needs_validaton' : True,
+        'needs_validation' : True,
         'name' : 'Multi-Controlled Phase',
         'parameters' : ['lam'],
         'qubits' : ['control_qubits...', 'target_qubit'],
     },
 
     'mcrx': {
-        'needs_validaton' : True,
+        'needs_validation' : True,
         'name' : 'Multi-Controlled X Rotation',
         'parameters' : ['theta'],
         'qubits' : ['q_controls...', 'q_target'],
     },
 
     'mcry': {
-        'needs_validaton' : True,
+        'needs_validation' : True,
         'name' : 'Multi-Controlled Y Rotation',
         'parameters' : ['theta'],
         'qubits' : ['q_controls...', 'q_target'],
     },
 
     'mcrz': {
-        'needs_validaton' : True,
+        'needs_validation' : True,
         'name' : 'Multi-Controlled Z Rotation',
         'parameters' : ['theta'],
         'qubits' : ['q_controls...', 'q_target'],
     },
 
     'mcx': {
-        'needs_validaton' : True,
+        'needs_validation' : True,
         'name' : 'Multi-Controlled X',
         'parameters' : ['theta'],
         'qubits' : ['control_qubits...', 'target_qubit'],
     },
 
     'ms': {
-        'needs_validaton' : True,
+        'needs_validation' : True,
         'name' : 'Mølmer–Sørensen',
         'parameters' : ['theta'],
         'qubits' : ['qubits...'],
@@ -167,7 +167,7 @@ gate_specifications = {
     },
 
     'pauli': {
-        'needs_validaton' : True,
+        'needs_validation' : True,
         'name' : 'Pauli',
         'parameters' : ['pauli_string'],
         'qubits' : ['qubits...'],
@@ -227,8 +227,8 @@ gate_specifications = {
 
     'rzx': {
         'name' : 'RZX',
-        'n_qubits' : 2,
         'parameters' : ['theta'],
+        'qubits' : ['qubit1', 'qubit2'],
     },
 
     'rzz': {
