@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Callable, Dict, Optional, Any, List, Tuple, Union
-from utils.losses import *
+from src.utils.losses import *
 
 import torch
 

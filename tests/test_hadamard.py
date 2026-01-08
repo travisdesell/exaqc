@@ -1,9 +1,13 @@
 import pytest
 import pennylane as qml
 import torch
+import math
 
 from src.trainer import QuantumStateTrainer
-from src.utils.losses import fidelity
+from src.utils.losses import fidelity, objective_one_minus_fidelity_pl, qiskit_to_pl_state_forward
+
+from qiskit import QuantumCircuit
+from qiskit.circuit import Parameter
 
 torch.set_default_dtype(torch.float64)
 
@@ -108,3 +112,82 @@ def test_03_trainer_runs_and_logs(circuits):
 
     last_fid = logs[-1].metric["fidelity"]
     assert last_fid >= 0.90, f"Final fidelity too low in smoke test: {last_fid}"
+
+
+def test_04_train_parameterized_qiskit_circuit_as_hadamard_using_fidelity():
+    """Train and test a parameterized Qiskit circuit to behave like a Hadamard gate.
+
+    This test reuses the previously-declared helpers/loss style:
+      - qiskit_to_pl_state_forward(...)
+      - objective_one_minus_fidelity_pl(...)
+
+    The circuit is built in Qiskit (a single U gate with 3 parameters), imported into
+    PennyLane for execution/differentiation, trained with Torch/Adam, and evaluated
+    via fidelity on the two basis inputs.
+
+    Assertions:
+      - Fidelity(H|0>, model(|0>)) > 0.999
+      - Fidelity(H|1>, model(|1>)) > 0.999
+    """
+    torch.manual_seed(0)
+
+    # --- Targets: H|0> = |+>, H|1> = |-> (global phase irrelevant for fidelity) ---
+    inv_sqrt2 = 1.0 / math.sqrt(2.0)
+    target_plus = torch.tensor([inv_sqrt2 + 0.0j, inv_sqrt2 + 0.0j], dtype=torch.complex64)
+    target_minus = torch.tensor([inv_sqrt2 + 0.0j, -inv_sqrt2 + 0.0j], dtype=torch.complex64)
+
+    # --- Parameterized 1-qubit Qiskit circuit ---
+    theta = Parameter("theta")
+    phi = Parameter("phi")
+    lam = Parameter("lam")
+
+    qc = QuantumCircuit(1)
+    qc.u(theta, phi, lam, 0)
+
+    # --- Trainable torch parameters (PennyLane binds by parameter name) ---
+    t_theta = torch.randn((), dtype=torch.float32, requires_grad=True)
+    t_phi = torch.randn((), dtype=torch.float32, requires_grad=True)
+    t_lam = torch.randn((), dtype=torch.float32, requires_grad=True)
+
+    opt = torch.optim.Adam([t_theta, t_phi, t_lam], 
+                           weight_decay=1e-4, 
+                           lr=0.2)
+
+    # --- Training loop using the previously-defined fidelity objective helper ---
+    for _step in range(250):
+        opt.zero_grad(set_to_none=True)
+
+        params = {theta: t_theta, phi: t_phi, lam: t_lam}
+
+        loss0, _ = objective_one_minus_fidelity_pl(
+            qc,
+            target_state=target_plus,
+            params=params,
+            input_bits="0",
+        )
+        loss1, _ = objective_one_minus_fidelity_pl(
+            qc,
+            target_state=target_minus,
+            params=params,
+            input_bits="1",
+        )
+
+        loss = 0.5 * (loss0 + loss1)
+        loss.backward()
+        opt.step()
+
+    # --- Evaluation (reuse forward helper to compute output states, then fidelity) ---
+    # forward = qiskit_to_pl_state_forward(qc, input_bits="0", shots=None)
+    with torch.no_grad():
+        params_eval = {theta: t_theta, phi: t_phi, lam: t_lam}
+
+        # Evaluate on |0>
+        psi0 = qiskit_to_pl_state_forward(qc, input_bits="0", shots=None)(params_eval)
+        fid0 = fidelity(target_plus, psi0).item()
+
+        # Evaluate on |1>
+        psi1 = qiskit_to_pl_state_forward(qc, input_bits="1", shots=None)(params_eval)
+        fid1 = fidelity(target_minus, psi1).item()
+
+    assert fid0 > 0.999, f"Fidelity on |0> too low: {fid0:.6f}"
+    assert fid1 > 0.999, f"Fidelity on |1> too low: {fid1:.6f}"
