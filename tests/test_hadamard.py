@@ -131,6 +131,8 @@ def test_04_train_parameterized_qiskit_circuit_as_hadamard_using_fidelity():
     """
     torch.manual_seed(0)
 
+    train_hparams = {"shots": None}
+
     # --- Targets: H|0> = |+>, H|1> = |-> (global phase irrelevant for fidelity) ---
     inv_sqrt2 = 1.0 / math.sqrt(2.0)
     target_plus = torch.tensor([inv_sqrt2 + 0.0j, inv_sqrt2 + 0.0j], dtype=torch.complex64)
@@ -164,12 +166,14 @@ def test_04_train_parameterized_qiskit_circuit_as_hadamard_using_fidelity():
             target_state=target_plus,
             params=params,
             input_bits="0",
+            train_hparams=train_hparams,
         )
         loss1, _ = objective_one_minus_fidelity_pl(
             qc,
             target_state=target_minus,
             params=params,
             input_bits="1",
+            train_hparams=train_hparams,
         )
 
         loss = 0.5 * (loss0 + loss1)

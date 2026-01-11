@@ -148,6 +148,7 @@ def objective_one_minus_fidelity_pl(
     target_state: torch.Tensor,
     params: Dict[Any, Any],
     input_bits: Optional[InputState] = None,
+    train_hparams: Optional[Dict[str, Any]] = None,
 ) -> Tuple[torch.Tensor, QuantumCircuit]:
     """
     Computes a fidelity-based loss for a Qiskit circuit using PennyLane.
@@ -163,6 +164,7 @@ def objective_one_minus_fidelity_pl(
             ``(2**n_qubits,)``.
         params: Dictionary mapping Qiskit parameters to numerical values.
             Values may be torch tensors to enable gradient-based training.
+        train_hparams: Dictionary of training hyperparameters.
         input_bits: Optional computational-basis input state for the
             forward pass.
 
@@ -219,6 +221,7 @@ def objective_state_angle_pl(
     params: Dict[Any, Any],
     input_bits: Optional[InputState] = None,
     eps: float = 1e-12,
+    train_hparams: Optional[Dict[str, Any]] = None,
 ) -> Tuple[torch.Tensor, QuantumCircuit]:
     """
     Compute the Fubini–Study (angular) distance between quantum states.
@@ -238,6 +241,7 @@ def objective_state_angle_pl(
         params: Dictionary mapping Qiskit parameters to numerical values.
         input_bits: Optional computational-basis input state.
         eps: Small numerical constant to avoid invalid ``arccos`` inputs.
+        train_hparams: Dictionary of training hyperparameters.
 
     Returns:
         A tuple ``(loss, qc)`` where:
@@ -290,6 +294,7 @@ def objective_total_variation_pl(
     params: Dict[Any, Any],
     input_bits: Optional[InputState] = None,
     eps: float = 1e-12,
+    train_hparams: Optional[Dict[str, Any]] = None,
 ) -> Tuple[torch.Tensor, QuantumCircuit]:
     """
     Compute total variation distance between output and target distributions.
@@ -307,6 +312,7 @@ def objective_total_variation_pl(
         params: Dictionary mapping Qiskit parameters to numerical values.
         input_bits: Optional computational-basis input state.
         eps: Small numerical constant for normalization safety.
+        train_hparams: Dictionary of training hyperparameters.
 
     Returns:
         A tuple ``(loss, qc)`` where:
@@ -358,6 +364,7 @@ def objective_kl_divergence_pl(
     params: Dict[Any, Any],
     input_bits: Optional[InputState] = None,
     eps: float = 1e-12,
+    train_hparams: Optional[Dict[str, Any]] = None,
 ) -> Tuple[torch.Tensor, QuantumCircuit]:
     """
     Compute the Kullback–Leibler divergence between target and output distributions.
@@ -374,6 +381,7 @@ def objective_kl_divergence_pl(
         params: Dictionary mapping Qiskit parameters to numerical values.
         input_bits: Optional computational-basis input state.
         eps: Small numerical constant for numerical stability.
+        train_hparams: Dictionary of training hyperparameters.
 
     Returns:
         A tuple ``(loss, qc)`` where:
@@ -420,29 +428,66 @@ def objective_obs_mse_pl(
     *,
     target_obs: torch.Tensor,
     params: Dict[Any, Any],
-    forward_fn,
+    forward_fn=None,
+    train_hparams: Optional[Dict[str, Any]] = None,
+    input_bits: Optional[InputState] = None,
 ) -> Tuple[torch.Tensor, QuantumCircuit]:
     """
     Compute mean-squared error between observable outputs.
 
-    This objective is intended for circuits whose forward pass returns
-    expectation values (e.g. ⟨Z⟩, ⟨ZZ⟩), rather than full statevectors.
+    If ``forward_fn`` is not provided, this function builds a PennyLane QNode
+    internally from the Qiskit circuit and the observables specified in
+    ``train_hparams["observables"]``.
 
     Args:
         qc: Qiskit ``QuantumCircuit`` defining the quantum model.
-        target_obs: Target observable values tensor.
+        target_obs: Target observable values tensor (shape must match forward output).
         params: Dictionary mapping Qiskit parameters to numerical values.
-        forward_fn: Callable performing the forward pass and returning
-            a tensor of observable values.
+        forward_fn: Optional callable performing the forward pass and returning
+            a tensor of observable expectation values.
+        train_hparams: Dictionary of training hyperparameters. If ``forward_fn`` is None,
+            this must include:
+              - "observables": list of PennyLane observables to measure
+            Optional keys:
+              - "shots": Optional[int]
+              - "diff_method": str, e.g. "parameter-shift" (default) or "backprop"
+        input_bits: Optional computational-basis input state for the forward pass.
 
     Returns:
         A tuple ``(loss, qc)`` where:
           - ``loss`` is the mean-squared error
           - ``qc`` is the original Qiskit circuit
     """
+    train_hparams = train_hparams or {}
+
+    if forward_fn is None:
+        observables = train_hparams.get("observables", None)
+        if observables is None:
+            raise ValueError(
+                "objective_obs_mse_pl requires either forward_fn or train_hparams['observables']."
+            )
+
+        shots = train_hparams.get("shots", None)
+        diff_method = train_hparams.get("diff_method", "parameter-shift")
+
+        n_qubits = qc.num_qubits
+        qfunc = qml.from_qiskit(qc)
+        dev = qml.device("default.qubit", wires=n_qubits, shots=shots)
+
+        @qml.qnode(dev, interface="torch", diff_method=diff_method)
+        def forward_fn(local_params: Dict[Any, Any]):
+            if input_bits is not None:
+                if isinstance(input_bits, str):
+                    bits = [int(b) for b in input_bits]
+                else:
+                    bits = list(map(int, input_bits))
+                qml.BasisState(torch.tensor(bits, dtype=torch.int64), wires=range(n_qubits))
+
+            kwargs = {getattr(k, "name", str(k)): v for k, v in (local_params or {}).items()}
+            qfunc(wires=range(n_qubits), **kwargs)
+
+            return [qml.expval(obs) for obs in observables]
+
     psi_obs = forward_fn(params)
-
-    phi = target_obs.to(dtype=psi_obs.dtype, device=psi_obs.device)
-    loss = torch.mean((psi_obs - phi) ** 2)
-
+    loss = loss_obs_mse(target_obs, psi_obs)
     return loss, qc
