@@ -1,6 +1,7 @@
 from qiskit import QuantumCircuit
 
 from src.circuits.gate_specifications import gate_specifications
+from src.evolution.innovation import innovation_number_generator
 
 
 
@@ -12,27 +13,31 @@ class Gate:
     circuit.
     """
 
-    def __init__(self, innovation_number: int, depth: float, method_name: str, qubits: list[tuple[str, int]], parameters: dict[str, float] = {}):
+    def __init__(self, depth: float, method_name: str, qubits: list[tuple[str, int]], parameters: dict[str, float] = {}, innovation_number: int = None):
         """
         Initializes a gate element in an evolved quantum circuit.
 
         Args:
-            innovation_number: is a unique number representing this gate across every evolved
-                quantum circuit it appears in
             depth: is how deep in the circuit this gate appears, this will be a value
-                greater than 0 and less than 1, as 0 represents the inputs and 1
-                represents the outputs.
+                greater than 0 and less than 1, with 0 being closest to the input and 1
+                being closest to the output.
             method_name: is the method name used by qiskit to add the gate to a quantum circuit
             qubits: a list of qubits to form the arguments to the gate method name, each is a tuple with a string for the input
                 register name and then the index. if the gate takes the whole register (and not individual qubits) then the second
                 value will be None (e.g., for a Hadamard gate).
             parameters: is a dict where the keys are the parameter names and the values are the values
+            innovation_number: is a unique number representing this gate across every evolved
+                quantum circuit it appears in. if a value is not provided, a new innovation number will be generated
+                for the gate.
         """
 
         assert (depth > 0.0) and (depth < 1.0)
         self.depth = depth
 
-        self.innovation_number = innovation_number
+        if innovation_number is None:
+            self.innovation_number = innovation_number_generator()
+        else:
+            self.innovation_number = innovation_number
 
         self.method_name = method_name
         self.qubits = qubits
@@ -50,6 +55,26 @@ class Gate:
             assert len(self.parameters) == len(self.specs['parameters'])
 
         self.enabled = True
+
+    def copy(self, new_innovation_number: bool = False) -> Gate:
+        """
+        Creates a deep copy of this Gate.
+
+        Args:
+            new_innovation_number: if True, the copied gate will have a new innovation
+                number instead of this gates innovation number (useful for mutating an
+                existing gate into a new one).
+
+        Returns:
+            A deep copy of this gate, potentially with a new innovation number.
+        """
+
+        innovation_number = self.innovation_number
+        if new_innovation_number:
+            innovation_number = None
+
+        return Gate(depth=self.depth, method_name=self.method_name, qubits=self.qubits.copy(), parameters=self.parameters.copy(), innovation_number=innovation_number)
+
 
     def add_to_circuit(self, registers: dict[str, QuantumRegister], circuit: QuantumCircuit):
         """
