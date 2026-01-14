@@ -1,6 +1,6 @@
 from qiskit import QuantumCircuit
 
-from src.circuits.gate_specifications import gate_specifications
+from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
 from src.evolution.innovation import innovation_number_generator
 
 
@@ -43,16 +43,13 @@ class Gate:
         self.qubits = qubits
         self.parameters = parameters
 
-        self.specs = gate_specifications[self.method_name]
+        self.specs = qiskit_gate_specifications[self.method_name]
 
         # the number of parameters and number of qubits provided need to be the
         # same as in the specifications
-        assert len(self.qubits) == len(self.specs['qubits'])
+        assert len(self.qubits) == len(self.specs.qubits)
 
-        if 'parameters' not in self.specs:
-            assert len(self.parameters) == 0
-        else:
-            assert len(self.parameters) == len(self.specs['parameters'])
+        assert len(self.parameters) == len(self.specs.parameters)
 
         self.enabled = True
 
@@ -94,7 +91,7 @@ class Gate:
         for i, qubit in enumerate(self.qubits):
             qubit_name = qubit[0]
             qubit_index = qubit[1]
-            argument_name = self.specs['qubits'][i]
+            argument_name = self.specs.qubits[i]
             print(f"\tsetting argument '{argument_name}' = '{qubit_name}[{qubit_index}]'")
 
             # assign the values for the qubit arguments to the method

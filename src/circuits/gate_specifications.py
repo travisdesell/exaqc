@@ -12,285 +12,100 @@ The key for an entry is the method name to be used on the QuantumCircuit object.
     qubit arguments).
 '''
 
-gate_specifications = {
-    'ccx': {
-        'name' : 'Toffoli',
-        'qubits' : ['control_qubit1', 'control_qubit2', 'target_qubit'],
-    },
+class GateSpecification:
+    def __init__(self, name: str, qubits: list[str], parameters: list[str] = [], needs_validation: bool = False):
+        """
+        Initializes a gate specification object which tracks the qiskit method name, formal name,
+        input/control/target qubits, parameter names and if we need to further validate it before being used.
 
-    'ccz': {
-        'name' : 'Symmetric',
-        'qubits' : ['control_qubit1', 'control_qubit2', 'target_qubit'],
-    },
+        Args:
+            name: is a formal full name for the gate
+            qubits: is a list of the qubit arguments to the qiskit method
+            parameters: is a list of the parameter names for the non-qubit arguments to the qiskit method
+            needs_validation: can be set to true for a gate method we know exists but we have not yet validated
+                how to use it correctly, so it will be turned off for testing and the EXAQC algorithm.
+        """
 
-    'ch': {
-        'name' : 'Controlled Hadamard',
-        'qubits' : ['control_qubit', 'target_qubit'],
-    },
+        self.name = name
+        self.qubits = qubits
+        self.parameters = parameters
+        self.needs_validation = needs_validation
 
-    'cp': {
-        'name' : 'Controlled Phase',
-        'parameters' : ['theta'],
-        'qubits' : ['control_qubit', 'target_qubit'],
-    },
+    
+    def __str__(self) -> str:
+        """
+        Returns:
+            A human readable string of this gate
+        """
 
-    'crx': {
-        'name' : 'Controlled RX',
-        'parameters' : ['theta'],
-        'qubits' : ['control_qubit', 'target_qubit'],
-    },
+        return f"{self.name}({self.qubits}, {self.parameters})"
 
-    'cry': {
-        'name' : 'Controlled RY',
-        'parameters' : ['theta'],
-        'qubits' : ['control_qubit', 'target_qubit'],
-    },
+class GateSpecifications:
+    def __init__(self, target: str):
+        """
+        Constructs gate specifications for either qiskit or pennylane
+        
+        Args:
+            target: should be either 'qiskit' or 'pennylane', specifying which
+                target framework these are for.
+        """
 
-    'crz': {
-        'name' : 'Controlled RZ',
-        'parameters' : ['theta'],
-        'qubits' : ['control_qubit', 'target_qubit'],
-    },
+        if target not in ['qiskit', 'pennylane']:
+            print(f"ERROR: target framework '{target}' was neither 'qiskit' nor 'pennylane'")
+            exit(1)
 
-    'cs': {
-        'name' : 'Controlled S',
-        'qubits' : ['control_qubit', 'target_qubit'],
-    },
+        self.target = target
 
-    'csdg': {
-        'name' : 'Controlled S^dagger',
-        'qubits' : ['control_qubit', 'target_qubit'],
-    },
+        self.specifications = {}
 
-    'cswap': {
-        'name' : 'Controlled SWAP (Fredkin)',
-        'qubits' : ['control_qubit', 'target_qubit1', 'target_qubit2'],
-    },
+    def __setitem__(self, method_name: str, gate_specification: GateSpecification):
+        """
+        Adds a new gate specification to this dict of gate specifications.
 
-    'csx': {
-        'name' : 'Controlled sqrt X',
-        'qubits' : ['control_qubit', 'target_qubit'],
-    },
+        Args:
+            method_name: is the qiskit method name for applying this gate to a QuantumCircuit
+            gate_specification: is the GateSpecifcation object containing all the information.
+        """
 
-    'cu': {
-        'name' : 'Controlled U',
-        'parameters' : ['theta', 'phi', 'lam', 'gamma'],
-        'qubits' : ['control_qubit', 'target_qubit'],
-    },
+        print(f"adding gate: {gate_specification}")
 
-    'cx': {
-        'name' : 'Controlled X',
-        'qubits' : ['control_qubit', 'target_qubit'],
-    },
+        self.specifications[method_name] = gate_specification
 
-    'cy': {
-        'name' : 'Controlled Y',
-        'qubits' : ['control_qubit', 'target_qubit'],
-    },
+    def __getitem__(self, method_name: str) -> GateSpecification:
+        """
+        Gets a gate specification from this dict of gate specifications.
 
-    'cz': {
-        'name' : 'Controlled Z',
-        'qubits' : ['control_qubit', 'target_qubit'],
-    },
+        Args:
+            method_name: is the qiskit method name for applying this gate to a QuantumCircuit
 
-    'dcx': {
-        'name' : 'Double CNOT',
-        'qubits' : ['qubit1', 'qubit2'],
-    },
+        Returns:
+            The GateSpecification for the given qiskit method name
+        """
 
-    'ecr': {
-        'name' : 'Echoed Cross-Resonance',
-        'qubits' : ['qubit1', 'qubit2'],
-    },
+        return self.specifications[method_name]
 
-    'h': {
-        'name' : 'Hadamard',
-        'qubits' : ['qubit'],
-    },
+    def keys(self) -> list[str]:
+        """
+        Returns:
+            All the gate method names (all the keys) of the specifications dict
+        """
 
-    'id': {
-        'name' : 'Identity',
-        'qubits' : ['qubit'],
-    },
+        return self.specifications.keys()
 
-    'iswap': {
-        'name' : 'iSWAP',
-        'qubits' : ['qubit1', 'qubit2'],
-    },
+    def values(self) -> list[str]:
+        """
+        Returns:
+            All the GateSpecifications (all the values) of the specifications dict
+        """
 
-    'mcp': {
-        'needs_validation' : True,
-        'name' : 'Multi-Controlled Phase',
-        'parameters' : ['lam'],
-        'qubits' : ['control_qubits...', 'target_qubit'],
-    },
+        return self.specifications.values()
 
-    'mcrx': {
-        'needs_validation' : True,
-        'name' : 'Multi-Controlled X Rotation',
-        'parameters' : ['theta'],
-        'qubits' : ['q_controls...', 'q_target'],
-    },
 
-    'mcry': {
-        'needs_validation' : True,
-        'name' : 'Multi-Controlled Y Rotation',
-        'parameters' : ['theta'],
-        'qubits' : ['q_controls...', 'q_target'],
-    },
+    def items(self) -> tuple[str, GateSpecification]:
+        """
+        Returns:
+            The items listing for the dict of gate specifications.
+        """
 
-    'mcrz': {
-        'needs_validation' : True,
-        'name' : 'Multi-Controlled Z Rotation',
-        'parameters' : ['theta'],
-        'qubits' : ['q_controls...', 'q_target'],
-    },
+        return self.specifications.items()
 
-    'mcx': {
-        'needs_validation' : True,
-        'name' : 'Multi-Controlled X',
-        'parameters' : ['theta'],
-        'qubits' : ['control_qubits...', 'target_qubit'],
-    },
-
-    'ms': {
-        'needs_validation' : True,
-        'name' : 'Mølmer–Sørensen',
-        'parameters' : ['theta'],
-        'qubits' : ['qubits...'],
-    },
-
-    'p': {
-        'name' : 'Phase',
-        'parameters' : ['theta'],
-        'qubits' : ['qubit'],
-    },
-
-    'pauli': {
-        'needs_validation' : True,
-        'name' : 'Pauli',
-        'parameters' : ['pauli_string'],
-        'qubits' : ['qubits...'],
-    },
-
-    'r': {
-        'name' : 'R',
-        'parameters' : ['theta', 'phi'],
-        'qubits' : ['qubit'],
-    },
-
-    'rcccx': {
-        'name' : 'Simplified 3-Controlled Toffoli',
-        'qubits' : ['control_qubit1', 'control_qubit2', 'control_qubit3', 'target_qubit'],
-    },
-
-    'rccx': {
-        'name' : 'Simplified Toffoli (Margolus)',
-        'qubits' : ['control_qubit1', 'control_qubit2', 'target_qubit'],
-    },
-
-    'rv': {
-        'name' : 'RV',
-        'parameters' : ['vx', 'vy', 'vz'],
-        'qubits' : ['qubit'],
-    },
-
-    'rx': {
-        'name' : 'RX',
-        'parameters' : ['theta'],
-        'qubits' : ['qubit'],
-    },
-
-    'rxx': {
-        'name' : 'RXX',
-        'parameters' : ['theta'],
-        'qubits' : ['qubit1', 'qubit2'],
-    },
-
-    'ry': {
-        'name' : 'RY',
-        'parameters' : ['theta'],
-        'qubits' : ['qubit'],
-    },
-
-    'ryy': {
-        'name' : 'RYY',
-        'parameters' : ['theta'],
-        'qubits' : ['qubit1', 'qubit2'],
-    },
-
-    'rz': {
-        'name' : 'RZ',
-        'parameters' : ['phi'],
-        'qubits' : ['qubit'],
-    },
-
-    'rzx': {
-        'name' : 'RZX',
-        'parameters' : ['theta'],
-        'qubits' : ['qubit1', 'qubit2'],
-    },
-
-    'rzz': {
-        'name' : 'RZZ',
-        'parameters' : ['theta'],
-        'qubits' : ['qubit1', 'qubit2'],
-    },
-
-    's': {
-        'name' : 'S',
-        'qubits' : ['qubit'],
-    },
-
-    'sdg': {
-        'name' : 'S-adjoint',
-        'qubits' : ['qubit'],
-    },
-
-    'swap': {
-        'name' : 'SWAP',
-        'qubits' : ['qubit1', 'qubit2'],
-    },
-
-    'sx': {
-        'name' : 'sqrt X',
-        'qubits' : ['qubit'],
-    },
-
-    'sxdg': {
-        'name' : 'inverse sqrt X',
-        'qubits' : ['qubit'],
-    },
-
-    't': {
-        'name' : 'T',
-        'qubits' : ['qubit'],
-    },
-
-    'tdg': {
-        'name' : 'T-adjoint',
-        'qubits' : ['qubit'],
-    },
-
-    'u': {
-        'name' : 'U',
-        'parameters' : ['theta', 'phi', 'lam'],
-        'qubits' : ['qubit'],
-    },
-
-    'x': {
-        'name' : 'X',
-        'qubits' : ['qubit'],
-    },
-
-    'y': {
-        'name' : 'Y',
-        'qubits' : ['qubit'],
-    },
-
-    'z': {
-        'name' : 'z',
-        'qubits' : ['qubit'],
-    },
-
-}

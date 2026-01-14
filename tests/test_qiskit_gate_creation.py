@@ -6,10 +6,10 @@ import warnings
 from qiskit import QuantumCircuit, QuantumRegister
 
 from src.circuits.circuit import CircuitGenome
-from src.circuits.gate_specifications import gate_specifications
+from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
 
 
-@pytest.mark.parametrize("gate_method_name", gate_specifications)
+@pytest.mark.parametrize("gate_method_name", qiskit_gate_specifications.keys())
 def test_gate_creation(gate_method_name: str):
     '''
     This uses the gate specifications dict to test creation of quantum circuits
@@ -21,23 +21,21 @@ def test_gate_creation(gate_method_name: str):
     '''
     print(f"testing gate: {gate_method_name}, type: {type(gate_method_name)}")
 
-    specification = gate_specifications[gate_method_name]
+    specification = qiskit_gate_specifications[gate_method_name]
 
     print(f"gate specification: {specification}")
 
-    if 'needs_validation' in specification.keys():
+    if specification.needs_validation:
         # skip these for now
-        warnings.warn(f"skipping gate {gate_method_name} ({specification['name']}) that needs validation")
+        warnings.warn(f"skipping gate {gate_method_name} ({specification.name}) that needs validation")
         return
 
     # get the parameter args (if any) otherwise set to an empty list
-    parameter_args = []
-    if 'parameters' in specification.keys():
-        parameter_args = specification['parameters'] 
+    parameter_args = specification.parameters
 
     # create a register large enough for the gates input and
     # output qubits
-    qubit_args = specification['qubits']
+    qubit_args = specification.qubits
     n_qubits = len(qubit_args)
 
     qc = CircuitGenome(genome_number=1, registers={"test" : n_qubits})
@@ -51,13 +49,11 @@ def test_gate_creation(gate_method_name: str):
 
     # make the dict of parameters (if there are parameters) for the add_gate_method
     qc_params = {}
-    param_args = {}
-    if 'parameters' in specification.keys():
-        param_args = specification['parameters']
+    param_args = specification.parameters
 
-        for parameter in param_args:
-            qc_params[parameter] = random.random()
-    
+    for parameter in param_args:
+        qc_params[parameter] = random.random()
+
     print(f"qc_params: {qc_params}")
 
     qc.add_gate(depth=0.5, method_name=gate_method_name, qubits=qc_qubits, parameters=qc_params)
