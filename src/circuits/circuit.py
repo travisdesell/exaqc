@@ -96,7 +96,7 @@ class CircuitGenome:
         # make sure we apply the gates in the correct ordering by depth
         self.sort_gates()
         for gate in self.gates:
-            gate.add_to_circuit(quantum_registers, circuit)
+            gate.add_to_qiskit_circuit(quantum_registers, circuit)
 
         for name, classical_register in classical_registers.items():
             circuit.measure(quantum_registers[name], classical_register)

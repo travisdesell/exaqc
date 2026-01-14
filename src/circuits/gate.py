@@ -84,7 +84,7 @@ class Gate:
             innovation_number=innovation_number,
         )
 
-    def add_to_circuit(
+    def add_to_qiskit_circuit(
         self, registers: dict[str, QuantumRegister], circuit: QuantumCircuit
     ):
         """
