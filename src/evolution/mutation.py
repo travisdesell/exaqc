@@ -2,12 +2,11 @@ import math
 import random
 
 from src.circuits.circuit import CircuitGenome
-from src.circuits.gate import Gate
 from src.circuits.gate_specifications import GateSpecifications
 
 
 def disable_gate(circuit: CircuitGenome) -> bool:
-    '''
+    """
     Selects a random enabled gate in the genome and disables it.
 
     Args:
@@ -16,7 +15,7 @@ def disable_gate(circuit: CircuitGenome) -> bool:
     Returns:
         True if the circuit was modified, False otherwise (e.g., if the
         genome had no enabled gates)
-    '''
+    """
 
     enabled_gates = [gate for gate in circuit.gates if gate.enabled]
 
@@ -32,7 +31,7 @@ def disable_gate(circuit: CircuitGenome) -> bool:
 
 
 def enable_gate(circuit: CircuitGenome) -> bool:
-    '''
+    """
     Selects a random disabled gate in the genome and enables it.
 
     Args:
@@ -41,7 +40,7 @@ def enable_gate(circuit: CircuitGenome) -> bool:
     Returns:
         True if the circuit was modified, False otherwise (e.g., if the
         genome had no disabled gates)
-    '''
+    """
 
     disabled_gates = [gate for gate in circuit.gates if not gate.enabled]
 
@@ -55,9 +54,10 @@ def enable_gate(circuit: CircuitGenome) -> bool:
 
     return True
 
+
 def reorder_gate(circuit: CircuitGenome) -> bool:
-    '''
-    Selects a random gate and disables it. It then creates a copy of it 
+    """
+    Selects a random gate and disables it. It then creates a copy of it
     and inserts it (enabled) into the genome at a new random depth.
 
     Args:
@@ -66,7 +66,7 @@ def reorder_gate(circuit: CircuitGenome) -> bool:
     Returns:
         True if the circuit was modified, False otherwise (e.g., if the
         genome had no gates)
-    '''
+    """
 
     if len(circuit.gates) == 0:
         # there were no gates
@@ -88,8 +88,12 @@ def reorder_gate(circuit: CircuitGenome) -> bool:
     return True
 
 
-def add_gate(gate_specifications: GateSpecifications, gate_method_name: str, circuit: CircuitGenome) -> bool:
-    '''
+def add_gate(
+    gate_specifications: GateSpecifications,
+    gate_method_name: str,
+    circuit: CircuitGenome,
+) -> bool:
+    """
     Adds a gate with the given method name to the given circuit genome
     at a random depth. By having the gate_method_name as the argument we can
     make multiple instances of this method to use later for dynamically
@@ -105,7 +109,7 @@ def add_gate(gate_specifications: GateSpecifications, gate_method_name: str, cir
     Returns:
         False if the gate method requires more qubits than are in the
         circuit, otherwise it should always return true
-    '''
+    """
 
     specification = gate_specifications[gate_method_name]
 
@@ -129,9 +133,12 @@ def add_gate(gate_specifications: GateSpecifications, gate_method_name: str, cir
     # required as inputs/outputs to this gate
     gate_qubits = random.sample(circuit.qubits, n_qubits)
 
-    circuit.add_gate(depth=random.uniform(0.0, 1.0), method_name=gate_method_name, qubits=gate_qubits, parameters=gate_parameters)
+    circuit.add_gate(
+        depth=random.uniform(0.0, 1.0),
+        method_name=gate_method_name,
+        qubits=gate_qubits,
+        parameters=gate_parameters,
+    )
     circuit.sort_gates()
 
     return True
-
-

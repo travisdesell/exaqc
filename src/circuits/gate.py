@@ -1,19 +1,25 @@
-from qiskit import QuantumCircuit
+from qiskit import QuantumCircuit, QuantumRegister
 
 from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
 from src.evolution.innovation import innovation_number_generator
 
 
-
 class Gate:
     """
     Represents a gate within a quantum circuit, which could have multiple inputs
-    and outputs, as well as potential paramaeters.  Contains appropriate information 
+    and outputs, as well as potential paramaeters.  Contains appropriate information
     to go from this representation to adding the correct qiskit method to an existing
     circuit.
     """
 
-    def __init__(self, depth: float, method_name: str, qubits: list[tuple[str, int]], parameters: dict[str, float] = {}, innovation_number: int = None):
+    def __init__(
+        self,
+        depth: float,
+        method_name: str,
+        qubits: list[tuple[str, int]],
+        parameters: dict[str, float] = {},
+        innovation_number: int = None,
+    ):
         """
         Initializes a gate element in an evolved quantum circuit.
 
@@ -22,9 +28,9 @@ class Gate:
                 greater than 0 and less than 1, with 0 being closest to the input and 1
                 being closest to the output.
             method_name: is the method name used by qiskit to add the gate to a quantum circuit
-            qubits: a list of qubits to form the arguments to the gate method name, each is a tuple with a string for the input
-                register name and then the index. if the gate takes the whole register (and not individual qubits) then the second
-                value will be None (e.g., for a Hadamard gate).
+            qubits: a list of qubits to form the arguments to the gate method name, each is a tuple with a string
+                for the input register name and then the index. if the gate takes the whole register (and not
+                individual qubits) then the second value will be None (e.g., for a Hadamard gate).
             parameters: is a dict where the keys are the parameter names and the values are the values
             innovation_number: is a unique number representing this gate across every evolved
                 quantum circuit it appears in. if a value is not provided, a new innovation number will be generated
@@ -70,10 +76,17 @@ class Gate:
         if new_innovation_number:
             innovation_number = None
 
-        return Gate(depth=self.depth, method_name=self.method_name, qubits=self.qubits.copy(), parameters=self.parameters.copy(), innovation_number=innovation_number)
+        return Gate(
+            depth=self.depth,
+            method_name=self.method_name,
+            qubits=self.qubits.copy(),
+            parameters=self.parameters.copy(),
+            innovation_number=innovation_number,
+        )
 
-
-    def add_to_circuit(self, registers: dict[str, QuantumRegister], circuit: QuantumCircuit):
+    def add_to_circuit(
+        self, registers: dict[str, QuantumRegister], circuit: QuantumCircuit
+    ):
         """
         Adds this gate to the qiskit QuantumCircuit using reflection
         to specify the correct method along with the given parameters.
@@ -92,12 +105,12 @@ class Gate:
             qubit_name = qubit[0]
             qubit_index = qubit[1]
             argument_name = self.specs.qubits[i]
-            print(f"\tsetting argument '{argument_name}' = '{qubit_name}[{qubit_index}]'")
+            print(
+                f"\tsetting argument '{argument_name}' = '{qubit_name}[{qubit_index}]'"
+            )
 
             # assign the values for the qubit arguments to the method
             # name
             qubit_args[argument_name] = registers[qubit_name][qubit_index]
 
         gate_method(**self.parameters, **qubit_args)
-
-

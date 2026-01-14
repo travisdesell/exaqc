@@ -1,4 +1,4 @@
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 
 from qiskit import QuantumCircuit
 from qiskit import QuantumRegister, ClassicalRegister
@@ -19,7 +19,7 @@ class CircuitGenome:
         """
         # a dict of cubits where the key is the cubit name is the name of the
         # input quantum register and the value is an instantiated quantum register
-        self.registers : dict[str, int] = registers
+        self.registers: dict[str, int] = registers
 
         # create a list of input qubits (which are tuples of register names and indexes)
         # so we can easily select random qubits to use for gate mutations
@@ -30,8 +30,8 @@ class CircuitGenome:
                 self.qubits.append((gate_name, index))
 
         # a list of Gates sorted by depth represnting the gates in the quantum
-        #circuit
-        self.gates : list[Gate] = []
+        # circuit
+        self.gates: list[Gate] = []
 
     def add_existing_gate(self, gate: Gate):
         """
@@ -44,16 +44,21 @@ class CircuitGenome:
         self.gates.append(gate)
         self.sort_gates()
 
-    def add_gate(self, depth: float, method_name: str, qubits: list[tuple[str,int]] = [], parameters: dict[str,float] = {}):
+    def add_gate(
+        self,
+        depth: float,
+        method_name: str,
+        qubits: list[tuple[str, int]] = [],
+        parameters: dict[str, float] = {},
+    ):
         """
         Adds a new gate to this quantum circuit at the given depth.
 
         Args:
             depth: a number between 0 and 1 representing the depth of the gate in the circuit.
             method_name: the name of the method to invoke this gate on a qiskit QuantumCircuit
-            qubits: a list of qubits to form the arguments to the gate method name, each is a tuple with a string for the input
-                register name and then the index. if the gate takes the whole register (and not individual qubits) then the second
-                value will be None (e.g., for a Hadamard gate).
+            qubits: a list of qubits to form the arguments to the gate method name, each is a tuple
+                with a string for the input register name and then the index.
             parameters: a dict where the key is the parameter name and the value is the parameter value
         """
 
@@ -61,14 +66,14 @@ class CircuitGenome:
         self.sort_gates()
 
     def sort_gates(self):
-        '''
+        """
         Sorts the gates in the circuit by their depth (useful if new gates are
         added or the circuit is mutated).
 
         Sort the gates first by depth then by innovation number (in case two gates
         somehow had the same depth).
-        '''
-        self.gates.sort(key = lambda g : (g.depth, g.innovation_number))
+        """
+        self.gates.sort(key=lambda g: (g.depth, g.innovation_number))
 
     def generate_qiskit_circuit(self) -> QuantumCircuit:
         """
@@ -84,7 +89,9 @@ class CircuitGenome:
             quantum_registers[name] = QuantumRegister(size, name=name)
             classical_registers[name] = ClassicalRegister(size)
 
-        circuit = QuantumCircuit(*quantum_registers.values(), *classical_registers.values())
+        circuit = QuantumCircuit(
+            *quantum_registers.values(), *classical_registers.values()
+        )
 
         # make sure we apply the gates in the correct ordering by depth
         self.sort_gates()
@@ -97,7 +104,7 @@ class CircuitGenome:
         return circuit
 
 
-'''
+"""
 qc = CircuitGenome(genome_number=1, registers={"a" : 3, "b" : 5})
 
 qc.add_gate(depth=0.05, method_name='x', qubits=[('a', 1)])
@@ -154,4 +161,4 @@ circuit.measure(q_b, c_b);
 circuit.draw(output="mpl")
 
 plt.show()
-'''
+"""

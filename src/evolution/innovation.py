@@ -29,6 +29,6 @@ class DefaultInnovationNumberGenerator:
         """
         self.current_innovation_number += 1
         return self.current_innovation_number
-        
+
 
 innovation_number_generator = DefaultInnovationNumberGenerator()

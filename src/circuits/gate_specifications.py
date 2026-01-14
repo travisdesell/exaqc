@@ -1,4 +1,4 @@
-'''
+"""
 The following dict provides information about all the possible gates that can
 be applied to a QuantumCircuit.
 
@@ -10,10 +10,17 @@ The key for an entry is the method name to be used on the QuantumCircuit object.
  * 'qubits' specfies the qubit argument names. These need to be in the same order
     as the game method that accepts them (and they typically come after any
     qubit arguments).
-'''
+"""
+
 
 class GateSpecification:
-    def __init__(self, name: str, qubits: list[str], parameters: list[str] = [], needs_validation: bool = False):
+    def __init__(
+        self,
+        name: str,
+        qubits: list[str],
+        parameters: list[str] = [],
+        needs_validation: bool = False,
+    ):
         """
         Initializes a gate specification object which tracks the qiskit method name, formal name,
         input/control/target qubits, parameter names and if we need to further validate it before being used.
@@ -31,7 +38,6 @@ class GateSpecification:
         self.parameters = parameters
         self.needs_validation = needs_validation
 
-    
     def __str__(self) -> str:
         """
         Returns:
@@ -40,18 +46,21 @@ class GateSpecification:
 
         return f"{self.name}({self.qubits}, {self.parameters})"
 
+
 class GateSpecifications:
     def __init__(self, target: str):
         """
         Constructs gate specifications for either qiskit or pennylane
-        
+
         Args:
             target: should be either 'qiskit' or 'pennylane', specifying which
                 target framework these are for.
         """
 
-        if target not in ['qiskit', 'pennylane']:
-            print(f"ERROR: target framework '{target}' was neither 'qiskit' nor 'pennylane'")
+        if target not in ["qiskit", "pennylane"]:
+            print(
+                f"ERROR: target framework '{target}' was neither 'qiskit' nor 'pennylane'"
+            )
             exit(1)
 
         self.target = target
@@ -100,7 +109,6 @@ class GateSpecifications:
 
         return self.specifications.values()
 
-
     def items(self) -> tuple[str, GateSpecification]:
         """
         Returns:
@@ -108,4 +116,3 @@ class GateSpecifications:
         """
 
         return self.specifications.items()
-

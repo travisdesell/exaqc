@@ -9,14 +9,14 @@ from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
 
 @pytest.mark.parametrize("gate_method_name", qiskit_gate_specifications.keys())
 def test_gate_specification(gate_method_name: str):
-    '''
+    """
     This uses python reflection to ensure that the gate specfications provided
     (gate method names, qubit and parameter arguments) are correct.
 
     Args:
         gate_method_name: is the qiskit gate method name that can be applied
             to the QuantumCircuit object.
-    '''
+    """
     print(f"testing gate: {gate_method_name}, type: {type(gate_method_name)}")
 
     specification = qiskit_gate_specifications[gate_method_name]
@@ -25,7 +25,9 @@ def test_gate_specification(gate_method_name: str):
 
     if specification.needs_validation:
         # skip these for now
-        warnings.warn(f"skipping gate {gate_method_name} ({specification.name}) that needs validation")
+        warnings.warn(
+            f"skipping gate {gate_method_name} ({specification.name}) that needs validation"
+        )
         return
 
     # get the parameter args (if any) otherwise set to an empty list
@@ -35,7 +37,7 @@ def test_gate_specification(gate_method_name: str):
     # output qubits
     qubit_args = specification.qubits
     n_qubits = len(qubit_args)
-    register = QuantumRegister(n_qubits, name='test')
+    register = QuantumRegister(n_qubits, name="test")
 
     # create a quantum circuit with that register
     circuit = QuantumCircuit(register)
@@ -67,8 +69,6 @@ def test_gate_specification(gate_method_name: str):
 
     # make sure the specification arguments match the required
     # method arguments for number of qubits and other parameters
-    assert (required_args == spec_args)
+    assert required_args == spec_args
 
     print()
-
-    

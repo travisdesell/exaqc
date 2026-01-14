@@ -3,7 +3,11 @@ from src.circuits.gate_specifications import all_gate_specifications
 
 class EXAQC:
 
-    def __init__(self, gate_specifications: GateSpecifications = all_gate_specifications, population: PopulationStrategy = None):
+    def __init__(
+        self,
+        gate_specifications: GateSpecifications = all_gate_specifications,
+        population: PopulationStrategy = None,
+    ):
         """
         Creates an instance of Evolutionary Exploration of Augmenting Quantum Circuits given a
         particular population strategy, allowing the given gates (if specified).
@@ -15,4 +19,5 @@ class EXAQC:
             population: is an instance of a subclass of the PopulationStrategy interface, utilized to get
                 parents for mutation or crossover and insert children back into the population.
         """
-}
+
+        return
