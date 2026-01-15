@@ -1,6 +1,8 @@
 from src.circuits.circuit import CircuitGenome
 from src.evolution.mutation import enable_gate
 
+from tests.innovation_validation import validate_innovation_numbers
+
 
 def test_no_gates():
     """
@@ -11,6 +13,8 @@ def test_no_gates():
     qc = CircuitGenome(genome_number=1, registers={"test": 3})
 
     assert enable_gate(qc) is False
+
+    validate_innovation_numbers(qc)
 
 
 def test_all_disabled():
@@ -45,6 +49,8 @@ def test_all_disabled():
 
     assert enabled_count == 1
 
+    validate_innovation_numbers(qc)
+
 
 def test_all_enabled():
     """
@@ -67,6 +73,8 @@ def test_all_enabled():
 
     # the mutation should return true because it modified a gate
     assert enable_gate(qc) is False
+
+    validate_innovation_numbers(qc)
 
 
 def test_one_enabled():
@@ -101,3 +109,5 @@ def test_one_enabled():
             enabled_count += 1
 
     assert enabled_count == 2
+
+    validate_innovation_numbers(qc)

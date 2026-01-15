@@ -1,6 +1,8 @@
 from src.circuits.circuit import CircuitGenome
 from src.evolution.mutation import reorder_gate
 
+from tests.innovation_validation import validate_innovation_numbers
+
 
 def test_all_disabled():
     """
@@ -37,6 +39,8 @@ def test_all_disabled():
 
     assert enabled_count == 1
 
+    validate_innovation_numbers(qc)
+
 
 def test_all_enabled():
     """
@@ -69,3 +73,5 @@ def test_all_enabled():
             enabled_count += 1
 
     assert enabled_count == 3
+
+    validate_innovation_numbers(qc)

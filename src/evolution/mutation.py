@@ -78,7 +78,7 @@ def reorder_gate(circuit: CircuitGenome) -> bool:
 
     # create a copy of the randomly selected gate, enable it
     # and give it a new random depth
-    new_gate = random_gate.copy()
+    new_gate = random_gate.copy(new_innovation_number=True)
     new_gate.enabled = True
     new_gate.depth = random.uniform(0.0, 1.0)
 

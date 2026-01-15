@@ -5,6 +5,8 @@ import warnings
 from src.circuits.circuit import CircuitGenome
 from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
 
+from tests.innovation_validation import validate_innovation_numbers
+
 
 @pytest.mark.parametrize("gate_method_name", qiskit_gate_specifications.keys())
 def test_gate_creation(gate_method_name: str):
@@ -54,6 +56,8 @@ def test_gate_creation(gate_method_name: str):
     qc.add_gate(
         depth=0.5, method_name=gate_method_name, qubits=qc_qubits, parameters=qc_params
     )
+
+    validate_innovation_numbers(qc)
 
     qc.generate_qiskit_circuit()
 
