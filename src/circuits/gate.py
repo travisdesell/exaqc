@@ -1,6 +1,8 @@
 from qiskit import QuantumCircuit, QuantumRegister
+import pennylane as qml
 
 from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
+from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
 from src.evolution.innovation import innovation_number_generator
 
 
@@ -114,3 +116,111 @@ class Gate:
             qubit_args[argument_name] = registers[qubit_name][qubit_index]
 
         gate_method(**self.parameters, **qubit_args)
+
+
+    # def add_to_pennylane_circuit(self, registers: dict[str, qml.Wires]):
+    #     """
+    #     Adds this gate to a PennyLane circuit using the provided wire registers.
+
+    #     Args:
+    #         registers: a dictionary mapping register names to PennyLane Wires objects
+    #                 (e.g., created via `qml.registers({"q0": 3, "q1": 2})`).
+    #     """
+    #     if not self.enabled:
+    #         print(f"Gate {self.method_name} is disabled; skipping.")
+    #         return
+
+    #     # Get the PennyLane gate class
+    #     try:
+    #         gate_cls = getattr(qml, self.method_name)
+    #     except AttributeError:
+    #         raise ValueError(f"PennyLane does not have a gate named '{self.method_name}'")
+
+    #     # Build the wire list for this gate
+    #     qubit_wires = []
+    #     for i, qubit in enumerate(self.qubits):
+    #         reg_name, index = qubit
+    #         reg_wires = registers[reg_name]  # qml.Wires object
+
+    #         if index is None:
+    #             # Apply gate to whole register
+    #             qubit_wires.extend(reg_wires)
+    #         else:
+    #             qubit_wires.append(reg_wires[index])
+
+    #     # Apply the gate with parameters if any
+    #     print(f"Adding {self.method_name} on wires {qubit_wires} with params {self.parameters}")
+    #     if self.parameters:
+    #         gate_cls(*self.parameters.values(), wires=qubit_wires)
+    #     else:
+    #         gate_cls(wires=qubit_wires)
+
+
+    def add_to_pennylane_circuit(self, registers: dict[str, qml.Wires]):
+        """
+        Adds this gate to a PennyLane circuit using registers.
+        Uses native PennyLane gates if available, otherwise falls back to decomposition.
+
+        Args:
+            registers: a dictionary mapping register names to PennyLane Wires objects
+                    (e.g., created via `qml.registers({"q0": 3, "q1": 2})`).
+        """
+        if not self.enabled:
+            print(f"Gate {self.method_name} is disabled; skipping.")
+            return
+
+        spec = pennylane_gate_specifications[self.method_name]
+
+        # Build wire list
+        qubit_wires = []
+        for i, (reg_name, qubit_index) in enumerate(self.qubits):
+            reg_wires = registers[reg_name]
+            if qubit_index is None:
+                qubit_wires.extend(reg_wires)
+                print(f"\tGate argument '{spec.qubits[i]}' = whole register '{reg_name}'")
+            else:
+                qubit_wires.append(reg_wires[qubit_index])
+                print(f"\tGate argument '{spec.qubits[i]}' = '{reg_name}[{qubit_index}]'")
+
+        # Decide whether to use native gate or decomposition
+        use_native = hasattr(qml, self.method_name) and not getattr(spec, "needs_validation", False)
+
+        if use_native:
+            gate_cls = getattr(qml, self.method_name)
+            if self.parameters:
+                gate_cls(*self.parameters.values(), wires=qubit_wires)
+            else:
+                gate_cls(wires=qubit_wires)
+            print(f"Added native gate {self.method_name} on wires {qubit_wires}")
+        else:
+            # Use decomposition
+            if self.method_name not in globals():
+                raise ValueError(f"No decomposition function found for gate '{self.method_name}'")
+
+            decomp_fn = globals()[self.method_name]
+
+            # Handle multi-qubit gates
+            # For example: mcx(controls=[...], target=...)
+            # We'll automatically split controls vs target if needed
+            # Simple heuristic: last wire is target, rest are controls
+            wires = qubit_wires
+            if self.method_name in ["mcx", "mcrx", "mcry", "mcrz", "mcp"]:
+                # parametric multi-controlled gates
+                param = list(self.parameters.values())[0] if self.parameters else 0.0
+                *controls, target = wires
+                decomp_fn(param, controls, target)
+            elif self.method_name in ["cs", "csdg", "csx", "sx", "sxdg", "dcx", "ecr", "rccx", "rcccx", "cu", "rzx", "ms"]:
+                # functions expect either (control, target) or individual qubits
+                if self.parameters:
+                    decomp_fn(*self.parameters.values(), *wires)
+                else:
+                    decomp_fn(*wires)
+            else:
+                # generic case: pass wires directly
+                if self.parameters:
+                    decomp_fn(*self.parameters.values(), wires=wires)
+                else:
+                    decomp_fn(*wires)
+
+            print(f"Added decomposed gate {self.method_name} on wires {qubit_wires}")
+
