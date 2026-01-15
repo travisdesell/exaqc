@@ -1,4 +1,3 @@
-import pytest
 from src.circuits.circuit import CircuitGenome
 from src.evolution.mutation import enable_gate
 
@@ -19,9 +18,15 @@ def test_all_disabled_pennylane():
     """
     qc = CircuitGenome(genome_number=1, registers={"test": 3})
 
-    qc.add_gate(depth=0.40, method_name="ccz", qubits=[("test", 0), ("test", 1), ("test", 2)])
-    qc.add_gate(depth=0.40, method_name="ccx", qubits=[("test", 0), ("test", 2), ("test", 1)])
-    qc.add_gate(depth=0.40, method_name="cswap", qubits=[("test", 2), ("test", 1), ("test", 0)])
+    qc.add_gate(
+        depth=0.40, method_name="ccz", qubits=[("test", 0), ("test", 1), ("test", 2)]
+    )
+    qc.add_gate(
+        depth=0.40, method_name="ccx", qubits=[("test", 0), ("test", 2), ("test", 1)]
+    )
+    qc.add_gate(
+        depth=0.40, method_name="cswap", qubits=[("test", 2), ("test", 1), ("test", 0)]
+    )
 
     for gate in qc.gates:
         gate.enabled = False
@@ -39,9 +44,15 @@ def test_all_enabled_pennylane():
     """
     qc = CircuitGenome(genome_number=1, registers={"test": 3})
 
-    qc.add_gate(depth=0.40, method_name="ccz", qubits=[("test", 0), ("test", 1), ("test", 2)])
-    qc.add_gate(depth=0.40, method_name="ccx", qubits=[("test", 0), ("test", 2), ("test", 1)])
-    qc.add_gate(depth=0.40, method_name="cswap", qubits=[("test", 2), ("test", 1), ("test", 0)])
+    qc.add_gate(
+        depth=0.40, method_name="ccz", qubits=[("test", 0), ("test", 1), ("test", 2)]
+    )
+    qc.add_gate(
+        depth=0.40, method_name="ccx", qubits=[("test", 0), ("test", 2), ("test", 1)]
+    )
+    qc.add_gate(
+        depth=0.40, method_name="cswap", qubits=[("test", 2), ("test", 1), ("test", 0)]
+    )
 
     assert enable_gate(qc) is False
 
@@ -53,9 +64,15 @@ def test_one_enabled_pennylane():
     """
     qc = CircuitGenome(genome_number=1, registers={"test": 3})
 
-    qc.add_gate(depth=0.40, method_name="ccz", qubits=[("test", 0), ("test", 1), ("test", 2)])
-    qc.add_gate(depth=0.40, method_name="ccx", qubits=[("test", 0), ("test", 2), ("test", 1)])
-    qc.add_gate(depth=0.40, method_name="cswap", qubits=[("test", 2), ("test", 1), ("test", 0)])
+    qc.add_gate(
+        depth=0.40, method_name="ccz", qubits=[("test", 0), ("test", 1), ("test", 2)]
+    )
+    qc.add_gate(
+        depth=0.40, method_name="ccx", qubits=[("test", 0), ("test", 2), ("test", 1)]
+    )
+    qc.add_gate(
+        depth=0.40, method_name="cswap", qubits=[("test", 2), ("test", 1), ("test", 0)]
+    )
 
     qc.gates[0].enabled = False
     qc.gates[1].enabled = False

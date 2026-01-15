@@ -103,11 +103,12 @@ class CircuitGenome:
             circuit.measure(quantum_registers[name], classical_register)
 
         return circuit
-    
 
-    def generate_pennylane_circuit(self, 
-                                   device_name: str = "default.qubit",
-                                   measure_registers: bool = True,):
+    def generate_pennylane_circuit(
+        self,
+        device_name: str = "default.qubit",
+        measure_registers: bool = True,
+    ):
         """
         Converts this genome into a PennyLane QNode-ready function.
 
@@ -137,7 +138,7 @@ class CircuitGenome:
             # Optional: measure all wires in computational basis
             # For PennyLane, measuring in classical bits is optional; return state
             # return qml.state()
-        
+
             # 4️⃣ Measurement
             if measure_registers:
                 # Return computational basis samples for each register

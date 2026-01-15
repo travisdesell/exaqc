@@ -13,7 +13,9 @@ def test_gate_creation_pennylane(gate_method_name: str):
     specification = pennylane_gate_specifications[gate_method_name]
 
     if getattr(specification, "needs_validation", False):
-        warnings.warn(f"Skipping gate {gate_method_name} ({specification.name}) that needs validation")
+        warnings.warn(
+            f"Skipping gate {gate_method_name} ({specification.name}) that needs validation"
+        )
         return
 
     qc = CircuitGenome(genome_number=1, registers={"test": 10})
@@ -32,7 +34,9 @@ def test_qubit_requirements_pennylane(gate_method_name: str):
     specification = pennylane_gate_specifications[gate_method_name]
 
     if getattr(specification, "needs_validation", False):
-        warnings.warn(f"Skipping gate {gate_method_name} ({specification.name}) that needs validation")
+        warnings.warn(
+            f"Skipping gate {gate_method_name} ({specification.name}) that needs validation"
+        )
         return
 
     n_qubits = len(specification.qubits)

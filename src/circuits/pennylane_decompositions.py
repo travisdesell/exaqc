@@ -1,6 +1,7 @@
 import pennylane as qml
 import numpy as np
 
+
 # ============================================================
 # Multi-controlled X using recursive decomposition
 # ============================================================
@@ -21,19 +22,23 @@ def mcx(wires):
         qml.Toffoli(wires=[controls[-2], controls[-1], target])
         mcx(controls[:-1] + [target])
 
+
 # ============================================================
 # Controlled S / S-dagger / sqrt(X)
 # ============================================================
 def cs(control_qubit, target_qubit):
     qml.ControlledPhaseShift(np.pi / 2, wires=[control_qubit, target_qubit])
 
+
 def csdg(control_qubit, target_qubit):
     qml.ControlledPhaseShift(-np.pi / 2, wires=[control_qubit, target_qubit])
+
 
 def csx(control_qubit, target_qubit):
     qml.Hadamard(wires=target_qubit)
     qml.CRX(np.pi / 2, wires=[control_qubit, target_qubit])
     qml.Hadamard(wires=target_qubit)
+
 
 # ============================================================
 # Double CNOT / Echoed Cross-Resonance
@@ -42,12 +47,14 @@ def dcx(qubit1, qubit2):
     qml.CNOT(wires=[qubit1, qubit2])
     qml.CNOT(wires=[qubit2, qubit1])
 
+
 def ecr(qubit1, qubit2):
     qml.Hadamard(wires=qubit2)
     qml.CNOT(wires=[qubit1, qubit2])
     qml.RZ(np.pi / 2, wires=qubit2)
     qml.CNOT(wires=[qubit1, qubit2])
     qml.Hadamard(wires=qubit2)
+
 
 # ============================================================
 # Simplified Toffoli variants
@@ -63,12 +70,14 @@ def rccx(control_qubit1, control_qubit2, target_qubit):
     qml.T.adjoint()(wires=target_qubit)
     qml.Hadamard(wires=target_qubit)
 
+
 def rcccx(control_qubit1, control_qubit2, control_qubit3, target_qubit):
     qml.Hadamard(wires=target_qubit)
     qml.T(wires=target_qubit)
     mcx([control_qubit1, control_qubit2, control_qubit3, target_qubit])
     qml.T.adjoint()(wires=target_qubit)
     qml.Hadamard(wires=target_qubit)
+
 
 # ============================================================
 # Multi-controlled phase / rotations
@@ -80,12 +89,14 @@ def mcp(phi, control_qubits, target_qubit):
     for c in reversed(control_qubits):
         qml.CNOT(wires=[c, target_qubit])
 
+
 def mcrx(theta, control_qubits, target_qubit):
     for c in control_qubits:
         qml.CNOT(wires=[c, target_qubit])
     qml.RX(theta, wires=target_qubit)
     for c in reversed(control_qubits):
         qml.CNOT(wires=[c, target_qubit])
+
 
 def mcry(theta, control_qubits, target_qubit):
     for c in control_qubits:
@@ -94,6 +105,7 @@ def mcry(theta, control_qubits, target_qubit):
     for c in reversed(control_qubits):
         qml.CNOT(wires=[c, target_qubit])
 
+
 def mcrz(theta, control_qubits, target_qubit):
     for c in control_qubits:
         qml.CNOT(wires=[c, target_qubit])
@@ -101,18 +113,20 @@ def mcrz(theta, control_qubits, target_qubit):
     for c in reversed(control_qubits):
         qml.CNOT(wires=[c, target_qubit])
 
+
 # ============================================================
 # CU (general controlled-U)
 # ============================================================
 def cu(theta, phi, lam, gamma, control_qubit, target_qubit):
-    qml.RZ((phi + lam)/2, wires=target_qubit)
-    qml.RY(theta/2, wires=target_qubit)
+    qml.RZ((phi + lam) / 2, wires=target_qubit)
+    qml.RY(theta / 2, wires=target_qubit)
     qml.CNOT(wires=[control_qubit, target_qubit])
-    qml.RY(-theta/2, wires=target_qubit)
-    qml.RZ(-(phi + lam)/2, wires=target_qubit)
+    qml.RY(-theta / 2, wires=target_qubit)
+    qml.RZ(-(phi + lam) / 2, wires=target_qubit)
     qml.CNOT(wires=[control_qubit, target_qubit])
     qml.RZ(lam, wires=target_qubit)
     qml.RZ(gamma, wires=control_qubit)
+
 
 # ============================================================
 # RZX gate
@@ -123,6 +137,7 @@ def rzx(theta, qubit1, qubit2):
     qml.RZ(theta, wires=qubit2)
     qml.CNOT(wires=[qubit1, qubit2])
     qml.Hadamard(wires=qubit2)
+
 
 # ============================================================
 # MS (Mølmer–Sørensen)
@@ -137,14 +152,17 @@ def ms(theta, qubits):
     qml.RX(-np.pi / 2, wires=q1)
     qml.RX(-np.pi / 2, wires=q2)
 
+
 # ============================================================
 # Sqrt X gates
 # ============================================================
 def sx(qubit):
     qml.RX(np.pi / 2, wires=qubit)
 
+
 def sxdg(qubit):
     qml.RX(-np.pi / 2, wires=qubit)
+
 
 # ============================================================
 # S-dagger and T-dagger
@@ -152,14 +170,17 @@ def sxdg(qubit):
 def sdg(qubit):
     qml.S.adjoint()(wires=qubit)
 
+
 def tdg(qubit):
     qml.T.adjoint()(wires=qubit)
+
 
 # ============================================================
 # R / RV (parameterized single-qubit rotations)
 # ============================================================
 def r(theta, phi, qubit):
     qml.Rot(theta, phi, 0.0, wires=qubit)  # approximate single-qubit R gate
+
 
 def rv(vx, vy, vz, qubit):
     qml.Rot(vx, vy, vz, wires=qubit)
@@ -173,6 +194,7 @@ def rxx(theta, q1, q2):
     qml.CNOT(wires=[q1, q2])
     qml.RX(theta, wires=q2)
     qml.CNOT(wires=[q1, q2])
+
 
 def ryy(theta, q1, q2):
     """Decomposition of RYY(theta) into native PennyLane operations"""

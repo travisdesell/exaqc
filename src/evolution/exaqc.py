@@ -1,4 +1,5 @@
 from src.circuits.gate_specifications import all_gate_specifications
+from src.circuits.gate_specifications import GateSpecifications
 
 
 class EXAQC:

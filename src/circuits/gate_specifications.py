@@ -53,7 +53,7 @@ class GateSpecification:
     def n_qubits(self) -> int:
         """Number of qubits this gate acts on (control + target)."""
         return len(self.qubits)
-    
+
     @property
     def pl_qubits(self) -> list[str]:
         """
@@ -107,7 +107,6 @@ class GateSpecifications:
         """
 
         return self.specifications[method_name]
-    
 
     def keys(self) -> list[str]:
         """

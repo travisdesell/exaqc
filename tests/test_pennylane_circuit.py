@@ -1,6 +1,4 @@
 import pytest
-import pennylane as qml
-
 from src.circuits.circuit import CircuitGenome
 
 
@@ -20,9 +18,16 @@ def test_pennylane_example_circuit_full_stack():
     qc.add_gate(depth=0.25, method_name="h", qubits=[("a", 0)])
     qc.add_gate(depth=0.30, method_name="h", qubits=[("b", 1)])
 
-    qc.add_gate(depth=0.31, method_name="rx", qubits=[("b", 1)], parameters={"theta": 0.2})
+    qc.add_gate(
+        depth=0.31, method_name="rx", qubits=[("b", 1)], parameters={"theta": 0.2}
+    )
 
-    qc.add_gate(depth=0.35, method_name="cp", qubits=[("b", 3), ("a", 0)], parameters={"theta": 0.3})
+    qc.add_gate(
+        depth=0.35,
+        method_name="cp",
+        qubits=[("b", 3), ("a", 0)],
+        parameters={"theta": 0.3},
+    )
 
     qc.add_gate(depth=0.40, method_name="ccz", qubits=[("b", 0), ("b", 1), ("b", 3)])
     qc.add_gate(depth=0.41, method_name="cswap", qubits=[("b", 0), ("b", 1), ("b", 2)])
@@ -44,7 +49,9 @@ def test_pennylane_example_circuit_full_stack():
     # ---- Basic sanity checks ----
     assert state is not None, "Returned state is None"
     assert hasattr(state, "shape"), "Returned object has no shape (not a state vector?)"
-    assert state.shape[0] == 2 ** 8, f"Expected statevector of size 256, got {state.shape}"
+    assert (
+        state.shape[0] == 2**8
+    ), f"Expected statevector of size 256, got {state.shape}"
 
     print("\n✅ PennyLane example circuit executed successfully")
     print(f"State shape: {state.shape}")

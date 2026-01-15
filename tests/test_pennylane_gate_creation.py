@@ -1,6 +1,5 @@
 import pytest
 import random
-import pennylane as qml
 
 from src.circuits.circuit import CircuitGenome
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
@@ -18,7 +17,9 @@ def test_gate_creation_pennylane(gate_method_name: str):
 
     # Skip gates that require validation
     if getattr(spec, "needs_validation", False):
-        pytest.skip(f"Skipping gate {gate_method_name} ({spec.name}) that needs validation")
+        pytest.skip(
+            f"Skipping gate {gate_method_name} ({spec.name}) that needs validation"
+        )
 
     print(f"\nTesting gate: {gate_method_name}")
     print(f"Specification: {spec}")

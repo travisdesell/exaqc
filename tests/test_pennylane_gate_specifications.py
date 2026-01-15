@@ -20,8 +20,12 @@ def test_gate_specification_pennylane(gate_method_name: str):
 
     # Skip gates that need validation
     if getattr(spec, "needs_validation", False):
-        warnings.warn(f"Skipping gate {gate_method_name} ({spec.name}) that needs validation")
-        pytest.skip(f"Skipping gate {gate_method_name} ({spec.name}) that needs validation")
+        warnings.warn(
+            f"Skipping gate {gate_method_name} ({spec.name}) that needs validation"
+        )
+        pytest.skip(
+            f"Skipping gate {gate_method_name} ({spec.name}) that needs validation"
+        )
 
     print(f"\nTesting gate: {gate_method_name}")
     print(f"Specification: {spec}")
@@ -32,8 +36,12 @@ def test_gate_specification_pennylane(gate_method_name: str):
 
     # Try to get the PennyLane operation
     if not spec.pennylane_op or not hasattr(qml, spec.pennylane_op):
-        warnings.warn(f"Gate '{gate_method_name}' not found in PennyLane. Skipping reflection check.")
-        pytest.skip(f"Gate '{gate_method_name}' not found in PennyLane. Skipping reflection check.")
+        warnings.warn(
+            f"Gate '{gate_method_name}' not found in PennyLane. Skipping reflection check."
+        )
+        pytest.skip(
+            f"Gate '{gate_method_name}' not found in PennyLane. Skipping reflection check."
+        )
 
     pl_gate_cls = getattr(qml, spec.pennylane_op)
 
@@ -44,11 +52,11 @@ def test_gate_specification_pennylane(gate_method_name: str):
         sig = inspect.getfullargspec(pl_gate_cls)
 
     # Positional args (skip self)
-    positional_args = sig.args[1:] if 'self' in sig.args else sig.args
+    positional_args = sig.args[1:] if "self" in sig.args else sig.args
 
     # Remove args that have default values
     if sig.defaults:
-        positional_args = positional_args[:len(positional_args) - len(sig.defaults)]
+        positional_args = positional_args[: len(positional_args) - len(sig.defaults)]
 
     # Keyword-only args that have no defaults
     kwonly_args = []

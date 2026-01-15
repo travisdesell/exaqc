@@ -7,6 +7,7 @@ from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
 from src.evolution.innovation import innovation_number_generator
 
+
 class Gate:
     """
     Represents a gate within a quantum circuit, which could have multiple inputs
@@ -127,7 +128,7 @@ class Gate:
         """
         Adds this gate to a PennyLane circuit using the provided wire registers.
 
-        Handles native PennyLane gates, decompositions for unsupported gates, 
+        Handles native PennyLane gates, decompositions for unsupported gates,
         multi-qubit / controlled gates, parametric gates, and adjoint (.inv) gates.
 
         Args:
@@ -153,7 +154,9 @@ class Gate:
         pennylane_op_name = getattr(spec, "pennylane_op", None)
 
         # Try native PennyLane gate first
-        decomposition_module = __import__("src.circuits.pennylane_decompositions", fromlist=["*"])
+        decomposition_module = __import__(
+            "src.circuits.pennylane_decompositions", fromlist=["*"]
+        )
 
         try:
             if pennylane_op_name is not None:
@@ -162,7 +165,9 @@ class Gate:
                     base_op_name = pennylane_op_name.split(".")[0]
                     gate_cls = getattr(qml, base_op_name)
                     gate_cls(*self.parameters.values(), wires=qubit_wires[0]).adjoint()
-                    print(f"Added adjoint gate {self.method_name} on wire {qubit_wires[0]}")
+                    print(
+                        f"Added adjoint gate {self.method_name} on wire {qubit_wires[0]}"
+                    )
                     return
 
                 gate_cls = getattr(qml, pennylane_op_name)
@@ -173,17 +178,23 @@ class Gate:
                 # Always pass wires as the last argument
                 gate_cls(*params, wires=qubit_wires)
 
-                print(f"Added native gate {self.method_name} ({pennylane_op_name}) on wires {qubit_wires}")
+                print(
+                    f"Added native gate {self.method_name} ({pennylane_op_name}) on wires {qubit_wires}"
+                )
 
             else:
                 # Use decomposition if native gate unavailable
                 decomp_func = getattr(decomposition_module, self.method_name, None)
                 if decomp_func is None:
-                    raise ValueError(f"No decomposition found for gate '{self.method_name}'")
+                    raise ValueError(
+                        f"No decomposition found for gate '{self.method_name}'"
+                    )
 
                 params = list(self.parameters.values()) if self.parameters else []
                 decomp_func(*params, *qubit_wires)
-                print(f"Added decomposed gate {self.method_name} on wires {qubit_wires}")
+                print(
+                    f"Added decomposed gate {self.method_name} on wires {qubit_wires}"
+                )
 
         except Exception as e:
             print(f"Failed to add gate {self.method_name}: {e}")
