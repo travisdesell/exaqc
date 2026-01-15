@@ -4,6 +4,7 @@ import bisect
 
 from qiskit import QuantumCircuit
 from qiskit import QuantumRegister, ClassicalRegister
+import pennylane as qml
 
 from src.circuits.gate import Gate
 
@@ -144,6 +145,55 @@ class CircuitGenome:
             circuit.measure(quantum_registers[name], classical_register)
 
         return circuit
+
+    def generate_pennylane_circuit(
+        self,
+        device_name: str = "default.qubit",
+        measure_registers: bool = True,
+    ):
+        """
+        Converts this genome into a PennyLane QNode-ready function.
+
+        Args:
+            device_name: Name of the PennyLane device to use.
+            measure_registers: If True, return measurement results for all wires (like Qiskit classical registers).
+
+        Returns:
+            A tuple (dev, qnode_fn), where `dev` is the PennyLane device and
+            `qnode_fn` is a QNode function that implements this circuit genome.
+        """
+        # 1️⃣ Create wire registers via qml.registers
+        total_qubits = sum(self.registers.values())
+        registers = qml.registers(dict(self.registers.items()))
+
+        # 2️⃣ Instantiate PennyLane device
+        dev = qml.device(device_name, wires=total_qubits)
+
+        # 3️⃣ Define the QNode function
+        @qml.qnode(dev)
+        def qnode_fn():
+            # Apply all gates in depth order
+            self.sort_gates()
+            for gate in self.gates:
+                gate.add_to_pennylane_circuit(registers)
+
+            # Optional: measure all wires in computational basis
+            # For PennyLane, measuring in classical bits is optional; return state
+            # return qml.state()
+
+            # 4️⃣ Measurement
+            if measure_registers:
+                # Return computational basis samples for each register
+                # Flatten all register wires for measurement
+                all_wires = []
+                for reg_wires in registers.values():
+                    all_wires.extend(reg_wires)
+                return qml.sample(wires=all_wires)
+            else:
+                # Return full state vector
+                return qml.state()
+
+        return dev, qnode_fn
 
 
 """

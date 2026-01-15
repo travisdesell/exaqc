@@ -1,6 +1,10 @@
+from __future__ import annotations
+
 from qiskit import QuantumCircuit, QuantumRegister
+import pennylane as qml
 
 from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
+from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
 from src.evolution.innovation import innovation_number_generator
 
 
@@ -19,6 +23,7 @@ class Gate:
         qubits: list[tuple[str, int]],
         parameters: dict[str, float] = {},
         innovation_number: int = None,
+        target: str = "qiskit",
     ):
         """
         Initializes a gate element in an evolved quantum circuit.
@@ -35,6 +40,7 @@ class Gate:
             innovation_number: is a unique number representing this gate across every evolved
                 quantum circuit it appears in. if a value is not provided, a new innovation number will be generated
                 for the gate.
+            target: denotes whether you are adding qiskit or pennylane gates
         """
 
         assert (depth > 0.0) and (depth < 1.0)
@@ -49,7 +55,10 @@ class Gate:
         self.qubits = qubits
         self.parameters = parameters
 
-        self.specs = qiskit_gate_specifications[self.method_name]
+        if target == "qiskit":
+            self.specs = qiskit_gate_specifications[self.method_name]
+        else:
+            self.specs = pennylane_gate_specifications[self.method_name]
 
         # the number of parameters and number of qubits provided need to be the
         # same as in the specifications
@@ -114,3 +123,79 @@ class Gate:
             qubit_args[argument_name] = registers[qubit_name][qubit_index]
 
         gate_method(**self.parameters, **qubit_args)
+
+    def add_to_pennylane_circuit(self, registers: dict[str, qml.Wires]):
+        """
+        Adds this gate to a PennyLane circuit using the provided wire registers.
+
+        Handles native PennyLane gates, decompositions for unsupported gates,
+        multi-qubit / controlled gates, parametric gates, and adjoint (.inv) gates.
+
+        Args:
+            registers: a dictionary mapping register names to PennyLane Wires objects.
+        """
+        if not self.enabled:
+            print(f"Gate {self.method_name} is disabled; skipping.")
+            return
+
+        spec = pennylane_gate_specifications[self.method_name]
+        n_qubits = getattr(spec, "n_qubits", 1)  # Number of qubits needed
+
+        # Build qubit wire list using self.qubits and register
+        qubit_wires = []
+        for i in range(n_qubits):
+            reg_name, qubit_index = self.qubits[i]
+            reg_wires = registers[reg_name]
+            if qubit_index is None:
+                qubit_wires.extend(reg_wires)
+            else:
+                qubit_wires.append(reg_wires[qubit_index])
+
+        pennylane_op_name = getattr(spec, "pennylane_op", None)
+
+        # Try native PennyLane gate first
+        decomposition_module = __import__(
+            "src.circuits.pennylane_decompositions", fromlist=["*"]
+        )
+
+        try:
+            if pennylane_op_name is not None:
+                # Handle adjoint gates
+                if ".adjoint" in pennylane_op_name:
+                    base_op_name = pennylane_op_name.split(".")[0]
+                    gate_cls = getattr(qml, base_op_name)
+                    gate_cls(*self.parameters.values(), wires=qubit_wires[0]).adjoint()
+                    print(
+                        f"Added adjoint gate {self.method_name} on wire {qubit_wires[0]}"
+                    )
+                    return
+
+                gate_cls = getattr(qml, pennylane_op_name)
+
+                # Parametric gates: pick parameters if any
+                params = list(self.parameters.values()) if self.parameters else []
+
+                # Always pass wires as the last argument
+                gate_cls(*params, wires=qubit_wires)
+
+                print(
+                    f"Added native gate {self.method_name} ({pennylane_op_name}) on wires {qubit_wires}"
+                )
+
+            else:
+                # Use decomposition if native gate unavailable
+                decomp_func = getattr(decomposition_module, self.method_name, None)
+                if decomp_func is None:
+                    raise ValueError(
+                        f"No decomposition found for gate '{self.method_name}'"
+                    )
+
+                params = list(self.parameters.values()) if self.parameters else []
+                decomp_func(*params, *qubit_wires)
+                print(
+                    f"Added decomposed gate {self.method_name} on wires {qubit_wires}"
+                )
+
+        except Exception as e:
+            print(f"Failed to add gate {self.method_name}: {e}")
+            raise

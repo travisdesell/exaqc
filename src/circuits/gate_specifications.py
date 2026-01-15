@@ -20,6 +20,7 @@ class GateSpecification:
         qubits: list[str],
         parameters: list[str] = [],
         needs_validation: bool = False,
+        pennylane_op: str | None = None,
     ):
         """
         Initializes a gate specification object which tracks the qiskit method name, formal name,
@@ -31,12 +32,14 @@ class GateSpecification:
             parameters: is a list of the parameter names for the non-qubit arguments to the qiskit method
             needs_validation: can be set to true for a gate method we know exists but we have not yet validated
                 how to use it correctly, so it will be turned off for testing and the EXAQC algorithm.
+            pennylane_op: method name in pennylane
         """
 
         self.name = name
         self.qubits = qubits
         self.parameters = parameters
         self.needs_validation = needs_validation
+        self.pennylane_op = pennylane_op
 
         # this will be set when when the GateSpecification is added to a
         # GateSpecifications object in the __setitem__ method.
@@ -49,6 +52,18 @@ class GateSpecification:
         """
 
         return f"'{self.name}' : {self.method_name}(qubits={self.qubits}, params={self.parameters})"
+
+    @property
+    def n_qubits(self) -> int:
+        """Number of qubits this gate acts on (control + target)."""
+        return len(self.qubits)
+
+    @property
+    def pl_qubits(self) -> list[str]:
+        """
+        For PennyLane, all gates take a single 'wires' argument at runtime.
+        """
+        return ["wires"]
 
 
 class GateSpecifications:
