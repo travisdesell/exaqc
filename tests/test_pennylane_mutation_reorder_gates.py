@@ -1,3 +1,4 @@
+import pytest
 from src.circuits.circuit import CircuitGenome
 from src.evolution.mutation import reorder_gate
 
