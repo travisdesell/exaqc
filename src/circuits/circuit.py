@@ -113,6 +113,7 @@ class CircuitGenome:
 
         Args:
             device_name: Name of the PennyLane device to use.
+            measure_registers: If True, return measurement results for all wires (like Qiskit classical registers).
 
         Returns:
             A tuple (dev, qnode_fn), where `dev` is the PennyLane device and
@@ -120,7 +121,6 @@ class CircuitGenome:
         """
         # 1️⃣ Create wire registers via qml.registers
         total_qubits = sum(self.registers.values())
-        # registers = qml.registers({name: size for name, size in self.registers.items()})
         registers = qml.registers(dict(self.registers.items()))
 
         # 2️⃣ Instantiate PennyLane device

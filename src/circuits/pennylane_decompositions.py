@@ -1,105 +1,3 @@
-# import pennylane as qml
-# import numpy as np
-
-# # =========================
-# # MCX (multi-controlled X)
-# # =========================
-# def mcx(controls, target):
-#     if len(controls) == 1:
-#         qml.CNOT(wires=[controls[0], target])
-#     elif len(controls) == 2:
-#         qml.Toffoli(wires=[controls[0], controls[1], target])
-#     else:
-#         # recursive decomposition
-#         qml.Toffoli(wires=[controls[-2], controls[-1], target])
-#         mcx(controls[:-1] + [target], target)
-#         qml.Toffoli(wires=[controls[-2], controls[-1], target])
-#         mcx(controls[:-1] + [target], target)
-
-# # =========================
-# # CSX (controlled sqrt X)
-# # =========================
-# def csx(control, target):
-#     qml.Hadamard(wires=target)
-#     qml.CRX(np.pi / 2, wires=[control, target])
-#     qml.Hadamard(wires=target)
-
-# # =========================
-# # CS (controlled S)
-# # =========================
-# def cs(control, target):
-#     qml.ControlledPhaseShift(np.pi / 2, wires=[control, target])
-
-# # =========================
-# # CSDG (controlled S-dagger)
-# # =========================
-# def csdg(control, target):
-#     qml.ControlledPhaseShift(-np.pi / 2, wires=[control, target])
-
-# # =========================
-# # DCX (Double CNOT)
-# # =========================
-# def dcx(q1, q2):
-#     qml.CNOT(wires=[q1, q2])
-#     qml.CNOT(wires=[q2, q1])
-
-# # =========================
-# # ECR (Echoed Cross Resonace)
-# # =========================
-# def ecr(q1, q2):
-#     qml.Hadamard(wires=q2)
-#     qml.CNOT(wires=[q1, q2])
-#     qml.RZ(np.pi/2, wires=q2)
-#     qml.CNOT(wires=[q1, q2])
-#     qml.Hadamard(wires=q2)
-
-# # =========================
-# # RCCX (Margolus)
-# # =========================
-# def rccx(c1, c2, target):
-#     qml.Hadamard(wires=target)
-#     qml.T(wires=target)
-#     qml.CNOT(wires=[c2, target])
-#     qml.T.adjoint()(wires=target)
-#     qml.CNOT(wires=[c1, target])
-#     qml.T(wires=target)
-#     qml.CNOT(wires=[c2, target])
-#     qml.T.adjoint()(wires=target)
-#     qml.Hadamard(wires=target)
-
-# # =========================
-# # RCCCX (3-control Margolus)
-# # =========================
-# def rcccx(c1, c2, c3, target):
-#     qml.Hadamard(wires=target)
-#     qml.T(wires=target)
-#     qml.Toffoli(wires=[c1, c2, c3])
-#     qml.T.adjoint()(wires=target)
-#     qml.Hadamard(wires=target)
-
-# # =========================
-# # RZX gate
-# # =========================
-# def rzx(theta, q1, q2):
-#     qml.Hadamard(wires=q2)
-#     qml.CNOT(wires=[q1, q2])
-#     qml.RZ(theta, wires=q2)
-#     qml.CNOT(wires=[q1, q2])
-#     qml.Hadamard(wires=q2)
-
-# # =========================
-# # MS (Molmer-Sorensen)
-# # =========================
-# def ms(theta, q1, q2):
-#     qml.RX(np.pi/2, wires=q1)
-#     qml.RX(np.pi/2, wires=q2)
-#     qml.CNOT(wires=[q1, q2])
-#     qml.RZ(theta, wires=q2)
-#     qml.CNOT(wires=[q1, q2])
-#     qml.RX(-np.pi/2, wires=q1)
-#     qml.RX(-np.pi/2, wires=q2)
-
-
 import pennylane as qml
 import numpy as np
 
@@ -278,20 +176,13 @@ def rxx(theta, q1, q2):
 
 def ryy(theta, q1, q2):
     """Decomposition of RYY(theta) into native PennyLane operations"""
-    # Step 1: H on both qubits
     qml.H(wires=q1)
     qml.H(wires=q2)
-    
-    # Step 2: S gates on both qubits
     qml.S(wires=q1)
     qml.S(wires=q2)
-    
-    # Step 3: CNOT, RY, CNOT
     qml.CNOT(wires=[q1, q2])
     qml.RY(theta, wires=q2)
     qml.CNOT(wires=[q1, q2])
-    
-    # Step 4: undo S and H
     qml.S(wires=q1).adjoint()
     qml.S(wires=q2).adjoint()
     qml.H(wires=q1)

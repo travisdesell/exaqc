@@ -123,45 +123,6 @@ class Gate:
 
         gate_method(**self.parameters, **qubit_args)
 
-
-    # def add_to_pennylane_circuit(self, registers: dict[str, qml.Wires]):
-    #     """
-    #     Adds this gate to a PennyLane circuit using the provided wire registers.
-
-    #     Args:
-    #         registers: a dictionary mapping register names to PennyLane Wires objects
-    #                 (e.g., created via `qml.registers({"q0": 3, "q1": 2})`).
-    #     """
-    #     if not self.enabled:
-    #         print(f"Gate {self.method_name} is disabled; skipping.")
-    #         return
-
-    #     # Get the PennyLane gate class
-    #     try:
-    #         gate_cls = getattr(qml, self.method_name)
-    #     except AttributeError:
-    #         raise ValueError(f"PennyLane does not have a gate named '{self.method_name}'")
-
-    #     # Build the wire list for this gate
-    #     qubit_wires = []
-    #     for i, qubit in enumerate(self.qubits):
-    #         reg_name, index = qubit
-    #         reg_wires = registers[reg_name]  # qml.Wires object
-
-    #         if index is None:
-    #             # Apply gate to whole register
-    #             qubit_wires.extend(reg_wires)
-    #         else:
-    #             qubit_wires.append(reg_wires[index])
-
-    #     # Apply the gate with parameters if any
-    #     print(f"Adding {self.method_name} on wires {qubit_wires} with params {self.parameters}")
-    #     if self.parameters:
-    #         gate_cls(*self.parameters.values(), wires=qubit_wires)
-    #     else:
-    #         gate_cls(wires=qubit_wires)
-
-
     def add_to_pennylane_circuit(self, registers: dict[str, qml.Wires]):
         """
         Adds this gate to a PennyLane circuit using the provided wire registers.

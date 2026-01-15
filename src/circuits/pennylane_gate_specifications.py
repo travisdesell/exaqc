@@ -131,7 +131,7 @@ pennylane_gate_specifications["rcccx"] = GateSpecification(
 )
 
 # ======================================================
-# Multi-controlled variadic gates
+# Multi-controlled gates
 # ======================================================
 pennylane_gate_specifications["mcx"] = GateSpecification(
     name="Multi-Controlled X",
