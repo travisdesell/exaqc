@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import random
 
 from src.evolution.exaqc import EXAQC
+from src.circuits.circuit import CircuitGenome
 from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
 from src.population.steady_state_population import SteadyStatePopulation
 
@@ -34,7 +35,9 @@ def random_objective_function(genome: CircuitGenome):
     count += 1
 
     if genome.fitness < best_fitness:
-        print(f"found new best genome number {genome.genome_number} with fitness: {genome.fitness}")
+        print(
+            f"found new best genome number {genome.genome_number} with fitness: {genome.fitness}"
+        )
 
         # plot each generated circuit to see how things are going
         circuit.draw(output="mpl")
@@ -71,7 +74,10 @@ if __name__ == "__main__":
         type=str,
         nargs="+",
         default=None,
-        help="If specified, EXAQC will only add gates with the given method names, otherwise it will use all available gates.",
+        help=(
+            "If specified, EXAQC will only add gates with the given method names, ",
+            "otherwise it will use all available gates.",
+        ),
     )
 
     args = parser.parse_args()
@@ -87,7 +93,7 @@ if __name__ == "__main__":
     exaqc = EXAQC(
         gate_specifications=allowed_gates,
         population=SteadyStatePopulation(max_population_size=50),
-        registers={"a" : 3, "b" : 3},
+        registers={"a": 3, "b": 3},
         objective_function=random_objective_function,
     )
 

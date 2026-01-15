@@ -40,7 +40,6 @@ class CircuitGenome:
         # if a genome has not yet been evaluated, its fitness is None
         self.fitness = None
 
-
     def copy(self, genome_number: int = None) -> CircuitGenome:
         """
         Creates a deep copy of this CircuitGenome, with potentially a new
@@ -62,14 +61,15 @@ class CircuitGenome:
             genome_number = self.genome_number
             fitness = None
 
-        new_genome = CircuitGenome(genome_number=genome_number, registers=self.registers.copy())
+        new_genome = CircuitGenome(
+            genome_number=genome_number, registers=self.registers.copy()
+        )
         new_genome.fitness = fitness
 
         for gate in self.gates:
             new_genome.add_existing_gate(gate)
 
         return new_genome
-
 
     def add_existing_gate(self, gate: Gate):
         """

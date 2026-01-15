@@ -65,7 +65,6 @@ class SteadyStatePopulation(PopulationStrategy):
         else:
             return None
 
-
     def insert_genome(self, genome: CircuitGenome, **kwargs) -> bool:
         """
         Inserts a genome back into the population.
@@ -79,10 +78,10 @@ class SteadyStatePopulation(PopulationStrategy):
             True if it was inserted into the population, False otherwise.
         """
 
-        #TODO: don't add duplicate genomes to the population
-        #options:
-        #1. if gate innovation numbers are the same, keep the genome with better fitness
-        #2. if gate innovation numbers are the same but fitness different, keep both
+        # TODO: don't add duplicate genomes to the population
+        # options:
+        # 1. if gate innovation numbers are the same, keep the genome with better fitness
+        # 2. if gate innovation numbers are the same but fitness different, keep both
 
         bisect.insort(self.population, genome, key=lambda genome: genome.fitness)
 

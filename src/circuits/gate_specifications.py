@@ -73,7 +73,7 @@ class GateSpecifications:
 
     def use_only(self, allowed_methods: list[str]) -> GateSpecifications:
         """
-        Used to create a new GateSpecifications object which only has the 
+        Used to create a new GateSpecifications object which only has the
         provided gate methods.
 
         Args:

@@ -5,7 +5,7 @@ from collections.abc import Callable
 from src.circuits.circuit import CircuitGenome
 from src.circuits.gate_specifications import GateSpecifications
 from src.evolution.mutation import add_gate, disable_gate, enable_gate, reorder_gate
-
+from src.population.population_strategy import PopulationStrategy
 
 
 class EXAQC:
@@ -37,13 +37,17 @@ class EXAQC:
         self.objective_function = objective_function
 
         print("Starting EXAQC with the following allowed gates:")
-        for gate in sorted(self.gate_specifications.values(), key=lambda g: g.method_name):
+        for gate in sorted(
+            self.gate_specifications.values(), key=lambda g: g.method_name
+        ):
             print(f"\t{gate}")
 
         # used to track how many genomes have been generated and set genome numbers
         self.genome_number = 0
 
-        initial_genome = CircuitGenome(genome_number=self.next_genome_number(), registers=self.registers)
+        initial_genome = CircuitGenome(
+            genome_number=self.next_genome_number(), registers=self.registers
+        )
 
         # generate the initial population
         for i in range(population.max_population_size):
@@ -51,7 +55,6 @@ class EXAQC:
             self.objective_function(child)
 
             self.population.insert_genome(child)
-
 
     def next_genome_number(self) -> int:
         """
@@ -91,7 +94,9 @@ class EXAQC:
 
             match mutation:
                 case "add_gate":
-                    gate_specification = random.choice(list(self.gate_specifications.values()))
+                    gate_specification = random.choice(
+                        list(self.gate_specifications.values())
+                    )
                     print(f"attempting {mutation} with {gate_specification}")
                     modified = add_gate(gate_specification, child)
 
@@ -123,5 +128,3 @@ class EXAQC:
             self.objective_function(child)
 
             self.population.insert_genome(child)
-
-
