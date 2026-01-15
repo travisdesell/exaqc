@@ -4,6 +4,8 @@ from src.circuits.circuit import CircuitGenome
 from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
 from src.evolution.mutation import add_gate
 
+from tests.innovation_validation import validate_innovation_numbers
+
 
 @pytest.mark.parametrize("gate_method_name", qiskit_gate_specifications.keys())
 def test_gate_creation(gate_method_name: str):
@@ -18,9 +20,11 @@ def test_gate_creation(gate_method_name: str):
     print(f"testing add gate for: {gate_method_name}, type: {type(gate_method_name)}")
 
     qc = CircuitGenome(genome_number=1, registers={"test": 10})
-    add_gate(qiskit_gate_specifications, gate_method_name, qc)
+    add_gate(qiskit_gate_specifications[gate_method_name], qc)
 
     assert len(qc.gates) == 1
+
+    validate_innovation_numbers(qc)
 
 
 @pytest.mark.parametrize("gate_method_name", qiskit_gate_specifications.keys())
@@ -44,13 +48,15 @@ def test_qubit_requirements(gate_method_name: str):
     for i in range(n_qubits + 2):
         # print(f"\ti is: {i}")
         qc = CircuitGenome(genome_number=1, registers={"test": i})
-        success = add_gate(qiskit_gate_specifications, gate_method_name, qc)
+        success = add_gate(specification, qc)
         # print(f"\tsuccess? : {success}")
 
         if i < n_qubits:
             assert success is False
         else:
             assert success is True
+
+    validate_innovation_numbers(qc)
 
 
 def test_all_gates_one_register():
@@ -64,12 +70,14 @@ def test_all_gates_one_register():
     gate_count = 0
     for gate_method_name, gate_specs in qiskit_gate_specifications.items():
         if not gate_specs.needs_validation:
-            add_gate(qiskit_gate_specifications, gate_method_name, qc)
+            add_gate(gate_specs, qc)
             gate_count += 1
 
     # we should have the same number of gates in the quantum circuit
     # as add gate mutation calls
     assert len(qc.gates) == gate_count
+
+    validate_innovation_numbers(qc)
 
 
 def test_all_gates_two_registers():
@@ -83,9 +91,11 @@ def test_all_gates_two_registers():
     gate_count = 0
     for gate_method_name, gate_specs in qiskit_gate_specifications.items():
         if not gate_specs.needs_validation:
-            add_gate(qiskit_gate_specifications, gate_method_name, qc)
+            add_gate(gate_specs, qc)
             gate_count += 1
 
     # we should have the same number of gates in the quantum circuit
     # as add gate mutation calls
     assert len(qc.gates) == gate_count
+
+    validate_innovation_numbers(qc)

@@ -1,13 +1,21 @@
-from src.circuits.gate_specifications import all_gate_specifications
+import random
+
+from collections.abc import Callable
+
+from src.circuits.circuit import CircuitGenome
 from src.circuits.gate_specifications import GateSpecifications
+from src.evolution.mutation import add_gate, disable_gate, enable_gate, reorder_gate
+from src.population.population_strategy import PopulationStrategy
 
 
 class EXAQC:
 
     def __init__(
         self,
-        gate_specifications: GateSpecifications = all_gate_specifications,
-        population: PopulationStrategy = None,
+        gate_specifications: GateSpecifications,
+        population: PopulationStrategy,
+        registers: dict[str, int],
+        objective_function: Callable[[CircuitGenome], None],
     ):
         """
         Creates an instance of Evolutionary Exploration of Augmenting Quantum Circuits given a
@@ -15,10 +23,108 @@ class EXAQC:
 
         args:
             gate_specifications: is an object containing the allowed gates specifications for the search
-                process. If it is none, it will default to the globally defined specifications for all
-                gates.
+                process, for either the pennylane or qiskit frameworks.
             population: is an instance of a subclass of the PopulationStrategy interface, utilized to get
                 parents for mutation or crossover and insert children back into the population.
+            registers: a dict of register names and sizes (the key is the qubit name, the value is its size)
+            objective_function: a method which takes a CircuitGenome, evaluates it and sets it's fitness
+                value.
         """
 
-        return
+        self.gate_specifications = gate_specifications
+        self.population = population
+        self.registers = registers
+        self.objective_function = objective_function
+
+        print("Starting EXAQC with the following allowed gates:")
+        for gate in sorted(
+            self.gate_specifications.values(), key=lambda g: g.method_name
+        ):
+            print(f"\t{gate}")
+
+        # used to track how many genomes have been generated and set genome numbers
+        self.genome_number = 0
+
+        initial_genome = CircuitGenome(
+            genome_number=self.next_genome_number(), registers=self.registers
+        )
+
+        # generate the initial population
+        for i in range(population.max_population_size):
+            child = self.mutate(initial_genome)
+            self.objective_function(child)
+
+            self.population.insert_genome(child)
+
+    def next_genome_number(self) -> int:
+        """
+        Increments and returns the next genome number.
+
+        Returns:
+            A new unique genome number for a new genome.
+        """
+
+        self.genome_number += 1
+        return self.genome_number
+
+    def mutate(self, parent: CircuitGenome) -> CircuitGenome:
+        """
+        Takes a given parent genome, makes a copy of it (with a new genome number) and
+        then applies a random mutation to it.
+
+        Args:
+            parent: is the genome to mutate
+
+        Returns:
+            A mutated copy of the parent genome as a child.
+        """
+
+        child = parent.copy(genome_number=self.next_genome_number())
+
+        mutation_options = ["add_gate", "disable_gate", "enable_gate", "reorder_gate"]
+
+        modified = False
+
+        print()
+        print("starting mutation process")
+        while not modified:
+            # keep trying to mutate until successful
+
+            mutation = random.choice(mutation_options)
+
+            match mutation:
+                case "add_gate":
+                    gate_specification = random.choice(
+                        list(self.gate_specifications.values())
+                    )
+                    print(f"attempting {mutation} with {gate_specification}")
+                    modified = add_gate(gate_specification, child)
+
+                case "disable_gate":
+                    print(f"attempting to mutate with {mutation}")
+                    modified = disable_gate(child)
+
+                case "enable_gate":
+                    print(f"attempting to mutate with {mutation}")
+                    modified = enable_gate(child)
+
+                case "reorder_gate":
+                    print(f"attempting to mutate with {mutation}")
+                    modified = reorder_gate(child)
+
+        return child
+
+    def run_for(self, number_genomes: int):
+        """
+        Runs EXAQC until it has generated and evaluated the given number of genomes.
+
+        Args:
+            number_genomes: how many genomes to generate with EXAQC
+        """
+
+        while self.genome_number < number_genomes:
+            parent = self.population.get_parent()
+            child = self.mutate(parent)
+            self.objective_function(child)
+
+            self.population.insert_genome(child)
