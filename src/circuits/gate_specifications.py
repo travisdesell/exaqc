@@ -38,13 +38,17 @@ class GateSpecification:
         self.parameters = parameters
         self.needs_validation = needs_validation
 
+        # this will be set when when the GateSpecification is added to a
+        # GateSpecifications object in the __setitem__ method.
+        self.method_name = None
+
     def __str__(self) -> str:
         """
         Returns:
             A human readable string of this gate
         """
 
-        return f"{self.name}({self.qubits}, {self.parameters})"
+        return f"'{self.name}' : {self.method_name}(qubits={self.qubits}, params={self.parameters})"
 
 
 class GateSpecifications:
@@ -67,6 +71,24 @@ class GateSpecifications:
 
         self.specifications = {}
 
+    def use_only(self, allowed_methods: list[str]) -> GateSpecifications:
+        """
+        Used to create a new GateSpecifications object which only has the 
+        provided gate methods.
+
+        Args:
+            allow_methods: are the gate method names for the gates to be
+                kept and used.
+        """
+
+        new_specs = GateSpecifications(self.target)
+
+        for method_name, specs in self.specifications.items():
+            if method_name in allowed_methods:
+                new_specs[method_name] = specs
+
+        return new_specs
+
     def __setitem__(self, method_name: str, gate_specification: GateSpecification):
         """
         Adds a new gate specification to this dict of gate specifications.
@@ -76,8 +98,9 @@ class GateSpecifications:
             gate_specification: is the GateSpecifcation object containing all the information.
         """
 
-        print(f"adding gate: {gate_specification}")
+        # print(f"adding gate: {gate_specification}")
 
+        gate_specification.method_name = method_name
         self.specifications[method_name] = gate_specification
 
     def __getitem__(self, method_name: str) -> GateSpecification:

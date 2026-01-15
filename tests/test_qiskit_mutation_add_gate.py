@@ -20,7 +20,7 @@ def test_gate_creation(gate_method_name: str):
     print(f"testing add gate for: {gate_method_name}, type: {type(gate_method_name)}")
 
     qc = CircuitGenome(genome_number=1, registers={"test": 10})
-    add_gate(qiskit_gate_specifications, gate_method_name, qc)
+    add_gate(qiskit_gate_specifications[gate_method_name], qc)
 
     assert len(qc.gates) == 1
 
@@ -48,7 +48,7 @@ def test_qubit_requirements(gate_method_name: str):
     for i in range(n_qubits + 2):
         # print(f"\ti is: {i}")
         qc = CircuitGenome(genome_number=1, registers={"test": i})
-        success = add_gate(qiskit_gate_specifications, gate_method_name, qc)
+        success = add_gate(specification, qc)
         # print(f"\tsuccess? : {success}")
 
         if i < n_qubits:
@@ -70,7 +70,7 @@ def test_all_gates_one_register():
     gate_count = 0
     for gate_method_name, gate_specs in qiskit_gate_specifications.items():
         if not gate_specs.needs_validation:
-            add_gate(qiskit_gate_specifications, gate_method_name, qc)
+            add_gate(gate_specs, qc)
             gate_count += 1
 
     # we should have the same number of gates in the quantum circuit
@@ -91,7 +91,7 @@ def test_all_gates_two_registers():
     gate_count = 0
     for gate_method_name, gate_specs in qiskit_gate_specifications.items():
         if not gate_specs.needs_validation:
-            add_gate(qiskit_gate_specifications, gate_method_name, qc)
+            add_gate(gate_specs, qc)
             gate_count += 1
 
     # we should have the same number of gates in the quantum circuit

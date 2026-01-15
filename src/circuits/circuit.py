@@ -1,5 +1,7 @@
 # import matplotlib.pyplot as plt
 
+import bisect
+
 from qiskit import QuantumCircuit
 from qiskit import QuantumRegister, ClassicalRegister
 
@@ -17,6 +19,8 @@ class CircuitGenome:
                 that genomes have been generated, e.g., 0 is the first genome created, 1 is the next, etc.
             registers: a dict of register names and sizes (the key is the qubit name, the value is its size)
         """
+        self.genome_number = genome_number
+
         # a dict of cubits where the key is the cubit name is the name of the
         # input quantum register and the value is an instantiated quantum register
         self.registers: dict[str, int] = registers
@@ -33,16 +37,51 @@ class CircuitGenome:
         # circuit
         self.gates: list[Gate] = []
 
+        # if a genome has not yet been evaluated, its fitness is None
+        self.fitness = None
+
+
+    def copy(self, genome_number: int = None) -> CircuitGenome:
+        """
+        Creates a deep copy of this CircuitGenome, with potentially a new
+        genome_number if it will be used as a child genome, e.g. for crossover
+        or mutation.
+
+        Args:
+            genome_number: if this is specified, the copy will use this new genome
+                number. This also means the fitness should be set to None as it will
+                be modified via crossover or mutation.
+
+        Returns:
+            A copy of this genome, with potentially modified genome number and fitness.
+        """
+
+        fitness = self.fitness
+
+        if genome_number is None:
+            genome_number = self.genome_number
+            fitness = None
+
+        new_genome = CircuitGenome(genome_number=genome_number, registers=self.registers.copy())
+        new_genome.fitness = fitness
+
+        for gate in self.gates:
+            new_genome.add_existing_gate(gate)
+
+        return new_genome
+
+
     def add_existing_gate(self, gate: Gate):
         """
-        Adds a new already created gate to this quantum circuit.
+        Adds a new already created gate to this quantum circuit, keeping the
+        gates in order sorted first by depth and then by innovation number to
+        handle any gates with the same depth (which shouldn't usually happen).
 
         Args:
             gate: is the gate to add.
         """
 
-        self.gates.append(gate)
-        self.sort_gates()
+        bisect.insort(self.gates, gate, key=lambda g: (g.depth, g.innovation_number))
 
     def add_gate(
         self,
@@ -52,7 +91,9 @@ class CircuitGenome:
         parameters: dict[str, float] = {},
     ):
         """
-        Adds a new gate to this quantum circuit at the given depth.
+        Adds a new already created gate to this quantum circuit, keeping the
+        gates in order sorted first by depth and then by innovation number to
+        handle any gates with the same depth (which shouldn't usually happen).
 
         Args:
             depth: a number between 0 and 1 representing the depth of the gate in the circuit.
@@ -62,8 +103,9 @@ class CircuitGenome:
             parameters: a dict where the key is the parameter name and the value is the parameter value
         """
 
-        self.gates.append(Gate(depth, method_name, qubits, parameters))
-        self.sort_gates()
+        gate = Gate(depth, method_name, qubits, parameters)
+        # make sure to add the gate in sorted order
+        bisect.insort(self.gates, gate, key=lambda g: (g.depth, g.innovation_number))
 
     def sort_gates(self):
         """

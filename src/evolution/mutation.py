@@ -2,7 +2,7 @@ import math
 import random
 
 from src.circuits.circuit import CircuitGenome
-from src.circuits.gate_specifications import GateSpecifications
+from src.circuits.gate_specifications import GateSpecification
 
 
 def disable_gate(circuit: CircuitGenome) -> bool:
@@ -89,8 +89,7 @@ def reorder_gate(circuit: CircuitGenome) -> bool:
 
 
 def add_gate(
-    gate_specifications: GateSpecifications,
-    gate_method_name: str,
+    gate_specification: GateSpecification,
     circuit: CircuitGenome,
 ) -> bool:
     """
@@ -100,10 +99,8 @@ def add_gate(
     selecting which gates to add at varying probabilities.
 
     Args:
-        gate_method_name: is the gate method name so the gate information
-            can be looked up in the gate_specifications dict.
-
-    Args:
+        gate_specification: is the GateSpecification for the new gate to
+            be added to the provided circuit
         circuit: is the CircuitGenome to mutate
 
     Returns:
@@ -111,17 +108,15 @@ def add_gate(
         circuit, otherwise it should always return true
     """
 
-    specification = gate_specifications[gate_method_name]
-
     # get the parameter args (if any) otherwise set to an empty list
     gate_parameters = {}
-    for parameter_name in specification.parameters:
+    for parameter_name in gate_specification.parameters:
         # generate a random angle as all parameter values are in radians
         gate_parameters[parameter_name] = random.uniform(-math.pi, math.pi)
 
     # create a register large enough for the gates input and
     # output qubits
-    qubit_args = specification.qubits
+    qubit_args = gate_specification.qubits
     n_qubits = len(qubit_args)
 
     # make sure there are enough qubits in the quantum circuit to
@@ -135,7 +130,7 @@ def add_gate(
 
     circuit.add_gate(
         depth=random.uniform(0.0, 1.0),
-        method_name=gate_method_name,
+        method_name=gate_specification.method_name,
         qubits=gate_qubits,
         parameters=gate_parameters,
     )
