@@ -281,6 +281,7 @@ pennylane_gate_specifications["rxx"] = GateSpecification(
     name="RXX",
     qubits=["qubit1", "qubit2"],
     parameters=["theta"],
+    needs_validation=True,
 )
 
 pennylane_gate_specifications["ryy"] = GateSpecification(

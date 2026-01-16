@@ -1,5 +1,5 @@
 # import matplotlib.pyplot as plt
-
+from __future__ import annotations
 import bisect
 
 from qiskit import QuantumCircuit
@@ -165,6 +165,7 @@ class CircuitGenome:
         # 1️⃣ Create wire registers via qml.registers
         total_qubits = sum(self.registers.values())
         registers = qml.registers(dict(self.registers.items()))
+        print(f"pennylane register: {registers}")
 
         # 2️⃣ Instantiate PennyLane device
         dev = qml.device(device_name, wires=total_qubits)
