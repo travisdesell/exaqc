@@ -11,7 +11,7 @@ The key for an entry is the method name to be used on the QuantumCircuit object.
     as the game method that accepts them (and they typically come after any
     qubit arguments).
 """
-
+from __future__ import annotations
 
 class GateSpecification:
     def __init__(
