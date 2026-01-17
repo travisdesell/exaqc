@@ -1,5 +1,6 @@
 import pytest
 import random
+import torch
 
 from src.circuits.circuit import CircuitGenome
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
@@ -50,6 +51,15 @@ def test_gate_creation_pennylane(gate_method_name: str):
     except Exception as e:
         pytest.fail(f"Failed to add gate {gate_method_name}: {e}")
 
+    n_qubits = sum(qc.registers.values())
+    input_bits = torch.zeros(n_qubits, dtype=torch.int64)
+
+    torch_params = {
+        name: torch.tensor(value, dtype=torch.float64)
+        for gate in qc.gates
+        for name, value in gate.parameters.items()
+    }
+
     # Generate PennyLane QNode
     try:
         dev, qnode_fn = qc.generate_pennylane_circuit(measure_registers=False)
@@ -58,7 +68,7 @@ def test_gate_creation_pennylane(gate_method_name: str):
 
     # Run the QNode to ensure execution works
     try:
-        state = qnode_fn()
+        state = qnode_fn(input_bits, torch_params)
     except Exception as e:
         pytest.fail(f"Execution failed for gate {gate_method_name}: {e}")
 

@@ -11,7 +11,7 @@ best_fitness = 1.0
 count = 0
 
 
-def random_objective_function(genome: CircuitGenome):
+def random_objective_function(genome: CircuitGenome, target="qiskit"):
     """
     Computes a random fitness value for a given circuit. This will
     assign the genome's fitness attribute to the new fitness value. It

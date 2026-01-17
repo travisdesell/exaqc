@@ -17,7 +17,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Callable, Dict, Optional, Any, List, Tuple, Union
-from src.utils.losses import *
+from src.utils.losses import (
+    fidelity,
+    loss_one_minus_fidelity,
+    loss_state_angle,
+    loss_kl_divergence,
+    loss_obs_mse
+)
 
 import torch
 
