@@ -11,8 +11,6 @@ Supported backends:
   - Qiskit circuits (via PennyLane conversion)
   - PennyLane-native circuits
 
-This module is intended to be used inside evolutionary or NAS-style
-optimization loops, enabling memetic (EA + gradient) learning.
 """
 
 from __future__ import annotations
@@ -186,57 +184,68 @@ def train_genome_objective(
     # 1️⃣ Extract trainable parameters
     torch_params = genome_to_torch_params(genome)
 
-    # 2️⃣ Build forward model
-    model_fn = build_forward_from_genome(
-        genome,
-        input_bits=input_bits,
-        target = target,
-    )
+    has_trainable_params = len(torch_params) > 0
 
-    # 3️⃣ Trainer
-    trainer = QuantumStateTrainer(
-        model_fn=lambda params: model_fn(params),
-        params=list(torch_params.values()),
-        target=target_state,
-        loss_name="fidelity",
-        normalize_states=True,
-    )
+    if has_trainable_params:
 
-    # 4️⃣ Train
-    logs = trainer.fit(
-        steps=steps,
-        lr=lr,
-        log_every=log_every,
-    )
+        # 2️⃣ Build forward model
+        model_fn = build_forward_from_genome(
+            genome,
+            input_bits=input_bits,
+            target = target,
+        )
 
-    # 5️⃣ Final forward pass
-    with torch.no_grad():
-        psi = model_fn(torch_params)
-        psi = psi / torch.linalg.norm(psi)
-        phi = target_state / torch.linalg.norm(target_state)
+        param_keys = list(torch_params.keys())
+        param_values = list(torch_params.values())
 
-    # 6️⃣ Compute all metrics
-    fid = loss_one_minus_fidelity(phi, psi)
-    angle = loss_state_angle(phi, psi)
-    probs_psi = statevector_to_probs(psi)
-    probs_phi = statevector_to_probs(phi)
+        def wrapped_model_fn(*flat_params):
+            param_dict = dict(zip(param_keys, flat_params))
+            return model_fn(param_dict)
 
-    tv = loss_total_variation(probs_phi, probs_psi)
-    kl = loss_kl_divergence(
-        probs_phi.clamp_min(1e-12),
-        probs_psi.clamp_min(1e-12),
-    )
+        # 3️⃣ Trainer
+        trainer = QuantumStateTrainer(
+            model_fn=wrapped_model_fn,
+            params=param_values,
+            target=target_state,
+            loss_name="fidelity",
+            normalize_states=True,
+        )
 
-    # 7️⃣ Store fitness (losses only, as requested)
-    genome.fitness = {
-        "fidelity_loss": float(fid.item()),
-        "angle_loss": float(angle.item()),
-        "total_variation": float(tv.item()),
-        "kl_divergence": float(kl.item()),
-    }
+        # 4️⃣ Train
+        logs = trainer.fit(
+            steps=steps,
+            lr=lr,
+            log_every=log_every,
+        )
 
-    # 8️⃣ Write trained params back to genome
-    torch_params_to_genome(genome, torch_params)
+        # 5️⃣ Final forward pass
+        with torch.no_grad():
+            psi = model_fn(torch_params)
+            psi = psi / torch.linalg.norm(psi)
+            phi = target_state / torch.linalg.norm(target_state)
+
+        # 6️⃣ Compute all metrics
+        fid = loss_one_minus_fidelity(phi, psi)
+        angle = loss_state_angle(phi, psi)
+        probs_psi = statevector_to_probs(psi)
+        probs_phi = statevector_to_probs(phi)
+
+        tv = loss_total_variation(probs_phi, probs_psi)
+        kl = loss_kl_divergence(
+            probs_phi.clamp_min(1e-12),
+            probs_psi.clamp_min(1e-12),
+        )
+
+        # 7️⃣ Store fitness (losses only, as requested)
+        genome.fitness = {
+            "fidelity_loss": float(fid.item()),
+            "angle_loss": float(angle.item()),
+            "total_variation": float(tv.item()),
+            "kl_divergence": float(kl.item()),
+        }
+
+        # 8️⃣ Write trained params back to genome
+        torch_params_to_genome(genome, torch_params)
 
     return genome
 

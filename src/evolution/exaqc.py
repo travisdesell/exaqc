@@ -83,7 +83,13 @@ class EXAQC:
 
         child = parent.copy(genome_number=self.next_genome_number())
 
-        mutation_options = ["add_gate", "disable_gate", "enable_gate", "reorder_gate"]
+        # mutation_options = ["add_gate", "disable_gate", "enable_gate", "reorder_gate"]
+        mutation_options = (
+        ["add_gate"]*6 +  # 60%
+        ["reorder_gate"]*3 +  # 30%
+        ["enable_gate"] +  # 5%
+        ["disable_gate"]    # 5%
+    )
 
         modified = False
 

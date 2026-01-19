@@ -6,11 +6,6 @@ circuits whose outputs are quantum statevectors. The trainer supports multiple
 loss functions (fidelity, angular distance, KL divergence, and observable MSE)
 and integrates with PyTorch-based optimization pipelines.
 
-Typical use cases include:
-- Variational quantum state preparation
-- Gate synthesis via state matching
-- Quantum neural network (QNN) training
-- Supervised quantum learning with state targets
 """
 
 from __future__ import annotations
@@ -287,6 +282,8 @@ class QuantumStateTrainer:
             loss = torch.stack(losses).mean()
             fid = torch.stack(fidelities).mean()
 
+            if not loss.requires_grad:
+                break
             loss.backward()
 
             if grad_clip_norm is not None:

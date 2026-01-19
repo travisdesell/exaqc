@@ -2,7 +2,7 @@ import pytest
 import torch
 from src.circuits.circuit import CircuitGenome
 
-# @pytest.mark.skip(reason="Not yet implemented")
+
 def test_pennylane_example_circuit_full_stack():
     """
     Integration test:
@@ -39,7 +39,7 @@ def test_pennylane_example_circuit_full_stack():
     input_bits = torch.zeros(n_qubits, dtype=torch.int64)
 
     torch_params = {
-        f"{name}": torch.tensor(value, dtype=torch.float64)
+        f"{gate.innovation_number}:{name}": torch.tensor(value, dtype=torch.float64)
         for gate in qc.gates
         for name, value in gate.parameters.items()
     }
