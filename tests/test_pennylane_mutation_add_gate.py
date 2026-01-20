@@ -19,7 +19,7 @@ def test_gate_creation_pennylane(gate_method_name: str):
         return
 
     qc = CircuitGenome(genome_number=1, registers={"test": 10})
-    add_gate(pennylane_gate_specifications, gate_method_name, qc)
+    add_gate(pennylane_gate_specifications[gate_method_name], qc)
 
     # one gate should have been added
     assert len(qc.gates) == 1
@@ -44,7 +44,7 @@ def test_qubit_requirements_pennylane(gate_method_name: str):
     # iterate up to a circuit size large enough to add the gate
     for i in range(n_qubits + 2):
         qc = CircuitGenome(genome_number=1, registers={"test": i})
-        success = add_gate(pennylane_gate_specifications, gate_method_name, qc)
+        success = add_gate(pennylane_gate_specifications[gate_method_name], qc)
 
         if i < n_qubits:
             assert success is False
@@ -61,7 +61,7 @@ def test_all_gates_one_register_pennylane():
     gate_count = 0
     for gate_method_name, gate_specs in pennylane_gate_specifications.items():
         if not getattr(gate_specs, "needs_validation", False):
-            add_gate(pennylane_gate_specifications, gate_method_name, qc)
+            add_gate(pennylane_gate_specifications[gate_method_name], qc)
             gate_count += 1
 
     # the number of gates in the circuit should match the number of mutation calls
@@ -77,7 +77,7 @@ def test_all_gates_two_registers_pennylane():
     gate_count = 0
     for gate_method_name, gate_specs in pennylane_gate_specifications.items():
         if not getattr(gate_specs, "needs_validation", False):
-            add_gate(pennylane_gate_specifications, gate_method_name, qc)
+            add_gate(pennylane_gate_specifications[gate_method_name], qc)
             gate_count += 1
 
     assert len(qc.gates) == gate_count

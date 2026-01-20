@@ -3,7 +3,7 @@ cubits:
   - x2
   - x3
   - x4
-  ...
+  # ...
 
 gates:
   - name: h
@@ -27,5 +27,5 @@ gates:
     target:
       - x3 # could also be x4
 
-  ...
+  # ...
 

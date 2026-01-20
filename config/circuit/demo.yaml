@@ -1,0 +1,52 @@
+quantum_model:
+  backend:
+    framework: pennylane      
+    device: default.qubit
+    shots: null         
+
+  register:
+    num_qubits: 3
+
+  parameters:
+    theta:
+      shape: [6]
+      init: uniform
+      range: [-0.1, 0.1]
+
+  circuit:
+    - gate: H
+      wires: [0]
+
+    - gate: RX
+      wires: [1]
+      param: theta[0]
+
+    - gate: RY
+      wires: [2]
+      param: theta[1]
+
+    - gate: CNOT
+      wires: [0, 1]
+
+    - gate: CNOT
+      wires: [1, 2]
+
+    - gate: RZ
+      wires: [0]
+      param: theta[2]
+
+    - gate: RY
+      wires: [1]
+      param: theta[3]
+
+    - gate: RZ
+      wires: [2]
+      param: theta[4]
+
+  measurement:
+    readout:
+      type: expectation
+      observables:
+        - PauliZ@0
+        - PauliZ@1
+        - PauliZ@2
