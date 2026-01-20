@@ -93,6 +93,10 @@ class EXAQC:
 
         modified = False
 
+        # only use the gates with which do not still require some validation from us to
+        # ensure compatability
+        allowed_gate_specifications = [v for v in self.gate_specifications.values() if v.needs_validation is False]
+
         print()
         print("starting mutation process")
         while not modified:
@@ -102,9 +106,7 @@ class EXAQC:
 
             match mutation:
                 case "add_gate":
-                    gate_specification = random.choice(
-                        list(self.gate_specifications.values())
-                    )
+                    gate_specification = random.choice(allowed_gate_specifications)
                     print(f"attempting {mutation} with {gate_specification}")
                     modified = add_gate(gate_specification, child)
 
