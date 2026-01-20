@@ -1,10 +1,11 @@
-# import matplotlib.pyplot as plt
-
+from __future__ import annotations
+from typing import Dict, Optional
 import bisect
 
 from qiskit import QuantumCircuit
 from qiskit import QuantumRegister, ClassicalRegister
 import pennylane as qml
+import torch
 
 from src.circuits.gate import Gate
 
@@ -146,10 +147,21 @@ class CircuitGenome:
 
         return circuit
 
+    def _register_wire_map(self):
+        """Return a dict mapping register names to PennyLane wires."""
+        wire_map = {}
+        offset = 0
+        for name, size in self.registers.items():
+            wire_map[name] = list(range(offset, offset + size))
+            offset += size
+        return wire_map
+
+
     def generate_pennylane_circuit(
         self,
         device_name: str = "default.qubit",
         measure_registers: bool = True,
+        shots: Optional[int] = None,
     ):
         """
         Converts this genome into a PennyLane QNode-ready function.
@@ -164,34 +176,44 @@ class CircuitGenome:
         """
         # 1️⃣ Create wire registers via qml.registers
         total_qubits = sum(self.registers.values())
-        registers = qml.registers(dict(self.registers.items()))
+        # registers = qml.registers(dict(self.registers.items()))
+        registers = self._register_wire_map()
+        print(f"pennylane register: {registers}")
 
         # 2️⃣ Instantiate PennyLane device
-        dev = qml.device(device_name, wires=total_qubits)
+        dev = qml.device(device_name, wires=total_qubits, shots=shots,)
 
         # 3️⃣ Define the QNode function
-        @qml.qnode(dev)
-        def qnode_fn():
+        @qml.qnode(dev, interface="torch")
+        def qnode_fn(
+            input_bits: torch.Tensor,
+            params: Dict[str, torch.Tensor],
+            ):
+            # Basis state preparation
+            qml.BasisState(input_bits, wires=range(total_qubits))
+
             # Apply all gates in depth order
             self.sort_gates()
             for gate in self.gates:
-                gate.add_to_pennylane_circuit(registers)
+                gate.add_to_pennylane_circuit(registers, params=params)
 
             # Optional: measure all wires in computational basis
             # For PennyLane, measuring in classical bits is optional; return state
             # return qml.state()
 
             # 4️⃣ Measurement
-            if measure_registers:
-                # Return computational basis samples for each register
-                # Flatten all register wires for measurement
-                all_wires = []
-                for reg_wires in registers.values():
-                    all_wires.extend(reg_wires)
-                return qml.sample(wires=all_wires)
-            else:
-                # Return full state vector
-                return qml.state()
+            # if measure_registers:
+            #     # Return computational basis samples for each register
+            #     # Flatten all register wires for measurement
+            #     all_wires = []
+            #     for reg_wires in registers.values():
+            #         all_wires.extend(reg_wires)
+            #     return qml.sample(wires=all_wires)
+            # else:
+            #     # Return full state vector
+            #     return qml.state()
+
+            return qml.state()
 
         return dev, qnode_fn
 

@@ -1,4 +1,5 @@
 import pytest
+import torch
 from src.circuits.circuit import CircuitGenome
 
 
@@ -34,6 +35,15 @@ def test_pennylane_example_circuit_full_stack():
     qc.add_gate(depth=0.42, method_name="cswap", qubits=[("b", 2), ("b", 3), ("b", 4)])
     qc.add_gate(depth=0.43, method_name="cswap", qubits=[("b", 3), ("b", 4), ("b", 0)])
 
+    n_qubits = sum(qc.registers.values())
+    input_bits = torch.zeros(n_qubits, dtype=torch.int64)
+
+    torch_params = {
+        f"{gate.innovation_number}:{name}": torch.tensor(value, dtype=torch.float64)
+        for gate in qc.gates
+        for name, value in gate.parameters.items()
+    }
+
     # ---- Generate PennyLane circuit ----
     try:
         dev, qnode_fn = qc.generate_pennylane_circuit(measure_registers=False)
@@ -42,7 +52,7 @@ def test_pennylane_example_circuit_full_stack():
 
     # ---- Execute ----
     try:
-        state = qnode_fn()
+        state = qnode_fn(input_bits, torch_params)
     except Exception as e:
         pytest.fail(f"Execution failed: {e}")
 

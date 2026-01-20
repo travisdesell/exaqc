@@ -1,17 +1,19 @@
 import argparse
 import matplotlib.pyplot as plt
 import random
+import pennylane as qml
+import torch
 
 from src.evolution.exaqc import EXAQC
 from src.circuits.circuit import CircuitGenome
-from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
+from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
 from src.population.steady_state_population import SteadyStatePopulation
 
 best_fitness = 1.0
 count = 0
 
 
-def random_objective_function(genome: CircuitGenome, target="qiskit"):
+def random_objective_function(genome: CircuitGenome, target="pennylane"):
     """
     Computes a random fitness value for a given circuit. This will
     assign the genome's fitness attribute to the new fitness value. It
@@ -26,9 +28,27 @@ def random_objective_function(genome: CircuitGenome, target="qiskit"):
             # them, e.g., if they are being trained
             gate.parameters[parameter] = value + random.uniform(-0.5, 0.5)
 
+    torch_params = {
+        f"{name}": torch.tensor(value, dtype=torch.float64)
+        for gate in genome.gates
+        for name, value in gate.parameters.items()
+    }
+    print(f"torch_params: {torch_params}")
+
     # just a test to make sure we can generate this circuit and not
     # break things
-    circuit = genome.generate_qiskit_circuit()
+    _, circuit = genome.generate_pennylane_circuit()
+
+    # Input qubits
+    n_qubits = sum(genome.registers.values())
+    input_bits = torch.zeros(n_qubits, dtype=torch.int64)
+
+    # --- Forward pass (just to validate genome can run) ---
+    try:
+        _ = circuit(input_bits, torch_params)
+    except Exception as e:
+        print(f"Failed to run forward pass for genome {genome.genome_number}: {e}")
+        state = None
 
     # make the fitnesses get progressively better
     genome.fitness = random.uniform(0.0, 1.0) - (count * 0.001)
@@ -40,9 +60,14 @@ def random_objective_function(genome: CircuitGenome, target="qiskit"):
         )
 
         # plot each generated circuit to see how things are going
-        circuit.draw(output="mpl")
-        plt.show()
-
+        try:
+            fig, ax = qml.draw_mpl(circuit)(input_bits, torch_params)
+            fig.savefig(f'plots/circuit_genome_{genome.fitness}.png', dpi=200, bbox_inches="tight")
+            plt.close()
+        except Exception as e:
+            print(
+                f"Cannot plot adjoint operation: {e}"
+            )
         best_fitness = genome.fitness
 
 
@@ -85,7 +110,7 @@ if __name__ == "__main__":
     max_population_size = args.max_population_size
     number_genomes = args.number_genomes
 
-    allowed_gates = qiskit_gate_specifications
+    allowed_gates = pennylane_gate_specifications
 
     if args.allowed_gates is not None:
         allowed_gates = allowed_gates.use_only(args.allowed_gates)

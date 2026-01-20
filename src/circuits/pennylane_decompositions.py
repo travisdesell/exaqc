@@ -63,11 +63,11 @@ def rccx(control_qubit1, control_qubit2, target_qubit):
     qml.Hadamard(wires=target_qubit)
     qml.T(wires=target_qubit)
     qml.CNOT(wires=[control_qubit2, target_qubit])
-    qml.T.adjoint()(wires=target_qubit)
+    qml.T(wires=target_qubit).adjoint()
     qml.CNOT(wires=[control_qubit1, target_qubit])
     qml.T(wires=target_qubit)
     qml.CNOT(wires=[control_qubit2, target_qubit])
-    qml.T.adjoint()(wires=target_qubit)
+    qml.T(wires=target_qubit).adjoint()
     qml.Hadamard(wires=target_qubit)
 
 
@@ -75,7 +75,7 @@ def rcccx(control_qubit1, control_qubit2, control_qubit3, target_qubit):
     qml.Hadamard(wires=target_qubit)
     qml.T(wires=target_qubit)
     mcx([control_qubit1, control_qubit2, control_qubit3, target_qubit])
-    qml.T.adjoint()(wires=target_qubit)
+    qml.T(wires=target_qubit).adjoint()
     qml.Hadamard(wires=target_qubit)
 
 
@@ -168,11 +168,11 @@ def sxdg(qubit):
 # S-dagger and T-dagger
 # ============================================================
 def sdg(qubit):
-    qml.S.adjoint()(wires=qubit)
+    qml.S(wires=qubit).adjoint()
 
 
 def tdg(qubit):
-    qml.T.adjoint()(wires=qubit)
+    qml.T(wires=qubit).adjoint()
 
 
 # ============================================================
