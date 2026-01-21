@@ -20,35 +20,6 @@ jobs:
 
         steps:
             -   uses: actions/checkout@v3.1.0
-                with:
-                    lfs: true
-                    fetch-depth: 1
-
-            -   name: Free Disk Space
-                run: |
-                    df -h
-
-                    echo "removing android..."
-                    sudo rm -rf /usr/local/lib/android || true
-                    sudo rm -rf /opt/android || true
-                    sudo rm -rf /usr/local/android-sdk || true
-                    sudo rm -rf /home/runner/Android || true
-                    echo "removed android"
-                    echo "removing dotnet..."
-                    sudo rm -rf /usr/share/dotnet || true
-                    sudo rm -rf /usr/share/doc/dotnet-* || true
-                    echo "removed dotnet"
-                    echo "removing haskell..."
-                    sudo rm -rf /opt/ghc || true
-                    sudo rm -rf /usr/local/.ghcup || true
-                    sudo rm -rf /opt/cabal || true
-                    sudo rm -rf /home/runner/.ghcup || true
-                    sudo rm -rf /home/runner/.cabal || true
-                    echo "removed haskell"
-
-                    df -h
-                    free -h
-
             -   name: Set up Python ${{ matrix.python-version }}
                 uses: actions/setup-python@v4.3.0
                 with:
