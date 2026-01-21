@@ -5,6 +5,7 @@ from loguru import logger
 
 from src.circuits.circuit import CircuitGenome
 from src.circuits.gate_specifications import GateSpecifications
+#from src.evolution.crossover import crossover
 from src.evolution.mutation import add_gate, disable_gate, enable_gate, reorder_gate
 from src.population.population_strategy import PopulationStrategy
 
@@ -133,6 +134,23 @@ class EXAQC:
         """
 
         while self.genome_number < number_genomes:
+            child = None
+
+            '''
+            if self.genome_number > self.population.max_population_size:
+                parents = self.population.get_parents(3)
+                child = CircuitGenome(
+                    genome_number=self.next_genome_number(), registers=self.registers
+                )
+
+                crossover(child, parents)
+                self.objective_function(child)
+
+            else:
+                parent = self.population.get_parent()
+                child = self.mutate(parent)
+                self.objective_function(child)
+            '''
             parent = self.population.get_parent()
             child = self.mutate(parent)
             self.objective_function(child)
