@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union, Callable
+from typing import Any, Optional, Union, Callable
 
 import yaml
 import torch
@@ -20,18 +20,20 @@ class LoadedModel:
             - For Qiskit: returns a QuantumCircuit
         bind: Optional callable used for parameter binding (Qiskit use-case).
     """
+
     framework: str
-    config: Dict[str, Any]
-    params: Dict[str, Union[torch.nn.Parameter, torch.Tensor]]
+    config: dict[str, Any]
+    params: dict[str, Union[torch.nn.Parameter, torch.Tensor]]
     build: Callable[[], Any]
-    bind: Optional[Callable[[Any, Dict[str, Any]], Any]] = None
+    bind: Optional[Callable[[Any, dict[str, Any]], Any]] = None
 
 
 # -----------------------
 # YAML parsing
 # -----------------------
 
-def load_yaml(path: str) -> Dict[str, Any]:
+
+def load_yaml(path: str) -> dict[str, Any]:
     """Load YAML file into a Python dict."""
     with open(path, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
@@ -44,7 +46,10 @@ def load_yaml(path: str) -> Dict[str, Any]:
 # Parameter handling
 # -----------------------
 
-def _init_tensor(init: str, shape: Tuple[int, ...], init_cfg: Dict[str, Any]) -> torch.Tensor:
+
+def _init_tensor(
+    init: str, shape: tuple[int, ...], init_cfg: dict[str, Any]
+) -> torch.Tensor:
     """Create an initial tensor according to init scheme."""
     if init == "zeros":
         return torch.zeros(shape, dtype=torch.float64)
@@ -60,7 +65,9 @@ def _init_tensor(init: str, shape: Tuple[int, ...], init_cfg: Dict[str, Any]) ->
     raise ValueError(f"Unknown init scheme '{init}'.")
 
 
-def build_torch_parameters(param_cfg: Dict[str, Any]) -> Dict[str, Union[torch.nn.Parameter, torch.Tensor]]:
+def build_torch_parameters(
+    param_cfg: dict[str, Any],
+) -> dict[str, Union[torch.nn.Parameter, torch.Tensor]]:
     """Build torch parameters from YAML 'parameters' section.
 
     Expected schema:
@@ -75,11 +82,13 @@ def build_torch_parameters(param_cfg: Dict[str, Any]) -> Dict[str, Union[torch.n
     Returns:
         Dict mapping parameter name -> torch.nn.Parameter (if trainable) else torch.Tensor.
     """
-    params: Dict[str, Union[torch.nn.Parameter, torch.Tensor]] = {}
+    params: dict[str, Union[torch.nn.Parameter, torch.Tensor]] = {}
     for name, spec in (param_cfg or {}).items():
         shape_list = spec.get("shape", [])
         if not isinstance(shape_list, list):
-            raise ValueError(f"parameters.{name}.shape must be a list, got {type(shape_list)}")
+            raise ValueError(
+                f"parameters.{name}.shape must be a list, got {type(shape_list)}"
+            )
         shape = tuple(int(x) for x in shape_list) if shape_list else tuple()
         init = str(spec.get("init", "normal"))
         trainable = bool(spec.get("trainable", True))
@@ -93,7 +102,8 @@ def build_torch_parameters(param_cfg: Dict[str, Any]) -> Dict[str, Union[torch.n
 # Expression resolution: "theta[3]" -> tensor element
 # -----------------------
 
-def resolve_param(expr: Any, params: Dict[str, Any]) -> Any:
+
+def resolve_param(expr: Any, params: dict[str, Any]) -> Any:
     """Resolve YAML param expressions to concrete python objects.
 
     Supported:
@@ -150,7 +160,8 @@ _PL_GATE_MAP = {
     "Toffoli": "Toffoli",
 }
 
-def build_pennylane_qnode(cfg: Dict[str, Any], params: Dict[str, Any]):
+
+def build_pennylane_qnode(cfg: dict[str, Any], params: dict[str, Any]):
     """Build a PennyLane QNode from ML-friendly YAML."""
     import pennylane as qml
 
@@ -165,7 +176,7 @@ def build_pennylane_qnode(cfg: Dict[str, Any], params: Dict[str, Any]):
 
     dev = qml.device(device_name, wires=n_qubits, shots=shots)
 
-    def _apply_gate(g: Dict[str, Any]):
+    def _apply_gate(g: dict[str, Any]):
         gate = str(g["gate"])
         wires = g.get("wires", [])
         if wires == "all":
@@ -175,7 +186,9 @@ def build_pennylane_qnode(cfg: Dict[str, Any], params: Dict[str, Any]):
 
         op_name = _PL_GATE_MAP.get(gate, gate)
         if not hasattr(qml, op_name):
-            raise ValueError(f"PennyLane does not have gate/op '{op_name}' (from '{gate}')")
+            raise ValueError(
+                f"PennyLane does not have gate/op '{op_name}' (from '{gate}')"
+            )
 
         op = getattr(qml, op_name)
 
@@ -239,7 +252,8 @@ def build_pennylane_qnode(cfg: Dict[str, Any], params: Dict[str, Any]):
 _QK_GATE_SIMPLE = {"H", "X", "Y", "Z", "CX", "CNOT", "CZ", "SWAP"}
 _QK_GATE_PARAM = {"RX", "RY", "RZ"}
 
-def build_qiskit_circuit(cfg: Dict[str, Any], params: Dict[str, Any]):
+
+def build_qiskit_circuit(cfg: dict[str, Any], params: dict[str, Any]):
     """Build a Qiskit QuantumCircuit from ML-friendly YAML.
 
     Returns:
@@ -257,7 +271,7 @@ def build_qiskit_circuit(cfg: Dict[str, Any], params: Dict[str, Any]):
     qc = QuantumCircuit(n_qubits)
 
     # Create Qiskit ParameterVectors for trainable params
-    qparams: Dict[str, Any] = {}
+    qparams: dict[str, Any] = {}
     for name, t in params.items():
         # infer length
         if isinstance(t, torch.nn.Parameter):
@@ -293,7 +307,7 @@ def build_qiskit_circuit(cfg: Dict[str, Any], params: Dict[str, Any]):
         i = int(idx)
         return pv[i]
 
-    def _apply_gate(g: Dict[str, Any]):
+    def _apply_gate(g: dict[str, Any]):
         gate = str(g["gate"])
         wires = g.get("wires", [])
         if wires == "all":
@@ -349,7 +363,7 @@ def build_qiskit_circuit(cfg: Dict[str, Any], params: Dict[str, Any]):
             wires = list(range(n_qubits))
         qc.measure_all() if wires == list(range(n_qubits)) else qc.measure(wires, wires)
 
-    def bind_fn(qc_in: Any, torch_params: Dict[str, Any]):
+    def bind_fn(qc_in: Any, torch_params: dict[str, Any]):
         """Bind Qiskit parameters using current torch parameter values.
 
         Args:
@@ -374,6 +388,7 @@ def build_qiskit_circuit(cfg: Dict[str, Any], params: Dict[str, Any]):
 # -----------------------
 # Public loader API
 # -----------------------
+
 
 def load_quantum_model_from_yaml(path: str) -> LoadedModel:
     """Load ML-friendly YAML and return a circuit builder (PennyLane or Qiskit).
@@ -413,16 +428,30 @@ def load_quantum_model_from_yaml(path: str) -> LoadedModel:
     params = build_torch_parameters(qm.get("parameters", {}))
 
     if framework == "pennylane":
+
         def build():
             return build_pennylane_qnode(cfg, params)
-        return LoadedModel(framework="pennylane", config=cfg, params=params, build=build)
+
+        return LoadedModel(
+            framework="pennylane", config=cfg, params=params, build=build
+        )
 
     if framework == "qiskit":
+
         def build():
             qc, bind_fn = build_qiskit_circuit(cfg, params)
             return qc
+
         # expose binder for convenience
         qc, bind_fn = build_qiskit_circuit(cfg, params)
-        return LoadedModel(framework="qiskit", config=cfg, params=params, build=lambda: qc, bind=bind_fn)
+        return LoadedModel(
+            framework="qiskit",
+            config=cfg,
+            params=params,
+            build=lambda: qc,
+            bind=bind_fn,
+        )
 
-    raise ValueError(f"Unknown backend.framework '{framework}'. Use 'pennylane' or 'qiskit'.")
+    raise ValueError(
+        f"Unknown backend.framework '{framework}'. Use 'pennylane' or 'qiskit'."
+    )

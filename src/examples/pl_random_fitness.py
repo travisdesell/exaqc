@@ -3,13 +3,16 @@ import matplotlib.pyplot as plt
 import random
 import pennylane as qml
 import torch
+import sys
+
+from loguru import logger
 
 from src.evolution.exaqc import EXAQC
 from src.circuits.circuit import CircuitGenome
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
 from src.population.steady_state_population import SteadyStatePopulation
 
-best_fitness = 1.0
+best_fitness = {"fidelity_loss": 1.0}
 count = 0
 
 
@@ -20,7 +23,7 @@ def random_objective_function(genome: CircuitGenome, target="pennylane"):
     also shows an example for modifying the genome's parameter values for
     parameterized gates.
     """
-    global best_fitness, count
+    global best_fitness, count  # noqa: F824
 
     for gate in genome.gates:
         for parameter, value in gate.parameters.items():
@@ -33,7 +36,7 @@ def random_objective_function(genome: CircuitGenome, target="pennylane"):
         for gate in genome.gates
         for name, value in gate.parameters.items()
     }
-    print(f"torch_params: {torch_params}")
+    logger.info(f"torch_params: {torch_params}")
 
     # just a test to make sure we can generate this circuit and not
     # break things
@@ -47,27 +50,32 @@ def random_objective_function(genome: CircuitGenome, target="pennylane"):
     try:
         _ = circuit(input_bits, torch_params)
     except Exception as e:
-        print(f"Failed to run forward pass for genome {genome.genome_number}: {e}")
-        state = None
+        logger.error(
+            f"Failed to run forward pass for genome {genome.genome_number}: {e}"
+        )
 
     # make the fitnesses get progressively better
-    genome.fitness = random.uniform(0.0, 1.0) - (count * 0.001)
+    genome.fitness = {
+        "fidelity_loss": random.uniform(0.0, 1.0) - (count * 0.001),
+    }
     count += 1
 
-    if genome.fitness < best_fitness:
-        print(
+    if genome.fitness["fidelity_loss"] < best_fitness["fidelity_loss"]:
+        logger.info(
             f"found new best genome number {genome.genome_number} with fitness: {genome.fitness}"
         )
 
         # plot each generated circuit to see how things are going
         try:
             fig, ax = qml.draw_mpl(circuit)(input_bits, torch_params)
-            fig.savefig(f'plots/circuit_genome_{genome.fitness}.png', dpi=200, bbox_inches="tight")
+            fig.savefig(
+                f"plots/circuit_genome_{genome.fitness}.png",
+                dpi=200,
+                bbox_inches="tight",
+            )
             plt.close()
         except Exception as e:
-            print(
-                f"Cannot plot adjoint operation: {e}"
-            )
+            logger.error(f"Cannot plot adjoint operation: {e}")
         best_fitness = genome.fitness
 
 
@@ -105,7 +113,21 @@ if __name__ == "__main__":
         ),
     )
 
+    parser.add_argument(
+        "--logging_level",
+        type=str,
+        required=False,
+        default="INFO",
+        help="""One of the 5 default logging levels for showing on terminal. Pick DEBUG to show everything.""",
+    )
+
+    # Parse arguments
     args = parser.parse_args()
+
+    # remove the old logging handler.
+    logger.remove()
+    # create a new logging handler at the appropriate level
+    logger.add(sys.stdout, level=args.logging_level)
 
     max_population_size = args.max_population_size
     number_genomes = args.number_genomes

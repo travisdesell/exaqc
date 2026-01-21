@@ -11,7 +11,10 @@ The key for an entry is the method name to be used on the QuantumCircuit object.
     as the game method that accepts them (and they typically come after any
     qubit arguments).
 """
+
 from __future__ import annotations
+from loguru import logger
+
 
 class GateSpecification:
     def __init__(
@@ -77,7 +80,7 @@ class GateSpecifications:
         """
 
         if target not in ["qiskit", "pennylane"]:
-            print(
+            logger.error(
                 f"ERROR: target framework '{target}' was neither 'qiskit' nor 'pennylane'"
             )
             exit(1)
@@ -113,7 +116,7 @@ class GateSpecifications:
             gate_specification: is the GateSpecifcation object containing all the information.
         """
 
-        # print(f"adding gate: {gate_specification}")
+        logger.debug(f"adding gate: {gate_specification}")
 
         gate_specification.method_name = method_name
         self.specifications[method_name] = gate_specification

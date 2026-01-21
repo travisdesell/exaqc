@@ -18,7 +18,8 @@ from __future__ import annotations
 from typing import Dict, Any, Optional
 
 import torch
-import pennylane as qml
+
+# import pennylane as qml
 from qiskit import QuantumCircuit
 
 from src.circuits.circuit import CircuitGenome
@@ -79,10 +80,7 @@ def torch_params_to_genome(
 
 
 def build_forward_from_genome(
-    genome: CircuitGenome,
-    *,
-    input_bits=None,
-    target: str = "qiskit"
+    genome: CircuitGenome, *, input_bits=None, target: str = "qiskit"
 ):
     """
     Build a differentiable forward model from a CircuitGenome.
@@ -125,7 +123,6 @@ def build_forward_from_genome(
             return qnode_fn(input_bits, params)
 
         return forward
-    
 
     def _build_qiskit_forward(
         genome: CircuitGenome,
@@ -156,7 +153,6 @@ def build_forward_from_genome(
             return forward(params)
 
         return wrapped_forward
-
 
     if target == "pennylane":
         return _build_pl_forward(genome, input_bits=input_bits)
@@ -192,7 +188,7 @@ def train_genome_objective(
         model_fn = build_forward_from_genome(
             genome,
             input_bits=input_bits,
-            target = target,
+            target=target,
         )
 
         param_keys = list(torch_params.keys())
@@ -212,7 +208,7 @@ def train_genome_objective(
         )
 
         # 4️⃣ Train
-        logs = trainer.fit(
+        logs = trainer.fit(  # noqa: F841
             steps=steps,
             lr=lr,
             log_every=log_every,
@@ -248,4 +244,3 @@ def train_genome_objective(
         torch_params_to_genome(genome, torch_params)
 
     return genome
-

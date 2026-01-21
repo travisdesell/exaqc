@@ -59,6 +59,10 @@ def test_gate_creation(gate_method_name: str):
 
     validate_innovation_numbers(qc)
 
-    qc.generate_qiskit_circuit()
+    try:
+        print("generating qiskit circuit")
+        qc.generate_qiskit_circuit()
+    except Exception as e:
+        pytest.fail(f"Execution failed for gate {gate_method_name}: {e}")
 
     print()

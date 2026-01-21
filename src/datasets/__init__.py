@@ -1,1 +1,1 @@
-from .HalfAdderDataset import HalfAdderDataset
+from .HalfAdderDataset import HalfAdderDataset  # noqa

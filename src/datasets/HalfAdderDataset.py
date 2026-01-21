@@ -19,6 +19,7 @@ def bits_to_statevector(bits: List[int], n_qubits: int) -> torch.Tensor:
     state[index] = 1.0 + 0.0j
     return state
 
+
 class HalfAdderDataset(QuantumDataset):
     """
     Torch-style dataset for the half-adder truth table.
@@ -65,7 +66,6 @@ class HalfAdderDataset(QuantumDataset):
 
             target_state = bits_to_statevector(output_bits, self.n_qubits)
             self._data.append((input_bits, target_state))
-
 
     def __len__(self) -> int:
         return len(self._data)

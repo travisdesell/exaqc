@@ -1,4 +1,5 @@
 from __future__ import annotations
+from loguru import logger
 from typing import Dict, Optional
 import bisect
 
@@ -156,7 +157,6 @@ class CircuitGenome:
             offset += size
         return wire_map
 
-
     def generate_pennylane_circuit(
         self,
         device_name: str = "default.qubit",
@@ -174,21 +174,25 @@ class CircuitGenome:
             A tuple (dev, qnode_fn), where `dev` is the PennyLane device and
             `qnode_fn` is a QNode function that implements this circuit genome.
         """
-        # 1️⃣ Create wire registers via qml.registers
+        # Create wire registers via qml.registers
         total_qubits = sum(self.registers.values())
         # registers = qml.registers(dict(self.registers.items()))
         registers = self._register_wire_map()
-        print(f"pennylane register: {registers}")
+        logger.info(f"pennylane register: {registers}")
 
-        # 2️⃣ Instantiate PennyLane device
-        dev = qml.device(device_name, wires=total_qubits, shots=shots,)
+        # Instantiate PennyLane device
+        dev = qml.device(
+            device_name,
+            wires=total_qubits,
+            shots=shots,
+        )
 
-        # 3️⃣ Define the QNode function
+        # Define the QNode function
         @qml.qnode(dev, interface="torch")
         def qnode_fn(
             input_bits: torch.Tensor,
             params: Dict[str, torch.Tensor],
-            ):
+        ):
             # Basis state preparation
             qml.BasisState(input_bits, wires=range(total_qubits))
 

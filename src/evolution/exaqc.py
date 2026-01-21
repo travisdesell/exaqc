@@ -1,6 +1,7 @@
 import random
 
 from collections.abc import Callable
+from loguru import logger
 
 from src.circuits.circuit import CircuitGenome
 from src.circuits.gate_specifications import GateSpecifications
@@ -16,7 +17,6 @@ class EXAQC:
         population: PopulationStrategy,
         registers: dict[str, int],
         objective_function: Callable[[CircuitGenome], None],
-        target: str = "qiskit",
     ):
         """
         Creates an instance of Evolutionary Exploration of Augmenting Quantum Circuits given a
@@ -30,7 +30,6 @@ class EXAQC:
             registers: a dict of register names and sizes (the key is the qubit name, the value is its size)
             objective_function: a method which takes a CircuitGenome, evaluates it and sets it's fitness
                 value.
-            target: a flag to denote whether the circuit is in qiskit or pennylane
         """
 
         self.gate_specifications = gate_specifications
@@ -38,11 +37,11 @@ class EXAQC:
         self.registers = registers
         self.objective_function = objective_function
 
-        print("Starting EXAQC with the following allowed gates:")
+        logger.info("Starting EXAQC with the following allowed gates:")
         for gate in sorted(
             self.gate_specifications.values(), key=lambda g: g.method_name
         ):
-            print(f"\t{gate}")
+            logger.info(f"\t{gate}")
 
         # used to track how many genomes have been generated and set genome numbers
         self.genome_number = 0
@@ -54,7 +53,7 @@ class EXAQC:
         # generate the initial population
         for i in range(population.max_population_size):
             child = self.mutate(initial_genome)
-            self.objective_function(child, target=target)
+            self.objective_function(child)
 
             self.population.insert_genome(child)
 
@@ -85,20 +84,21 @@ class EXAQC:
 
         # mutation_options = ["add_gate", "disable_gate", "enable_gate", "reorder_gate"]
         mutation_options = (
-        ["add_gate"]*6 +  # 60%
-        ["reorder_gate"]*3 +  # 30%
-        ["enable_gate"] +  # 5%
-        ["disable_gate"]    # 5%
-    )
+            ["add_gate"] * 6  # 60%
+            + ["reorder_gate"] * 3  # 30%
+            + ["enable_gate"]  # 5%
+            + ["disable_gate"]  # 5%
+        )
 
         modified = False
 
         # only use the gates with which do not still require some validation from us to
         # ensure compatability
-        allowed_gate_specifications = [v for v in self.gate_specifications.values() if v.needs_validation is False]
+        allowed_gate_specifications = [
+            v for v in self.gate_specifications.values() if v.needs_validation is False
+        ]
 
-        print()
-        print("starting mutation process")
+        logger.info("starting mutation process")
         while not modified:
             # keep trying to mutate until successful
 
@@ -107,19 +107,19 @@ class EXAQC:
             match mutation:
                 case "add_gate":
                     gate_specification = random.choice(allowed_gate_specifications)
-                    print(f"attempting {mutation} with {gate_specification}")
+                    logger.info(f"\tattempting {mutation} with {gate_specification}")
                     modified = add_gate(gate_specification, child)
 
                 case "disable_gate":
-                    print(f"attempting to mutate with {mutation}")
+                    logger.info(f"\tattempting to mutate with {mutation}")
                     modified = disable_gate(child)
 
                 case "enable_gate":
-                    print(f"attempting to mutate with {mutation}")
+                    logger.info(f"\tattempting to mutate with {mutation}")
                     modified = enable_gate(child)
 
                 case "reorder_gate":
-                    print(f"attempting to mutate with {mutation}")
+                    logger.info(f"\tattempting to mutate with {mutation}")
                     modified = reorder_gate(child)
 
         return child
