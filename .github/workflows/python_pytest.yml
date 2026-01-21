@@ -1,0 +1,80 @@
+# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
+# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
+
+name: Automated PyTest
+
+on:
+    push:
+        branches:
+            - "*"
+    pull_request:
+        branches:
+            - "*"
+
+jobs:
+    python-run-tests:
+        runs-on: ubuntu-latest
+        strategy:
+            matrix:
+                python-version: [ "3.12" ]
+
+        steps:
+            -   uses: actions/checkout@v3.1.0
+                with:
+                    lfs: true
+                    fetch-depth: 1
+
+            -   name: Free Disk Space
+                run: |
+                    df -h
+
+                    echo "removing android..."
+                    sudo rm -rf /usr/local/lib/android || true
+                    sudo rm -rf /opt/android || true
+                    sudo rm -rf /usr/local/android-sdk || true
+                    sudo rm -rf /home/runner/Android || true
+                    echo "removed android"
+                    echo "removing dotnet..."
+                    sudo rm -rf /usr/share/dotnet || true
+                    sudo rm -rf /usr/share/doc/dotnet-* || true
+                    echo "removed dotnet"
+                    echo "removing haskell..."
+                    sudo rm -rf /opt/ghc || true
+                    sudo rm -rf /usr/local/.ghcup || true
+                    sudo rm -rf /opt/cabal || true
+                    sudo rm -rf /home/runner/.ghcup || true
+                    sudo rm -rf /home/runner/.cabal || true
+                    echo "removed haskell"
+
+                    df -h
+                    free -h
+
+            -   name: Set up Python ${{ matrix.python-version }}
+                uses: actions/setup-python@v4.3.0
+                with:
+                    python-version: ${{ matrix.python-version }}
+            -   name: Install requirements
+                run: |
+                    df -h
+                    sudo apt-get update
+                    sudo apt-get install -y exempi
+                    sudo apt-get install -y libimage-exiftool-perl
+                    python -m pip install --upgrade pip
+                    pip install -r requirements-testing.txt
+                    pip install '.[testing]'
+                    df -h
+            -   name: Add to Path
+                run: |
+                    whereis perl
+                    whereis exiftool
+                    export PATH=$PATH:$(pwd)
+            -   name: Run test suite
+                run: |
+                    export PYTHONPATH=.
+                    export EXIFTOOL_PATH=/usr/bin/exiftool
+                    export PERL_PATH=/usr/bin/perl
+                    export CI=true
+
+                    df -h
+                    free -h
+                    python -m pytest . --durations=0 --ignore=tests/solar_flight_coverage/
