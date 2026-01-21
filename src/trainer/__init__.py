@@ -1,1 +1,1 @@
-from .trainer import QuantumStateTrainer
+from .trainer import QuantumStateTrainer  # noqa: F401

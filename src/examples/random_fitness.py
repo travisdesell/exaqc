@@ -1,13 +1,16 @@
 import argparse
 import matplotlib.pyplot as plt
 import random
+import sys
+
+from loguru import logger
 
 from src.evolution.exaqc import EXAQC
 from src.circuits.circuit import CircuitGenome
 from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
 from src.population.steady_state_population import SteadyStatePopulation
 
-best_fitness = 1.0
+best_fitness = {"fidelity_loss": 1.0}
 count = 0
 
 
@@ -31,11 +34,13 @@ def random_objective_function(genome: CircuitGenome, target="qiskit"):
     circuit = genome.generate_qiskit_circuit()
 
     # make the fitnesses get progressively better
-    genome.fitness = random.uniform(0.0, 1.0) - (count * 0.001)
+    genome.fitness = {
+        "fidelity_loss": random.uniform(0.0, 1.0) - (count * 0.001),
+    }
     count += 1
 
-    if genome.fitness < best_fitness:
-        print(
+    if genome.fitness["fidelity_loss"] < best_fitness["fidelity_loss"]:
+        logger.info(
             f"found new best genome number {genome.genome_number} with fitness: {genome.fitness}"
         )
 
@@ -80,7 +85,21 @@ if __name__ == "__main__":
         ),
     )
 
+    parser.add_argument(
+        "--logging_level",
+        type=str,
+        required=False,
+        default="INFO",
+        help="""One of the 5 default logging levels for showing on terminal. Pick DEBUG to show everything.""",
+    )
+
+    # Parse arguments
     args = parser.parse_args()
+
+    # remove the old logging handler.
+    logger.remove()
+    # create a new logging handler at the appropriate level
+    logger.add(sys.stdout, level=args.logging_level)
 
     max_population_size = args.max_population_size
     number_genomes = args.number_genomes

@@ -1,13 +1,19 @@
 import argparse
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 import pennylane as qml
 import torch
+import sys
+
+from loguru import logger
 
 from src.evolution.exaqc import EXAQC
 from src.circuits.circuit import CircuitGenome
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
 from src.population.steady_state_population import SteadyStatePopulation
-from src.objectives.genome_objectives import train_genome_objective, genome_to_torch_params
+from src.objectives.genome_objectives import (
+    train_genome_objective,
+    genome_to_torch_params,
+)
 from src.datasets import HalfAdderDataset
 
 best_fitness = float("inf")
@@ -18,7 +24,7 @@ best_genome: CircuitGenome = None
 dataset = HalfAdderDataset()
 
 
-def half_adder_objective(genome: CircuitGenome, target: str = "pennylane"):
+def half_adder_objective(genome: CircuitGenome):
     """
     Memetic objective:
       - For each input (a,b)
@@ -33,17 +39,16 @@ def half_adder_objective(genome: CircuitGenome, target: str = "pennylane"):
     example_input = torch.zeros(n_qubits, dtype=torch.int64)
     params = genome_to_torch_params(genome)
 
-    
     for input_bits, target_state in dataset:
         genome = train_genome_objective(
             genome,
             input_bits=input_bits,
             target_state=target_state,
-            target=target,
+            target="pennylane",
             steps=500,
         )
 
-        print(f"[INFO   ] Loss: {genome.fitness}")
+        logger.info(f"Loss: {genome.fitness}")
 
         if genome.fitness is None:
             # No trainable parameters → evaluate directly
@@ -57,16 +62,14 @@ def half_adder_objective(genome: CircuitGenome, target: str = "pennylane"):
             total_fidelity_loss += float(fidelity_loss.item())
         else:
             total_fidelity_loss += genome.fitness["fidelity_loss"]
-    
+
     avg_loss = total_fidelity_loss / len(dataset)
 
     if genome.fitness is None:
-        genome.fitness = {
-                "fidelity_loss": avg_loss
-            }
+        genome.fitness = {"fidelity_loss": avg_loss}
 
     if avg_loss < best_fitness:
-        print(
+        logger.info(
             f"🎯 New best genome {genome.genome_number} "
             f"with fidelity loss: {avg_loss:.6f}"
         )
@@ -81,12 +84,11 @@ def half_adder_objective(genome: CircuitGenome, target: str = "pennylane"):
                 bbox_inches="tight",
             )
         except Exception as e:
-            print(f"⚠️ Could not plot circuit (adjoint issue?): {e}")
+            logger.error(f"⚠️ Could not plot circuit (adjoint issue?): {e}")
 
         best_fitness = avg_loss
 
     return genome
-
 
 
 if __name__ == "__main__":
@@ -124,18 +126,20 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--backend",
-        "-b",
-        required=False,
+        "--logging_level",
         type=str,
-        default='qiskit',
-        help=(
-            "If specified, EXAQC will use the provided option between qiskit or pennylane ",
-            "otherwise it will use qiskit.",
-        ),
+        required=False,
+        default="INFO",
+        help="""One of the 5 default logging levels for showing on terminal. Pick DEBUG to show everything.""",
     )
 
+    # Parse arguments
     args = parser.parse_args()
+
+    # remove the old logging handler.
+    logger.remove()
+    # create a new logging handler at the appropriate level
+    logger.add(sys.stdout, level=args.logging_level)
 
     max_population_size = args.max_population_size
     number_genomes = args.number_genomes
@@ -150,7 +154,6 @@ if __name__ == "__main__":
         population=SteadyStatePopulation(max_population_size=50),
         registers={"q": 4},
         objective_function=half_adder_objective,
-        target = args.backend
     )
 
     exaqc.run_for(number_genomes)

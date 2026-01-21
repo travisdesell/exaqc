@@ -8,6 +8,7 @@ from qiskit import QuantumCircuit
 
 InputState = Union[str, Sequence[int]]
 
+
 def statevector_to_probs(psi: torch.Tensor) -> torch.Tensor:
     """Convert a quantum statevector to a probability distribution.
 
@@ -91,10 +92,7 @@ def qiskit_to_pl_state_forward(
             )
 
         # PennyLane binds parameters by name
-        kwargs = {
-            getattr(k, "name", str(k)): v
-            for k, v in (params or {}).items()
-        }
+        kwargs = {getattr(k, "name", str(k)): v for k, v in (params or {}).items()}
 
         qfunc(wires=range(n_qubits), **kwargs)
         return qml.state()
@@ -214,6 +212,7 @@ def loss_state_angle(
     overlap_mag = torch.abs(torch.vdot(phi, psi)).clamp(max=1.0 - eps)
     return torch.arccos(overlap_mag)
 
+
 def objective_state_angle_pl(
     qc: QuantumCircuit,
     *,
@@ -287,6 +286,7 @@ def loss_total_variation(phi: torch.Tensor, psi: torch.Tensor) -> torch.Tensor:
     """
     return 0.5 * torch.sum(torch.abs(psi - phi))
 
+
 def objective_total_variation_pl(
     qc: QuantumCircuit,
     *,
@@ -357,6 +357,7 @@ def loss_kl_divergence(phi: torch.Tensor, psi: torch.Tensor) -> torch.Tensor:
     """
     return torch.sum(phi * (torch.log(phi) - torch.log(psi)))
 
+
 def objective_kl_divergence_pl(
     qc: QuantumCircuit,
     *,
@@ -423,6 +424,7 @@ def loss_obs_mse(phi: torch.Tensor, psi: torch.Tensor) -> torch.Tensor:
     """
     return torch.mean((psi - phi) ** 2)
 
+
 def objective_obs_mse_pl(
     qc: QuantumCircuit,
     *,
@@ -481,9 +483,13 @@ def objective_obs_mse_pl(
                     bits = [int(b) for b in input_bits]
                 else:
                     bits = list(map(int, input_bits))
-                qml.BasisState(torch.tensor(bits, dtype=torch.int64), wires=range(n_qubits))
+                qml.BasisState(
+                    torch.tensor(bits, dtype=torch.int64), wires=range(n_qubits)
+                )
 
-            kwargs = {getattr(k, "name", str(k)): v for k, v in (local_params or {}).items()}
+            kwargs = {
+                getattr(k, "name", str(k)): v for k, v in (local_params or {}).items()
+            }
             qfunc(wires=range(n_qubits), **kwargs)
 
             return [qml.expval(obs) for obs in observables]

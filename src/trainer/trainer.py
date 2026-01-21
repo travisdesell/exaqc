@@ -11,19 +11,18 @@ and integrates with PyTorch-based optimization pipelines.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Any, List, Tuple, Union
+from typing import Callable, Optional, Any, Union
 from src.utils.losses import (
     fidelity,
     loss_one_minus_fidelity,
     loss_state_angle,
     loss_kl_divergence,
-    loss_obs_mse
+    loss_obs_mse,
 )
 
 import torch
 
-
-LOSS_REGISTRY: Dict[str, Callable[..., torch.Tensor]] = {
+LOSS_REGISTRY: dict[str, Callable[..., torch.Tensor]] = {
     "fidelity": loss_one_minus_fidelity,
     "angle": loss_state_angle,
     "kl": loss_kl_divergence,
@@ -32,6 +31,7 @@ LOSS_REGISTRY: Dict[str, Callable[..., torch.Tensor]] = {
 
 
 # ---------- Utilities ----------
+
 
 def _ensure_complex(x: torch.Tensor) -> torch.Tensor:
     """Ensure a tensor is complex-valued.
@@ -46,7 +46,9 @@ def _ensure_complex(x: torch.Tensor) -> torch.Tensor:
         A complex-valued tensor with the same shape as ``x``.
     """
     if not torch.is_complex(x):
-        return x.to(dtype=torch.complex128 if x.dtype == torch.float64 else torch.complex64)
+        return x.to(
+            dtype=torch.complex128 if x.dtype == torch.float64 else torch.complex64
+        )
     return x
 
 
@@ -76,9 +78,10 @@ class TrainStepLog:
         loss: Scalar loss value at this step.
         metric: Dictionary of logged metrics (e.g., fidelity).
     """
+
     step: int
     loss: float
-    metric: Dict[str, float]
+    metric: dict[str, float]
 
 
 class QuantumStateTrainer:
@@ -101,14 +104,14 @@ class QuantumStateTrainer:
     def __init__(
         self,
         model_fn: Callable[..., torch.Tensor],
-        params: Union[torch.nn.Parameter, List[torch.nn.Parameter]],
+        params: Union[torch.nn.Parameter, list[torch.nn.Parameter]],
         target: Union[torch.Tensor, Callable[..., torch.Tensor]],
         loss_name: str = "fidelity",
         *,
         normalize_states: bool = True,
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
-        loss_kwargs: Optional[Dict[str, Any]] = None,
+        loss_kwargs: Optional[dict[str, Any]] = None,
     ):
         """Initialize the quantum state trainer.
 
@@ -166,7 +169,11 @@ class QuantumStateTrainer:
         Returns:
             Complex-valued target quantum statevector.
         """
-        phi = self.target(*model_args, **model_kwargs) if callable(self.target) else self.target
+        phi = (
+            self.target(*model_args, **model_kwargs)
+            if callable(self.target)
+            else self.target
+        )
         phi = _ensure_complex(phi)
         if self.device is not None:
             phi = phi.to(self.device)
