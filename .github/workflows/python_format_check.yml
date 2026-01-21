@@ -28,4 +28,4 @@ jobs:
                     pip install -e .
             -   name: Lint with flake8
                 run: |
-                    make lint
+                    flake8 .
