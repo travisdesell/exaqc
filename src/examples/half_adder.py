@@ -1,4 +1,5 @@
 import argparse
+
 # import matplotlib.pyplot as plt
 import pennylane as qml
 import torch
@@ -17,7 +18,6 @@ from src.objectives.genome_objectives import (
 from src.datasets import HalfAdderDataset
 
 best_fitness = float("inf")
-count = 0
 
 best_genome: CircuitGenome = None
 
@@ -31,7 +31,7 @@ def half_adder_objective(genome: CircuitGenome):
       - Train parameters via fidelity loss
       - Average final fidelity loss
     """
-    global best_fitness, count, best_genome, dataset
+    global best_fitness, best_genome, dataset  # noqa: F824
 
     total_fidelity_loss = 0.0
 

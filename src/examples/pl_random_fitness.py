@@ -23,7 +23,7 @@ def random_objective_function(genome: CircuitGenome, target="pennylane"):
     also shows an example for modifying the genome's parameter values for
     parameterized gates.
     """
-    global best_fitness, count
+    global best_fitness, count  # noqa: F824
 
     for gate in genome.gates:
         for parameter, value in gate.parameters.items():
