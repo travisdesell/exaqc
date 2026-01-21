@@ -56,25 +56,10 @@ jobs:
             -   name: Install requirements
                 run: |
                     df -h
-                    sudo apt-get update
-                    sudo apt-get install -y exempi
-                    sudo apt-get install -y libimage-exiftool-perl
                     python -m pip install --upgrade pip
-                    pip install -r requirements-testing.txt
-                    pip install '.[testing]'
-                    df -h
-            -   name: Add to Path
-                run: |
-                    whereis perl
-                    whereis exiftool
-                    export PATH=$PATH:$(pwd)
+                    pip install -e .
             -   name: Run test suite
                 run: |
-                    export PYTHONPATH=.
-                    export EXIFTOOL_PATH=/usr/bin/exiftool
-                    export PERL_PATH=/usr/bin/perl
-                    export CI=true
-
                     df -h
                     free -h
-                    python -m pytest . --durations=0 --ignore=tests/solar_flight_coverage/
+                    python -m pytest . --durations=0
