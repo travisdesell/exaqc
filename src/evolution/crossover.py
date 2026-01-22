@@ -5,6 +5,35 @@ from loguru import logger
 from src.circuits.circuit import CircuitGenome
 from src.circuits.gate import Gate
 
+def exponential_crossover(
+    child: CircuitGenome,
+    p1: CircuitGenome,
+    p2: CircuitGenome,
+    best_keep_rate: float = 0.75,
+    other_keep_rate: float = 0.25,
+    c1: float = -1.0,
+    c2: float = 0.5,
+):
+    """
+    This recombines 2 parent genomes into a new child genome. If a gate appears
+    in the best parent and the other parent it will always pass to the child. If
+    it is only in the best fit parent but not the other, it will be kept with the best_keep_rate,
+    if it only appears in other parent, it will pass to the child at other_keep_rate.
+
+    Args:
+        child: an empty CircuitGenome to have gates added to by the parents.
+        parents: a list (2 or more) of genomes to recombine.
+        best_keep_rate: is how frequently a gate from the best fit parent (but no other
+            parents) will be added to the child genome.
+        other_keep_rate: is how frequently a gate not in the best fit parent will be
+            added to the child genome.
+        c1: line search parameter for how far ahead of the more fit weight the
+            randomized line search can potentially go
+        c2: line search parameter for how far past the less fit weight the
+            randomized line search can potentially go
+    """
+
+
 
 def binary_crossover(
     child: CircuitGenome,
@@ -156,6 +185,9 @@ def n_ary_crossover(
     logger.info("parent fitnesses now:")
     for parent in parents:
         logger.info(f"\t{parent.fitness}")
+
+    #TODO: we can sort these genomes by which dominate which and then
+    #take the first as primary instead
 
     primary = parents[0]
     others = parents[1:]
