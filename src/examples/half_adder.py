@@ -17,8 +17,6 @@ from src.objectives.genome_objectives import (
 )
 from src.datasets import HalfAdderDataset
 
-best_fitness = float("inf")
-
 best_genome: CircuitGenome = None
 
 dataset = HalfAdderDataset()
@@ -68,14 +66,14 @@ def half_adder_objective(genome: CircuitGenome):
     if genome.fitness is None:
         genome.fitness = {"fidelity_loss": avg_loss}
 
-    if avg_loss < best_fitness:
+    if best_genome is None or genome.dominates(best_genome):
         logger.info(
             f"🎯 New best genome {genome.genome_number} "
             f"with fidelity loss: {avg_loss:.6f}"
         )
 
+        best_genome = genome
         try:
-            best_genome = genome
             _, qnode = genome.generate_pennylane_circuit()
             fig, ax = qml.draw_mpl(qnode)(example_input, params)
             fig.savefig(
@@ -85,8 +83,6 @@ def half_adder_objective(genome: CircuitGenome):
             )
         except Exception as e:
             logger.error(f"⚠️ Could not plot circuit (adjoint issue?): {e}")
-
-        best_fitness = avg_loss
 
     return genome
 
