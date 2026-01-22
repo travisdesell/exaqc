@@ -23,10 +23,9 @@ class PennyLaneTrainer(Trainer):
         loss_history = {k: [] for k in losses}
 
         for _ in range(self.steps):
+
             def total_loss(p):
-                return sum(
-                    loss.compute(qnode, p) for loss in losses.values()
-                )
+                return sum(loss.compute(qnode, p) for loss in losses.values())
 
             params = self.optimizer.step(total_loss, params)
 

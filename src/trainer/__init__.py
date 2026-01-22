@@ -1,1 +1,1 @@
-from .trainer import QuantumStateTrainer
+from .QuantumStateTrainer import QuantumStateTrainer

@@ -129,7 +129,7 @@ qiskit_gate_specifications["mcry"] = GateSpecification(
 qiskit_gate_specifications["mcrz"] = GateSpecification(
     needs_validation=True,
     name="Multi-Controlled Z Rotation",
-    parameters=["theta"],
+    parameters=["lam"],
     qubits=["q_controls...", "q_target"],
 )
 

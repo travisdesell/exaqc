@@ -83,7 +83,13 @@ class SteadyStatePopulation(PopulationStrategy):
         # 1. if gate innovation numbers are the same, keep the genome with better fitness
         # 2. if gate innovation numbers are the same but fitness different, keep both
 
-        bisect.insort(self.population, genome, key=lambda genome: genome.fitness["fidelity_loss"])
+        loss_name = "fidelity_loss"
+        if "loss_name" in kwargs:
+            loss_name = kwargs["loss_name"]
+
+        bisect.insort(
+            self.population, genome, key=lambda genome: genome.fitness[loss_name]
+        )
 
         if len(self.population) > self.max_population_size:
             # remove the last genome from the population

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from qiskit import QuantumCircuit, QuantumRegister
+from qiskit.circuit import Parameter
 import pennylane as qml
 import torch
 
@@ -94,6 +95,21 @@ class Gate:
             innovation_number=innovation_number,
         )
 
+    def _get_qiskit_parameters(self) -> dict[str, Parameter]:
+        """
+        Lazily create and cache Qiskit Parameter objects for this gate.
+
+        Keys are parameter names (e.g. "theta").
+        Parameter names encode innovation number for global uniqueness.
+        """
+        _qiskit_parameters = {}
+
+        for pname in self.parameters.keys():
+            full_name = f"{self.innovation_number}:{pname}"
+            _qiskit_parameters[pname] = Parameter(full_name)
+
+        return _qiskit_parameters
+
     def add_to_qiskit_circuit(
         self, registers: dict[str, QuantumRegister], circuit: QuantumCircuit
     ):
@@ -123,10 +139,14 @@ class Gate:
             # name
             qubit_args[argument_name] = registers[qubit_name][qubit_index]
 
-        gate_method(**self.parameters, **qubit_args)
-        
+        param_args = self._get_qiskit_parameters()
 
-    def add_to_pennylane_circuit(self, registers: dict[str, list], params: dict[str, torch.Tensor] = None):
+        # gate_method(**self.parameters, **qubit_args)
+        gate_method(**param_args, **qubit_args)
+
+    def add_to_pennylane_circuit(
+        self, registers: dict[str, list], params: dict[str, torch.Tensor] = None
+    ):
         """
         Adds this gate to a PennyLane circuit using the provided wire registers.
 
@@ -139,7 +159,7 @@ class Gate:
                     trainable torch.Tensor values. If None, uses self.parameters values.
         """
         if not self.enabled:
-            print(f"Gate {self.method_name} is disabled; skipping.")
+            # print(f"Gate {self.method_name} is disabled; skipping.")
             return
 
         spec = pennylane_gate_specifications[self.method_name]
@@ -158,7 +178,8 @@ class Gate:
         # Resolve parameters
         if params is not None:
             param_values = [
-                params[f"{self.innovation_number}:{name}"] for name in self.parameters
+                params[f"{self.innovation_number}:{name}"]
+                for name in self.parameters
                 # params[f"{name}"] for name in self.parameters
             ]
         else:
@@ -178,22 +199,63 @@ class Gate:
                     gate_cls = getattr(qml, base_op_name)
                     # Apply adjoint to all wires
                     gate_cls(*param_values, wires=qubit_wires).adjoint()
-                    print(f"Added adjoint gate {self.method_name} on wires {qubit_wires}")
+                    # print(f"Added adjoint gate {self.method_name} on wires {qubit_wires}")
                     return
 
                 # Regular gate
                 gate_cls = getattr(qml, pennylane_op_name)
                 gate_cls(*param_values, wires=qubit_wires)
-                print(f"Added native gate {self.method_name} ({pennylane_op_name}) on wires {qubit_wires}")
+                # print(f"Added native gate {self.method_name} ({pennylane_op_name}) on wires {qubit_wires}")
 
             else:
                 # Use decomposition if native gate unavailable
                 decomp_func = getattr(decomposition_module, self.method_name, None)
                 if decomp_func is None:
-                    raise ValueError(f"No decomposition found for gate '{self.method_name}'")
+                    raise ValueError(
+                        f"No decomposition found for gate '{self.method_name}'"
+                    )
                 decomp_func(*param_values, *qubit_wires)
-                print(f"Added decomposed gate {self.method_name} on wires {qubit_wires}")
+                # print(f"Added decomposed gate {self.method_name} on wires {qubit_wires}")
 
         except Exception as e:
             print(f"Failed to add gate {self.method_name}: {e}")
             raise
+
+    def describe_pennylane_circuit(
+        self,
+        registers: dict[str, list],
+    ):
+        """
+        Print EXACTLY the same messages as add_to_pennylane_circuit(),
+        but without executing any PennyLane operations.
+        This should be called ONCE at circuit generation time.
+        """
+        if not self.enabled:
+            print(f"Gate {self.method_name} is disabled; skipping.")
+            return
+
+        spec = pennylane_gate_specifications[self.method_name]
+        n_qubits = getattr(spec, "n_qubits", len(self.qubits))
+
+        # Build qubit wire list (IDENTICAL LOGIC)
+        qubit_wires = []
+        for i in range(n_qubits):
+            reg_name, qubit_index = self.qubits[i]
+            reg_wires = registers[reg_name]
+            if qubit_index is None:
+                qubit_wires.extend(reg_wires)
+            else:
+                qubit_wires.append(reg_wires[qubit_index])
+
+        pennylane_op_name = getattr(spec, "pennylane_op", None)
+
+        if pennylane_op_name is not None:
+            if ".adjoint" in pennylane_op_name:
+                print(f"Added adjoint gate {self.method_name} on wires {qubit_wires}")
+                return
+
+            print(
+                f"Added native gate {self.method_name} ({pennylane_op_name}) on wires {qubit_wires}"
+            )
+        else:
+            print(f"Added decomposed gate {self.method_name} on wires {qubit_wires}")

@@ -48,7 +48,7 @@ def random_objective_function(genome: CircuitGenome, target="pennylane"):
         _ = circuit(input_bits, torch_params)
     except Exception as e:
         print(f"Failed to run forward pass for genome {genome.genome_number}: {e}")
-        state = None
+        # state = None
 
     # make the fitnesses get progressively better
     genome.fitness = random.uniform(0.0, 1.0) - (count * 0.001)
@@ -61,13 +61,15 @@ def random_objective_function(genome: CircuitGenome, target="pennylane"):
 
         # plot each generated circuit to see how things are going
         try:
-            fig, ax = qml.draw_mpl(circuit)(input_bits, torch_params)
-            fig.savefig(f'plots/circuit_genome_{genome.fitness}.png', dpi=200, bbox_inches="tight")
+            fig, _ = qml.draw_mpl(circuit)(input_bits, torch_params)
+            fig.savefig(
+                f"plots/circuit_genome_{genome.fitness}.png",
+                dpi=200,
+                bbox_inches="tight",
+            )
             plt.close()
         except Exception as e:
-            print(
-                f"Cannot plot adjoint operation: {e}"
-            )
+            print(f"Cannot plot adjoint operation: {e}")
         best_fitness = genome.fitness
 
 

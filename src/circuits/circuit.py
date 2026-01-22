@@ -119,7 +119,10 @@ class CircuitGenome:
         """
         self.gates.sort(key=lambda g: (g.depth, g.innovation_number))
 
-    def generate_qiskit_circuit(self) -> QuantumCircuit:
+    def generate_qiskit_circuit(
+        self,
+        measure_registers: bool = True,
+    ) -> QuantumCircuit:
         """
         Converts this genome into a useable qiskit instationation.
 
@@ -142,8 +145,11 @@ class CircuitGenome:
         for gate in self.gates:
             gate.add_to_qiskit_circuit(quantum_registers, circuit)
 
-        for name, classical_register in classical_registers.items():
-            circuit.measure(quantum_registers[name], classical_register)
+        if measure_registers:
+            for name, classical_register in classical_registers.items():
+                circuit.measure(quantum_registers[name], classical_register)
+
+        self.circuit = circuit
 
         return circuit
 
@@ -155,7 +161,6 @@ class CircuitGenome:
             wire_map[name] = list(range(offset, offset + size))
             offset += size
         return wire_map
-
 
     def generate_pennylane_circuit(
         self,
@@ -177,18 +182,23 @@ class CircuitGenome:
         # 1️⃣ Create wire registers via qml.registers
         total_qubits = sum(self.registers.values())
         # registers = qml.registers(dict(self.registers.items()))
-        registers = self._register_wire_map()
+        self.register_map = self._register_wire_map()
+        registers = self.register_map
         print(f"pennylane register: {registers}")
 
         # 2️⃣ Instantiate PennyLane device
-        dev = qml.device(device_name, wires=total_qubits, shots=shots,)
+        dev = qml.device(
+            device_name,
+            wires=total_qubits,
+            shots=shots,
+        )
 
         # 3️⃣ Define the QNode function
         @qml.qnode(dev, interface="torch")
         def qnode_fn(
             input_bits: torch.Tensor,
             params: Dict[str, torch.Tensor],
-            ):
+        ):
             # Basis state preparation
             qml.BasisState(input_bits, wires=range(total_qubits))
 
@@ -202,18 +212,18 @@ class CircuitGenome:
             # return qml.state()
 
             # 4️⃣ Measurement
-            # if measure_registers:
-            #     # Return computational basis samples for each register
-            #     # Flatten all register wires for measurement
-            #     all_wires = []
-            #     for reg_wires in registers.values():
-            #         all_wires.extend(reg_wires)
-            #     return qml.sample(wires=all_wires)
-            # else:
-            #     # Return full state vector
-            #     return qml.state()
+            if measure_registers:
+                observables = [qml.PauliZ(i) for i in self.register_map["output"]]
+                return [qml.expval(obs) for obs in observables]
 
             return qml.state()
+
+        self.circuit = qnode_fn
+
+        # 🔹 PRINT ONCE HERE
+        self.sort_gates()
+        for gate in self.gates:
+            gate.describe_pennylane_circuit(registers)
 
         return dev, qnode_fn
 
