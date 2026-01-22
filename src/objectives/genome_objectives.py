@@ -295,11 +295,16 @@ def _train_with_qiskit_ml_outputs(
     from qiskit_machine_learning.connectors import TorchConnector
 
     try:
-        from qiskit.primitives import Estimator as PrimitiveEstimator
+        # from qiskit.primitives import Estimator as PrimitiveEstimator
+        from qiskit.primitives import StatevectorEstimator as PrimitiveEstimator
     except Exception as e:
         raise RuntimeError(
             "Need qiskit.primitives.Estimator for Qiskit ML backend."
         ) from e
+    from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
+
+    # Gradient classes live here in modern Qiskit
+    from qiskit_algorithms.gradients import ParamShiftEstimatorGradient
 
     if x_extractor is None:
         # Default: use raw bits on input_qubits as float vector
@@ -332,7 +337,9 @@ def _train_with_qiskit_ml_outputs(
 
     genome.sort_gates()
     for gate in genome.gates:
-        gate.add_to_qiskit_circuit(qregs, ansatz, backend="qiskit_ml")
+        gate.add_to_qiskit_circuit(qregs, ansatz)
+
+    # ansatz = genome.generate_qiskit_circuit(measure_registers=True)
 
     # compose
     full = QuantumCircuit(n_qubits)
@@ -358,13 +365,18 @@ def _train_with_qiskit_ml_outputs(
         pauli[n_qubits - 1 - q] = "Z"  # Qiskit: rightmost is qubit 0
         observables.append(SparsePauliOp("".join(pauli)))
 
+    pm = generate_preset_pass_manager(optimization_level=1)  # good default
     estimator = PrimitiveEstimator()
+    gradient = ParamShiftEstimatorGradient(estimator=estimator)
+
     qnn = EstimatorQNN(
         circuit=full,
         estimator=estimator,
         input_params=list(x_params),
         weight_params=weight_params,
         observables=observables,
+        gradient=gradient,
+        pass_manager = pm,
     )
 
     model = TorchConnector(qnn)
@@ -409,7 +421,7 @@ def _train_with_qiskit_ml_outputs(
             eval_losses.append(loss_fn(p1, y))
         avg_loss = float(torch.stack(eval_losses).mean().cpu().item())
 
-    return {"task_loss": avg_loss}
+    return {"fidelity_loss": avg_loss}
 
 
 # ---------- Public unified API ----------

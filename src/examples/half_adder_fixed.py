@@ -132,8 +132,8 @@ def half_adder_objective(
                 "y_extractor": y_extractor,
             },
         )
-
-        avg_loss = genome.fitness[f"{loss}_loss"]
+        avg_loss = genome.fitness["fidelity_loss"]
+        print(avg_loss)
 
         if avg_loss < best_fitness:
             best_fitness = avg_loss
@@ -142,6 +142,8 @@ def half_adder_objective(
                 f"🎯 New best genome {genome.genome_number} "
                 f"(Qiskit ML) loss={avg_loss:.6f}"
             )
+            qc = genome.generate_qiskit_circuit(measure_registers=False)
+            qc.draw(output="mpl", filename=f"plots/best_half_adder_qiskit_{avg_loss:.6f}.png")
 
         return genome
 
@@ -192,6 +194,7 @@ if __name__ == "__main__":
         registers={"input": 2, "output": 2},
         objective_function=half_adder_objective,
         target=args.backend,
+        loss = args.loss,
     )
 
     exaqc.run_for(args.number_genomes)

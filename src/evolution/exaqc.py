@@ -17,6 +17,7 @@ class EXAQC:
         registers: dict[str, int],
         objective_function: Callable[[CircuitGenome], None],
         target: str = "qiskit",
+        loss: str = "fidelity"
     ):
         """
         Creates an instance of Evolutionary Exploration of Augmenting Quantum Circuits given a
@@ -54,7 +55,7 @@ class EXAQC:
         # generate the initial population
         for i in range(population.max_population_size):
             child = self.mutate(initial_genome)
-            self.objective_function(child, target=target)
+            self.objective_function(child, target=target, loss=loss)
 
             self.population.insert_genome(child)
 
