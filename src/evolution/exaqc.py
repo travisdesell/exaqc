@@ -5,7 +5,7 @@ from loguru import logger
 
 from src.circuits.circuit import CircuitGenome
 from src.circuits.gate_specifications import GateSpecifications
-#from src.evolution.crossover import crossover
+from src.evolution.crossover import binary_crossover, n_ary_crossover
 from src.evolution.mutation import add_gate, disable_gate, enable_gate, reorder_gate
 from src.population.population_strategy import PopulationStrategy
 
@@ -125,34 +125,61 @@ class EXAQC:
 
         return child
 
-    def run_for(self, number_genomes: int):
+    def run_for(
+        self,
+        number_genomes: int,
+        binary_crossover_rate: float = 0.15,
+        n_ary_crossover_rate: float = 0.15,
+        n_ary_parents: int = 4,
+    ):
         """
         Runs EXAQC until it has generated and evaluated the given number of genomes.
 
         Args:
             number_genomes: how many genomes to generate with EXAQC
+            binary_crossover_rate: what percentage of time to do binary crossover after
+                the population has been initialized.
+            n_ary_crossover_rate: what percentage of the time to do n-ary crossover
+                after the population has been initialized.
+            n_ary_parents: how many parents to use for n-ary crossover
         """
+
+        # calculate this so we can use a single if set of statements based on
+        # the random r value
+        n_ary_cutoff = binary_crossover_rate + n_ary_crossover_rate
 
         while self.genome_number < number_genomes:
             child = None
 
-            '''
-            if self.genome_number > self.population.max_population_size:
-                parents = self.population.get_parents(3)
+            r = random.uniform(0, 1.0)
+
+            if (
+                self.genome_number > self.population.max_population_size
+                and r < binary_crossover_rate
+            ):
+                parents = self.population.get_parents(2)
                 child = CircuitGenome(
                     genome_number=self.next_genome_number(), registers=self.registers
                 )
 
-                crossover(child, parents)
+                binary_crossover(child, parents[0], parents[1])
+                self.objective_function(child)
+
+            elif (
+                self.genome_number > self.population.max_population_size
+                and r < n_ary_cutoff
+            ):
+                parents = self.population.get_parents(n_ary_parents)
+                child = CircuitGenome(
+                    genome_number=self.next_genome_number(), registers=self.registers
+                )
+
+                n_ary_crossover(child, parents)
                 self.objective_function(child)
 
             else:
                 parent = self.population.get_parent()
                 child = self.mutate(parent)
                 self.objective_function(child)
-            '''
-            parent = self.population.get_parent()
-            child = self.mutate(parent)
-            self.objective_function(child)
 
             self.population.insert_genome(child)

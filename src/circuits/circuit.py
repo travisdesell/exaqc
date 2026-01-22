@@ -43,6 +43,22 @@ class CircuitGenome:
         # if a genome has not yet been evaluated, its fitness is None
         self.fitness = None
 
+    def dominates(self, other: CircuitGenome) -> bool:
+        """
+        Determines if this genome dominates another genome. This method is needed because
+        in the multi-objective case we can't just compare a single fitness value to determine
+        if one genome is better than another.
+
+        Args:
+            other: is the other genome to compare to.
+
+        Returns:
+            True if this genome dominates another genome.
+        """
+
+        # TODO: update for multi objectives, but for now just use fidelity loss
+        return self.fitness["fidelity_loss"] < other.fitness["fidelity_loss"]
+
     def copy(self, genome_number: int = None) -> CircuitGenome:
         """
         Creates a deep copy of this CircuitGenome, with potentially a new

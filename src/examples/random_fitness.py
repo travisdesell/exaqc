@@ -10,7 +10,7 @@ from src.circuits.circuit import CircuitGenome
 from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
 from src.population.steady_state_population import SteadyStatePopulation
 
-best_fitness = {"fidelity_loss": 1.0}
+best_genome = None
 count = 0
 
 
@@ -21,7 +21,7 @@ def random_objective_function(genome: CircuitGenome, target="qiskit"):
     also shows an example for modifying the genome's parameter values for
     parameterized gates.
     """
-    global best_fitness, count
+    global best_genome, count
 
     for gate in genome.gates:
         for parameter, value in gate.parameters.items():
@@ -39,7 +39,11 @@ def random_objective_function(genome: CircuitGenome, target="qiskit"):
     }
     count += 1
 
-    if genome.fitness["fidelity_loss"] < best_fitness["fidelity_loss"]:
+    if best_genome is None or genome.dominates(best_genome):
+        logger.info(f"best genome is: {best_genome}")
+        if best_genome is not None:
+            logger.info(f"best genome fitness: {best_genome.fitness}")
+
         logger.info(
             f"found new best genome number {genome.genome_number} with fitness: {genome.fitness}"
         )
@@ -48,7 +52,7 @@ def random_objective_function(genome: CircuitGenome, target="qiskit"):
         circuit.draw(output="mpl")
         plt.show()
 
-        best_fitness = genome.fitness
+        best_genome = genome
 
 
 if __name__ == "__main__":
