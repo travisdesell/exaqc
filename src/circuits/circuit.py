@@ -13,13 +13,16 @@ from src.circuits.gate import Gate
 
 class CircuitGenome:
 
-    def __init__(self, genome_number: int, registers: dict[str, int] = None):
+    def __init__(
+        self, genome_number: int, target: str, registers: dict[str, int] = None
+    ):
         """
         Initializes an empty quantum circuit.
 
         Args:
             genome_number: a unique identifier for this evolved circuit, which also represents the ordering
                 that genomes have been generated, e.g., 0 is the first genome created, 1 is the next, etc.
+            target: specifies if the circuit is for qiskit or pennylane
             registers: a dict of register names and sizes (the key is the qubit name, the value is its size)
         """
         self.genome_number = genome_number
@@ -39,6 +42,8 @@ class CircuitGenome:
         # a list of Gates sorted by depth represnting the gates in the quantum
         # circuit
         self.gates: list[Gate] = []
+
+        self.target = target
 
         # if a genome has not yet been evaluated, its fitness is None
         self.fitness = None
@@ -81,7 +86,9 @@ class CircuitGenome:
             fitness = None
 
         new_genome = CircuitGenome(
-            genome_number=genome_number, registers=self.registers.copy()
+            genome_number=genome_number,
+            target=self.target,
+            registers=self.registers.copy(),
         )
         new_genome.fitness = fitness
 
@@ -122,7 +129,13 @@ class CircuitGenome:
             parameters: a dict where the key is the parameter name and the value is the parameter value
         """
 
-        gate = Gate(depth, method_name, qubits, parameters)
+        gate = Gate(
+            depth=depth,
+            method_name=method_name,
+            qubits=qubits,
+            parameters=parameters,
+            target=self.target,
+        )
         # make sure to add the gate in sorted order
         bisect.insort(self.gates, gate, key=lambda g: (g.depth, g.innovation_number))
 

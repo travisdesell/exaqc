@@ -1,22 +1,32 @@
+import pytest
+
 from src.circuits.circuit import CircuitGenome
 from src.evolution.mutation import disable_gate
 
 
-def test_no_gates_pennylane():
+@pytest.mark.parametrize("target", ["qiskit", "pennylane"])
+def test_no_gates_pennylane(target: str):
     """
     Creates a circuit genome with no gates and attempts to use the disable_gate
     mutation. Should return False.
+
+    Args:
+        target: is the target framework (qiskit or pennylane)
     """
-    qc = CircuitGenome(genome_number=1, registers={"test": 3})
+    qc = CircuitGenome(genome_number=1, registers={"test": 3}, target=target)
     assert disable_gate(qc) is False
 
 
-def test_all_disabled_pennylane():
+@pytest.mark.parametrize("target", ["qiskit", "pennylane"])
+def test_all_disabled_pennylane(target: str):
     """
     Creates a circuit genome with 3 gates which are all disabled.
     The mutation should return False.
+
+    Args:
+        target: is the target framework (qiskit or pennylane)
     """
-    qc = CircuitGenome(genome_number=1, registers={"test": 3})
+    qc = CircuitGenome(genome_number=1, registers={"test": 3}, target=target)
 
     qc.add_gate(
         depth=0.40, method_name="ccz", qubits=[("test", 0), ("test", 1), ("test", 2)]
@@ -34,12 +44,16 @@ def test_all_disabled_pennylane():
     assert disable_gate(qc) is False
 
 
-def test_all_enabled_pennylane():
+@pytest.mark.parametrize("target", ["qiskit", "pennylane"])
+def test_all_enabled_pennylane(target: str):
     """
     Creates a circuit genome with 3 gates which are all enabled.
     The mutation should return True and one gate should be disabled.
+
+    Args:
+        target: is the target framework (qiskit or pennylane)
     """
-    qc = CircuitGenome(genome_number=1, registers={"test": 3})
+    qc = CircuitGenome(genome_number=1, registers={"test": 3}, target=target)
 
     qc.add_gate(
         depth=0.40, method_name="ccz", qubits=[("test", 0), ("test", 1), ("test", 2)]
@@ -57,12 +71,16 @@ def test_all_enabled_pennylane():
     assert enabled_count == 2  # one gate should now be disabled
 
 
-def test_one_enabled_pennylane():
+@pytest.mark.parametrize("target", ["qiskit", "pennylane"])
+def test_one_enabled_pennylane(target: str):
     """
     Creates a circuit genome with 3 gates where only one is enabled.
     The mutation should return True and all gates should then be disabled.
+
+    Args:
+        target: is the target framework (qiskit or pennylane)
     """
-    qc = CircuitGenome(genome_number=1, registers={"test": 3})
+    qc = CircuitGenome(genome_number=1, registers={"test": 3}, target=target)
 
     qc.add_gate(
         depth=0.40, method_name="ccz", qubits=[("test", 0), ("test", 1), ("test", 2)]

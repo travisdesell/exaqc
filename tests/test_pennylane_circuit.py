@@ -9,7 +9,7 @@ def test_pennylane_example_circuit_full_stack():
     Build a non-trivial circuit using CircuitGenome and ensure
     PennyLane circuit generation + execution works end-to-end.
     """
-    qc = CircuitGenome(genome_number=1, registers={"a": 3, "b": 5})
+    qc = CircuitGenome(genome_number=1, registers={"a": 3, "b": 5}, target="pennylane")
 
     qc.add_gate(depth=0.05, method_name="x", qubits=[("a", 1)])
     qc.add_gate(depth=0.10, method_name="x", qubits=[("b", 1)])

@@ -10,6 +10,8 @@ def validate_innovation_numbers(circuit: CircuitGenome):
     seen = set()
 
     print(f"number gates: {len(circuit.gates)}")
+    for gate in circuit.gates:
+        print(f"\t{gate}")
 
     for gate in circuit.gates:
         print(f"\tgate innovation number: {gate.innovation_number}")
