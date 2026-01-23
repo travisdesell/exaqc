@@ -10,7 +10,13 @@ from src.evolution.crossover import (
     exponential_crossover,
     n_ary_crossover,
 )
-from src.evolution.mutation import add_gate, disable_gate, enable_gate, reorder_gate
+from src.evolution.mutation import (
+    add_gate,
+    disable_gate,
+    enable_gate,
+    reorder_gate,
+    qubit_swap,
+)
 from src.population.population_strategy import PopulationStrategy
 
 
@@ -22,6 +28,7 @@ class EXAQC:
         population: PopulationStrategy,
         registers: dict[str, int],
         objective_function: Callable[[CircuitGenome], None],
+        target: str,
     ):
         """
         Creates an instance of Evolutionary Exploration of Augmenting Quantum Circuits given a
@@ -35,12 +42,14 @@ class EXAQC:
             registers: a dict of register names and sizes (the key is the qubit name, the value is its size)
             objective_function: a method which takes a CircuitGenome, evaluates it and sets it's fitness
                 value.
+            target: if the optimization is being done for qiskit or pennylane
         """
 
         self.gate_specifications = gate_specifications
         self.population = population
         self.registers = registers
         self.objective_function = objective_function
+        self.target = target
 
         logger.info("Starting EXAQC with the following allowed gates:")
         for gate in sorted(
@@ -52,7 +61,9 @@ class EXAQC:
         self.genome_number = 0
 
         initial_genome = CircuitGenome(
-            genome_number=self.next_genome_number(), registers=self.registers
+            genome_number=self.next_genome_number(),
+            target=self.target,
+            registers=self.registers,
         )
 
         # generate the initial population
@@ -89,8 +100,9 @@ class EXAQC:
 
         # mutation_options = ["add_gate", "disable_gate", "enable_gate", "reorder_gate"]
         mutation_options = (
-            ["add_gate"] * 6  # 60%
-            + ["reorder_gate"] * 3  # 30%
+            ["add_gate"] * 5  # 50%
+            + ["reorder_gate"] * 2  # 20%
+            + ["qubit_swap"] * 2  # 20%
             + ["enable_gate"]  # 5%
             + ["disable_gate"]  # 5%
         )
@@ -126,6 +138,10 @@ class EXAQC:
                 case "reorder_gate":
                     logger.info(f"\tattempting to mutate with {mutation}")
                     modified = reorder_gate(child)
+
+                case "qubit_swap":
+                    logger.info(f"\tattempting to mutate with {mutation}")
+                    modified = qubit_swap(child)
 
         return child
 
@@ -165,7 +181,9 @@ class EXAQC:
             ):
                 parents = self.population.get_parents(2)
                 child = CircuitGenome(
-                    genome_number=self.next_genome_number(), registers=self.registers
+                    genome_number=self.next_genome_number(),
+                    target=self.target,
+                    registers=self.registers,
                 )
 
                 if binary_crossover(child, parents[0], parents[1]):
@@ -181,7 +199,9 @@ class EXAQC:
             ):
                 parents = self.population.get_parents(n_ary_parents)
                 child = CircuitGenome(
-                    genome_number=self.next_genome_number(), registers=self.registers
+                    genome_number=self.next_genome_number(),
+                    target=self.target,
+                    registers=self.registers,
                 )
 
                 n_ary_crossover(child, parents)
@@ -193,7 +213,9 @@ class EXAQC:
             ):
                 parents = self.population.get_parents(2)
                 child = CircuitGenome(
-                    genome_number=self.next_genome_number(), registers=self.registers
+                    genome_number=self.next_genome_number(),
+                    target=self.target,
+                    registers=self.registers,
                 )
 
                 exponential_crossover(child, parents[0], parents[1])

@@ -156,6 +156,7 @@ if __name__ == "__main__":
         population=SteadyStatePopulation(max_population_size=50),
         registers={"q": 4},
         objective_function=half_adder_objective,
+        target="pennylane",
     )
 
     exaqc.run_for(number_genomes)

@@ -36,7 +36,7 @@ def test_gate_creation(gate_method_name: str):
     qubit_args = specification.qubits
     n_qubits = len(qubit_args)
 
-    qc = CircuitGenome(genome_number=1, registers={"test": n_qubits})
+    qc = CircuitGenome(genome_number=1, registers={"test": n_qubits}, target="qiskit")
 
     # make the lost of qubit tuples for the add_gate method
     qc_qubits = []

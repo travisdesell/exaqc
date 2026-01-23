@@ -30,7 +30,9 @@ def test_gate_creation_pennylane(gate_method_name: str):
     print(f"n_qubits: {n_qubits}")
 
     # Create a CircuitGenome with a single register
-    qc = CircuitGenome(genome_number=1, registers={"test": n_qubits})
+    qc = CircuitGenome(
+        genome_number=1, registers={"test": n_qubits}, target="pennylane"
+    )
 
     # Build qubit tuples (always 0..n_qubits-1 for the register)
     qc_qubits = [("test", i) for i in range(n_qubits)]
