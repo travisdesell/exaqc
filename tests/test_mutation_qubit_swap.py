@@ -20,7 +20,7 @@ def test_not_enough_qubits(target: str):
         depth=0.40, method_name="ccz", qubits=[("test", 0), ("test", 1), ("test", 2)]
     )
 
-    assert qubit_swap(qc) is False
+    assert qubit_swap(qc, favor_enabled=True) is False
 
 
 @pytest.mark.parametrize("target", ["qiskit", "pennylane"])
@@ -44,7 +44,7 @@ def test_enough_qubits_1_gate(target: str):
         parameters={"phi": 0.2},
     )
 
-    assert qubit_swap(qc) is True
+    assert qubit_swap(qc, favor_enabled=True) is True
 
     assert len(qc.gates) == 2
 
@@ -96,7 +96,7 @@ def test_prefer_enabled_gates(target: str):
     print(f"disabling gate: {qc.gates[1].method_name}")
     qc.gates[1].enabled = False
 
-    assert qubit_swap(qc) is True
+    assert qubit_swap(qc, favor_enabled=True) is True
 
     assert len(qc.gates) == 3
 
@@ -139,7 +139,7 @@ def test_enough_qubits_3_gate(target: str):
         depth=0.40, method_name="ccz", qubits=[("test", 0), ("test", 1), ("test", 2)]
     )
 
-    assert qubit_swap(qc) is True
+    assert qubit_swap(qc, favor_enabled=True) is True
 
     assert len(qc.gates) == 2
 
