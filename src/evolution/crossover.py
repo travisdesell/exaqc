@@ -6,6 +6,46 @@ from src.circuits.circuit import CircuitGenome
 from src.circuits.gate import Gate
 
 
+def exponential_crossover(
+    child: CircuitGenome,
+    p1: CircuitGenome,
+    p2: CircuitGenome,
+):
+    """
+    This recombines 2 parent genomes into a new child genome. A random depth is
+    selected and all gates below that depth from p1 are added to the child genome,
+    and all gates greater than or equal to that depth from p2 are added to the child.
+
+    Args:
+        child: an empty CircuitGenome to have gates added to by the parents.
+        p1: The first parent to recombine.
+        p2: The second parent to recombine.
+    """
+
+    crossover_depth = random.uniform(0, 1.0)
+
+    logger.info(f"exponential crossover at depth: {crossover_depth}")
+
+    # add all gates in p1 with less depth than the crossover gate
+    for gate in p1.gates:
+        logger.info(f"p1 gate {gate.innovation_number} at depth: {gate.depth}")
+        if gate.depth < crossover_depth:
+            logger.info("\tadding!")
+            child.add_existing_gate(gate)
+        else:
+            logger.info("\tnot adding.")
+
+    for gate in p2.gates:
+        logger.info(f"p2 gate {gate.innovation_number} at depth: {gate.depth}")
+        if gate.depth >= crossover_depth:
+            logger.info("\tadding!")
+            child.add_existing_gate(gate)
+        else:
+            logger.info("\tnot adding.")
+
+    return child
+
+
 def binary_crossover(
     child: CircuitGenome,
     p1: CircuitGenome,
@@ -23,7 +63,8 @@ def binary_crossover(
 
     Args:
         child: an empty CircuitGenome to have gates added to by the parents.
-        parents: a list (2 or more) of genomes to recombine.
+        p1: The first parent to recombine.
+        p2: The second parent to recombine.
         best_keep_rate: is how frequently a gate from the best fit parent (but no other
             parents) will be added to the child genome.
         other_keep_rate: is how frequently a gate not in the best fit parent will be
@@ -34,9 +75,9 @@ def binary_crossover(
             randomized line search can potentially go
     """
 
-    logger.info("parent fitnesses now:")
-    logger.info(f"\t{p1.fitness}")
-    logger.info(f"\t{p2.fitness}")
+    logger.info("binary crossover with parents:")
+    logger.info(f"\tp1 fitness: {p1.fitness}")
+    logger.info(f"\tp2 fitness: {p2.fitness}")
 
     # TODO: handle the multi objective case where p2 doesn't
     # p1 will be the more fit parent
@@ -156,6 +197,9 @@ def n_ary_crossover(
     logger.info("parent fitnesses now:")
     for parent in parents:
         logger.info(f"\t{parent.fitness}")
+
+    # TODO: we can sort these genomes by which dominate which and then
+    # take the first as primary instead
 
     primary = parents[0]
     others = parents[1:]

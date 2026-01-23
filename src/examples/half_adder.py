@@ -63,8 +63,14 @@ def half_adder_objective(genome: CircuitGenome):
 
     avg_loss = total_fidelity_loss / len(dataset)
 
+    logger.info(f"genome fitness before setting to avg loss: {genome.fitness}")
+
     if genome.fitness is None:
         genome.fitness = {"fidelity_loss": avg_loss}
+    else:
+        genome.fitness["fidelity_loss"] = avg_loss
+
+    logger.info(f"genome fitness after setting to avg loss: {genome.fitness}")
 
     if best_genome is None or genome.dominates(best_genome):
         logger.info(
