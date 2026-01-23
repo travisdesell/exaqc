@@ -57,7 +57,7 @@ def enable_gate(circuit: CircuitGenome) -> bool:
     return True
 
 
-def qubit_swap(circuit: CircuitGenome) -> bool:
+def qubit_swap(circuit: CircuitGenome, favor_enabled: bool = False) -> bool:
     """
     Selects a random gate and randomly replaces one qubit in the
     gate with a different qubit, not already in use by the gate. The
@@ -68,6 +68,8 @@ def qubit_swap(circuit: CircuitGenome) -> bool:
 
     Args:
         circuit: is the CircuitGenome to mutate
+        favor_enabled: makes this mutation favored enabled gates
+            when selecting a gate to apply on
 
     Returns:
         True if the circuit was modified, False otherwise, e.g., the
@@ -108,10 +110,13 @@ def qubit_swap(circuit: CircuitGenome) -> bool:
     # mutation and disable the original one. Select an
     # enabled gate if possible
     random_gate = None
-    if len(possible_enabled_gates) > 0:
-        random_gate = random.choice(possible_enabled_gates)
+    if favor_enabled:
+        if len(possible_enabled_gates) > 0:
+            random_gate = random.choice(possible_enabled_gates)
+        else:
+            random_gate = random.choice(possible_disabled_gates)
     else:
-        random_gate = random.choice(possible_disabled_gates)
+        random_gate = random.choice(circuit.gates)
 
     random_gate.enabled = False
 
@@ -165,13 +170,15 @@ def qubit_swap(circuit: CircuitGenome) -> bool:
     return True
 
 
-def reorder_gate(circuit: CircuitGenome) -> bool:
+def reorder_gate(circuit: CircuitGenome, favor_enabled: bool = False) -> bool:
     """
     Selects a random gate and disables it. It then creates a copy of it
     and inserts it (enabled) into the genome at a new random depth.
 
     Args:
         circuit: is the CircuitGenome to mutate
+        favor_enabled: makes this mutation favored enabled gates
+            when selecting a gate to apply on
 
     Returns:
         True if the circuit was modified, False otherwise (e.g., if the
@@ -195,10 +202,13 @@ def reorder_gate(circuit: CircuitGenome) -> bool:
     # mutation and disable the original one. Select an
     # enabled gate if possible
     random_gate = None
-    if len(possible_enabled_gates) > 0:
-        random_gate = random.choice(possible_enabled_gates)
+    if favor_enabled:
+        if len(possible_enabled_gates) > 0:
+            random_gate = random.choice(possible_enabled_gates)
+        else:
+            random_gate = random.choice(possible_disabled_gates)
     else:
-        random_gate = random.choice(possible_disabled_gates)
+        random_gate = random.choice(circuit.gates)
 
     # disable the selected gate
     random_gate.enabled = False
