@@ -169,7 +169,7 @@ class EXAQC:
             ):
                 parents = self.population.get_parents(2)
                 child = CircuitGenome(
-                    genome_number=self.next_genome_number(), 
+                    genome_number=self.next_genome_number(),
                     registers=self.registers,
                     output_qubits=self.output_qubits.copy(),
                 )
@@ -183,7 +183,7 @@ class EXAQC:
             ):
                 parents = self.population.get_parents(n_ary_parents)
                 child = CircuitGenome(
-                    genome_number=self.next_genome_number(), 
+                    genome_number=self.next_genome_number(),
                     registers=self.registers,
                     output_qubits=self.output_qubits.copy(),
                 )

@@ -95,9 +95,9 @@ class CircuitGenome:
             fitness = None
 
         new_genome = CircuitGenome(
-            genome_number=genome_number, 
+            genome_number=genome_number,
             registers=self.registers.copy(),
-            output_qubits=self.output_qubits.copy()
+            output_qubits=self.output_qubits.copy(),
         )
         new_genome.fitness = fitness
 

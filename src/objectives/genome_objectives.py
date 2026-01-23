@@ -241,7 +241,9 @@ def _train_with_pennylane(
                 logger.info(
                     f"[{step:04d}] loss={loss.item():.6f} train_acc={train_acc:.3f}"
                 )
-            test_metrics = eval_pennylane_forward_only(genome, test_data, parameters=torch_params, n_classes=3)
+            test_metrics = eval_pennylane_forward_only(
+                genome, test_data, parameters=torch_params, n_classes=3
+            )
             genome.fitness = test_metrics
 
     # write params back
