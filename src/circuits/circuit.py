@@ -9,11 +9,17 @@ import pennylane as qml
 import torch
 
 from src.circuits.gate import Gate
+from src.utils.helpers import register_wire_map
 
 
 class CircuitGenome:
 
-    def __init__(self, genome_number: int, registers: dict[str, int] = None):
+    def __init__(
+        self,
+        genome_number: int,
+        registers: dict[str, int] = None,
+        output_qubits: list[int] = None,
+    ):
         """
         Initializes an empty quantum circuit.
 
@@ -43,6 +49,14 @@ class CircuitGenome:
         # if a genome has not yet been evaluated, its fitness is None
         self.fitness = None
 
+        # the inherent circuit is set to None
+        self.circuit = None
+
+        # mark the indexes of the output qubits
+        self.output_qubits = output_qubits
+        if self.output_qubits is None:
+            self.output_qubits = list(range(sum(registers.values())))
+
     def dominates(self, other: CircuitGenome) -> bool:
         """
         Determines if this genome dominates another genome. This method is needed because
@@ -57,7 +71,7 @@ class CircuitGenome:
         """
 
         # TODO: update for multi objectives, but for now just use fidelity loss
-        return self.fitness["fidelity_loss"] < other.fitness["fidelity_loss"]
+        return self.fitness["loss"] < other.fitness["loss"]
 
     def copy(self, genome_number: int = None) -> CircuitGenome:
         """
@@ -81,7 +95,9 @@ class CircuitGenome:
             fitness = None
 
         new_genome = CircuitGenome(
-            genome_number=genome_number, registers=self.registers.copy()
+            genome_number=genome_number, 
+            registers=self.registers.copy(),
+            output_qubits=self.output_qubits.copy()
         )
         new_genome.fitness = fitness
 
@@ -143,7 +159,7 @@ class CircuitGenome:
         Returns:
             A qiskit QuantumCircuit instantiation of this circuit genome.
         """
-
+        self.total_qubits = sum(self.registers.values())
         quantum_registers = {}
         classical_registers = {}
         for name, size in self.registers.items():
@@ -162,22 +178,26 @@ class CircuitGenome:
         for name, classical_register in classical_registers.items():
             circuit.measure(quantum_registers[name], classical_register)
 
+        self.circuit = circuit
+
         return circuit
 
-    def _register_wire_map(self):
-        """Return a dict mapping register names to PennyLane wires."""
-        wire_map = {}
-        offset = 0
-        for name, size in self.registers.items():
-            wire_map[name] = list(range(offset, offset + size))
-            offset += size
-        return wire_map
+    # def _register_wire_map(self) -> dict:
+    #     """Return a dict mapping register names to PennyLane wires."""
+    #     wire_map = {}
+    #     offset = 0
+    #     for name, size in self.registers.items():
+    #         wire_map[name] = list(range(offset, offset + size))
+    #         offset += size
+    #     return wire_map
 
     def generate_pennylane_circuit(
         self,
         device_name: str = "default.qubit",
         measure_registers: bool = True,
         shots: Optional[int] = None,
+        input_mode: str = "basis",
+        return_probs: bool = True,
     ):
         """
         Converts this genome into a PennyLane QNode-ready function.
@@ -185,55 +205,78 @@ class CircuitGenome:
         Args:
             device_name: Name of the PennyLane device to use.
             measure_registers: If True, return measurement results for all wires (like Qiskit classical registers).
+            shots: Sample from circuit output,
+            input_mode: choose encoding paradigm "basis" or "angle"
+            return_probs: Return the actual probablity weights from the circuit
 
         Returns:
             A tuple (dev, qnode_fn), where `dev` is the PennyLane device and
             `qnode_fn` is a QNode function that implements this circuit genome.
         """
         # Create wire registers via qml.registers
-        total_qubits = sum(self.registers.values())
+        self.total_qubits = sum(self.registers.values())
         # registers = qml.registers(dict(self.registers.items()))
-        registers = self._register_wire_map()
+        # self.register_map = self._register_wire_map()
+
+        self.register_map = register_wire_map(self.registers)
+
+        registers = self.register_map.copy()
         logger.info(f"pennylane register: {registers}")
 
         # Instantiate PennyLane device
         dev = qml.device(
             device_name,
-            wires=total_qubits,
+            wires=self.total_qubits,
             shots=shots,
         )
 
         # Define the QNode function
-        @qml.qnode(dev, interface="torch")
+        @qml.qnode(dev, interface="torch", diff_method="parameter-shift")
         def qnode_fn(
             input_bits: torch.Tensor,
             params: Dict[str, torch.Tensor],
         ):
-            # Basis state preparation
-            qml.BasisState(input_bits, wires=range(total_qubits))
+
+            # --- Input preparation ---
+            if input_mode == "basis":
+                # expects int tensor length == total_qubits
+                qml.BasisState(input_bits, wires=range(self.total_qubits))
+            elif input_mode == "angle":
+                # expects float tensor on "input" register wires
+                # encode x_i in [0,1] -> RY(pi*x_i) (common, stable)
+                in_wires = registers["input"]
+                for i, w in enumerate(in_wires):
+                    qml.RY(torch.pi * input_bits[i], wires=w)
+            else:
+                raise ValueError(f"Unknown input_mode={input_mode}")
 
             # Apply all gates in depth order
             self.sort_gates()
             for gate in self.gates:
                 gate.add_to_pennylane_circuit(registers, params=params)
 
-            # Optional: measure all wires in computational basis
-            # For PennyLane, measuring in classical bits is optional; return state
-            # return qml.state()
-
             # 4️⃣ Measurement
-            # if measure_registers:
-            #     # Return computational basis samples for each register
-            #     # Flatten all register wires for measurement
-            #     all_wires = []
-            #     for reg_wires in registers.values():
-            #         all_wires.extend(reg_wires)
-            #     return qml.sample(wires=all_wires)
-            # else:
-            #     # Return full state vector
-            #     return qml.state()
+            if return_probs:
+                return qml.probs(
+                    # wires=self.register_map["output"]
+                    wires=self.output_qubits
+                )  # shape = [2**len(out_wires)] (real)
+            elif measure_registers:
+                # fallback if you want expvals
+                expvals = [
+                    qml.expval(qml.PauliZ(w))
+                    for w in self.output_qubits  # self.register_map["output"]
+                ]
+                return torch.stack(expvals)
 
             return qml.state()
+
+        self.circuit = qnode_fn
+
+        # 🔹 PRINT ONCE HERE
+        self.sort_gates()
+        for gate in self.gates:
+            gate.describe_pennylane_circuit(registers)
 
         return dev, qnode_fn
 

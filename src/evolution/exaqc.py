@@ -18,6 +18,9 @@ class EXAQC:
         population: PopulationStrategy,
         registers: dict[str, int],
         objective_function: Callable[[CircuitGenome], None],
+        output_qubits: list[int] = None,
+        backend: str = "pennylane",
+        loss: str = "fidelity",
     ):
         """
         Creates an instance of Evolutionary Exploration of Augmenting Quantum Circuits given a
@@ -31,12 +34,17 @@ class EXAQC:
             registers: a dict of register names and sizes (the key is the qubit name, the value is its size)
             objective_function: a method which takes a CircuitGenome, evaluates it and sets it's fitness
                 value.
+            backend: qiskit or pennylane
         """
 
         self.gate_specifications = gate_specifications
         self.population = population
         self.registers = registers
         self.objective_function = objective_function
+
+        self.output_qubits = output_qubits
+        if self.output_qubits is None:
+            self.output_qubits = list(range(sum(registers.values())))
 
         logger.info("Starting EXAQC with the following allowed gates:")
         for gate in sorted(
@@ -48,13 +56,15 @@ class EXAQC:
         self.genome_number = 0
 
         initial_genome = CircuitGenome(
-            genome_number=self.next_genome_number(), registers=self.registers
+            genome_number=self.next_genome_number(),
+            registers=self.registers,
+            output_qubits=self.output_qubits.copy(),
         )
 
         # generate the initial population
         for i in range(population.max_population_size):
             child = self.mutate(initial_genome)
-            self.objective_function(child)
+            self.objective_function(child, target=backend, loss=loss)
 
             self.population.insert_genome(child)
 
@@ -159,7 +169,9 @@ class EXAQC:
             ):
                 parents = self.population.get_parents(2)
                 child = CircuitGenome(
-                    genome_number=self.next_genome_number(), registers=self.registers
+                    genome_number=self.next_genome_number(), 
+                    registers=self.registers,
+                    output_qubits=self.output_qubits.copy(),
                 )
 
                 binary_crossover(child, parents[0], parents[1])
@@ -171,7 +183,9 @@ class EXAQC:
             ):
                 parents = self.population.get_parents(n_ary_parents)
                 child = CircuitGenome(
-                    genome_number=self.next_genome_number(), registers=self.registers
+                    genome_number=self.next_genome_number(), 
+                    registers=self.registers,
+                    output_qubits=self.output_qubits.copy(),
                 )
 
                 n_ary_crossover(child, parents)

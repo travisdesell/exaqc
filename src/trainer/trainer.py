@@ -9,7 +9,7 @@ and integrates with PyTorch-based optimization pipelines.
 """
 
 from __future__ import annotations
-
+from loguru import logger
 from dataclasses import dataclass
 from typing import Callable, Optional, Any, Union
 from src.utils.losses import (
@@ -18,6 +18,7 @@ from src.utils.losses import (
     loss_state_angle,
     loss_kl_divergence,
     loss_obs_mse,
+    loss_readout_ce_from_state,
 )
 
 import torch
@@ -27,6 +28,7 @@ LOSS_REGISTRY: dict[str, Callable[..., torch.Tensor]] = {
     "angle": loss_state_angle,
     "kl": loss_kl_divergence,
     "mse": loss_obs_mse,
+    "ce": loss_readout_ce_from_state,
 }
 
 
@@ -174,11 +176,19 @@ class QuantumStateTrainer:
             if callable(self.target)
             else self.target
         )
-        phi = _ensure_complex(phi)
+        if self.loss_name in {"fidelity", "angle", "kl"}:
+            phi = _ensure_complex(phi)
+            if self.normalize_states:
+                phi = _normalize_state(phi)
+        else:
+            # CE / MSE style targets should be float tensors
+            phi = torch.as_tensor(phi).to(dtype=torch.float32)
+
+        # phi = _ensure_complex(phi)
         if self.device is not None:
             phi = phi.to(self.device)
-        if self.normalize_states:
-            phi = _normalize_state(phi)
+        # if self.normalize_states:
+        #     phi = _normalize_state(phi)
         return phi
 
     def forward_state(self, *model_args, **model_kwargs) -> torch.Tensor:
@@ -196,6 +206,10 @@ class QuantumStateTrainer:
             if self._model_expects_params_first()
             else self.model_fn(*model_args, **model_kwargs)
         )
+        # if isinstance(psi, (list, tuple)):
+        #     psi = torch.stack([torch.as_tensor(v) for v in psi], dim=0)
+        # else:
+        #     psi = torch.as_tensor(psi)
 
         psi = _ensure_complex(psi)
         if self.normalize_states:
@@ -225,8 +239,11 @@ class QuantumStateTrainer:
         psi = self.forward_state(*model_args, **model_kwargs)
         phi = self.get_target_state(*model_args, **model_kwargs)
 
-        loss = self.loss_fn(psi, phi, **self.loss_kwargs)
-        fid = fidelity(psi, phi)
+        loss = self.loss_fn(phi, psi, **self.loss_kwargs)
+        try:
+            fid = fidelity(phi, psi)
+        except Exception:
+            fid = torch.Tensor([0.0])
 
         metrics = {"fidelity": fid, "loss": loss}
         return loss, metrics
@@ -288,6 +305,8 @@ class QuantumStateTrainer:
 
             loss = torch.stack(losses).mean()
             fid = torch.stack(fidelities).mean()
+
+            logger.info(f"Training step [{step}] =====> Loss: {loss}")
 
             if not loss.requires_grad:
                 break

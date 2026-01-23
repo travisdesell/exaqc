@@ -15,7 +15,7 @@ from src.objectives.genome_objectives import (
     train_genome_objective,
     genome_to_torch_params,
 )
-from src.datasets import HalfAdderDataset
+from src.quantum_datasets import HalfAdderDataset
 
 best_genome: CircuitGenome = None
 
@@ -50,7 +50,7 @@ def half_adder_objective(genome: CircuitGenome):
 
         if genome.fitness is None:
             # No trainable parameters → evaluate directly
-            _, qnode = genome.generate_pennylane_circuit()
+            qnode = genome.circuit
             with torch.no_grad():
                 psi = qnode(input_bits, genome_to_torch_params(genome))
                 psi = psi / torch.linalg.norm(psi)
@@ -75,7 +75,7 @@ def half_adder_objective(genome: CircuitGenome):
         best_genome = genome
         try:
             _, qnode = genome.generate_pennylane_circuit()
-            fig, ax = qml.draw_mpl(qnode)(example_input, params)
+            fig, _ = qml.draw_mpl(qnode)(example_input, params)
             fig.savefig(
                 f"plots/best_half_adder_{avg_loss:.6f}.png",
                 dpi=200,

@@ -144,7 +144,7 @@ class Gate:
                     trainable torch.Tensor values. If None, uses self.parameters values.
         """
         if not self.enabled:
-            logger.debug(f"Gate {self.method_name} is disabled; skipping.")
+            # logger.debug(f"Gate {self.method_name} is disabled; skipping.")
             return
 
         spec = pennylane_gate_specifications[self.method_name]
@@ -163,9 +163,10 @@ class Gate:
         # Resolve parameters
         if params is not None:
             param_values = [
-                params[f"{self.innovation_number}:{name}"]
+                # params[f"{self.innovation_number}:{name}"]
+                # for name in self.parameters
+                params[f"{name}"]
                 for name in self.parameters
-                # params[f"{name}"] for name in self.parameters
             ]
         else:
             param_values = list(self.parameters.values())
@@ -184,17 +185,17 @@ class Gate:
                     gate_cls = getattr(qml, base_op_name)
                     # Apply adjoint to all wires
                     gate_cls(*param_values, wires=qubit_wires).adjoint()
-                    logger.debug(
-                        f"Added adjoint gate {self.method_name} on wires {qubit_wires}"
-                    )
+                    # logger.debug(
+                    #     f"Added adjoint gate {self.method_name} on wires {qubit_wires}"
+                    # )
                     return
 
                 # Regular gate
                 gate_cls = getattr(qml, pennylane_op_name)
                 gate_cls(*param_values, wires=qubit_wires)
-                logger.debug(
-                    f"Added native gate {self.method_name} ({pennylane_op_name}) on wires {qubit_wires}"
-                )
+                # logger.debug(
+                #     f"Added native gate {self.method_name} ({pennylane_op_name}) on wires {qubit_wires}"
+                # )
 
             else:
                 # Use decomposition if native gate unavailable
@@ -204,10 +205,53 @@ class Gate:
                         f"No decomposition found for gate '{self.method_name}'"
                     )
                 decomp_func(*param_values, *qubit_wires)
-                logger.debug(
-                    f"Added decomposed gate {self.method_name} on wires {qubit_wires}"
-                )
+                # logger.debug(
+                #     f"Added decomposed gate {self.method_name} on wires {qubit_wires}"
+                # )
 
         except Exception as e:
             logger.error(f"Failed to add gate {self.method_name}: {e}")
             raise
+
+    def describe_pennylane_circuit(
+        self,
+        registers: dict[str, list],
+    ):
+        """
+        Print EXACTLY the same messages as add_to_pennylane_circuit(),
+        but without executing any PennyLane operations.
+        This should be called ONCE at circuit generation time.
+        """
+        if not self.enabled:
+            logger.debug(f"Gate {self.method_name} is disabled; skipping.")
+            return
+
+        spec = pennylane_gate_specifications[self.method_name]
+        n_qubits = getattr(spec, "n_qubits", len(self.qubits))
+
+        # Build qubit wire list (IDENTICAL LOGIC)
+        qubit_wires = []
+        for i in range(n_qubits):
+            reg_name, qubit_index = self.qubits[i]
+            reg_wires = registers[reg_name]
+            if qubit_index is None:
+                qubit_wires.extend(reg_wires)
+            else:
+                qubit_wires.append(reg_wires[qubit_index])
+
+        pennylane_op_name = getattr(spec, "pennylane_op", None)
+
+        if pennylane_op_name is not None:
+            if ".adjoint" in pennylane_op_name:
+                logger.debug(
+                    f"Added adjoint gate {self.method_name} on wires {qubit_wires}"
+                )
+                return
+
+            logger.debug(
+                f"Added native gate {self.method_name} ({pennylane_op_name}) on wires {qubit_wires}"
+            )
+        else:
+            logger.debug(
+                f"Added decomposed gate {self.method_name} on wires {qubit_wires}"
+            )

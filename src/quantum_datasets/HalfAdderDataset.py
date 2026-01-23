@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Tuple, List
 import torch
 
-from src.datasets.base import QuantumDataset
+from src.quantum_datasets.base import QuantumDataset
 
 
 def bits_to_statevector(bits: List[int], n_qubits: int) -> torch.Tensor:
@@ -40,6 +40,7 @@ class HalfAdderDataset(QuantumDataset):
         self.n_qubits = n_qubits
         self.input_qubits = input_qubits
         self.output_qubits = output_qubits
+        self.num_classes = 2
 
         # Precompute dataset
         self._data = []
