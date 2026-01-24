@@ -305,6 +305,8 @@ def add_gate(
         # generate a random angle as all parameter values are in radians
         gate_parameters[parameter_name] = random.uniform(-math.pi, math.pi)
 
+    logger.info(f"\tparameters are: {gate_parameters}")
+
     circuit.add_gate(
         depth=depth,
         method_name=gate_specification.method_name,
