@@ -39,14 +39,17 @@ def test_pennylane_example_circuit_full_stack():
     input_bits = torch.zeros(n_qubits, dtype=torch.int64)
 
     torch_params = {
-        f"{gate.innovation_number}:{name}": torch.tensor(value, dtype=torch.float64)
+        # f"{gate.innovation_number}:{name}": torch.tensor(value, dtype=torch.float64)
+        name: torch.tensor(value, dtype=torch.float64)
         for gate in qc.gates
         for name, value in gate.parameters.items()
     }
 
     # ---- Generate PennyLane circuit ----
     try:
-        dev, qnode_fn = qc.generate_pennylane_circuit(measure_registers=False)
+        dev, qnode_fn = qc.generate_pennylane_circuit(
+            measure_registers=False, return_probs=False
+        )
     except Exception as e:
         pytest.fail(f"Failed to generate PennyLane circuit: {e}")
 

@@ -59,7 +59,8 @@ def test_gate_creation_pennylane(gate_method_name: str):
     torch_params = {}
     for gate in qc.gates:
         for name, value in gate.parameters.items():
-            key = f"{gate.innovation_number}:{name}"
+            # key = f"{gate.innovation_number}:{name}"
+            key = name
             torch_params[key] = torch.tensor(value, dtype=torch.float64)
 
     # Generate PennyLane QNode
