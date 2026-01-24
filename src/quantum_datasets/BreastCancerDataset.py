@@ -31,8 +31,8 @@ class BreastCancerDataset(QuantumDataset):
 
         data = load_breast_cancer()
 
-        X = data.data          # (569, 30)
-        y = data.target        # {0,1}
+        X = data.data  # (569, 30)
+        y = data.target  # {0,1}
 
         self.num_classes = 2
 

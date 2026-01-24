@@ -69,7 +69,7 @@ class EXAQC:
 
         initial_genome = CircuitGenome(
             genome_number=self.next_genome_number(),
-            target = self.target,
+            target=self.target,
             registers=self.registers,
             output_qubits=self.output_qubits.copy(),
         )
@@ -77,7 +77,9 @@ class EXAQC:
         # generate the initial population
         for i in range(population.max_population_size):
             child = self.mutate(initial_genome)
-            self.objective_function(child, target=self.target, loss=loss, batch_size=batch_size)
+            self.objective_function(
+                child, target=self.target, loss=loss, batch_size=batch_size
+            )
 
             self.population.insert_genome(child)
 

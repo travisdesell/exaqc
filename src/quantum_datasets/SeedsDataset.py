@@ -32,12 +32,10 @@ class SeedsDataset(QuantumDataset):
 
         # ---- Load raw data ----
         # Format: 7 features + 1 class label (1,2,3)
-        data = np.loadtxt(
-            "src/quantum_datasets/data/seeds_dataset.txt"
-        )
+        data = np.loadtxt("src/quantum_datasets/data/seeds_dataset.txt")
 
-        X = data[:, :7]               # (210, 7)
-        y = data[:, 7].astype(int)    # {1,2,3}
+        X = data[:, :7]  # (210, 7)
+        y = data[:, 7].astype(int)  # {1,2,3}
 
         # Convert labels -> {0,1,2}
         y = y - 1

@@ -13,10 +13,18 @@ from src.evolution.exaqc import EXAQC
 from src.population.steady_state_population import SteadyStatePopulation
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
 from src.circuits.circuit import CircuitGenome
-from src.objectives.genome_objectives import train_genome_objective, genome_to_torch_params
+from src.objectives.genome_objectives import (
+    train_genome_objective,
+    genome_to_torch_params,
+)
 from src.utils.helpers import register_wire_map
 
-from src.quantum_datasets import IrisDataset, WineDataset, SeedsDataset, BreastCancerDataset
+from src.quantum_datasets import (
+    IrisDataset,
+    WineDataset,
+    SeedsDataset,
+    BreastCancerDataset,
+)
 
 logger.add("run.log", level="INFO")
 
@@ -27,6 +35,7 @@ best_genome: CircuitGenome | None = None
 # ---------------------------------------------------------------------
 # Prediction + evaluation helpers
 # ---------------------------------------------------------------------
+
 
 def ce_onehot_on_probs(
     probs: torch.Tensor, y_onehot: torch.Tensor, eps: float = 1e-12
@@ -75,7 +84,6 @@ def eval_probs_ce_and_acc(
     correct = 0
     total = 0
 
-
     for x, y in dataset:
         probs_full = genome.circuit(x, params)
         probs_full = torch.as_tensor(probs_full, dtype=torch.float32)
@@ -96,12 +104,11 @@ def eval_probs_ce_and_acc(
 # Circuit saving
 # ---------------------------------------------------------------------
 
+
 def save_best_circuit(genome: CircuitGenome, out_dir: str, tag: str):
     os.makedirs(out_dir, exist_ok=True)
 
-    genome.generate_pennylane_circuit(
-        measure_registers=False, input_mode="angle"
-    )
+    genome.generate_pennylane_circuit(measure_registers=False, input_mode="angle")
 
     # --- Text gate list ---
     txt_path = os.path.join(out_dir, f"genome_{genome.genome_number}.txt")
@@ -111,9 +118,7 @@ def save_best_circuit(genome: CircuitGenome, out_dir: str, tag: str):
         f.write(f"Registers: {genome.registers}\n\n")
         for g in genome.gates:
             if getattr(g, "enabled", True):
-                f.write(
-                    f"{g.depth:.3f}  {g.method_name}  {g.qubits}  {g.parameters}\n"
-                )
+                f.write(f"{g.depth:.3f}  {g.method_name}  {g.qubits}  {g.parameters}\n")
 
     # --- PennyLane draw ---
     try:
@@ -132,40 +137,44 @@ def save_best_circuit(genome: CircuitGenome, out_dir: str, tag: str):
 # Objective
 # ---------------------------------------------------------------------
 
-def make_objective(dataset_name: str, 
-                    loss: str = "ce",
-                    steps: int = 250,
-                    lr: float = 1e-3,
-                    log_every: int = 50,
-                    batch_size:int = None,
-                    ):
+
+def make_objective(
+    dataset_name: str,
+    loss: str = "ce",
+    steps: int = 250,
+    lr: float = 1e-3,
+    log_every: int = 50,
+    batch_size: int = None,
+):
 
     if dataset_name == "iris":
         train_data = IrisDataset(split="train")
-        test_data  = IrisDataset(split="test")
+        test_data = IrisDataset(split="test")
         input_size = 4
         n_classes = 3
     elif dataset_name == "wine":
         train_data = WineDataset(split="train")
-        test_data  = WineDataset(split="test")
+        test_data = WineDataset(split="test")
         input_size = 13
         n_classes = 3
     elif dataset_name == "seeds":
         train_data = SeedsDataset(split="train")
-        test_data  = SeedsDataset(split="test")
+        test_data = SeedsDataset(split="test")
         input_size = 7
         n_classes = 3
     elif dataset_name == "breast_cancer":
         train_data = BreastCancerDataset(split="train")
-        test_data  = BreastCancerDataset(split="test")
+        test_data = BreastCancerDataset(split="test")
         input_size = 30
         n_classes = 2
     else:
         raise ValueError(dataset_name)
 
-    def objective(genome: CircuitGenome, target="pennylane", loss=loss, batch_size=batch_size):
+    def objective(
+        genome: CircuitGenome, target="pennylane", loss=loss, batch_size=batch_size
+    ):
         global best_fitness, best_genome
-        nonlocal train_data, test_data
+        # nonlocal train_data, test_data
 
         train_ds = train_data
         test_ds = test_data
@@ -229,29 +238,35 @@ def make_objective(dataset_name: str,
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--dataset", choices=["iris", "wine", "seeds", "breast_cancer"], required=True)
+    p.add_argument(
+        "--dataset", choices=["iris", "wine", "seeds", "breast_cancer"], required=True
+    )
     p.add_argument("--loss", default="ce", choices=["ce", "mse", "kl", "fidelity"])
     p.add_argument("--steps", type=int, default=200)
     p.add_argument("--lr", type=float, default=0.01)
     p.add_argument("--max_population_size", type=int, default=50)
     p.add_argument("--number_genomes", type=int, default=500)
     p.add_argument("--input_qubits", type=int, default=6)
-    p.add_argument("--out_qubits", type=int, default=2) # 1 for breast cancer
+    p.add_argument("--out_qubits", type=int, default=2)  # 1 for breast cancer
     p.add_argument("--mini_batch", action="store_true", help="Run minibatch training")
-    p.add_argument("--batch_size", type=int, default=16, 
-                   help="Batch size for training; available only when mini_batch is set")
+    p.add_argument(
+        "--batch_size",
+        type=int,
+        default=16,
+        help="Batch size for training; available only when mini_batch is set",
+    )
     args = p.parse_args()
 
-    bs = (args.batch_size if args.mini_batch else None)
+    bs = args.batch_size if args.mini_batch else None
 
     objective_fn, input_size = make_objective(
         args.dataset, loss=args.loss, steps=args.steps, lr=args.lr, batch_size=bs
     )
 
     qubits = {
-            "input": min(args.input_qubits, input_size),
-            "output": args.out_qubits,   # 2 readout qubits → 4 outcomes ≥ 3 classes
-        }
+        "input": min(args.input_qubits, input_size),
+        "output": args.out_qubits,  # 2 readout qubits → 4 outcomes ≥ 3 classes
+    }
     register_map = register_wire_map(qubits)
     logger.info(f"register map: {register_map}")
 

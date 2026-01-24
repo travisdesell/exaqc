@@ -19,8 +19,8 @@ class WineDataset(QuantumDataset):
         from sklearn.preprocessing import MinMaxScaler
 
         data = load_wine()
-        X = data.data          # (178, 13)
-        y = data.target        # (178,)
+        X = data.data  # (178, 13)
+        y = data.target  # (178,)
         n_classes = len(set(y.tolist()))
 
         self.num_classes = n_classes  # IMPORTANT: int (3)

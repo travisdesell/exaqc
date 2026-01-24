@@ -10,7 +10,7 @@ from src.utils.losses import (
     loss_kl_divergence,
     loss_obs_mse,
     loss_readout_ce_from_state,
-    loss_ce
+    loss_ce,
 )
 
 LOSS_REGISTRY: dict[str, Callable[..., torch.Tensor]] = {
@@ -106,7 +106,7 @@ def ce_onehot_on_probs(
     probs = probs.clamp_min(eps)
     probs = probs / probs.sum()
     y_onehot = y_onehot.to(dtype=probs.dtype, device=probs.device)
-    return -(y_onehot * torch.log(probs)).sum()
+    return -(y_onehot * torch.log(probs)).mean()
 
 
 def eval_pennylane_forward_only(
@@ -247,10 +247,14 @@ def _train_with_pennylane(
 
         # guard
         if not loss.requires_grad:
-            logger.warning("Loss has no grad path (no active params used). Falling back to forward-only eval.")
-            genome.fitness = eval_pennylane_forward_only(genome, train_data, n_classes=n_classes)
+            logger.warning(
+                "Loss has no grad path (no active params used). Falling back to forward-only eval."
+            )
+            genome.fitness = eval_pennylane_forward_only(
+                genome, train_data, n_classes=n_classes
+            )
             return genome
-        
+
         loss.backward()
         opt.step()
 
