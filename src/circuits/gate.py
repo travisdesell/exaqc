@@ -6,10 +6,14 @@ from qiskit import QuantumCircuit, QuantumRegister
 import pennylane as qml
 import torch
 
-from src.circuits.circuit import CircuitGenome
 from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
 from src.evolution.innovation import innovation_number_generator
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.circuits.circuit import CircuitGenome
 
 
 class Gate:
