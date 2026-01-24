@@ -27,7 +27,6 @@ class EXAQC:
         gate_specifications: GateSpecifications,
         population: PopulationStrategy,
         registers: dict[str, int],
-        output_qubits: list[int],
         objective_function: Callable[[CircuitGenome], None],
         output_qubits: list[int] = None,
         target: str = "pennylane",
