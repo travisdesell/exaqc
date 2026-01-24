@@ -52,9 +52,9 @@ class GateSpecification:
         self.output_qubit_indexes = []
 
         for i, qubit in enumerate(self.qubits):
-            if 'control_' in qubit:
+            if "control_" in qubit:
                 self.input_qubit_indexes.append(i)
-            elif 'target_' in qubit:
+            elif "target_" in qubit:
                 # target (output) qubits are also inputs
                 self.input_qubit_indexes.append(i)
                 self.output_qubit_indexes.append(i)
@@ -62,7 +62,6 @@ class GateSpecification:
                 # qubit is both an input and output
                 self.input_qubit_indexes.append(i)
                 self.output_qubit_indexes.append(i)
-
 
     def __str__(self) -> str:
         """

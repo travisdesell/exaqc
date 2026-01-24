@@ -258,20 +258,42 @@ def add_gate(
     # outputs
     possible_output_indexes = circuit.get_possible_output_qubits(depth=depth)
 
-    selected_qubit_indexes = random.sample(possible_output_indexes, len(gate_specification.output_qubit_indexes))
+    logger.info(
+        f"adding gate {gate_specification.method_name} at depth {depth} with possible "
+        f"output indexes: {possible_output_indexes}"
+    )
+    logger.info(
+        f"\tgate has {len(gate_specification.output_qubit_indexes)} output qubits and "
+        f"{len(gate_specification.input_qubit_indexes)} input qubits"
+    )
+
+    selected_qubit_indexes = random.sample(
+        possible_output_indexes, len(gate_specification.output_qubit_indexes)
+    )
+    logger.info(f"\tselected {selected_qubit_indexes} for outputs")
 
     # determine if we need extra qubits for the inputs
-    extra_inputs = len(gate_specification.input_qubit_indexes) - len(gate_specification.output_qubit_indexes)
+    extra_inputs = len(gate_specification.input_qubit_indexes) - len(
+        gate_specification.output_qubit_indexes
+    )
+    logger.info(f"\tneed {extra_inputs} other qubits for input")
 
     if extra_inputs > 0:
-        possible_indexes = range(len(circuit.qubits)) 
+        possible_indexes = range(len(circuit.qubits))
         # the other input can be any qubit in the circuit except for those selected as
         # outputs
-        possible_indexes = [index for index in possible_indexes if index not in selected_qubit_indexes]
+        possible_indexes = [
+            index for index in possible_indexes if index not in selected_qubit_indexes
+        ]
 
         # preprend the inputs as they always go before the ouputs/targets
         # TODO: verify this
-        selected_qubit_indexes = random.sample(possible_indexes, extra_inputs) + selected_qubit_indexes
+        selected_qubit_indexes = (
+            random.sample(possible_indexes, extra_inputs) + selected_qubit_indexes
+        )
+        logger.info(
+            f"\tselected qubit indexes for args are now {selected_qubit_indexes}"
+        )
 
     gate_qubits = []
     for index in selected_qubit_indexes:

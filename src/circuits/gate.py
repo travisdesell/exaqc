@@ -6,6 +6,7 @@ from qiskit import QuantumCircuit, QuantumRegister
 import pennylane as qml
 import torch
 
+from src.circuits.circuit import CircuitGenome
 from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
 from src.evolution.innovation import innovation_number_generator
@@ -129,7 +130,6 @@ class Gate:
             output_indexes.append(qubit_index)
 
         return output_indexes
-
 
     def copy(self, new_innovation_number: bool = False) -> Gate:
         """

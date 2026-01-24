@@ -1,7 +1,6 @@
 import pytest
 
 from src.circuits.circuit import CircuitGenome
-from src.evolution.mutation import reorder_gate
 
 
 @pytest.mark.parametrize("target", ["qiskit", "pennylane"])
@@ -27,9 +26,7 @@ def test_get_circuit_indexes(target: str):
     assert output_indexes == [6]
 
     # both are inputs and outputs
-    qc.add_gate(
-        depth=0.30, method_name="iswap", qubits=[("t2", 0), ("t1", 1)]
-    )
+    qc.add_gate(depth=0.30, method_name="iswap", qubits=[("t2", 0), ("t1", 1)])
     gate = qc.gates[1]
     input_indexes = gate.get_input_circuit_indexes(qc)
     output_indexes = gate.get_output_circuit_indexes(qc)
@@ -37,9 +34,7 @@ def test_get_circuit_indexes(target: str):
     assert output_indexes == [3, 1]
 
     # first two are control, third is target
-    qc.add_gate(
-        depth=0.40, method_name="ccz", qubits=[("t1", 0), ("t1", 1), ("t2", 3)]
-    )
+    qc.add_gate(depth=0.40, method_name="ccz", qubits=[("t1", 0), ("t1", 1), ("t2", 3)])
     gate = qc.gates[2]
     input_indexes = gate.get_input_circuit_indexes(qc)
     output_indexes = gate.get_output_circuit_indexes(qc)
@@ -47,9 +42,7 @@ def test_get_circuit_indexes(target: str):
     assert output_indexes == [6]
 
     # first is control, second is target
-    qc.add_gate(
-        depth=0.45, method_name="ch", qubits=[("t1", 2), ("t2", 1)]
-    )
+    qc.add_gate(depth=0.45, method_name="ch", qubits=[("t1", 2), ("t2", 1)])
     gate = qc.gates[3]
     input_indexes = gate.get_input_circuit_indexes(qc)
     output_indexes = gate.get_output_circuit_indexes(qc)
@@ -77,7 +70,12 @@ def test_get_circuit_indexes_by_depth(target: str):
     Args:
         target: is the target framework (qiskit or pennylane)
     """
-    qc = CircuitGenome(genome_number=1, registers={"t1": 3, "t2": 4}, target=target, output_qubits=[0, 1])
+    qc = CircuitGenome(
+        genome_number=1,
+        registers={"t1": 3, "t2": 4},
+        target=target,
+        output_qubits=[0, 1],
+    )
 
     # test with no gates yet
     assert qc.get_possible_output_qubits(0.95) == [0, 1]
@@ -89,22 +87,15 @@ def test_get_circuit_indexes_by_depth(target: str):
     assert qc.get_possible_output_qubits(0.85) == [0, 1]
 
     # first two are control, third is target
-    qc.add_gate(
-        depth=0.70, method_name="ccz", qubits=[("t2", 2), ("t2", 0), ("t1", 0)]
-    )
+    qc.add_gate(depth=0.70, method_name="ccz", qubits=[("t2", 2), ("t2", 0), ("t1", 0)])
     assert qc.get_possible_output_qubits(0.65) == [0, 1, 3, 5]
 
     # both are inputs and outputs
-    qc.add_gate(
-        depth=0.50, method_name="iswap", qubits=[("t2", 0), ("t2", 1)]
-    )
+    qc.add_gate(depth=0.50, method_name="iswap", qubits=[("t2", 0), ("t2", 1)])
     assert qc.get_possible_output_qubits(0.45) == [0, 1, 3, 4, 5]
 
-
     # first is control, second is target
-    qc.add_gate(
-        depth=0.3, method_name="ch", qubits=[("t1", 0), ("t2", 2)]
-    )
+    qc.add_gate(depth=0.3, method_name="ch", qubits=[("t1", 0), ("t2", 2)])
     assert qc.get_possible_output_qubits(0.25) == [0, 1, 3, 4, 5]
 
     # first is control, second and third are target

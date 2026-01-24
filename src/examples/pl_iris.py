@@ -22,7 +22,6 @@ from src.objectives.genome_objectives import (
 )
 from src.quantum_datasets import IrisDataset
 
-
 logger.add("iris_evolve.log", level="INFO")
 
 

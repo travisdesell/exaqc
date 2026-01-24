@@ -179,7 +179,9 @@ class CircuitGenome:
             qubits.
         """
         # determine which qubits this gate can be applied to so it will effect the output qubits
-        reverse_gates = sorted(self.gates, key=lambda g: (g.depth, g.innovation_number), reverse=True)
+        reverse_gates = sorted(
+            self.gates, key=lambda g: (g.depth, g.innovation_number), reverse=True
+        )
 
         possible_output_indexes = set(self.output_qubits)
 
@@ -203,7 +205,6 @@ class CircuitGenome:
                 break
 
         return sorted(possible_output_indexes)
-
 
     def generate_qiskit_circuit(self) -> QuantumCircuit:
         """
