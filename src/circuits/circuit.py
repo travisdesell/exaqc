@@ -144,7 +144,13 @@ class CircuitGenome:
             parameters: a dict where the key is the parameter name and the value is the parameter value
         """
 
-        gate = Gate(depth, method_name, qubits, parameters)
+        gate = Gate(
+            depth=depth,
+            method_name=method_name,
+            qubits=qubits,
+            parameters=parameters,
+            target=self.target,
+        )
         # make sure to add the gate in sorted order
         bisect.insort(self.gates, gate, key=lambda g: (g.depth, g.innovation_number))
 

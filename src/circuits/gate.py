@@ -58,7 +58,8 @@ class Gate:
         self.qubits = qubits
         self.parameters = parameters
 
-        if target == "qiskit":
+        self.target = target
+        if self.target == "qiskit":
             self.specs = qiskit_gate_specifications[self.method_name]
         else:
             self.specs = pennylane_gate_specifications[self.method_name]
@@ -94,6 +95,7 @@ class Gate:
             qubits=self.qubits.copy(),
             parameters=self.parameters.copy(),
             innovation_number=innovation_number,
+            target=self.target,
         )
 
     def add_to_qiskit_circuit(

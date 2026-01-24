@@ -19,7 +19,7 @@ def test_gate_creation(gate_method_name: str):
     """
     print(f"testing add gate for: {gate_method_name}, type: {type(gate_method_name)}")
 
-    qc = CircuitGenome(genome_number=1, registers={"test": 10})
+    qc = CircuitGenome(genome_number=1, registers={"test": 10}, target="qiskit")
     add_gate(qiskit_gate_specifications[gate_method_name], qc)
 
     assert len(qc.gates) == 1
@@ -47,7 +47,7 @@ def test_qubit_requirements(gate_method_name: str):
     # iterate up to a circuit size large enough to be able to add this gate
     for i in range(n_qubits + 2):
         # print(f"\ti is: {i}")
-        qc = CircuitGenome(genome_number=1, registers={"test": i})
+        qc = CircuitGenome(genome_number=1, registers={"test": i}, target="qiskit")
         success = add_gate(specification, qc)
         # print(f"\tsuccess? : {success}")
 
@@ -65,7 +65,7 @@ def test_all_gates_one_register():
     the add gate mutation.
     """
 
-    qc = CircuitGenome(genome_number=1, registers={"test": 10})
+    qc = CircuitGenome(genome_number=1, registers={"test": 10}, target="qiskit")
 
     gate_count = 0
     for gate_method_name, gate_specs in qiskit_gate_specifications.items():
@@ -86,7 +86,9 @@ def test_all_gates_two_registers():
     each possible gate to it using the add gate mutation.
     """
 
-    qc = CircuitGenome(genome_number=1, registers={"test1": 5, "test2": 5})
+    qc = CircuitGenome(
+        genome_number=1, registers={"test1": 5, "test2": 5}, target="qiskit"
+    )
 
     gate_count = 0
     for gate_method_name, gate_specs in qiskit_gate_specifications.items():

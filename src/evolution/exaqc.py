@@ -5,8 +5,18 @@ from loguru import logger
 
 from src.circuits.circuit import CircuitGenome
 from src.circuits.gate_specifications import GateSpecifications
-from src.evolution.crossover import binary_crossover, n_ary_crossover
-from src.evolution.mutation import add_gate, disable_gate, enable_gate, reorder_gate
+from src.evolution.crossover import (
+    binary_crossover,
+    exponential_crossover,
+    n_ary_crossover,
+)
+from src.evolution.mutation import (
+    add_gate,
+    disable_gate,
+    enable_gate,
+    reorder_gate,
+    qubit_swap,
+)
 from src.population.population_strategy import PopulationStrategy
 
 
@@ -97,8 +107,9 @@ class EXAQC:
 
         # mutation_options = ["add_gate", "disable_gate", "enable_gate", "reorder_gate"]
         mutation_options = (
-            ["add_gate"] * 6  # 60%
-            + ["reorder_gate"] * 3  # 30%
+            ["add_gate"] * 5  # 50%
+            + ["reorder_gate"] * 2  # 20%
+            + ["qubit_swap"] * 2  # 20%
             + ["enable_gate"]  # 5%
             + ["disable_gate"]  # 5%
         )
@@ -135,13 +146,18 @@ class EXAQC:
                     logger.info(f"\tattempting to mutate with {mutation}")
                     modified = reorder_gate(child)
 
+                case "qubit_swap":
+                    logger.info(f"\tattempting to mutate with {mutation}")
+                    modified = qubit_swap(child)
+
         return child
 
     def run_for(
         self,
         number_genomes: int,
-        binary_crossover_rate: float = 0.15,
-        n_ary_crossover_rate: float = 0.15,
+        binary_crossover_rate: float = 0.10,
+        n_ary_crossover_rate: float = 0.10,
+        exponential_crossover_rate: float = 0.10,
         n_ary_parents: int = 4,
     ):
         """
@@ -159,6 +175,7 @@ class EXAQC:
         # calculate this so we can use a single if set of statements based on
         # the random r value
         n_ary_cutoff = binary_crossover_rate + n_ary_crossover_rate
+        exponential_cutoff = n_ary_cutoff + exponential_crossover_rate
 
         while self.genome_number < number_genomes:
             child = None
@@ -177,8 +194,12 @@ class EXAQC:
                     output_qubits=self.output_qubits.copy(),
                 )
 
-                binary_crossover(child, parents[0], parents[1])
-                self.objective_function(child)
+                if binary_crossover(child, parents[0], parents[1]):
+                    self.objective_function(child)
+                else:
+                    # two parents could not be used in exponential crossover, so try
+                    # to generate a new child
+                    continue
 
             elif (
                 self.genome_number > self.population.max_population_size
@@ -193,6 +214,20 @@ class EXAQC:
                 )
 
                 n_ary_crossover(child, parents)
+                self.objective_function(child)
+
+            elif (
+                self.genome_number > self.population.max_population_size
+                and r < exponential_cutoff
+            ):
+                parents = self.population.get_parents(2)
+                child = CircuitGenome(
+                    genome_number=self.next_genome_number(),
+                    target=self.target,
+                    registers=self.registers,
+                )
+
+                exponential_crossover(child, parents[0], parents[1])
                 self.objective_function(child)
 
             else:
