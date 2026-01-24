@@ -10,6 +10,7 @@ from src.utils.losses import (
     loss_kl_divergence,
     loss_obs_mse,
     loss_readout_ce_from_state,
+    loss_ce
 )
 
 LOSS_REGISTRY: dict[str, Callable[..., torch.Tensor]] = {
@@ -17,7 +18,7 @@ LOSS_REGISTRY: dict[str, Callable[..., torch.Tensor]] = {
     "angle": loss_state_angle,
     "kl": loss_kl_divergence,
     "mse": loss_obs_mse,
-    "ce": loss_readout_ce_from_state,
+    "ce": loss_ce,
 }
 
 STATEVECTOR_LOSSES = {"fidelity", "angle", "kl", "ce"}
@@ -164,7 +165,9 @@ def _train_with_pennylane(
     lr: float = 0.05,
     log_every: int = 25,
     n_classes: int = 3,
+    batch_size: int = None,
     loss_name: str = "ce",
+    shuffle_each_step: bool = True,
 ):
     """
     Expects dataset items: (x, y_onehot)
@@ -214,17 +217,40 @@ def _train_with_pennylane(
 
     # logger.debug(f"torch params before training: {torch_params}")
 
+    n = len(train_list)
+    if batch_size is not None:
+        batch_size = max(1, min(batch_size, n))
+
     # ---- training loop ----
     for step in range(steps):
         opt.zero_grad()
 
+        # sample a minibatch
+        if batch_size is not None:
+            if shuffle_each_step:
+                idx = torch.randint(low=0, high=n, size=(batch_size,))
+                batch = [train_list[i] for i in idx.tolist()]
+            else:
+                # deterministic cycling batch
+                start = (step * batch_size) % n
+                batch = [train_list[(start + i) % n] for i in range(batch_size)]
+        else:
+            batch = train_list
+
         losses = []
-        for x, y in train_list:
+        for x, y in batch:
             probs = forward_probs(x)
             L = ce_onehot_on_probs(probs, y)
             losses.append(L)
 
         loss = torch.stack(losses).mean()
+
+        # guard
+        if not loss.requires_grad:
+            logger.warning("Loss has no grad path (no active params used). Falling back to forward-only eval.")
+            genome.fitness = eval_pennylane_forward_only(genome, train_data, n_classes=n_classes)
+            return genome
+        
         loss.backward()
         opt.step()
 
@@ -433,6 +459,7 @@ def train_genome_objective(
     steps: int = 200,
     lr: float = 0.05,
     log_every: int = 50,
+    bath_size: int = None,
     qiskit_config: Optional[dict[str, Any]] = None,
 ) -> CircuitGenome:
     """
@@ -454,6 +481,7 @@ def train_genome_objective(
             lr=lr,
             loss_name=loss,
             log_every=log_every,
+            batch_size=bath_size,
         )
         genome.fitness = metrics
         return genome
