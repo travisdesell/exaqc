@@ -164,6 +164,47 @@ class CircuitGenome:
         """
         self.gates.sort(key=lambda g: (g.depth, g.innovation_number))
 
+    def get_possible_output_qubits(self, depth: float) -> list[int]:
+        """
+        Traces back the gates from the output to a given depth to determine which output
+        qubits will effect any of the final output gates that are being measured.
+
+        Args:
+            depth: the depth a new gate will be added at, the results of this method will be
+                used to determine which qubits can be used as output (target) parameters for
+                the gate.
+
+        Returns:
+            A list of potential qubit indexes in this circuit that will effect the output
+            qubits.
+        """
+        # determine which qubits this gate can be applied to so it will effect the output qubits
+        reverse_gates = sorted(self.gates, key=lambda g: (g.depth, g.innovation_number), reverse=True)
+
+        possible_output_indexes = set(self.output_qubits)
+
+        for gate in reverse_gates:
+            output_circuit_indexes = gate.get_output_circuit_indexes(self)
+            input_circuit_indexes = gate.get_input_circuit_indexes(self)
+
+            # if any of the output indexes for the gate are in the possible output
+            # qubit indexes, then this gate effects the output and we can add its
+            # inputs as effecting the output
+            if not set(output_circuit_indexes).isdisjoint(possible_output_indexes):
+                possible_output_indexes.update(input_circuit_indexes)
+
+            if gate.depth <= depth:
+                # we've gone through all gates ahead of the insertion
+                # depth for this new gate.
+                break
+
+            if len(possible_output_indexes) == len(self.qubits):
+                # all gates are possible so we can quit checking
+                break
+
+        return sorted(possible_output_indexes)
+
+
     def generate_qiskit_circuit(self) -> QuantumCircuit:
         """
         Converts this genome into a useable qiskit instationation.
@@ -291,63 +332,3 @@ class CircuitGenome:
             gate.describe_pennylane_circuit(registers)
 
         return dev, qnode_fn
-
-
-"""
-qc = CircuitGenome(genome_number=1, registers={"a" : 3, "b" : 5})
-
-qc.add_gate(depth=0.05, method_name='x', qubits=[('a', 1)])
-qc.add_gate(depth=0.10, method_name='x', qubits=[('b', 1)])
-qc.add_gate(depth=0.15, method_name='x', qubits=[('b', 2)])
-qc.add_gate(depth=0.20, method_name='x', qubits=[('b', 4)])
-
-qc.add_gate(depth=0.25, method_name='h', qubits=[('a', 0)])
-qc.add_gate(depth=0.30, method_name='h', qubits=[('b', 1)])
-
-qc.add_gate(depth=0.31, method_name='rx', qubits=[('b', 1)], parameters={'theta': 0.2})
-
-qc.add_gate(depth=0.35, method_name='cp', qubits=[('b', 3), ('a', 0)], parameters={'theta': 0.3})
-
-qc.add_gate(depth=0.40, method_name='ccz', qubits=[('b', 0), ('b', 1), ('b',3)])
-qc.add_gate(depth=0.40, method_name='cswap', qubits=[('b', 0), ('b', 1), ('b',2)])
-qc.add_gate(depth=0.40, method_name='cswap', qubits=[('b', 0), ('b', 1), ('b',2)])
-qc.add_gate(depth=0.45, method_name='cswap', qubits=[('b', 2), ('b', 3), ('b',4)])
-qc.add_gate(depth=0.50, method_name='cswap', qubits=[('b', 3), ('b', 4), ('b',0)])
-
-circuit = qc.generate_qiskit_circuit()
-
-circuit.draw(output="mpl")
-
-plt.show()
-
-
-# Draw a new circuit with barriers and more registers
-q_a = QuantumRegister(3, name="a")
-q_b = QuantumRegister(5, name="b")
-c_a = ClassicalRegister(3)
-c_b = ClassicalRegister(5)
-
-circuit = QuantumCircuit(q_a, q_b, c_a, c_b)
-#circuit = QuantumCircuit(q_a, q_b)
-circuit.x(q_a[1])
-circuit.x(q_b[1])
-circuit.x(q_b[2])
-circuit.x(q_b[4])
-circuit.barrier()
-#circuit.h(q_b)
-circuit.h([q_a[0], q_a[2], q_b[1], q_b[3], q_b[4]])
-circuit.barrier(q_a)
-circuit.h(q_b)
-#circuit.mcrx(0.3, [q_a[0], q_b[1], q_b[3]], q_b[2])
-circuit.ms(0.3, [q_a[0], q_b[1], q_b[3], q_b[2]])
-circuit.cswap(q_b[0], q_b[1], q_b[2])
-circuit.cswap(q_b[2], q_b[3], q_b[4])
-circuit.cswap(q_b[3], q_b[4], q_b[0])
-circuit.barrier(q_b)
-circuit.measure(q_a, c_a)
-circuit.measure(q_b, c_b);
-
-circuit.draw(output="mpl")
-
-plt.show()
-"""

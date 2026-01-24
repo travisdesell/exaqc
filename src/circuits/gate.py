@@ -72,6 +72,65 @@ class Gate:
 
         self.enabled = True
 
+    def get_input_circuit_indexes(self, circuit: CircuitGenome) -> list[int]:
+        """
+        Determines which qubit indexes in the circuit genome this gate uses as inputs, given
+        the gate specification and its qubit names.
+
+        Args:
+            circuit: is the CircuitGenome to determine which qubit indexes this gate
+                uses.
+
+        Returns:
+            A list of ints, where each is an index of a qubit in the circuit.
+        """
+
+        input_indexes = []
+
+        # logger.debug(f'getting input qubits from circuit with qubits: {circuit.qubits}')
+
+        for gate_qubit_index in self.specs.input_qubit_indexes:
+            # get the qubit touple (register name and index in the register)
+            # for the gate
+            gate_qubit = self.qubits[gate_qubit_index]
+
+            # figure out which index this qubit has in the circuit
+            qubit_index = circuit.qubits.index(gate_qubit)
+
+            input_indexes.append(qubit_index)
+
+        return input_indexes
+
+    def get_output_circuit_indexes(self, circuit: CircuitGenome) -> list[int]:
+        """
+        Determines which qubit indexes in the circuit genome this gate uses as outputs, given
+        the gate specification and its qubit names.
+
+        Args:
+            circuit: is the CircuitGenome to determine which qubit indexes this gate
+                uses.
+
+        Returns:
+            A list of ints, where each is an index of a qubit in the circuit.
+        """
+
+        output_indexes = []
+
+        # logger.debug(f'getting output qubits from circuit with qubits: {circuit.qubits}')
+
+        for gate_qubit_index in self.specs.output_qubit_indexes:
+            # get the qubit touple (register name and index in the register)
+            # for the gate
+            gate_qubit = self.qubits[gate_qubit_index]
+
+            # figure out which index this qubit has in the circuit
+            qubit_index = circuit.qubits.index(gate_qubit)
+
+            output_indexes.append(qubit_index)
+
+        return output_indexes
+
+
     def copy(self, new_innovation_number: bool = False) -> Gate:
         """
         Creates a deep copy of this Gate.

@@ -239,11 +239,43 @@ def add_gate(
         gate_specification: is the GateSpecification for the new gate to
             be added to the provided circuit
         circuit: is the CircuitGenome to mutate
+        depth: is just used by unit tests to hijack making a random depth so
+            we can better test this mutation.
 
     Returns:
         False if the gate method requires more qubits than are in the
         circuit, otherwise it should always return true
     """
+
+    # make sure there are enough qubits in the quantum circuit to
+    # be able to add the gate
+    if len(circuit.qubits) < len(gate_specification.qubits):
+        return False
+
+    depth = random.uniform(0.0, 1.0)
+
+    # get the possible output qubits so we know which gates we can use for
+    # outputs
+    possible_output_indexes = circuit.get_possible_output_qubits(depth=depth)
+
+    selected_qubit_indexes = random.sample(possible_output_indexes, len(gate_specification.output_qubit_indexes))
+
+    # determine if we need extra qubits for the inputs
+    extra_inputs = len(gate_specification.input_qubit_indexes) - len(gate_specification.output_qubit_indexes)
+
+    if extra_inputs > 0:
+        possible_indexes = range(len(circuit.qubits)) 
+        # the other input can be any qubit in the circuit except for those selected as
+        # outputs
+        possible_indexes = [index for index in possible_indexes if index not in selected_qubit_indexes]
+
+        # preprend the inputs as they always go before the ouputs/targets
+        # TODO: verify this
+        selected_qubit_indexes = random.sample(possible_indexes, extra_inputs) + selected_qubit_indexes
+
+    gate_qubits = []
+    for index in selected_qubit_indexes:
+        gate_qubits.append(circuit.qubits[index])
 
     # get the parameter args (if any) otherwise set to an empty list
     gate_parameters = {}
@@ -251,22 +283,8 @@ def add_gate(
         # generate a random angle as all parameter values are in radians
         gate_parameters[parameter_name] = random.uniform(-math.pi, math.pi)
 
-    # create a register large enough for the gates input and
-    # output qubits
-    qubit_args = gate_specification.qubits
-    n_qubits = len(qubit_args)
-
-    # make sure there are enough qubits in the quantum circuit to
-    # be able to add the gate
-    if len(circuit.qubits) < n_qubits:
-        return False
-
-    # randomly sample (without replacement) the number of qubits
-    # required as inputs/outputs to this gate
-    gate_qubits = random.sample(circuit.qubits, n_qubits)
-
     circuit.add_gate(
-        depth=random.uniform(0.0, 1.0),
+        depth=depth,
         method_name=gate_specification.method_name,
         qubits=gate_qubits,
         parameters=gate_parameters,
