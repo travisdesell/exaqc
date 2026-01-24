@@ -17,6 +17,7 @@ class CircuitGenome:
     def __init__(
         self,
         genome_number: int,
+        target: int,
         registers: dict[str, int] = None,
         output_qubits: list[int] = None,
     ):
@@ -26,7 +27,9 @@ class CircuitGenome:
         Args:
             genome_number: a unique identifier for this evolved circuit, which also represents the ordering
                 that genomes have been generated, e.g., 0 is the first genome created, 1 is the next, etc.
+            target: specifies if the circuit is for qiskit or pennylane
             registers: a dict of register names and sizes (the key is the qubit name, the value is its size)
+            output_qubits: the list of indexes that corrspond to the output qubits
         """
         self.genome_number = genome_number
 
@@ -45,6 +48,8 @@ class CircuitGenome:
         # a list of Gates sorted by depth represnting the gates in the quantum
         # circuit
         self.gates: list[Gate] = []
+
+        self.target = target
 
         # if a genome has not yet been evaluated, its fitness is None
         self.fitness = None
@@ -96,6 +101,7 @@ class CircuitGenome:
 
         new_genome = CircuitGenome(
             genome_number=genome_number,
+            target=self.target,
             registers=self.registers.copy(),
             output_qubits=self.output_qubits.copy(),
         )

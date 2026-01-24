@@ -19,7 +19,7 @@ class EXAQC:
         registers: dict[str, int],
         objective_function: Callable[[CircuitGenome], None],
         output_qubits: list[int] = None,
-        backend: str = "pennylane",
+        target: str = "pennylane",
         loss: str = "fidelity",
     ):
         """
@@ -34,13 +34,14 @@ class EXAQC:
             registers: a dict of register names and sizes (the key is the qubit name, the value is its size)
             objective_function: a method which takes a CircuitGenome, evaluates it and sets it's fitness
                 value.
-            backend: qiskit or pennylane
+            target: qiskit or pennylane
         """
 
         self.gate_specifications = gate_specifications
         self.population = population
         self.registers = registers
         self.objective_function = objective_function
+        self.target = target
 
         self.output_qubits = output_qubits
         if self.output_qubits is None:
@@ -57,6 +58,7 @@ class EXAQC:
 
         initial_genome = CircuitGenome(
             genome_number=self.next_genome_number(),
+            target = self.target,
             registers=self.registers,
             output_qubits=self.output_qubits.copy(),
         )
@@ -64,7 +66,7 @@ class EXAQC:
         # generate the initial population
         for i in range(population.max_population_size):
             child = self.mutate(initial_genome)
-            self.objective_function(child, target=backend, loss=loss)
+            self.objective_function(child, target=self.target, loss=loss)
 
             self.population.insert_genome(child)
 
@@ -170,6 +172,7 @@ class EXAQC:
                 parents = self.population.get_parents(2)
                 child = CircuitGenome(
                     genome_number=self.next_genome_number(),
+                    target=self.target,
                     registers=self.registers,
                     output_qubits=self.output_qubits.copy(),
                 )
@@ -184,6 +187,7 @@ class EXAQC:
                 parents = self.population.get_parents(n_ary_parents)
                 child = CircuitGenome(
                     genome_number=self.next_genome_number(),
+                    target=self.target,
                     registers=self.registers,
                     output_qubits=self.output_qubits.copy(),
                 )

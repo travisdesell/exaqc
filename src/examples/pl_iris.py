@@ -253,7 +253,7 @@ if __name__ == "__main__":
         registers=qubits,
         objective_function=_obj,
         output_qubits=register_map["output"],
-        backend="pennylane",
+        target="pennylane",
         loss=args.loss,
     )
 
