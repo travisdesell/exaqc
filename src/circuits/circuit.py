@@ -205,7 +205,7 @@ class CircuitGenome:
 
     def generate_pennylane_circuit(
         self,
-        device_name: str = "default.qubit",
+        device_name: str = "lightning.qubit",
         measure_registers: bool = True,
         shots: Optional[int] = None,
         input_mode: str = "basis",
