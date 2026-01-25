@@ -75,7 +75,7 @@ def qubit_swap(circuit: CircuitGenome, favor_enabled: bool = False) -> bool:
         True if the circuit was modified, False otherwise, e.g., the
         genome had no gates using more than one qubit, or the genome
         had no gates using more than one qubit where there were spare
-        cubits to swap to.
+        qubits to swap to.
     """
     logger.info("qubit swap mutation")
 
@@ -262,6 +262,7 @@ def add_gate(
         f"adding gate {gate_specification.method_name} at depth {depth} with possible "
         f"output indexes: {possible_output_indexes}"
     )
+    logger.info(f"\tcircuit qubits: {circuit.qubits}")
     logger.info(
         f"\tgate has {len(gate_specification.output_qubit_indexes)} output qubits and "
         f"{len(gate_specification.input_qubit_indexes)} input qubits"
@@ -305,6 +306,7 @@ def add_gate(
         # generate a random angle as all parameter values are in radians
         gate_parameters[parameter_name] = random.uniform(-math.pi, math.pi)
 
+    logger.info(f"\tqubits are: {gate_qubits}")
     logger.info(f"\tparameters are: {gate_parameters}")
 
     circuit.add_gate(

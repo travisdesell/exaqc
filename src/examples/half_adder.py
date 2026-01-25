@@ -154,7 +154,8 @@ if __name__ == "__main__":
     exaqc = EXAQC(
         gate_specifications=allowed_gates,
         population=SteadyStatePopulation(max_population_size=50),
-        registers={"q": 4},
+        input_registers={"q": 4},
+        output_registers={"q": 4},
         objective_function=half_adder_objective,
         target="pennylane",
     )

@@ -18,8 +18,8 @@ class CircuitGenome:
         self,
         genome_number: int,
         target: int,
-        registers: dict[str, int] = None,
-        output_qubits: list[int] = None,
+        input_qubits: list[tuple[str, int]],
+        output_qubits: list[tuple[str, int]] = None,
     ):
         """
         Initializes an empty quantum circuit.
@@ -28,22 +28,40 @@ class CircuitGenome:
             genome_number: a unique identifier for this evolved circuit, which also represents the ordering
                 that genomes have been generated, e.g., 0 is the first genome created, 1 is the next, etc.
             target: specifies if the circuit is for qiskit or pennylane
-            registers: a dict of register names and sizes (the key is the qubit name, the value is its size)
-            output_qubits: the list of indexes that corrspond to the output qubits
+            input_qubits: a list of qubit names and indexes (e.g., (a, 0)).
+            output_qubits: a list of qubit names and indexes (e.g., (a, 0)), if None then output_qubits are
+                the same as the input qubits.
         """
         self.genome_number = genome_number
 
-        # a dict of cubits where the key is the cubit name is the name of the
-        # input quantum register and the value is an instantiated quantum register
-        self.registers: dict[str, int] = registers
-
         # create a list of input qubits (which are tuples of register names and indexes)
         # so we can easily select random qubits to use for gate mutations
-        self.qubits: list[str, int] = []
+        self.qubits: list[tuple[str, int]] = []
 
-        for gate_name, gate_size in registers.items():
-            for index in range(gate_size):
-                self.qubits.append((gate_name, index))
+        self.input_qubits: list[tuple[str, int]] = input_qubits
+        for qubit in self.input_qubits:
+            self.qubits.append(qubit)
+
+        if output_qubits is None:
+            output_qubits = input_qubits.copy()
+        self.output_qubits: list[tuple[str, int]] = output_qubits
+        for qubit in self.output_qubits:
+            if qubit not in self.qubits:
+                self.qubits.append(qubit)
+
+        # make sure they are all sorted
+        self.input_qubits.sort()
+        self.output_qubits.sort()
+        self.qubits.sort()
+
+        # get indexes for input and output qubits in the full qubit list
+        self.input_indexes = []
+        for qubit in input_qubits:
+            self.input_indexes.append(self.qubits.index(qubit))
+
+        self.output_indexes = []
+        for qubit in output_qubits:
+            self.output_indexes.append(self.qubits.index(qubit))
 
         # a list of Gates sorted by depth represnting the gates in the quantum
         # circuit
@@ -57,12 +75,8 @@ class CircuitGenome:
         # the inherent circuit is set to None
         self.circuit = None
 
-        # mark the indexes of the output qubits
-        self.output_qubits = output_qubits
-        if self.output_qubits is None:
-            self.output_qubits = list(range(sum(registers.values())))
 
-    def dominates(self, other: CircuitGenome) -> bool:
+    def dominates(self, other: CircuitGenome, loss: str = "fidelity_loss") -> bool:
         """
         Determines if this genome dominates another genome. This method is needed because
         in the multi-objective case we can't just compare a single fitness value to determine
@@ -75,8 +89,9 @@ class CircuitGenome:
             True if this genome dominates another genome.
         """
 
-        # TODO: update for multi objectives, but for now just use fidelity loss
-        return self.fitness["loss"] < other.fitness["loss"]
+        # TODO: update for multi objectives, but for now just use the given
+        # loss key
+        return self.fitness[loss] < other.fitness[loss]
 
     def copy(self, genome_number: int = None) -> CircuitGenome:
         """
@@ -102,7 +117,7 @@ class CircuitGenome:
         new_genome = CircuitGenome(
             genome_number=genome_number,
             target=self.target,
-            registers=self.registers.copy(),
+            input_qubits=self.input_qubits.copy(),
             output_qubits=self.output_qubits.copy(),
         )
         new_genome.fitness = fitness
@@ -164,6 +179,48 @@ class CircuitGenome:
         """
         self.gates.sort(key=lambda g: (g.depth, g.innovation_number))
 
+    def get_possible_input_qubits(self, depth: float) -> list[int]:
+        """
+        Traces back the gates from the input to a given depth to determine which input
+        qubits will effect any of the final output gates that are being measured.
+
+        Args:
+            depth: the depth a new gate will be added at, the results of this method will be
+                used to determine which qubits can be used as input (control) parameters for
+                the gate.
+
+        Returns:
+            A list of potential qubit indexes in this circuit that will effect the output
+            qubits.
+        """
+        # determine which qubits this gate can be applied to so it will effect the output qubits
+        self.sort_gates()
+
+        possible_input_indexes = set(self.input_indexes)
+
+        for gate in self.gates:
+            output_circuit_indexes = gate.get_output_circuit_indexes(self)
+            input_circuit_indexes = gate.get_input_circuit_indexes(self)
+
+            # if any of the input indexes for the gate are in the possible input
+            # qubit indexes, then this gate is effected by the input and we can add
+            # its outputs as additional possible inputs
+
+            if not set(input_circuit_indexes).isdisjoint(possible_input_indexes):
+                possible_input_indexes.update(output_circuit_indexes)
+
+            if gate.depth >= depth:
+                # we've gone through all gates ahead of the insertion
+                # depth for this new gate.
+                break
+
+            if len(possible_input_indexes) == len(self.qubits):
+                # all gates are possible so we can quit checking
+                break
+
+        return sorted(possible_input_indexes)
+
+
     def get_possible_output_qubits(self, depth: float) -> list[int]:
         """
         Traces back the gates from the output to a given depth to determine which output
@@ -183,7 +240,7 @@ class CircuitGenome:
             self.gates, key=lambda g: (g.depth, g.innovation_number), reverse=True
         )
 
-        possible_output_indexes = set(self.output_qubits)
+        possible_output_indexes = set(self.output_indexes)
 
         for gate in reverse_gates:
             output_circuit_indexes = gate.get_output_circuit_indexes(self)
@@ -213,37 +270,30 @@ class CircuitGenome:
         Returns:
             A qiskit QuantumCircuit instantiation of this circuit genome.
         """
-        self.total_qubits = sum(self.registers.values())
-        quantum_registers = {}
-        classical_registers = {}
-        for name, size in self.registers.items():
-            quantum_registers[name] = QuantumRegister(size, name=name)
-            classical_registers[name] = ClassicalRegister(size)
+        quantum_registers = []
+        classical_registers = []
+        register_dict = {}
+        for qubit_name, qubit_index in self.qubits:
+            quantum_register = QuantumRegister(1, name=f"{qubit_name}-{qubit_index}")
+            quantum_registers.append(quantum_register)
+            register_dict[(qubit_name, qubit_index)] = quantum_register
 
-        circuit = QuantumCircuit(
-            *quantum_registers.values(), *classical_registers.values()
-        )
+        for qubit_name, qubit_index in self.output_qubits:
+            classical_registers.append(ClassicalRegister(1))
+
+        circuit = QuantumCircuit(*quantum_registers, *classical_registers)
 
         # make sure we apply the gates in the correct ordering by depth
         self.sort_gates()
         for gate in self.gates:
-            gate.add_to_qiskit_circuit(quantum_registers, circuit)
+            gate.add_to_qiskit_circuit(register_dict, circuit)
 
-        for name, classical_register in classical_registers.items():
-            circuit.measure(quantum_registers[name], classical_register)
+        for output_index, input_index in enumerate(self.output_indexes):
+            circuit.measure(quantum_registers[input_index], classical_registers[output_index])
 
         self.circuit = circuit
 
         return circuit
-
-    # def _register_wire_map(self) -> dict:
-    #     """Return a dict mapping register names to PennyLane wires."""
-    #     wire_map = {}
-    #     offset = 0
-    #     for name, size in self.registers.items():
-    #         wire_map[name] = list(range(offset, offset + size))
-    #         offset += size
-    #     return wire_map
 
     def generate_pennylane_circuit(
         self,
@@ -268,9 +318,7 @@ class CircuitGenome:
             `qnode_fn` is a QNode function that implements this circuit genome.
         """
         # Create wire registers via qml.registers
-        self.total_qubits = sum(self.registers.values())
-        # registers = qml.registers(dict(self.registers.items()))
-        # self.register_map = self._register_wire_map()
+        self.total_qubits = sum(self.qubits)
 
         self.register_map = register_wire_map(self.registers)
 

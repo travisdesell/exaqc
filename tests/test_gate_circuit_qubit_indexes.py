@@ -1,6 +1,7 @@
 import pytest
 
 from src.circuits.circuit import CircuitGenome
+from src.circuits.registers import expand_registers
 
 
 @pytest.mark.parametrize("target", ["qiskit", "pennylane"])
@@ -13,7 +14,7 @@ def test_get_circuit_indexes(target: str):
     Args:
         target: is the target framework (qiskit or pennylane)
     """
-    qc = CircuitGenome(genome_number=1, registers={"t1": 3, "t2": 4}, target=target)
+    qc = CircuitGenome(genome_number=1, input_qubits=expand_registers({"t1": 3, "t2": 4}), target=target)
 
     # qubit is input and output
     qc.add_gate(
@@ -72,9 +73,9 @@ def test_get_circuit_indexes_by_depth(target: str):
     """
     qc = CircuitGenome(
         genome_number=1,
-        registers={"t1": 3, "t2": 4},
+        input_qubits=expand_registers({"t1": 3, "t2": 4}),
         target=target,
-        output_qubits=[0, 1],
+        output_qubits=[("t1", 0), ("t1", 1)],
     )
 
     # test with no gates yet
@@ -104,4 +105,4 @@ def test_get_circuit_indexes_by_depth(target: str):
     )
     assert qc.get_possible_output_qubits(0.25) == [0, 1, 2, 3, 4, 5]
 
-    assert qc.output_qubits == [0, 1]
+    assert qc.output_qubits == [("t1", 0), ("t1", 1)]

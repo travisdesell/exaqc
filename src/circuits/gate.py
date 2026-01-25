@@ -162,13 +162,14 @@ class Gate:
         )
 
     def add_to_qiskit_circuit(
-        self, registers: dict[str, QuantumRegister], circuit: QuantumCircuit
+        self, register_dict: dict[tuple[str, int], QuantumRegister], circuit: QuantumCircuit
     ):
         """
         Adds this gate to the qiskit QuantumCircuit using reflection
         to specify the correct method along with the given parameters.
 
         Args:
+            register_dict: is a dict of qubit tuples to the appropriate quantum register
             circuit: is the qiskit QuantumCircuit to add this gate to
         """
 
@@ -190,7 +191,7 @@ class Gate:
 
             # assign the values for the qubit arguments to the method
             # name
-            qubit_args[argument_name] = registers[qubit_name][qubit_index]
+            qubit_args[argument_name] = register_dict[qubit]
 
         gate_method(**self.parameters, **qubit_args)
 

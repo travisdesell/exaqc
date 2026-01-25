@@ -5,6 +5,8 @@ from loguru import logger
 
 from src.circuits.circuit import CircuitGenome
 from src.circuits.gate_specifications import GateSpecifications
+from src.circuits.registers import expand_registers
+
 from src.evolution.crossover import (
     binary_crossover,
     exponential_crossover,
@@ -19,16 +21,17 @@ from src.evolution.mutation import (
 )
 from src.population.population_strategy import PopulationStrategy
 
-
 class EXAQC:
 
     def __init__(
         self,
         gate_specifications: GateSpecifications,
         population: PopulationStrategy,
-        registers: dict[str, int],
         objective_function: Callable[[CircuitGenome], None],
-        output_qubits: list[int] = None,
+        input_qubits: list[tuple[str, int]] = None,
+        input_registers: dict[str, int] = None,
+        output_registers: dict[str, int] = None,
+        output_qubits: list[tuple[str, int]] = None,
         target: str = "pennylane",
         loss: str = "fidelity",
         batch_size: int = None,
@@ -42,21 +45,48 @@ class EXAQC:
                 process, for either the pennylane or qiskit frameworks.
             population: is an instance of a subclass of the PopulationStrategy interface, utilized to get
                 parents for mutation or crossover and insert children back into the population.
-            registers: a dict of register names and sizes (the key is the qubit name, the value is its size)
             objective_function: a method which takes a CircuitGenome, evaluates it and sets it's fitness
                 value.
+            input_registers: a dict of register names and sizes (the key is the qubit name, the value is its size). must
+                be specified if input_qubits is not specified.
+            input_qubits: a list of qubit tuples (name, register_index) which would be the expanded form of the
+                input_registers. Must be specified if input_registers is not specified.
+            output_registers: a dict of register names and sizes (the key is the qubit name, the value is its size). must
+                be specified if output_qubits is not specified. If output_registers and output_qubits are None, they
+                are set to the input registers/qubits.
+            output_qubits: a list of qubit tuples (name, register_index) which would be the expanded form of the
+                output_registers. Must be specified if output_registers is not specified. If output_registers
+                and output_qubits are None, they are set to the input_registers/qubits.
             target: qiskit or pennylane
         """
 
         self.gate_specifications = gate_specifications
         self.population = population
-        self.registers = registers
         self.objective_function = objective_function
         self.target = target
 
-        self.output_qubits = output_qubits
+        if input_registers is None and input_qubits is None:
+            logger.critical("EXAQC requires *either* input_registers or input_qubits to be specified.")
+            exit(1)
+
+        if input_registers is not None and input_qubits is not None:
+            logger.critical("EXAQC requires *either* input_registers or input_qubits to be specified, but not both.")
+            exit(1)
+
+        if output_registers is not None and output_qubits is not None:
+            logger.critical("EXAQC requires *either* output_registers or output_qubits to be specified, but not both.")
+            exit(1)
+
+        self.input_qubits: list[tuple[str, int]] = input_qubits
+        if self.input_qubits is None:
+            self.input_qubits = expand_registers(input_registers)
+
+        self.output_qubits: list[tuple[str, int]] = output_qubits
         if self.output_qubits is None:
-            self.output_qubits = list(range(sum(registers.values())))
+            if output_registers is None:
+                self.output_qubits = self.input_qubits.copy()
+            else:
+                self.output_qubits = expand_registers(output_registers)
 
         logger.info("Starting EXAQC with the following allowed gates:")
         for gate in sorted(
@@ -70,7 +100,7 @@ class EXAQC:
         initial_genome = CircuitGenome(
             genome_number=self.next_genome_number(),
             target=self.target,
-            registers=self.registers,
+            input_qubits=self.input_qubits.copy(),
             output_qubits=self.output_qubits.copy(),
         )
 
@@ -193,7 +223,7 @@ class EXAQC:
                 child = CircuitGenome(
                     genome_number=self.next_genome_number(),
                     target=self.target,
-                    registers=self.registers,
+                    input_qubits=self.input_qubits.copy(),
                     output_qubits=self.output_qubits.copy(),
                 )
 
@@ -212,7 +242,7 @@ class EXAQC:
                 child = CircuitGenome(
                     genome_number=self.next_genome_number(),
                     target=self.target,
-                    registers=self.registers,
+                    input_qubits=self.input_qubits.copy(),
                     output_qubits=self.output_qubits.copy(),
                 )
 
@@ -227,7 +257,8 @@ class EXAQC:
                 child = CircuitGenome(
                     genome_number=self.next_genome_number(),
                     target=self.target,
-                    registers=self.registers,
+                    input_qubits=self.input_qubits.copy(),
+                    output_qubits=self.output_qubits.copy(),
                 )
 
                 exponential_crossover(child, parents[0], parents[1])

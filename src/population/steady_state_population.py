@@ -85,7 +85,7 @@ class SteadyStatePopulation(PopulationStrategy):
         # 2. if gate innovation numbers are the same but fitness different, keep both
 
         bisect.insort(
-            self.population, genome, key=lambda genome: genome.fitness["loss"]
+            self.population, genome, key=lambda genome: genome.fitness[self.loss]
         )
 
         if len(self.population) > self.max_population_size:
