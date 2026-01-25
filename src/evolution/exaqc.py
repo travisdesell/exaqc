@@ -112,11 +112,15 @@ class EXAQC:
         )
 
         # generate the initial population
-        for i in range(population.max_population_size):
+        while len(population.population) < population.max_population_size:
             child = self.mutate(initial_genome)
-            self.objective_function(
-                child, target=self.target, loss=loss, batch_size=batch_size
-            )
+            if child.is_valid():
+                self.objective_function(
+                    child, target=self.target, loss=loss, batch_size=batch_size
+                )
+            else:
+                logger.warning("child was invalid (inputs did not connect to outputs).")
+                continue
 
             self.population.insert_genome(child)
 
