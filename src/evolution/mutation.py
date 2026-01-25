@@ -272,7 +272,7 @@ def add_gate(
         )
 
         # select one of these qubits for the gate parameter
-        gate_qubits[0] = circuit.qubits[random.choice(possible_indexes)]
+        gate_qubits[0] = circuit.qubits[random.choice(list(possible_indexes))]
 
     elif (
         gate_specification.input_qubit_indexes
@@ -284,9 +284,14 @@ def add_gate(
         input_index = random.choice(possible_input_indexes)
         possible_input_indexes.remove(input_index)
         logger.info(f"\tselected input index: {input_index}")
+        if input_index in possible_output_indexes:
+            possible_output_indexes.remove(input_index)
+
         output_index = random.choice(possible_output_indexes)
         possible_output_indexes.remove(output_index)
         logger.info(f"\tselected output index: {output_index}")
+        if output_index in possible_input_indexes:
+            possible_input_indexes.remove(output_index)
 
         indexes = [input_index, output_index]
 
@@ -306,6 +311,8 @@ def add_gate(
     else:
         # at least one target/output qubit should take a possible output qubit
         # and at least one control/input qubit should take a possible input qubit
+
+        first = True
 
         for i in range(n_qubits):
             logger.info(
@@ -332,22 +339,34 @@ def add_gate(
                 if index in possible_output_indexes:
                     possible_output_indexes.remove(index)
             else:
-                # make sure the target gates go to possible output gates
+                # make sure the target gates go to possible output gates for at least
+                # the first output
 
-                index = random.choice(possible_output_indexes)
+                index = None
+                if first:
+                    index = random.choice(possible_output_indexes)
+                else:
+                    remaining_indexes = set(possible_input_indexes).union(
+                        possible_output_indexes
+                    )
+                    index = random.choice(list(remaining_indexes))
+
                 logger.info(
-                    f"\t\tselected index {index} for an output or input to be put at index {i}"
+                    f"\t\tselected index {index} for an output or input to be put at index {i} (first: {first})"
                 )
                 gate_qubits[i] = circuit.qubits[index]
 
-                if index not in possible_output_indexes:
+                if first and index not in possible_output_indexes:
                     logger.error(
                         "There were not enough possible output indexes to add this gate. This shouldn't happen."
                     )
                     return False
 
+                first = False
+
                 # remove this as a possible selection
-                possible_output_indexes.remove(index)
+                if index in possible_output_indexes:
+                    possible_output_indexes.remove(index)
 
                 if index in possible_input_indexes:
                     possible_input_indexes.remove(index)
