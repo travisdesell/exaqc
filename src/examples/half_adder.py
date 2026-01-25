@@ -160,7 +160,7 @@ if __name__ == "__main__":
         gate_specifications=allowed_gates,
         population=SteadyStatePopulation(max_population_size=50, loss="fidelity_loss"),
         input_registers={"q": 4},
-        output_registers={"q": 4},
+        output_qubits=[("q", 2), ("q", 3)],
         objective_function=half_adder_objective,
         target="pennylane",
         loss="fidelity_loss",

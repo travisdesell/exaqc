@@ -13,7 +13,7 @@ from src.evolution.crossover import (
     n_ary_crossover,
 )
 from src.evolution.mutation import (
-    add_gate,
+    add_gate_with_selection,
     disable_gate,
     enable_gate,
     reorder_gate,
@@ -170,9 +170,12 @@ class EXAQC:
 
             match mutation:
                 case "add_gate":
-                    gate_specification = random.choice(allowed_gate_specifications)
-                    logger.info(f"\tattempting {mutation} with {gate_specification}")
-                    modified = add_gate(gate_specification, child)
+                    modified = add_gate_with_selection(
+                        allowed_gate_specifications, child
+                    )
+                    # gate_specification = random.choice(allowed_gate_specifications)
+                    # logger.info(f"\tattempting {mutation} with {gate_specification}")
+                    # modified = add_gate(gate_specification, child)
 
                 case "disable_gate":
                     logger.info(f"\tattempting to mutate with {mutation}")

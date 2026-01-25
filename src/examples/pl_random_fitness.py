@@ -19,7 +19,7 @@ count = 0
 def random_objective_function(
     genome: CircuitGenome,
     target: str = "qiskit",
-    loss: str = "fidelity_loss",
+    loss: str = "loss",
     batch_size: int = 0,
 ):
     """
@@ -61,7 +61,7 @@ def random_objective_function(
 
     # make the fitnesses get progressively better
     genome.fitness = {
-        "fidelity_loss": random.uniform(0.0, 1.0) - (count * 0.001),
+        "loss": random.uniform(0.0, 1.0) - (count * 0.001),
     }
     count += 1
 
@@ -148,11 +148,11 @@ if __name__ == "__main__":
 
     exaqc = EXAQC(
         gate_specifications=allowed_gates,
-        population=SteadyStatePopulation(max_population_size=50, loss="fidelity_loss"),
+        population=SteadyStatePopulation(max_population_size=50, loss="loss"),
         input_registers={"a": 3, "b": 3},
         objective_function=random_objective_function,
         target="pennylane",
-        loss="fidelity_loss",
+        loss="loss",
     )
 
     exaqc.run_for(number_genomes)
