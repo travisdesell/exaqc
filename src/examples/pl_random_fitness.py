@@ -16,7 +16,12 @@ best_genome = None
 count = 0
 
 
-def random_objective_function(genome: CircuitGenome, target="pennylane"):
+def random_objective_function(
+    genome: CircuitGenome,
+    target: str = "qiskit",
+    loss: str = "loss",
+    batch_size: int = 0,
+):
     """
     Computes a random fitness value for a given circuit. This will
     assign the genome's fitness attribute to the new fitness value. It
@@ -43,7 +48,7 @@ def random_objective_function(genome: CircuitGenome, target="pennylane"):
     _, circuit = genome.generate_pennylane_circuit()
 
     # Input qubits
-    n_qubits = sum(genome.registers.values())
+    n_qubits = len(genome.qubits)
     input_bits = torch.zeros(n_qubits, dtype=torch.int64)
 
     # --- Forward pass (just to validate genome can run) ---
@@ -56,7 +61,7 @@ def random_objective_function(genome: CircuitGenome, target="pennylane"):
 
     # make the fitnesses get progressively better
     genome.fitness = {
-        "fidelity_loss": random.uniform(0.0, 1.0) - (count * 0.001),
+        "loss": random.uniform(0.0, 1.0) - (count * 0.001),
     }
     count += 1
 
@@ -143,10 +148,11 @@ if __name__ == "__main__":
 
     exaqc = EXAQC(
         gate_specifications=allowed_gates,
-        population=SteadyStatePopulation(max_population_size=50),
-        registers={"a": 3, "b": 3},
+        population=SteadyStatePopulation(max_population_size=50, loss="loss"),
+        input_registers={"a": 3, "b": 3},
         objective_function=random_objective_function,
         target="pennylane",
+        loss="loss",
     )
 
     exaqc.run_for(number_genomes)

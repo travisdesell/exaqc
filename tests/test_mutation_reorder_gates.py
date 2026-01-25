@@ -1,6 +1,7 @@
 import pytest
 
 from src.circuits.circuit import CircuitGenome
+from src.circuits.registers import expand_registers
 from src.evolution.mutation import reorder_gate
 
 
@@ -14,7 +15,9 @@ def test_all_disabled_pennylane(target: str):
     Args:
         target: is the target framework (qiskit or pennylane)
     """
-    qc = CircuitGenome(genome_number=1, registers={"test": 3}, target=target)
+    qc = CircuitGenome(
+        genome_number=1, input_qubits=expand_registers({"test": 3}), target=target
+    )
 
     qc.add_gate(
         depth=0.40, method_name="ccz", qubits=[("test", 0), ("test", 1), ("test", 2)]
@@ -49,7 +52,9 @@ def test_all_enabled_pennylane(target: str):
     Args:
         target: is the target framework (qiskit or pennylane)
     """
-    qc = CircuitGenome(genome_number=1, registers={"test": 3}, target=target)
+    qc = CircuitGenome(
+        genome_number=1, input_qubits=expand_registers({"test": 3}), target=target
+    )
 
     qc.add_gate(
         depth=0.40, method_name="ccz", qubits=[("test", 0), ("test", 1), ("test", 2)]

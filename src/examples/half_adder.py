@@ -22,7 +22,12 @@ best_genome: CircuitGenome = None
 dataset = HalfAdderDataset()
 
 
-def half_adder_objective(genome: CircuitGenome):
+def half_adder_objective(
+    genome: CircuitGenome,
+    target: str = "pennylane",
+    loss: str = "fidelity_loss",
+    batch_size: int = 0,
+):
     """
     Memetic objective:
       - For each input (a,b)
@@ -33,7 +38,7 @@ def half_adder_objective(genome: CircuitGenome):
 
     total_fidelity_loss = 0.0
 
-    n_qubits = sum(genome.registers.values())
+    n_qubits = len(genome.qubits)
     example_input = torch.zeros(n_qubits, dtype=torch.int64)
     params = genome_to_torch_params(genome)
 
@@ -42,7 +47,7 @@ def half_adder_objective(genome: CircuitGenome):
             genome,
             input_bits=input_bits,
             target_state=target_state,
-            target="pennylane",
+            backend="pennylane",
             steps=500,
         )
 
@@ -153,10 +158,12 @@ if __name__ == "__main__":
 
     exaqc = EXAQC(
         gate_specifications=allowed_gates,
-        population=SteadyStatePopulation(max_population_size=50),
-        registers={"q": 4},
+        population=SteadyStatePopulation(max_population_size=50, loss="fidelity_loss"),
+        input_registers={"q": 4},
+        output_qubits=[("q", 2), ("q", 3)],
         objective_function=half_adder_objective,
         target="pennylane",
+        loss="fidelity_loss",
     )
 
     exaqc.run_for(number_genomes)

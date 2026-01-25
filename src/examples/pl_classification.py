@@ -115,7 +115,7 @@ def save_best_circuit(genome: CircuitGenome, out_dir: str, tag: str):
     with open(txt_path, "w") as f:
         genome.sort_gates()
         f.write(f"Genome {genome.genome_number}\n")
-        f.write(f"Registers: {genome.registers}\n\n")
+        f.write(f"Qubits: {genome.qubits}\n\n")
         for g in genome.gates:
             if getattr(g, "enabled", True):
                 f.write(f"{g.depth:.3f}  {g.method_name}  {g.qubits}  {g.parameters}\n")
@@ -123,7 +123,7 @@ def save_best_circuit(genome: CircuitGenome, out_dir: str, tag: str):
     # --- PennyLane draw ---
     try:
         params = genome_to_torch_params(genome)
-        x0 = torch.zeros(genome.registers["input"])
+        x0 = torch.zeros(len(genome.input_indexes))
         fig, ax = qml.draw_mpl(genome.circuit)(x0, params)
         ax.set_title(f"Genome {genome.genome_number} ({tag})")
         path = os.path.join(out_dir, f"best_genome_{genome.genome_number}_{tag}.png")
@@ -275,11 +275,11 @@ if __name__ == "__main__":
         gate_specifications=pennylane_gate_specifications,
         population=SteadyStatePopulation(
             max_population_size=args.max_population_size,
-            loss=args.loss,
+            loss="loss",  # weird that the genome loss vs the objective function loss are different
         ),
-        registers=qubits,
         objective_function=objective_fn,
-        output_qubits=register_map["output"],
+        input_registers={"input": min(args.input_qubits, input_size)},
+        output_registers={"output": args.out_qubits},
         target="pennylane",
         loss=args.loss,
         batch_size=bs,

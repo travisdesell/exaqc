@@ -3,6 +3,7 @@ import random
 import warnings
 
 from src.circuits.circuit import CircuitGenome
+from src.circuits.registers import expand_registers
 from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
 
 from tests.innovation_validation import validate_innovation_numbers
@@ -36,7 +37,11 @@ def test_gate_creation(gate_method_name: str):
     qubit_args = specification.qubits
     n_qubits = len(qubit_args)
 
-    qc = CircuitGenome(genome_number=1, registers={"test": n_qubits}, target="qiskit")
+    qc = CircuitGenome(
+        genome_number=1,
+        input_qubits=expand_registers({"test": n_qubits}),
+        target="qiskit",
+    )
 
     # make the lost of qubit tuples for the add_gate method
     qc_qubits = []

@@ -21,4 +21,5 @@ dependencies = [
     "pytest",
     "loguru",
     "pylatexenc",
+    "scikit-learn",
 ]

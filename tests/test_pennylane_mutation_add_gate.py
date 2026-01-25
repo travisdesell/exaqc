@@ -1,6 +1,7 @@
 import pytest
 import warnings
 from src.circuits.circuit import CircuitGenome
+from src.circuits.registers import expand_registers
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
 from src.evolution.mutation import add_gate
 
@@ -18,7 +19,9 @@ def test_gate_creation_pennylane(gate_method_name: str):
         )
         return
 
-    qc = CircuitGenome(genome_number=1, registers={"test": 10}, target="pennylane")
+    qc = CircuitGenome(
+        genome_number=1, input_qubits=expand_registers({"test": 10}), target="pennylane"
+    )
     add_gate(pennylane_gate_specifications[gate_method_name], qc)
 
     # one gate should have been added
@@ -43,7 +46,11 @@ def test_qubit_requirements_pennylane(gate_method_name: str):
 
     # iterate up to a circuit size large enough to add the gate
     for i in range(n_qubits + 2):
-        qc = CircuitGenome(genome_number=1, registers={"test": i}, target="pennylane")
+        qc = CircuitGenome(
+            genome_number=1,
+            input_qubits=expand_registers({"test": i}),
+            target="pennylane",
+        )
         success = add_gate(pennylane_gate_specifications[gate_method_name], qc)
 
         if i < n_qubits:
@@ -56,7 +63,9 @@ def test_all_gates_one_register_pennylane():
     """
     Creates a single-register circuit and adds all possible PennyLane gates.
     """
-    qc = CircuitGenome(genome_number=1, registers={"test": 10}, target="pennylane")
+    qc = CircuitGenome(
+        genome_number=1, input_qubits=expand_registers({"test": 10}), target="pennylane"
+    )
 
     gate_count = 0
     for gate_method_name, gate_specs in pennylane_gate_specifications.items():
@@ -73,7 +82,9 @@ def test_all_gates_two_registers_pennylane():
     Creates a two-register circuit and adds all possible PennyLane gates.
     """
     qc = CircuitGenome(
-        genome_number=1, registers={"test1": 5, "test2": 5}, target="pennylane"
+        genome_number=1,
+        input_qubits=expand_registers({"test1": 5, "test2": 5}),
+        target="pennylane",
     )
 
     gate_count = 0
