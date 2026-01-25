@@ -89,6 +89,9 @@ class CircuitGenome:
         logger.info(f"inital reached indexes now: {reached_indexes}")
 
         for gate in self.gates:
+            if not gate.enabled:
+                continue
+
             output_circuit_indexes = gate.get_output_circuit_indexes(self)
             input_circuit_indexes = gate.get_input_circuit_indexes(self)
 
@@ -231,6 +234,9 @@ class CircuitGenome:
         possible_input_indexes = set(self.input_indexes)
 
         for gate in self.gates:
+            if not gate.enabled:
+                continue
+
             output_circuit_indexes = gate.get_output_circuit_indexes(self)
             input_circuit_indexes = gate.get_input_circuit_indexes(self)
 
@@ -274,6 +280,9 @@ class CircuitGenome:
         possible_output_indexes = set(self.output_indexes)
 
         for gate in reverse_gates:
+            if not gate.enabled:
+                continue
+
             output_circuit_indexes = gate.get_output_circuit_indexes(self)
             input_circuit_indexes = gate.get_input_circuit_indexes(self)
 
