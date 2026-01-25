@@ -277,6 +277,7 @@ class EXAQC:
             if child.is_valid():
                 self.objective_function(child)
             else:
+                logger.warning("child was invalid (inputs did not connect to outputs).")
                 continue
 
             self.population.insert_genome(child)
