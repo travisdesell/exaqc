@@ -237,9 +237,7 @@ class EXAQC:
                     output_qubits=self.output_qubits.copy(),
                 )
 
-                if binary_crossover(child, parents[0], parents[1]):
-                    self.objective_function(child)
-                else:
+                if not binary_crossover(child, parents[0], parents[1]):
                     # two parents could not be used in exponential crossover, so try
                     # to generate a new child
                     continue
@@ -257,7 +255,6 @@ class EXAQC:
                 )
 
                 n_ary_crossover(child, parents)
-                self.objective_function(child)
 
             elif (
                 self.genome_number > self.population.max_population_size
@@ -272,11 +269,14 @@ class EXAQC:
                 )
 
                 exponential_crossover(child, parents[0], parents[1])
-                self.objective_function(child)
 
             else:
                 parent = self.population.get_parent()
                 child = self.mutate(parent)
+
+            if child.is_valid():
                 self.objective_function(child)
+            else:
+                continue
 
             self.population.insert_genome(child)

@@ -74,6 +74,40 @@ class CircuitGenome:
         # the inherent circuit is set to None
         self.circuit = None
 
+    def is_valid(self) -> bool:
+        """
+        Returns:
+            True if there is at least a path from the input qubits to the
+            output qubits through the gates (i.e., the inputs can effect
+            the outputs).  False, otherwise.
+        """
+
+        # determine which qubits this gate can be applied to so it will effect the output qubits
+        self.sort_gates()
+
+        reached_indexes = set(self.input_indexes)
+        logger.info(f"inital reached indexes now: {reached_indexes}")
+
+        for gate in self.gates:
+            output_circuit_indexes = gate.get_output_circuit_indexes(self)
+            input_circuit_indexes = gate.get_input_circuit_indexes(self)
+
+            # if any of the input indexes for the gate are in the reached
+            # qubit indexes, then this gate is effected by the input and we can add
+            # its outputs as additional possible inputs
+
+            if not set(input_circuit_indexes).isdisjoint(reached_indexes):
+                reached_indexes.update(output_circuit_indexes)
+
+            logger.info(f"\treached indexes now: {reached_indexes}")
+
+        valid = not reached_indexes.isdisjoint(self.output_indexes)
+        logger.info(
+            f"output indexes are: {self.output_indexes}, circuit valid? {valid}"
+        )
+
+        return valid
+
     def dominates(self, other: CircuitGenome, loss: str = "loss") -> bool:
         """
         Determines if this genome dominates another genome. This method is needed because
