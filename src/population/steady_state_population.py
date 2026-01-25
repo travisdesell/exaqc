@@ -1,6 +1,8 @@
 import bisect
 import random
 
+from loguru import logger
+
 from src.circuits.circuit import CircuitGenome
 from src.population.population_strategy import PopulationStrategy
 
@@ -22,6 +24,8 @@ class SteadyStatePopulation(PopulationStrategy):
 
         self.max_population_size = max_population_size
         self.loss = loss
+
+        self.insertions = 0
 
         # used to store the population, should be kept in sorted order.
         self.population: list[CircuitGenome] = []
@@ -87,6 +91,14 @@ class SteadyStatePopulation(PopulationStrategy):
         bisect.insort(
             self.population, genome, key=lambda genome: genome.fitness["loss"]
         )
+
+        self.insertions += 1
+
+        if genome.genome_number == self.population[0].genome_number:
+            # this was a new global best genome
+            logger.info(
+                f"[insertion {self.insertions}] Population found new GLOBAL best genome with fitness: {genome.fitness}"
+            )
 
         if len(self.population) > self.max_population_size:
             # remove the last genome from the population
