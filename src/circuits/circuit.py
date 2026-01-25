@@ -55,11 +55,11 @@ class CircuitGenome:
 
         # get indexes for input and output qubits in the full qubit list
         self.input_indexes = []
-        for qubit in input_qubits:
+        for qubit in self.input_qubits:
             self.input_indexes.append(self.qubits.index(qubit))
 
         self.output_indexes = []
-        for qubit in output_qubits:
+        for qubit in self.output_qubits:
             self.output_indexes.append(self.qubits.index(qubit))
 
         # a list of Gates sorted by depth represnting the gates in the quantum
