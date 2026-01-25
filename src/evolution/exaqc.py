@@ -104,25 +104,13 @@ class EXAQC:
         # used to track how many genomes have been generated and set genome numbers
         self.genome_number = 0
 
-        initial_genome = CircuitGenome(
+        # create a starting (empty) genome to initially generate genomes from
+        self.initial_genome = CircuitGenome(
             genome_number=self.next_genome_number(),
             target=self.target,
             input_qubits=self.input_qubits.copy(),
             output_qubits=self.output_qubits.copy(),
         )
-
-        # generate the initial population
-        while len(population.population) < population.max_population_size:
-            child = self.mutate(initial_genome)
-            if child.is_valid():
-                self.objective_function(
-                    child, target=self.target, loss=loss, batch_size=batch_size
-                )
-            else:
-                logger.warning("child was invalid (inputs did not connect to outputs).")
-                continue
-
-            self.population.insert_genome(child)
 
     def next_genome_number(self) -> int:
         """
@@ -151,9 +139,9 @@ class EXAQC:
 
         # mutation_options = ["add_gate", "disable_gate", "enable_gate", "reorder_gate"]
         mutation_options = (
-            ["add_gate"] * 5  # 50%
-            + ["reorder_gate"] * 2  # 20%
-            + ["qubit_swap"] * 2  # 20%
+            ["add_gate"] * 14  # 80%
+            + ["reorder_gate"] * 2  # 10%
+            + ["qubit_swap"] * 2  # 10%
             + ["enable_gate"]  # 5%
             + ["disable_gate"]  # 5%
         )
@@ -199,89 +187,131 @@ class EXAQC:
 
         return child
 
-    def run_for(
+    def generate_genome(
         self,
-        number_genomes: int,
         binary_crossover_rate: float = 0.10,
         n_ary_crossover_rate: float = 0.10,
         exponential_crossover_rate: float = 0.10,
         n_ary_parents: int = 4,
+    ) -> CircuitGenome:
+        """
+        Generates a single genome for EXAQC.
+
+        Args:
+            binary_crossover_rate: what percentage of time to do binary crossover after
+                the population has been initialized.
+            n_ary_crossover_rate: what percentage of the time to do n-ary crossover
+                after the population has been initialized.
+            n_ary_parents: how many parents to use for n-ary crossover
+        Returns:
+            A new child to evaluate for EXAQC.
+        """
+
+        if len(self.population.population) < self.population.max_population_size:
+            # still need to populate the initial population
+            valid = False
+
+            while not valid:
+                # keep trying to create a child from the initial
+                # genome until we get a valid one, then send it out
+                child = self.mutate(self.initial_genome)
+                child = self.mutate(child)
+                valid = child.is_valid()
+
+            return child
+
+        else:
+            # generate from the population as usual
+
+            # calculate this so we can use a single if set of statements based on
+            # the random r value
+            n_ary_cutoff = binary_crossover_rate + n_ary_crossover_rate
+            exponential_cutoff = n_ary_cutoff + exponential_crossover_rate
+
+            child = None
+            while child is None:
+                r = random.uniform(0, 1.0)
+
+                if (
+                    self.genome_number > self.population.max_population_size
+                    and r < binary_crossover_rate
+                ):
+                    parents = self.population.get_parents(2)
+                    child = CircuitGenome(
+                        genome_number=self.next_genome_number(),
+                        target=self.target,
+                        input_qubits=self.input_qubits.copy(),
+                        output_qubits=self.output_qubits.copy(),
+                    )
+
+                    if not binary_crossover(child, parents[0], parents[1]):
+                        # two parents could not be used in exponential crossover, so try
+                        # to generate a new child
+                        continue
+
+                elif (
+                    self.genome_number > self.population.max_population_size
+                    and r < n_ary_cutoff
+                ):
+                    parents = self.population.get_parents(n_ary_parents)
+                    child = CircuitGenome(
+                        genome_number=self.next_genome_number(),
+                        target=self.target,
+                        input_qubits=self.input_qubits.copy(),
+                        output_qubits=self.output_qubits.copy(),
+                    )
+
+                    n_ary_crossover(child, parents)
+
+                elif (
+                    self.genome_number > self.population.max_population_size
+                    and r < exponential_cutoff
+                ):
+                    parents = self.population.get_parents(2)
+                    child = CircuitGenome(
+                        genome_number=self.next_genome_number(),
+                        target=self.target,
+                        input_qubits=self.input_qubits.copy(),
+                        output_qubits=self.output_qubits.copy(),
+                    )
+
+                    exponential_crossover(child, parents[0], parents[1])
+
+                else:
+                    parent = self.population.get_parent()
+                    child = self.mutate(parent)
+                    child = self.mutate(child)
+
+                if not child.is_valid():
+                    logger.warning(
+                        "child was invalid (inputs did not connect to outputs), trying again."
+                    )
+                    child = None
+
+            # successfully generated a child
+            return child
+
+    def insert_genome(self, genome: CircuitGenome):
+        """
+        Trys to insert an evaluated genome into the population strategy.
+
+        Args:
+            genome: is the evaluated genome to insert
+        """
+        self.population.insert_genome(genome)
+
+    def run_for(
+        self,
+        number_genomes: int,
     ):
         """
         Runs EXAQC until it has generated and evaluated the given number of genomes.
 
         Args:
             number_genomes: how many genomes to generate with EXAQC
-            binary_crossover_rate: what percentage of time to do binary crossover after
-                the population has been initialized.
-            n_ary_crossover_rate: what percentage of the time to do n-ary crossover
-                after the population has been initialized.
-            n_ary_parents: how many parents to use for n-ary crossover
         """
 
-        # calculate this so we can use a single if set of statements based on
-        # the random r value
-        n_ary_cutoff = binary_crossover_rate + n_ary_crossover_rate
-        exponential_cutoff = n_ary_cutoff + exponential_crossover_rate
-
         while self.genome_number < number_genomes:
-            child = None
-
-            r = random.uniform(0, 1.0)
-
-            if (
-                self.genome_number > self.population.max_population_size
-                and r < binary_crossover_rate
-            ):
-                parents = self.population.get_parents(2)
-                child = CircuitGenome(
-                    genome_number=self.next_genome_number(),
-                    target=self.target,
-                    input_qubits=self.input_qubits.copy(),
-                    output_qubits=self.output_qubits.copy(),
-                )
-
-                if not binary_crossover(child, parents[0], parents[1]):
-                    # two parents could not be used in exponential crossover, so try
-                    # to generate a new child
-                    continue
-
-            elif (
-                self.genome_number > self.population.max_population_size
-                and r < n_ary_cutoff
-            ):
-                parents = self.population.get_parents(n_ary_parents)
-                child = CircuitGenome(
-                    genome_number=self.next_genome_number(),
-                    target=self.target,
-                    input_qubits=self.input_qubits.copy(),
-                    output_qubits=self.output_qubits.copy(),
-                )
-
-                n_ary_crossover(child, parents)
-
-            elif (
-                self.genome_number > self.population.max_population_size
-                and r < exponential_cutoff
-            ):
-                parents = self.population.get_parents(2)
-                child = CircuitGenome(
-                    genome_number=self.next_genome_number(),
-                    target=self.target,
-                    input_qubits=self.input_qubits.copy(),
-                    output_qubits=self.output_qubits.copy(),
-                )
-
-                exponential_crossover(child, parents[0], parents[1])
-
-            else:
-                parent = self.population.get_parent()
-                child = self.mutate(parent)
-
-            if child.is_valid():
-                self.objective_function(child)
-            else:
-                logger.warning("child was invalid (inputs did not connect to outputs).")
-                continue
-
+            child = self.generate_genome()
+            self.objective_function(child)
             self.population.insert_genome(child)

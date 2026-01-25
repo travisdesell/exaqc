@@ -3,13 +3,16 @@ from __future__ import annotations
 import argparse
 import os
 import torch
+import sys
 from typing import Iterable
 
 import pennylane as qml
 from loguru import logger
 import matplotlib.pyplot as plt
 
-from src.evolution.exaqc import EXAQC
+from src.evolution.master_worker import master_worker
+
+# from src.evolution.exaqc import EXAQC
 from src.population.steady_state_population import SteadyStatePopulation
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
 from src.circuits.circuit import CircuitGenome
@@ -256,7 +259,21 @@ if __name__ == "__main__":
         default=16,
         help="Batch size for training; available only when mini_batch is set",
     )
+
+    p.add_argument(
+        "--logging_level",
+        type=str,
+        required=False,
+        default="INFO",
+        help="""One of the 5 default logging levels for showing on terminal. Pick DEBUG to show everything.""",
+    )
+
     args = p.parse_args()
+
+    # remove the old logging handler.
+    logger.remove()
+    # create a new logging handler at the appropriate level
+    logger.add(sys.stdout, level=args.logging_level)
 
     bs = args.batch_size if args.mini_batch else None
 
@@ -271,6 +288,22 @@ if __name__ == "__main__":
     register_map = register_wire_map(qubits)
     logger.info(f"register map: {register_map}")
 
+    master_worker(
+        gate_specifications=pennylane_gate_specifications,
+        population=SteadyStatePopulation(
+            max_population_size=args.max_population_size,
+            loss="loss",  # weird that the genome loss vs the objective function loss are different
+        ),
+        objective_function=objective_fn,
+        run_for=args.number_genomes,
+        input_registers={"input": min(args.input_qubits, input_size)},
+        output_registers={"output": args.out_qubits},
+        target="pennylane",
+        loss=args.loss,
+        batch_size=bs,
+    )
+
+    """
     exaqc = EXAQC(
         gate_specifications=pennylane_gate_specifications,
         population=SteadyStatePopulation(
@@ -286,3 +319,4 @@ if __name__ == "__main__":
     )
 
     exaqc.run_for(args.number_genomes)
+    """

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
+
 from typing import Iterable, Optional
 
 import torch
@@ -9,7 +11,9 @@ import pennylane as qml
 import matplotlib.pyplot as plt
 from loguru import logger
 
-from src.evolution.exaqc import EXAQC
+from src.evolution.master_worker import master_worker
+
+# from src.evolution.exaqc import EXAQC
 from src.population.steady_state_population import SteadyStatePopulation
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
 from src.circuits.circuit import CircuitGenome
@@ -271,7 +275,20 @@ if __name__ == "__main__":
     p.add_argument("--mini_batch", action="store_true", help="Run minibatch training")
     p.add_argument("--batch_size", type=int, default=16)
 
+    p.add_argument(
+        "--logging_level",
+        type=str,
+        required=False,
+        default="INFO",
+        help="""One of the 5 default logging levels for showing on terminal. Pick DEBUG to show everything.""",
+    )
+
     args = p.parse_args()
+
+    # remove the old logging handler.
+    logger.remove()
+    # create a new logging handler at the appropriate level
+    logger.add(sys.stdout, level=args.logging_level)
 
     bs = args.batch_size if args.mini_batch else None
 
@@ -300,6 +317,7 @@ if __name__ == "__main__":
         output_wires=output_wires,
     )
 
+    """
     exaqc = EXAQC(
         gate_specifications=pennylane_gate_specifications,
         population=SteadyStatePopulation(
@@ -313,5 +331,20 @@ if __name__ == "__main__":
         loss="fidelity",
         batch_size=bs,
     )
-
     exaqc.run_for(args.number_genomes)
+    """
+
+    master_worker(
+        gate_specifications=pennylane_gate_specifications,
+        population=SteadyStatePopulation(
+            max_population_size=args.max_population_size,
+            loss="fidelity",
+        ),
+        input_registers={"input": args.input_qubits},
+        output_registers={"output": args.out_qubits},
+        objective_function=objective_fn,
+        run_for=args.number_genomes,
+        target="pennylane",
+        loss="fidelity",
+        batch_size=bs,
+    )

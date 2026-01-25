@@ -131,8 +131,6 @@ class GateSpecifications:
             gate_specification: is the GateSpecifcation object containing all the information.
         """
 
-        logger.debug(f"adding gate: {gate_specification}")
-
         gate_specification.method_name = method_name
         self.specifications[method_name] = gate_specification
 
