@@ -297,7 +297,7 @@ class CircuitGenome:
 
     def generate_pennylane_circuit(
         self,
-        device_name: str = "lightning.qubit",
+        device_name: str = "default.qubit",
         measure_registers: bool = True,
         shots: Optional[int] = None,
         input_mode: str = "basis",
@@ -333,7 +333,7 @@ class CircuitGenome:
         )
 
         # Define the QNode function
-        @qml.qnode(dev, interface="torch", diff_method="parameter-shift")
+        @qml.qnode(dev, interface="torch", diff_method="backprop")
         def qnode_fn(
             input_bits: torch.Tensor,
             params: Dict[str, torch.Tensor],
