@@ -112,10 +112,6 @@ def worker(
 
         genome = CircuitGenome.from_dict(data)
 
-        logger.info("worker received genome with gates:")
-        for gate in genome.gates:
-            logger.info(f"\t{gate}")
-
         objective_function(genome)
 
         comm.send(genome.to_dict(), dest=0, tag=tag_ids["genome_response"])
