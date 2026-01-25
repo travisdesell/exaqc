@@ -344,6 +344,12 @@ def add_gate(
 
                 index = None
                 if first:
+                    if len(possible_output_indexes) == 0:
+                        # TODO: sometimes all the outputs get used up by the inputs by random
+                        # chance, in this case we just need to try again.  there may be
+                        # a smarter way to do this.
+                        return False
+
                     index = random.choice(possible_output_indexes)
                 else:
                     remaining_indexes = set(possible_input_indexes).union(
