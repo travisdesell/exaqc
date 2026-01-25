@@ -162,6 +162,54 @@ class CircuitGenome:
 
         return new_genome
 
+    def to_dict(self) -> dict(str, any):
+        """
+        Creates a dict representation of the circuit genome that can be converted to JSON
+        or used for MPI serialization. This won't contain any of the qiskit or pennylane
+        internals which will need to be recreated when it is loaded back with the
+        CircuitGenome.from_dict method.
+
+        Returns:
+            A simple dict representation of this CircuitGenome.
+        """
+
+        serialized = {}
+        serialized["fitness"] = self.fitness
+        serialized["genome_number"] = self.genome_number
+        serialized["target"] = self.target
+        serialized["input_qubits"] = self.input_qubits.copy()
+        serialized["output_qubits"] = self.output_qubits.copy()
+        serialized["gates"] = []
+
+        for gate in self.gates:
+            serialized["gates"].append(gate.to_dict())
+
+        return serialized
+
+    @classmethod
+    def from_dict(cls, serialized: dict[str, any]) -> CircuitGenome:
+        """
+        Args:
+            serialized: is a serialized version of a CircuitGenome created
+                by the to_dict method.
+
+        Returns:
+            A circuit genome created from a serialized dict of a circuit genome.
+        """
+        new_genome = CircuitGenome(
+            genome_number=serialized["genome_number"],
+            target=serialized["target"],
+            input_qubits=serialized["input_qubits"],
+            output_qubits=serialized["output_qubits"],
+        )
+        new_genome.fitness = serialized["fitness"]
+
+        for serialized_gate in serialized["gates"]:
+            gate = Gate.from_dict(serialized_gate)
+            new_genome.add_existing_gate(gate)
+
+        return new_genome
+
     def add_existing_gate(self, gate: Gate):
         """
         Adds a new already created gate to this quantum circuit, keeping the

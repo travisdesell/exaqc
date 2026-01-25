@@ -135,6 +135,44 @@ class Gate:
 
         return output_indexes
 
+    def to_dict(self) -> dict[str, any]:
+        """
+        Creates a dict version of this gate that can be used for MPI serialization or
+        saving the gate to a JSON file.  This can be used to reconstruct the gate using
+        Gate.from_dict().
+        """
+        serialized = {}
+        serialized["depth"] = self.depth
+        serialized["method_name"] = self.method_name
+        serialized["qubits"] = self.qubits.copy()
+        serialized["parameters"] = self.parameters.copy()
+        serialized["innovation_number"] = self.innovation_number
+        serialized["target"] = self.target
+        serialized["enabled"] = self.enabled
+        return serialized
+
+    @classmethod
+    def from_dict(cls, serialized: dict[str, any]) -> Gate:
+        """
+        Args:
+            serialized: is a serialized Gate dict created by the to_dict method.
+
+        Returns:
+            A deserialized Gate from the serialized dict.
+        """
+        new_gate = Gate(
+            depth=serialized["depth"],
+            method_name=serialized["method_name"],
+            qubits=serialized["qubits"],
+            parameters=serialized["parameters"],
+            innovation_number=serialized["innovation_number"],
+            target=serialized["target"],
+        )
+
+        new_gate.enabled = serialized["enabled"]
+
+        return new_gate
+
     def copy(self, new_innovation_number: bool = False) -> Gate:
         """
         Creates a deep copy of this Gate.
