@@ -206,6 +206,19 @@ def loss_ce(
     return -(phi * torch.log(psi.clamp_min(eps))).mean()
 
 
+def ce_onehot_on_probs(
+    probs: torch.Tensor, y_onehot: torch.Tensor, eps: float = 1e-12
+) -> torch.Tensor:
+    """
+    probs: shape [K], real, sums to 1 (we’ll enforce)
+    y_onehot: shape [K], real one-hot
+    """
+    probs = probs.clamp_min(eps)
+    probs = probs / probs.sum()
+    y_onehot = y_onehot.to(dtype=probs.dtype, device=probs.device)
+    return -(y_onehot * torch.log(probs)).mean()
+
+
 def loss_readout_ce_from_state(
     phi: torch.Tensor,
     psi: torch.Tensor,
