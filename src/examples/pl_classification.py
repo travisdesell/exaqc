@@ -189,6 +189,7 @@ def make_objective(
                 loss=loss,  # e.g., "ce"
                 steps=steps,
                 lr=lr,
+                n_classes=n_classes,
                 log_every=log_every,
                 bath_size=batch_size,
             )
