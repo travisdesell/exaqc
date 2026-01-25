@@ -21,6 +21,7 @@ from src.evolution.mutation import (
 )
 from src.population.population_strategy import PopulationStrategy
 
+
 class EXAQC:
 
     def __init__(
@@ -51,9 +52,9 @@ class EXAQC:
                 be specified if input_qubits is not specified.
             input_qubits: a list of qubit tuples (name, register_index) which would be the expanded form of the
                 input_registers. Must be specified if input_registers is not specified.
-            output_registers: a dict of register names and sizes (the key is the qubit name, the value is its size). must
-                be specified if output_qubits is not specified. If output_registers and output_qubits are None, they
-                are set to the input registers/qubits.
+            output_registers: a dict of register names and sizes (the key is the qubit name, the value is its
+                size). must be specified if output_qubits is not specified. If output_registers and output_qubits
+                are None, they are set to the input registers/qubits.
             output_qubits: a list of qubit tuples (name, register_index) which would be the expanded form of the
                 output_registers. Must be specified if output_registers is not specified. If output_registers
                 and output_qubits are None, they are set to the input_registers/qubits.
@@ -66,15 +67,21 @@ class EXAQC:
         self.target = target
 
         if input_registers is None and input_qubits is None:
-            logger.critical("EXAQC requires *either* input_registers or input_qubits to be specified.")
+            logger.critical(
+                "EXAQC requires *either* input_registers or input_qubits to be specified."
+            )
             exit(1)
 
         if input_registers is not None and input_qubits is not None:
-            logger.critical("EXAQC requires *either* input_registers or input_qubits to be specified, but not both.")
+            logger.critical(
+                "EXAQC requires *either* input_registers or input_qubits to be specified, but not both."
+            )
             exit(1)
 
         if output_registers is not None and output_qubits is not None:
-            logger.critical("EXAQC requires *either* output_registers or output_qubits to be specified, but not both.")
+            logger.critical(
+                "EXAQC requires *either* output_registers or output_qubits to be specified, but not both."
+            )
             exit(1)
 
         self.input_qubits: list[tuple[str, int]] = input_qubits

@@ -9,7 +9,6 @@ import pennylane as qml
 import torch
 
 from src.circuits.gate import Gate
-from src.utils.helpers import register_wire_map
 
 
 class CircuitGenome:
@@ -75,8 +74,7 @@ class CircuitGenome:
         # the inherent circuit is set to None
         self.circuit = None
 
-
-    def dominates(self, other: CircuitGenome, loss: str = "fidelity_loss") -> bool:
+    def dominates(self, other: CircuitGenome, loss: str = "loss") -> bool:
         """
         Determines if this genome dominates another genome. This method is needed because
         in the multi-objective case we can't just compare a single fitness value to determine
@@ -220,7 +218,6 @@ class CircuitGenome:
 
         return sorted(possible_input_indexes)
 
-
     def get_possible_output_qubits(self, depth: float) -> list[int]:
         """
         Traces back the gates from the output to a given depth to determine which output
@@ -289,7 +286,9 @@ class CircuitGenome:
             gate.add_to_qiskit_circuit(register_dict, circuit)
 
         for output_index, input_index in enumerate(self.output_indexes):
-            circuit.measure(quantum_registers[input_index], classical_registers[output_index])
+            circuit.measure(
+                quantum_registers[input_index], classical_registers[output_index]
+            )
 
         self.circuit = circuit
 
@@ -318,12 +317,11 @@ class CircuitGenome:
             `qnode_fn` is a QNode function that implements this circuit genome.
         """
         # Create wire registers via qml.registers
-        self.total_qubits = sum(self.qubits)
+        self.total_qubits = len(self.qubits)
 
-        self.register_map = register_wire_map(self.registers)
-
-        registers = self.register_map.copy()
-        logger.info(f"pennylane register: {registers}")
+        logger.info(
+            f"input indexes: {self.input_indexes}, output_indexes: {self.output_indexes}"
+        )
 
         # Instantiate PennyLane device
         dev = qml.device(
@@ -346,8 +344,8 @@ class CircuitGenome:
             elif input_mode == "angle":
                 # expects float tensor on "input" register wires
                 # encode x_i in [0,1] -> RY(pi*x_i) (common, stable)
-                in_wires = registers["input"]
-                for i, w in enumerate(in_wires):
+
+                for i, w in enumerate(self.input_indexes):
                     qml.RY(torch.pi * input_bits[i], wires=w)
             else:
                 raise ValueError(f"Unknown input_mode={input_mode}")
@@ -355,13 +353,13 @@ class CircuitGenome:
             # Apply all gates in depth order
             self.sort_gates()
             for gate in self.gates:
-                gate.add_to_pennylane_circuit(registers, params=params)
+                gate.add_to_pennylane_circuit(self.qubits, params=params)
 
             # 4️⃣ Measurement
             if return_probs:
                 return qml.probs(
                     # wires=self.register_map["output"]
-                    wires=self.output_qubits
+                    wires=self.output_indexes
                 )  # shape = [2**len(out_wires)] (real)
             elif measure_registers:
                 # fallback if you want expvals
@@ -378,6 +376,6 @@ class CircuitGenome:
         # 🔹 PRINT ONCE HERE
         self.sort_gates()
         for gate in self.gates:
-            gate.describe_pennylane_circuit(registers)
+            gate.describe_pennylane_circuit(self.qubits)
 
         return dev, qnode_fn

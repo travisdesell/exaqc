@@ -14,7 +14,11 @@ def test_get_circuit_indexes(target: str):
     Args:
         target: is the target framework (qiskit or pennylane)
     """
-    qc = CircuitGenome(genome_number=1, input_qubits=expand_registers({"t1": 3, "t2": 4}), target=target)
+    qc = CircuitGenome(
+        genome_number=1,
+        input_qubits=expand_registers({"t1": 3, "t2": 4}),
+        target=target,
+    )
 
     # qubit is input and output
     qc.add_gate(
@@ -62,7 +66,54 @@ def test_get_circuit_indexes(target: str):
 
 
 @pytest.mark.parametrize("target", ["qiskit", "pennylane"])
-def test_get_circuit_indexes_by_depth(target: str):
+def test_get_circuit_input_indexes_by_depth(target: str):
+    """
+    Creates multiple gates of different types in a quantum circuit with
+    multiple registers of different sizes and makes sure the methods to
+    get the input and output qubit indexes in the circuit are correct.
+
+    Args:
+        target: is the target framework (qiskit or pennylane)
+    """
+    qc = CircuitGenome(
+        genome_number=1,
+        input_qubits=expand_registers({"i1": 2, "i2": 2}),
+        output_qubits=expand_registers({"o1": 2, "o2": 2}),
+        target=target,
+    )
+
+    # test with no gates yet
+    assert qc.get_possible_input_qubits(0.5) == [0, 1, 2, 3]
+
+    # qubit is input and output
+    qc.add_gate(
+        depth=0.10, method_name="p", qubits=[("i1", 1)], parameters={"theta": 0.1}
+    )
+    assert qc.get_possible_input_qubits(0.15) == [0, 1, 2, 3]
+
+    # first two are control, third is target
+    qc.add_gate(depth=0.30, method_name="ccz", qubits=[("i1", 0), ("i2", 0), ("o2", 1)])
+    assert qc.get_possible_input_qubits(0.35) == [0, 1, 2, 3, 7]
+
+    # both are inputs and outputs
+    qc.add_gate(depth=0.50, method_name="iswap", qubits=[("o2", 1), ("o2", 0)])
+    assert qc.get_possible_input_qubits(0.55) == [0, 1, 2, 3, 6, 7]
+
+    # first is control, second is target
+    qc.add_gate(depth=0.7, method_name="ch", qubits=[("i2", 1), ("o1", 0)])
+    assert qc.get_possible_input_qubits(0.75) == [0, 1, 2, 3, 4, 6, 7]
+
+    # first is control, second and third are target
+    qc.add_gate(
+        depth=0.90, method_name="cswap", qubits=[("o1", 0), ("i2", 0), ("o1", 1)]
+    )
+    assert qc.get_possible_input_qubits(0.95) == [0, 1, 2, 3, 4, 5, 6, 7]
+
+    assert qc.output_qubits == [("o1", 0), ("o1", 1), ("o2", 0), ("o2", 1)]
+
+
+@pytest.mark.parametrize("target", ["qiskit", "pennylane"])
+def test_get_circuit_output_indexes_by_depth(target: str):
     """
     Creates multiple gates of different types in a quantum circuit with
     multiple registers of different sizes and makes sure the methods to

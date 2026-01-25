@@ -3,6 +3,7 @@ import random
 import torch
 
 from src.circuits.circuit import CircuitGenome
+from src.circuits.registers import expand_registers
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
 
 
@@ -31,7 +32,9 @@ def test_gate_creation_pennylane(gate_method_name: str):
 
     # Create a CircuitGenome with a single register
     qc = CircuitGenome(
-        genome_number=1, registers={"test": n_qubits}, target="pennylane"
+        genome_number=1,
+        input_qubits=expand_registers({"test": n_qubits}),
+        target="pennylane",
     )
 
     # Build qubit tuples (always 0..n_qubits-1 for the register)
@@ -53,7 +56,7 @@ def test_gate_creation_pennylane(gate_method_name: str):
     except Exception as e:
         pytest.fail(f"Failed to add gate {gate_method_name}: {e}")
 
-    n_qubits = sum(qc.registers.values())
+    n_qubits = len(qc.qubits)
     input_bits = torch.zeros(n_qubits, dtype=torch.int64)
 
     torch_params = {}

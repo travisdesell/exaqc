@@ -162,7 +162,9 @@ class Gate:
         )
 
     def add_to_qiskit_circuit(
-        self, register_dict: dict[tuple[str, int], QuantumRegister], circuit: QuantumCircuit
+        self,
+        register_dict: dict[tuple[str, int], QuantumRegister],
+        circuit: QuantumCircuit,
     ):
         """
         Adds this gate to the qiskit QuantumCircuit using reflection
@@ -196,7 +198,9 @@ class Gate:
         gate_method(**self.parameters, **qubit_args)
 
     def add_to_pennylane_circuit(
-        self, registers: dict[str, list], params: dict[str, torch.Tensor] = None
+        self,
+        circuit_qubits: list[tuple[str, int]],
+        params: dict[str, torch.Tensor] = None,
     ):
         """
         Adds this gate to a PennyLane circuit using the provided wire registers.
@@ -205,6 +209,8 @@ class Gate:
         multi-qubit / controlled gates, parametric gates, and adjoint (.adjoint) gates.
 
         Args:
+            circuit_qubits: the list of all qubits in the circuit so we can map the qubit names
+                to wire indexes (ints).
             registers: a dictionary mapping register names to PennyLane wires (lists of ints).
             params: optional dictionary mapping "{innovation_number}:{param_name}" to
                     trainable torch.Tensor values. If None, uses self.parameters values.
@@ -219,12 +225,7 @@ class Gate:
         # Build qubit wire list
         qubit_wires = []
         for i in range(n_qubits):
-            reg_name, qubit_index = self.qubits[i]
-            reg_wires = registers[reg_name]
-            if qubit_index is None:
-                qubit_wires.extend(reg_wires)
-            else:
-                qubit_wires.append(reg_wires[qubit_index])
+            qubit_wires.append(circuit_qubits.index(self.qubits[i]))
 
         # Resolve parameters
         if params is not None:
@@ -281,12 +282,16 @@ class Gate:
 
     def describe_pennylane_circuit(
         self,
-        registers: dict[str, list],
+        circuit_qubits: list[tuple[str, int]],
     ):
         """
         Print EXACTLY the same messages as add_to_pennylane_circuit(),
         but without executing any PennyLane operations.
         This should be called ONCE at circuit generation time.
+
+        Args:
+            circuit_qubits: is the list of qubit tuples so we can index the parameter
+                qubit tuples to get the wire index (int).
         """
         if not self.enabled:
             logger.debug(f"Gate {self.method_name} is disabled; skipping.")
@@ -295,17 +300,12 @@ class Gate:
         spec = pennylane_gate_specifications[self.method_name]
         n_qubits = getattr(spec, "n_qubits", len(self.qubits))
 
-        # Build qubit wire list (IDENTICAL LOGIC)
+        pennylane_op_name = getattr(spec, "pennylane_op", None)
+
+        # Build qubit wire list
         qubit_wires = []
         for i in range(n_qubits):
-            reg_name, qubit_index = self.qubits[i]
-            reg_wires = registers[reg_name]
-            if qubit_index is None:
-                qubit_wires.extend(reg_wires)
-            else:
-                qubit_wires.append(reg_wires[qubit_index])
-
-        pennylane_op_name = getattr(spec, "pennylane_op", None)
+            qubit_wires.append(circuit_qubits.index(self.qubits[i]))
 
         if pennylane_op_name is not None:
             if ".adjoint" in pennylane_op_name:

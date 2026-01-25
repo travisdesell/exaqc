@@ -14,7 +14,12 @@ best_genome = None
 count = 0
 
 
-def random_objective_function(genome: CircuitGenome, target: str = "qiskit", loss: str = "fidelity_loss", batch_size: int = 0):
+def random_objective_function(
+    genome: CircuitGenome,
+    target: str = "qiskit",
+    loss: str = "fidelity_loss",
+    batch_size: int = 0,
+):
     """
     Computes a random fitness value for a given circuit. This will
     assign the genome's fitness attribute to the new fitness value. It

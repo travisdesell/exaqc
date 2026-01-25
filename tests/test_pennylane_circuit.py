@@ -1,6 +1,8 @@
 import pytest
 import torch
+
 from src.circuits.circuit import CircuitGenome
+from src.circuits.registers import expand_registers
 
 
 def test_pennylane_example_circuit_full_stack():
@@ -9,7 +11,11 @@ def test_pennylane_example_circuit_full_stack():
     Build a non-trivial circuit using CircuitGenome and ensure
     PennyLane circuit generation + execution works end-to-end.
     """
-    qc = CircuitGenome(genome_number=1, registers={"a": 3, "b": 5}, target="pennylane")
+    qc = CircuitGenome(
+        genome_number=1,
+        input_qubits=expand_registers({"a": 3, "b": 5}),
+        target="pennylane",
+    )
 
     qc.add_gate(depth=0.05, method_name="x", qubits=[("a", 1)])
     qc.add_gate(depth=0.10, method_name="x", qubits=[("b", 1)])
@@ -35,7 +41,7 @@ def test_pennylane_example_circuit_full_stack():
     qc.add_gate(depth=0.42, method_name="cswap", qubits=[("b", 2), ("b", 3), ("b", 4)])
     qc.add_gate(depth=0.43, method_name="cswap", qubits=[("b", 3), ("b", 4), ("b", 0)])
 
-    n_qubits = sum(qc.registers.values())
+    n_qubits = len(qc.qubits)
     input_bits = torch.zeros(n_qubits, dtype=torch.int64)
 
     torch_params = {

@@ -1,6 +1,7 @@
 import pytest
 
 from src.circuits.circuit import CircuitGenome
+from src.circuits.registers import expand_registers
 from src.evolution.mutation import add_gate
 
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
@@ -19,9 +20,9 @@ def test_get_circuit_indexes(target: str):
     """
     qc = CircuitGenome(
         genome_number=1,
-        registers={"t1": 2, "t2": 2},
+        input_qubits=expand_registers({"t1": 2, "t2": 2}),
+        output_qubits=[("t1", 0), ("t2", 0)],
         target=target,
-        output_qubits=[0, 2],
     )
 
     # test a 2 qubit both input and output gate
@@ -41,9 +42,9 @@ def test_get_circuit_indexes(target: str):
     for i in range(10):
         qc = CircuitGenome(
             genome_number=1,
-            registers={"t1": 2, "t2": 2},
+            input_qubits=expand_registers({"t1": 2, "t2": 2}),
+            output_qubits=[("t1", 0), ("t2", 0)],
             target=target,
-            output_qubits=[0, 2],
         )
 
         # first is control, second and third are target for cswap
@@ -64,9 +65,9 @@ def test_get_circuit_indexes(target: str):
     for i in range(10):
         qc = CircuitGenome(
             genome_number=1,
-            registers={"t1": 2, "t2": 2},
+            input_qubits=expand_registers({"t1": 2, "t2": 2}),
+            output_qubits=[("t1", 0), ("t2", 0)],
             target=target,
-            output_qubits=[0, 2],
         )
 
         # first is input, second is output
@@ -91,9 +92,9 @@ def test_get_circuit_indexes(target: str):
     for i in range(10):
         qc = CircuitGenome(
             genome_number=1,
-            registers={"t1": 2, "t2": 2},
+            input_qubits=expand_registers({"t1": 2, "t2": 2}),
+            output_qubits=[("t1", 0), ("t2", 0)],
             target=target,
-            output_qubits=[0, 2],
         )
 
         # first two are control, third is target for ccz
