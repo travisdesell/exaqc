@@ -22,4 +22,5 @@ dependencies = [
     "loguru",
     "pylatexenc",
     "scikit-learn",
+    "mpi4py",
 ]

@@ -114,6 +114,7 @@ class EXAQC:
         # generate the initial population
         while len(population.population) < population.max_population_size:
             child = self.mutate(initial_genome)
+            child = self.mutate(child)
             if child.is_valid():
                 self.objective_function(
                     child, target=self.target, loss=loss, batch_size=batch_size
@@ -151,9 +152,9 @@ class EXAQC:
 
         # mutation_options = ["add_gate", "disable_gate", "enable_gate", "reorder_gate"]
         mutation_options = (
-            ["add_gate"] * 5  # 50%
-            + ["reorder_gate"] * 2  # 20%
-            + ["qubit_swap"] * 2  # 20%
+            ["add_gate"] * 14  # 80%
+            + ["reorder_gate"] * 2  # 10%
+            + ["qubit_swap"] * 2  # 10%
             + ["enable_gate"]  # 5%
             + ["disable_gate"]  # 5%
         )
@@ -277,6 +278,7 @@ class EXAQC:
             else:
                 parent = self.population.get_parent()
                 child = self.mutate(parent)
+                child = self.mutate(child)
 
             if child.is_valid():
                 self.objective_function(child)
