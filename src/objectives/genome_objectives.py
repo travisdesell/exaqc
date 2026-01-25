@@ -93,6 +93,7 @@ def compute_teacher_metrics(
 
     return out
 
+
 @torch.no_grad()
 def _eval_teacher_split(data, genome, params, teacher_qnode):
     """Evaluate teacher mode metrics on a data split."""
@@ -139,20 +140,30 @@ def _eval_supervised_split(data, genome, params, n_classes):
 
 
 @torch.no_grad()
-def eval_forward_only(genome: CircuitGenome, 
-                      train_list: list, 
-                      test_list:list=None, 
-                      teacher_qnode=None, 
-                      n_classes:int=3):
+def eval_forward_only(
+    genome: CircuitGenome,
+    train_list: list,
+    test_list: list = None,
+    teacher_qnode=None,
+    n_classes: int = 3,
+):
     mode = "teacher" if teacher_qnode is not None else "supervised"
     params = genome_to_torch_params(genome)
 
     if mode == "teacher":
         tr = _eval_teacher_split(train_list, genome, params, teacher_qnode)
-        te = _eval_teacher_split(test_list, genome, params, teacher_qnode) if test_list is not None else None
+        te = (
+            _eval_teacher_split(test_list, genome, params, teacher_qnode)
+            if test_list is not None
+            else None
+        )
     else:
         tr = _eval_supervised_split(train_list, genome, params, n_classes)
-        te = _eval_supervised_split(test_list, genome, params, n_classes) if test_list is not None else None
+        te = (
+            _eval_supervised_split(test_list, genome, params, n_classes)
+            if test_list is not None
+            else None
+        )
 
     out = {f"{k}": v for k, v in tr.items()}
     if te is not None:
@@ -200,12 +211,13 @@ def _train_with_pennylane(
 
     # no params: forward-only eval
     if len(torch_params) == 0:
-        metrics = eval_forward_only(genome, 
-                                    train_list, 
-                                    test_list, 
-                                    teacher_qnode=target_qnode,
-                                    n_classes=n_classes,
-                                    )
+        metrics = eval_forward_only(
+            genome,
+            train_list,
+            test_list,
+            teacher_qnode=target_qnode,
+            n_classes=n_classes,
+        )
         genome.fitness = metrics
         return metrics
 
@@ -300,12 +312,13 @@ def _train_with_pennylane(
             logger.warning(
                 "Loss has no grad path. Are parameters actually used inside the QNode?"
             )
-            metrics = eval_forward_only(genome, 
-                                    train_list, 
-                                    test_list, 
-                                    teacher_qnode=target_qnode,
-                                    n_classes=n_classes,
-                                    )
+            metrics = eval_forward_only(
+                genome,
+                train_list,
+                test_list,
+                teacher_qnode=target_qnode,
+                n_classes=n_classes,
+            )
             genome.fitness = metrics
             return genome
 
@@ -318,7 +331,7 @@ def _train_with_pennylane(
                 if test_list is not None:
                     te = eval_teacher(test_list)
                     logger.info(
-                        f"[{step:04d}] fid_l={tr['fidelity_loss']:.6f} angle_l={tr['angle_loss']:.6f} | test_fid_l={te['fidelity_loss']:.6f}" # noqa
+                        f"[{step:04d}] fid_l={tr['fidelity_loss']:.6f} angle_l={tr['angle_loss']:.6f} | test_fid_l={te['fidelity_loss']:.6f}"  # noqa
                     )
                 else:
                     logger.info(
@@ -339,12 +352,13 @@ def _train_with_pennylane(
     torch_params_to_genome(genome, torch_params)
 
     # return final metrics
-    metrics = eval_forward_only(genome, 
-                                    train_list, 
-                                    test_list, 
-                                    teacher_qnode=target_qnode,
-                                    n_classes=n_classes,
-                                    )
+    metrics = eval_forward_only(
+        genome,
+        train_list,
+        test_list,
+        teacher_qnode=target_qnode,
+        n_classes=n_classes,
+    )
     genome.fitness = metrics
 
     return genome

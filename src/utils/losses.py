@@ -48,7 +48,7 @@ def marginal_probs_from_statevector(
     return probs_marg.reshape(-1)
 
 
-def fidelity(phi: torch.Tensor, psi: torch.Tensor, eps:float=1e-12) -> torch.Tensor:
+def fidelity(phi: torch.Tensor, psi: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
     """Compute the quantum state fidelity between two pure states.
 
     Fidelity is defined as:
@@ -120,7 +120,7 @@ def loss_state_angle(
 
 
 def loss_total_variation(
-    phi: torch.Tensor, psi: torch.Tensor, eps:float = 1e-12, **kwargs
+    phi: torch.Tensor, psi: torch.Tensor, eps: float = 1e-12, **kwargs
 ) -> torch.Tensor:
     """Compute total variation distance between two vectors.
 
@@ -147,7 +147,9 @@ def loss_total_variation(
     return 0.5 * torch.sum(torch.abs(psi - phi))
 
 
-def loss_kl_divergence(phi: torch.Tensor, psi: torch.Tensor, eps:float=1e-12, **kwargs) -> torch.Tensor:
+def loss_kl_divergence(
+    phi: torch.Tensor, psi: torch.Tensor, eps: float = 1e-12, **kwargs
+) -> torch.Tensor:
     """Compute the Kullback–Leibler (KL) divergence between two distributions.
 
     The KL divergence is defined as:
