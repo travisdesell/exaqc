@@ -23,8 +23,6 @@ LOSS_REGISTRY: dict[str, Callable[..., torch.Tensor]] = {
 
 STATEVECTOR_LOSSES = {"fidelity", "angle", "kl", "ce"}
 
-# ---------- Shared param IO ----------
-
 
 def genome_to_torch_params(genome: CircuitGenome) -> dict[str, torch.nn.Parameter]:
     params: dict[str, torch.nn.Parameter] = {}
@@ -95,177 +93,72 @@ def compute_teacher_metrics(
 
     return out
 
+@torch.no_grad()
+def _eval_teacher_split(data, genome, params, teacher_qnode):
+    """Evaluate teacher mode metrics on a data split."""
+    if data is None:
+        return None
+    losses = []
+    fids = []
+    for item in data:
+        x = item if not isinstance(item, (tuple, list)) else item[0]
+        phi = torch.as_tensor(teacher_qnode(x))
+        psi = genome.circuit(x, params)
+        L = loss_one_minus_fidelity(phi, psi)
+        losses.append(L)
+        fids.append(1.0 - L)
+    return {
+        "loss": float(torch.stack(losses).mean().item()) if losses else 0.0,
+        "fidelity": float(torch.stack(fids).mean().item()) if fids else 0.0,
+    }
 
-def eval_pennylane_forward_only(
-    genome: CircuitGenome,
-    data: Iterable[tuple[torch.Tensor, torch.Tensor]],
-    parameters: dict[str, Any] = {},
-    n_classes: int = 3,
-) -> dict[str, float]:
-    """
-    data items: (x, y_onehot)
-      x: float tensor (e.g., iris [4])
-      y_onehot: float tensor [n_classes]
-    Circuit must return probs on output wires.
-    """
-    # Ensure circuit exists and returns probs
-    genome.generate_pennylane_circuit(input_mode="angle", return_probs=True)
-    # circuit = genome.circuit
 
-    # Empty params dict (since no trainable params)
-    params: dict[str, torch.Tensor] = {}
-    if len(parameters) > 0:
-        params = parameters
-
+@torch.no_grad()
+def _eval_supervised_split(data, genome, params, n_classes):
+    """Evaluate supervised mode metrics on a data split."""
+    if data is None:
+        return None
     losses = []
     correct = 0
     total = 0
-
-    with torch.no_grad():
-        for x, y in data:
-            probs = genome.circuit(x, params)
-            probs = torch.as_tensor(probs, dtype=torch.float32)
-
-            # if output has 2 qubits -> 4 probs; iris -> use first 3 and renorm
-            probs = probs[:n_classes]
-            probs = probs / probs.sum()
-
-            L = ce_onehot_on_probs(probs, y)
-            losses.append(L)
-
-            pred = int(torch.argmax(probs).item())
-            true = int(torch.argmax(y).item())
-            correct += pred == true
-            total += 1
-
-    avg_loss = float(torch.stack(losses).mean().item()) if losses else 0.0
-    acc = float(correct / max(total, 1))
-    return {"loss": avg_loss, "acc": acc}
+    for x, y in data:
+        probs = genome.circuit(x, params)
+        probs = torch.as_tensor(probs, dtype=torch.float32)
+        probs = probs[:n_classes]
+        probs = probs / (probs.sum() + 1e-12)
+        L = ce_onehot_on_probs(probs, y)
+        losses.append(L)
+        pred = int(torch.argmax(probs).item())
+        true = int(torch.argmax(y).item())
+        correct += int(pred == true)
+        total += 1
+    return {
+        "loss": float(torch.stack(losses).mean().item()) if losses else 0.0,
+        "acc": float(correct / max(total, 1)),
+    }
 
 
-# def _train_with_pennylane(
-#     genome: CircuitGenome,
-#     train_data: Iterable[tuple[torch.Tensor, torch.Tensor]] = None,
-#     test_data: Iterable[tuple[torch.Tensor, torch.Tensor]] | None = None,
-#     *,
-#     steps: int = 200,
-#     lr: float = 0.05,
-#     log_every: int = 25,
-#     n_classes: int = 3,
-#     batch_size: int = None,
-#     loss_name: str = "ce",
-#     shuffle_each_step: bool = True,
-# ):
-#     """
-#     Expects dataset items: (x, y_onehot)
-#       x: torch.float32 shape [4] for iris
-#       y_onehot: torch.float32 shape [3]
-#     """
-#     # build qnode (returns probs on output wires)
-#     genome.generate_pennylane_circuit(input_mode="angle", return_probs=True)
+@torch.no_grad()
+def eval_forward_only(genome: CircuitGenome, 
+                      train_list: list, 
+                      test_list:list=None, 
+                      teacher_qnode=None, 
+                      n_classes:int=3):
+    mode = "teacher" if teacher_qnode is not None else "supervised"
+    params = genome_to_torch_params(genome)
 
-#     # params as torch.nn.Parameter dict
-#     torch_params = genome_to_torch_params(genome)
-#     if len(torch_params) == 0:
-#         # no params -> forward-only
-#         metrics = eval_pennylane_forward_only(genome, train_data, n_classes=3)
-#         # optionally also test metrics:
-#         # test_metrics = eval_pennylane_forward_only(genome, test_data, n_classes=3)
-#         genome.fitness = metrics
-#         return genome
+    if mode == "teacher":
+        tr = _eval_teacher_split(train_list, genome, params, teacher_qnode)
+        te = _eval_teacher_split(test_list, genome, params, teacher_qnode) if test_list is not None else None
+    else:
+        tr = _eval_supervised_split(train_list, genome, params, n_classes)
+        te = _eval_supervised_split(test_list, genome, params, n_classes) if test_list is not None else None
 
-#     opt = torch.optim.Adam(torch_params.values(), lr=lr, weight_decay=0.0001)
-
-#     train_list = list(train_data)
-#     if test_data is not None:
-#         test_list = list(test_data)
-#     else:
-#         test_list = None
-
-#     def forward_probs(x: torch.Tensor) -> torch.Tensor:
-#         probs = genome.circuit(x, torch_params)  # shape [2**n_out]
-#         probs = torch.as_tensor(probs, dtype=torch.float32)
-#         # iris: use first n_classes bins (e.g. |00>,|01>,|10>) and renormalize
-#         probs = probs[:n_classes]
-#         probs = probs / probs.sum()
-#         return probs
-
-#     def accuracy(data_list) -> float:
-#         correct = 0
-#         total = 0
-#         with torch.no_grad():
-#             for x, y in data_list:
-#                 p = forward_probs(x)
-#                 pred = int(torch.argmax(p).item())
-#                 true = int(torch.argmax(y).item())
-#                 correct += pred == true
-#                 total += 1
-#         return correct / max(total, 1)
-
-#     # logger.debug(f"torch params before training: {torch_params}")
-
-#     n = len(train_list)
-#     if batch_size is not None:
-#         batch_size = max(1, min(batch_size, n))
-
-#     # ---- training loop ----
-#     for step in range(steps):
-#         opt.zero_grad()
-
-#         # sample a minibatch
-#         if batch_size is not None:
-#             if shuffle_each_step:
-#                 idx = torch.randint(low=0, high=n, size=(batch_size,))
-#                 batch = [train_list[i] for i in idx.tolist()]
-#             else:
-#                 # deterministic cycling batch
-#                 start = (step * batch_size) % n
-#                 batch = [train_list[(start + i) % n] for i in range(batch_size)]
-#         else:
-#             batch = train_list
-
-#         losses = []
-#         for x, y in batch:
-#             probs = forward_probs(x)
-#             L = ce_onehot_on_probs(probs, y)
-#             losses.append(L)
-
-#         loss = torch.stack(losses).mean()
-
-#         # guard
-#         if not loss.requires_grad:
-#             logger.warning(
-#                 "Loss has no grad path (no active params used). Falling back to forward-only eval."
-#             )
-#             genome.fitness = eval_pennylane_forward_only(
-#                 genome, train_data, n_classes=n_classes
-#             )
-#             return genome
-
-#         loss.backward()
-#         opt.step()
-
-#         # logger.debug(f"torch params after training: {torch_params}")
-
-#         if step % log_every == 0 or step == steps - 1:
-#             train_acc = accuracy(train_list)
-#             if test_list is not None:
-#                 test_acc = accuracy(test_list)
-#                 logger.info(
-#                     f"[{step:04d}] loss={loss.item():.6f} train_acc={train_acc:.3f} test_acc={test_acc:.3f}"
-#                 )
-#             else:
-#                 logger.info(
-#                     f"[{step:04d}] loss={loss.item():.6f} train_acc={train_acc:.3f}"
-#                 )
-#             # test_metrics = eval_pennylane_forward_only(
-#             #     genome, test_data, parameters=torch_params, n_classes=3
-#             # )
-#             # genome.fitness = test_metrics
-
-#     # write params back
-#     torch_params_to_genome(genome, torch_params)
-#     return genome
+    out = {f"{k}": v for k, v in tr.items()}
+    if te is not None:
+        out.update({f"train_{k}": v for k, v in tr.items()})
+        out.update({f"{k}": v for k, v in te.items()})
+    return out
 
 
 def _train_with_pennylane(
@@ -282,6 +175,9 @@ def _train_with_pennylane(
     # NEW:
     target_qnode: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
 ):
+    train_list = list(train_data)
+    test_list = list(test_data) if test_data is not None else None
+
     # ----- choose output type -----
     use_state = (
         loss_name in {"fidelity", "angle", "kl"} and target_qnode
@@ -304,35 +200,16 @@ def _train_with_pennylane(
 
     # no params: forward-only eval
     if len(torch_params) == 0:
-        if use_state:
-            # forward-only teacher metrics
-            train_list = list(train_data)
-            with torch.no_grad():
-                losses = []
-                fidelity = []
-                for x in train_list:
-                    phi = target_qnode(x)
-                    psi = genome.circuit(x, {})
-                    phi = _normalize_state(_ensure_complex(phi))
-                    psi = _normalize_state(_ensure_complex(psi))
-                    fid_loss = loss_one_minus_fidelity(phi, psi)
-                    losses.append(fid_loss)
-                    fidelity.append(1.0 - fid_loss)
-            metrics = {
-                "loss": float(torch.stack(losses).mean().item()),
-                "fidelity": float(torch.stack(fidelity).mean().item()),
-            }
-        else:
-            metrics = eval_pennylane_forward_only(
-                genome, train_data, n_classes=n_classes
-            )
+        metrics = eval_forward_only(genome, 
+                                    train_list, 
+                                    test_list, 
+                                    teacher_qnode=target_qnode,
+                                    n_classes=n_classes,
+                                    )
         genome.fitness = metrics
         return metrics
 
     opt = torch.optim.Adam(torch_params.values(), lr=lr, weight_decay=0.0001)
-
-    train_list = list(train_data)
-    test_list = list(test_data) if test_data is not None else None
 
     n = len(train_list)
     if batch_size is not None:
@@ -423,28 +300,12 @@ def _train_with_pennylane(
             logger.warning(
                 "Loss has no grad path. Are parameters actually used inside the QNode?"
             )
-            if use_state:
-                # forward-only teacher metrics
-                train_list = list(train_data)
-                with torch.no_grad():
-                    losses = []
-                    fidelity = []
-                    for x in train_list:
-                        phi = target_qnode(x)
-                        psi = genome.circuit(x, {})
-                        phi = _normalize_state(_ensure_complex(phi))
-                        psi = _normalize_state(_ensure_complex(psi))
-                        fid_loss = loss_one_minus_fidelity(phi, psi)
-                        losses.append(fid_loss)
-                        fidelity.append(1.0 - fid_loss)
-                metrics = {
-                    "loss": float(torch.stack(losses).mean().item()),
-                    "fidelity": float(torch.stack(fidelity).mean().item()),
-                }
-            else:
-                metrics = eval_pennylane_forward_only(
-                    genome, train_data, n_classes=n_classes, parameters=torch_params
-                )
+            metrics = eval_forward_only(genome, 
+                                    train_list, 
+                                    test_list, 
+                                    teacher_qnode=target_qnode,
+                                    n_classes=n_classes,
+                                    )
             genome.fitness = metrics
             return genome
 
@@ -478,28 +339,12 @@ def _train_with_pennylane(
     torch_params_to_genome(genome, torch_params)
 
     # return final metrics
-    if use_state:
-        # forward-only teacher metrics
-        train_list = list(train_data)
-        with torch.no_grad():
-            losses = []
-            fidelity = []
-            for x in train_list:
-                phi = target_qnode(x)
-                psi = genome.circuit(x, torch_params)
-                phi = _normalize_state(_ensure_complex(phi))
-                psi = _normalize_state(_ensure_complex(psi))
-                fid_loss = loss_one_minus_fidelity(phi, psi)
-                losses.append(fid_loss)
-                fidelity.append(1.0 - fid_loss)
-        metrics = {
-            "loss": float(torch.stack(losses).mean().item()),
-            "fidelity": float(torch.stack(fidelity).mean().item()),
-        }
-    else:
-        metrics = eval_pennylane_forward_only(
-            genome, train_data, n_classes=n_classes, parameters=torch_params
-        )
+    metrics = eval_forward_only(genome, 
+                                    train_list, 
+                                    test_list, 
+                                    teacher_qnode=target_qnode,
+                                    n_classes=n_classes,
+                                    )
     genome.fitness = metrics
 
     return genome
@@ -543,7 +388,6 @@ def _train_with_qiskit_ml_outputs(
     from qiskit_machine_learning.connectors import TorchConnector
 
     try:
-        # from qiskit.primitives import Estimator as PrimitiveEstimator
         from qiskit.primitives import StatevectorEstimator as PrimitiveEstimator
     except Exception as e:
         raise RuntimeError(

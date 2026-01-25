@@ -48,7 +48,7 @@ def marginal_probs_from_statevector(
     return probs_marg.reshape(-1)
 
 
-def fidelity(phi: torch.Tensor, psi: torch.Tensor) -> torch.Tensor:
+def fidelity(phi: torch.Tensor, psi: torch.Tensor, eps:float=1e-12) -> torch.Tensor:
     """Compute the quantum state fidelity between two pure states.
 
     Fidelity is defined as:
@@ -65,6 +65,8 @@ def fidelity(phi: torch.Tensor, psi: torch.Tensor) -> torch.Tensor:
         A scalar tensor representing the fidelity between the two states.
     """
     phi = phi.to(dtype=psi.dtype, device=psi.device)
+    phi = phi / (torch.linalg.norm(phi) + eps)
+    psi = psi / (torch.linalg.norm(psi) + eps)
     overlap = torch.vdot(phi, psi)  # ⟨φ | ψ⟩
     return torch.abs(overlap) ** 2
 
@@ -110,13 +112,15 @@ def loss_state_angle(
     Returns:
         A scalar tensor representing the angular distance between states.
     """
+    phi = phi / (torch.linalg.norm(phi) + eps)
+    psi = psi / (torch.linalg.norm(psi) + eps)
     phi = phi.to(dtype=psi.dtype, device=psi.device)
     overlap_mag = torch.abs(torch.vdot(phi, psi)).clamp(max=1.0 - eps)
     return torch.arccos(overlap_mag)
 
 
 def loss_total_variation(
-    phi: torch.Tensor, psi: torch.Tensor, **kwargs
+    phi: torch.Tensor, psi: torch.Tensor, eps:float = 1e-12, **kwargs
 ) -> torch.Tensor:
     """Compute total variation distance between two vectors.
 
@@ -137,11 +141,13 @@ def loss_total_variation(
     Returns:
         A scalar tensor representing the total variation distance.
     """
+    phi = phi / (torch.linalg.norm(phi) + eps)
+    psi = psi / (torch.linalg.norm(psi) + eps)
     phi = phi.to(dtype=psi.dtype, device=psi.device)
     return 0.5 * torch.sum(torch.abs(psi - phi))
 
 
-def loss_kl_divergence(phi: torch.Tensor, psi: torch.Tensor, **kwargs) -> torch.Tensor:
+def loss_kl_divergence(phi: torch.Tensor, psi: torch.Tensor, eps:float=1e-12, **kwargs) -> torch.Tensor:
     """Compute the Kullback–Leibler (KL) divergence between two distributions.
 
     The KL divergence is defined as:
@@ -160,6 +166,8 @@ def loss_kl_divergence(phi: torch.Tensor, psi: torch.Tensor, **kwargs) -> torch.
     Returns:
         A scalar tensor representing the KL divergence.
     """
+    phi = phi / (torch.linalg.norm(phi) + eps)
+    psi = psi / (torch.linalg.norm(psi) + eps)
     phi = phi.to(dtype=psi.dtype, device=psi.device)
     return torch.sum(phi * (torch.log(phi) - torch.log(psi)))
 
