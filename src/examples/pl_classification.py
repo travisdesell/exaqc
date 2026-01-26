@@ -247,6 +247,10 @@ if __name__ == "__main__":
     p.add_argument(
         "--dataset", choices=["iris", "wine", "seeds", "breast_cancer"], required=True
     )
+    p.add_argument(
+        "--out_dir", type=str, default='artifacts',
+        help="Output directory to store results from runs"
+    )
     p.add_argument("--loss", default="ce", choices=["ce", "mse", "kl", "fidelity"])
     p.add_argument("--steps", type=int, default=200)
     p.add_argument("--lr", type=float, default=0.01)
@@ -277,6 +281,8 @@ if __name__ == "__main__":
     # create a new logging handler at the appropriate level
     logger.add(sys.stdout, level=args.logging_level)
 
+    logger.add(os.path.join(args.out_dir, args.dataset, 'run.log'))
+
     bs = args.batch_size if args.mini_batch else None
 
     objective_fn, input_size = make_objective(
@@ -296,6 +302,7 @@ if __name__ == "__main__":
             max_population_size=args.max_population_size,
             loss="loss",  # weird that the genome loss vs the objective function loss are different
             dataset=args.dataset,
+            out_dir = args.out_dir,
         ),
         objective_function=objective_fn,
         run_for=args.number_genomes,
