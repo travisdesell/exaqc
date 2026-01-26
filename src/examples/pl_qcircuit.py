@@ -221,15 +221,15 @@ def make_teacher_objective(
             f"test_fid={test_metrics['fidelity']:.3f}"
         )
 
-        if avg_loss < best_fitness:
-            best_fitness = avg_loss
-            best_genome = genome
-            logger.info(
-                f"🎯 New best genome {genome.genome_number} "
-                f"loss={avg_loss:.4f} test_fid={test_metrics['fidelity']:.3f}"
-            )
-            tag = f"trainloss_{avg_loss:.4f}_testfid_{test_metrics['fidelity']:.3f}"
-            save_best_circuit(genome, f"artifacts/teacher_{teacher_name}_best", tag)
+        # if avg_loss < best_fitness:
+        #     best_fitness = avg_loss
+        #     best_genome = genome
+        #     logger.info(
+        #         f"🎯 New best genome {genome.genome_number} "
+        #         f"loss={avg_loss:.4f} test_fid={test_metrics['fidelity']:.3f}"
+        #     )
+        #     tag = f"trainloss_{avg_loss:.4f}_testfid_{test_metrics['fidelity']:.3f}"
+        #     save_best_circuit(genome, f"artifacts/teacher_{teacher_name}_best", tag)
 
         return genome
 
@@ -339,6 +339,7 @@ if __name__ == "__main__":
         population=SteadyStatePopulation(
             max_population_size=args.max_population_size,
             loss="fidelity",
+            dataset=args.teacher,
         ),
         input_registers={"input": args.input_qubits},
         output_registers={"output": args.out_qubits},
