@@ -2,14 +2,21 @@ import bisect
 import random
 
 from loguru import logger
+import os
+import torch
+import pennylane as qml
+import matplotlib.pyplot as plt
 
 from src.circuits.circuit import CircuitGenome
 from src.population.population_strategy import PopulationStrategy
+from src.objectives.genome_objectives import (
+    genome_to_torch_params,
+)
 
 
 class SteadyStatePopulation(PopulationStrategy):
 
-    def __init__(self, max_population_size: int, loss: str = None):
+    def __init__(self, max_population_size: int, loss: str = None, dataset: str = None):
         """
         Creates a steady state population with the specified max population size.  The population
         will be sorted in order by genome fitness. The get parent methods can be called at any
@@ -20,6 +27,8 @@ class SteadyStatePopulation(PopulationStrategy):
 
         Args:
             max_population_size: is the maximum number of genomes that the population will hold.
+            loss: tag for loss value key in genome fitness
+            dataset: name of the dataset being used for training
         """
 
         self.max_population_size = max_population_size
@@ -29,6 +38,7 @@ class SteadyStatePopulation(PopulationStrategy):
 
         # used to store the population, should be kept in sorted order.
         self.population: list[CircuitGenome] = []
+        self.dataset = dataset
 
     def get_parent(self, **kwargs) -> CircuitGenome:
         """
@@ -97,9 +107,53 @@ class SteadyStatePopulation(PopulationStrategy):
         if genome.genome_number == self.population[0].genome_number:
             # this was a new global best genome
             logger.info(
+                f"🎯 New best genome {genome.genome_number} "
                 f"[insertion {self.insertions}] Population found new GLOBAL best genome with fitness: {genome.fitness}"
+            )
+
+            tag = f"trainloss_{genome.fitness['train_loss']:.4f}_testacc_{genome.fitness['test_acc']:.3f}"
+            self._save_best_circuit(
+                genome, out_dir=f"artifacts/{self.dataset}_best", tag=tag
             )
 
         if len(self.population) > self.max_population_size:
             # remove the last genome from the population
             del self.population[-1]
+
+    def _save_best_circuit(
+        self, genome: CircuitGenome, out_dir: str = "artifacts/", tag: str = ""
+    ):
+        if genome is None:
+            logger.error("Genome cannot be None")
+            raise ValueError
+
+        os.makedirs(out_dir, exist_ok=True)
+
+        genome.generate_pennylane_circuit(return_probs=True, input_mode="angle")
+        # logger.info(f"genome circuit: {genome.circuit}")
+
+        # --- Text gate list ---
+        txt_path = os.path.join(out_dir, f"genome_{genome.genome_number}.txt")
+        with open(txt_path, "w") as f:
+            genome.sort_gates()
+            f.write(f"Genome {genome.genome_number}\n")
+            f.write(f"Qubits: {genome.qubits}\n\n")
+            for g in genome.gates:
+                if getattr(g, "enabled", True):
+                    f.write(
+                        f"{g.depth:.3f}  {g.method_name}  {g.qubits}  {g.parameters}\n"
+                    )
+
+        # --- PennyLane draw ---
+        try:
+            params = genome_to_torch_params(genome)
+            x0 = torch.zeros(len(genome.input_indexes))
+            fig, ax = qml.draw_mpl(genome.circuit)(x0, params)
+            ax.set_title(f"Genome {genome.genome_number} ({tag})")
+            path = os.path.join(
+                out_dir, f"best_genome_{genome.genome_number}_{tag}.png"
+            )
+            fig.savefig(path, dpi=200, bbox_inches="tight")
+            plt.close(fig)
+        except Exception as e:
+            logger.warning(f"Could not draw circuit: {e}")
