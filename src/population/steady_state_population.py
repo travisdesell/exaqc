@@ -110,8 +110,11 @@ class SteadyStatePopulation(PopulationStrategy):
                 f"🎯 New best genome {genome.genome_number} "
                 f"[insertion {self.insertions}] Population found new GLOBAL best genome with fitness: {genome.fitness}"
             )
+            test_metric = genome.fitness.get("test_acc", None)
+            if test_metric is None:
+                test_metric = genome.fitness.get("test_fidelity")
 
-            tag = f"trainloss_{genome.fitness['train_loss']:.4f}_testacc_{genome.fitness['test_acc']:.3f}"
+            tag = f"trainloss_{genome.fitness['train_loss']:.4f}_testacc_{test_metric:.3f}"
             self._save_best_circuit(
                 genome, out_dir=f"artifacts/{self.dataset}_best", tag=tag
             )
@@ -149,7 +152,7 @@ class SteadyStatePopulation(PopulationStrategy):
             params = genome_to_torch_params(genome)
             x0 = torch.zeros(len(genome.input_indexes))
             fig, ax = qml.draw_mpl(genome.circuit)(x0, params)
-            ax.set_title(f"Genome {genome.genome_number} ({tag})")
+            ax.set_title(f"Genome {genome.genome_number}")
             path = os.path.join(
                 out_dir, f"best_genome_{genome.genome_number}_{tag}.png"
             )
