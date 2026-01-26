@@ -31,8 +31,8 @@ from src.quantum_datasets import (
 
 logger.add("run.log", level="INFO")
 
-best_fitness = float("inf")
-best_genome: CircuitGenome | None = None
+# best_fitness = float("inf")
+# best_genome: CircuitGenome | None = None
 
 
 # ---------------------------------------------------------------------
@@ -111,7 +111,9 @@ def eval_probs_ce_and_acc(
 def save_best_circuit(genome: CircuitGenome, out_dir: str, tag: str):
     os.makedirs(out_dir, exist_ok=True)
 
-    genome.generate_pennylane_circuit(return_probs=True, measure_registers=False, input_mode="angle")
+    genome.generate_pennylane_circuit(
+        return_probs=True, measure_registers=False, input_mode="angle"
+    )
 
     # --- Text gate list ---
     txt_path = os.path.join(out_dir, f"genome_{genome.genome_number}.txt")
@@ -176,7 +178,7 @@ def make_objective(
     def objective(
         genome: CircuitGenome, target="pennylane", loss=loss, batch_size=batch_size
     ):
-        global best_fitness, best_genome
+        # global best_fitness, best_genome
         # nonlocal train_data, test_data
 
         train_ds = train_data

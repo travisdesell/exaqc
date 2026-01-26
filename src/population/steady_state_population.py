@@ -112,17 +112,17 @@ class SteadyStatePopulation(PopulationStrategy):
             )
 
             tag = f"trainloss_{genome.fitness['train_loss']:.4f}_testacc_{genome.fitness['test_acc']:.3f}"
-            self._save_best_circuit(genome, out_dir=f"artifacts/{self.dataset}_best", tag=tag)
+            self._save_best_circuit(
+                genome, out_dir=f"artifacts/{self.dataset}_best", tag=tag
+            )
 
         if len(self.population) > self.max_population_size:
             # remove the last genome from the population
             del self.population[-1]
 
-
-    def _save_best_circuit(self, 
-                           genome: CircuitGenome, 
-                           out_dir: str="artifacts/", 
-                           tag: str=""):
+    def _save_best_circuit(
+        self, genome: CircuitGenome, out_dir: str = "artifacts/", tag: str = ""
+    ):
         if genome is None:
             logger.error("Genome cannot be None")
             raise ValueError
@@ -140,7 +140,9 @@ class SteadyStatePopulation(PopulationStrategy):
             f.write(f"Qubits: {genome.qubits}\n\n")
             for g in genome.gates:
                 if getattr(g, "enabled", True):
-                    f.write(f"{g.depth:.3f}  {g.method_name}  {g.qubits}  {g.parameters}\n")
+                    f.write(
+                        f"{g.depth:.3f}  {g.method_name}  {g.qubits}  {g.parameters}\n"
+                    )
 
         # --- PennyLane draw ---
         try:
@@ -148,7 +150,9 @@ class SteadyStatePopulation(PopulationStrategy):
             x0 = torch.zeros(len(genome.input_indexes))
             fig, ax = qml.draw_mpl(genome.circuit)(x0, params)
             ax.set_title(f"Genome {genome.genome_number} ({tag})")
-            path = os.path.join(out_dir, f"best_genome_{genome.genome_number}_{tag}.png")
+            path = os.path.join(
+                out_dir, f"best_genome_{genome.genome_number}_{tag}.png"
+            )
             fig.savefig(path, dpi=200, bbox_inches="tight")
             plt.close(fig)
         except Exception as e:
