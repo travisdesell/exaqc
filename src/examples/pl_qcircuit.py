@@ -26,8 +26,8 @@ from src.quantum_datasets import QuantumTeacherDataset
 
 logger.add("run_teacher.log", level="INFO")
 
-best_fitness = float("inf")
-best_genome: CircuitGenome | None = None
+# best_fitness = float("inf")
+# best_genome: CircuitGenome | None = None
 
 
 # ---------------------------------------------------------------------
@@ -182,7 +182,7 @@ def make_teacher_objective(
         loss="fidelity",
         batch_size=batch_size,
     ):
-        global best_fitness, best_genome
+        # global best_fitness, best_genome
 
         # Always train against teacher (even if you have 0 params, it'll just eval)
         genome = train_genome_objective(

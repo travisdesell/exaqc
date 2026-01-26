@@ -110,10 +110,10 @@ class SteadyStatePopulation(PopulationStrategy):
                 f"🎯 New best genome {genome.genome_number} "
                 f"[insertion {self.insertions}] Population found new GLOBAL best genome with fitness: {genome.fitness}"
             )
-            test_metric = genome.fitness.get('test_acc', None)
+            test_metric = genome.fitness.get("test_acc", None)
             if test_metric is None:
-                test_metric = genome.fitness.get('test_fidelity')
-                
+                test_metric = genome.fitness.get("test_fidelity")
+
             tag = f"trainloss_{genome.fitness['train_loss']:.4f}_testacc_{test_metric:.3f}"
             self._save_best_circuit(
                 genome, out_dir=f"artifacts/{self.dataset}_best", tag=tag
