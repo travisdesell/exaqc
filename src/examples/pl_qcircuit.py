@@ -246,13 +246,19 @@ if __name__ == "__main__":
         required=True,
         choices=[
             "identity",
-            "x_out0",
+            "x_out4",
             "bell_out",
             "copy_in_to_out",
-            "parity012_to_out0",
+            "parity012_to_out4",
             "input_controlled_bell",
             "2layer_out_block",
         ],
+    )
+    p.add_argument(
+        "--out_dir",
+        type=str,
+        default="artifacts",
+        help="Output directory to store results from runs",
     )
     p.add_argument("--input_mode", default="angle", choices=["angle", "basis"])
     p.add_argument("--steps", type=int, default=200)
@@ -289,6 +295,8 @@ if __name__ == "__main__":
     logger.remove()
     # create a new logging handler at the appropriate level
     logger.add(sys.stdout, level=args.logging_level)
+
+    logger.add(os.path.join(args.out_dir, args.teacher, "run.log"))
 
     bs = args.batch_size if args.mini_batch else None
 
@@ -340,6 +348,7 @@ if __name__ == "__main__":
             max_population_size=args.max_population_size,
             loss="fidelity",
             dataset=args.teacher,
+            out_dir=args.out_dir,
         ),
         input_registers={"input": args.input_qubits},
         output_registers={"output": args.out_qubits},
