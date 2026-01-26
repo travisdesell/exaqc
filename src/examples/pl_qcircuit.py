@@ -255,8 +255,10 @@ if __name__ == "__main__":
         ],
     )
     p.add_argument(
-        "--out_dir", type=str, default='artifacts',
-        help="Output directory to store results from runs"
+        "--out_dir",
+        type=str,
+        default="artifacts",
+        help="Output directory to store results from runs",
     )
     p.add_argument("--input_mode", default="angle", choices=["angle", "basis"])
     p.add_argument("--steps", type=int, default=200)
@@ -294,7 +296,7 @@ if __name__ == "__main__":
     # create a new logging handler at the appropriate level
     logger.add(sys.stdout, level=args.logging_level)
 
-    logger.add(os.path.join(args.out_dir, args.teacher, 'run.log'))
+    logger.add(os.path.join(args.out_dir, args.teacher, "run.log"))
 
     bs = args.batch_size if args.mini_batch else None
 
@@ -346,7 +348,7 @@ if __name__ == "__main__":
             max_population_size=args.max_population_size,
             loss="fidelity",
             dataset=args.teacher,
-            out_dir = args.out_dir,
+            out_dir=args.out_dir,
         ),
         input_registers={"input": args.input_qubits},
         output_registers={"output": args.out_qubits},

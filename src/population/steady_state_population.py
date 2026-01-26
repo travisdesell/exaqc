@@ -16,10 +16,13 @@ from src.objectives.genome_objectives import (
 
 class SteadyStatePopulation(PopulationStrategy):
 
-    def __init__(self, max_population_size: int, 
-                 loss: str = None, 
-                 dataset: str = None,
-                 out_dir: str = 'artifacts'):
+    def __init__(
+        self,
+        max_population_size: int,
+        loss: str = None,
+        dataset: str = None,
+        out_dir: str = "artifacts",
+    ):
         """
         Creates a steady state population with the specified max population size.  The population
         will be sorted in order by genome fitness. The get parent methods can be called at any
@@ -119,11 +122,9 @@ class SteadyStatePopulation(PopulationStrategy):
                 test_metric = genome.fitness.get("test_fidelity")
 
             tag = f"trainloss_{genome.fitness['train_loss']:.4f}_testacc_{test_metric:.3f}"
-            
+
             save_path = os.path.join(self.out_dir, self.dataset)
-            self._save_best_circuit(
-                genome, out_dir=f"{save_path}", tag=tag
-            )
+            self._save_best_circuit(genome, out_dir=f"{save_path}", tag=tag)
 
         if len(self.population) > self.max_population_size:
             # remove the last genome from the population
