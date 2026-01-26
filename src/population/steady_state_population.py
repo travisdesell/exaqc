@@ -96,7 +96,7 @@ class SteadyStatePopulation(PopulationStrategy):
 
         if genome.genome_number == self.population[0].genome_number:
             # this was a new global best genome
-            logger.info(
+            logger.success(
                 f"[insertion {self.insertions}] Population found new GLOBAL best genome with fitness: {genome.fitness}"
             )
 
