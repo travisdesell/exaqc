@@ -11,6 +11,23 @@ Then dependencies can be installed with (from the EXAQC project root directory):
 python3 -m pip install -e .
 ```
 
-list of possible quantum gates and their inputs, outputs and if they have weights:
+Example classification tasks can be run using MPI, e.g.:
 
-https://docs.google.com/spreadsheets/d/1Z6MjrHlESEH4S-SbZLGtgomzQ4ZeNv39t3BgJ3i0xFY/edit?gid=0#gid=0
+```
+mpiexec -n 12 python3 -m src.examples.pl_classification --logging_level INFO --dataset iris --number_genomes 500 --input_qubits 4 --out_qubits 2 --out_dir ./iris_results 
+mpiexec -n 12 python3 -m src.examples.pl_classification --logging_level INFO --dataset wine --number_genomes 500 --input_qubits 6 --out_qubits 2 --out_dir ./wine_results 
+mpiexec -n 12 python3 -m src.examples.pl_classification --logging_level INFO --dataset seeds --number_genomes 500 --input_qubits 7 --out_qubits 2 --out_dir ./breast_cancer_results 
+mpiexec -n 12 python3 -m src.examples.pl_classification --logging_level INFO --dataset breast_cancer --number_genomes 500 --input_qubits 8 --out_qubits 1 --out_dir ./breast_cancer_results 
+```
+
+Example teacher circuits can be run using MPI, e.g.:
+
+```
+mpiexec -n 12 python3 -m src.examples.pl_classification --logging_level INFO --dataset iris --number_genomes 500 --input_qubits 4 --out_qubits 2 --out_dir ./iris_results 
+mpiexec -n 12 python3 -m src.examples.pl_classification --logging_level INFO --dataset wine --number_genomes 500 --input_qubits 6 --out_qubits 2 --out_dir ./wine_results 
+mpiexec -n 12 python3 -m src.examples.pl_classification --logging_level INFO --dataset seeds --number_genomes 500 --input_qubits 7 --out_qubits 2 --out_dir ./breast_cancer_results 
+mpiexec -n 12 python3 -m src.examples.pl_classification --logging_level INFO --dataset breast_cancer --number_genomes 500 --input_qubits 8 --out_qubits 1 --out_dir ./breast_cancer_results 
+```
+
+
+
