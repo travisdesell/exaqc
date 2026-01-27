@@ -139,7 +139,7 @@ class EXAQC:
 
         # mutation_options = ["add_gate", "disable_gate", "enable_gate", "reorder_gate"]
         mutation_options = (
-            ["add_gate"] * 14  # 80%
+            ["add_gate"] * 14  # 70%
             + ["reorder_gate"] * 2  # 10%
             + ["qubit_swap"] * 2  # 10%
             + ["enable_gate"]  # 5%

@@ -388,10 +388,10 @@ class CircuitGenome:
     def generate_pennylane_circuit(
         self,
         device_name: str = "default.qubit",
-        measure_registers: bool = True,
+        measure_registers: bool = False,
         shots: Optional[int] = None,
         input_mode: str = "basis",
-        return_probs: bool = True,
+        return_probs: bool = False,
     ):
         """
         Converts this genome into a PennyLane QNode-ready function.
@@ -456,7 +456,7 @@ class CircuitGenome:
                 # fallback if you want expvals
                 expvals = [
                     qml.expval(qml.PauliZ(w))
-                    for w in self.output_qubits  # self.register_map["output"]
+                    for w in self.output_indexes  # self.register_map["output"]
                 ]
                 return torch.stack(expvals)
 

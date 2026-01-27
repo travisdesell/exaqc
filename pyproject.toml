@@ -12,6 +12,7 @@ classifiers = [
 dependencies = [
     "black",
     "flake8",
+    "numpy<2",
     "qiskit-aer",
     "qiskit",
     "pennylane",

@@ -287,6 +287,12 @@ def add_gate(
         if input_index in possible_output_indexes:
             possible_output_indexes.remove(input_index)
 
+        if len(possible_output_indexes) == 0:
+            logger.error(
+                "There were not enough possible input indexes to add this gate. This shouldn't happen."
+            )
+            return False
+
         output_index = random.choice(possible_output_indexes)
         possible_output_indexes.remove(output_index)
         logger.info(f"\tselected output index: {output_index}")

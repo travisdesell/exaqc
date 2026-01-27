@@ -336,3 +336,32 @@ pennylane_gate_specifications["u"] = GateSpecification(
     parameters=["theta", "phi", "delta"],
     pennylane_op="U3",
 )
+
+
+
+'''
+print("\\begin{table}[h!]")
+print("\\begin{tabular}{llll}")
+print("\\hline")
+print("\\textbf{Gate} & \\textbf{Method} & \\textbf{Qubits} & \\textbf{Parameters} \\\\")
+print("\\hline")
+
+for method_name, gate in sorted(pennylane_gate_specifications.items()):
+    if not gate.needs_validation:
+        name = gate.name.replace('^dagger', '\\textsuperscript{\\textdagger}')
+        params = ''
+        if gate.parameters is not None:
+            params = ', '.join(gate.parameters)
+
+        qubits = ', '.join(gate.qubits)
+        qubits = qubits.replace('_', '\\_')
+
+        print(f"{name} & {method_name} & {qubits} & {params} \\\\")
+        print("\\hline")
+
+print("\\hline")
+print("\\end{tabular}")
+print("\\caption{Available Pennylane gates, their qubits and parameters (if parameterized).}")
+print("\\label{tab:pennylane_gates}")
+print("\\end{table}")
+'''

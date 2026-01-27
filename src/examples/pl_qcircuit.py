@@ -26,8 +26,8 @@ from src.quantum_datasets import QuantumTeacherDataset
 
 logger.add("run_teacher.log", level="INFO")
 
-best_fitness = float("inf")
-best_genome: CircuitGenome | None = None
+# best_fitness = float("inf")
+# best_genome: CircuitGenome | None = None
 
 
 # ---------------------------------------------------------------------
@@ -182,7 +182,7 @@ def make_teacher_objective(
         loss="fidelity",
         batch_size=batch_size,
     ):
-        global best_fitness, best_genome
+        # global best_fitness, best_genome
 
         # Always train against teacher (even if you have 0 params, it'll just eval)
         genome = train_genome_objective(
@@ -221,15 +221,15 @@ def make_teacher_objective(
             f"test_fid={test_metrics['fidelity']:.3f}"
         )
 
-        if avg_loss < best_fitness:
-            best_fitness = avg_loss
-            best_genome = genome
-            logger.info(
-                f"🎯 New best genome {genome.genome_number} "
-                f"loss={avg_loss:.4f} test_fid={test_metrics['fidelity']:.3f}"
-            )
-            tag = f"trainloss_{avg_loss:.4f}_testfid_{test_metrics['fidelity']:.3f}"
-            save_best_circuit(genome, f"artifacts/teacher_{teacher_name}_best", tag)
+        # if avg_loss < best_fitness:
+        #     best_fitness = avg_loss
+        #     best_genome = genome
+        #     logger.info(
+        #         f"🎯 New best genome {genome.genome_number} "
+        #         f"loss={avg_loss:.4f} test_fid={test_metrics['fidelity']:.3f}"
+        #     )
+        #     tag = f"trainloss_{avg_loss:.4f}_testfid_{test_metrics['fidelity']:.3f}"
+        #     save_best_circuit(genome, f"artifacts/teacher_{teacher_name}_best", tag)
 
         return genome
 
@@ -246,13 +246,19 @@ if __name__ == "__main__":
         required=True,
         choices=[
             "identity",
-            "x_out0",
+            "x_out4",
             "bell_out",
             "copy_in_to_out",
-            "parity012_to_out0",
+            "parity012_to_out4",
             "input_controlled_bell",
             "2layer_out_block",
         ],
+    )
+    p.add_argument(
+        "--out_dir",
+        type=str,
+        default="artifacts",
+        help="Output directory to store results from runs",
     )
     p.add_argument("--input_mode", default="angle", choices=["angle", "basis"])
     p.add_argument("--steps", type=int, default=200)
@@ -289,6 +295,8 @@ if __name__ == "__main__":
     logger.remove()
     # create a new logging handler at the appropriate level
     logger.add(sys.stdout, level=args.logging_level)
+
+    logger.add(os.path.join(args.out_dir, args.teacher, "run.log"))
 
     bs = args.batch_size if args.mini_batch else None
 
@@ -339,6 +347,8 @@ if __name__ == "__main__":
         population=SteadyStatePopulation(
             max_population_size=args.max_population_size,
             loss="fidelity",
+            dataset=args.teacher,
+            out_dir=args.out_dir,
         ),
         input_registers={"input": args.input_qubits},
         output_registers={"output": args.out_qubits},

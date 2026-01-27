@@ -31,8 +31,8 @@ from src.quantum_datasets import (
 
 logger.add("run.log", level="INFO")
 
-best_fitness = float("inf")
-best_genome: CircuitGenome | None = None
+# best_fitness = float("inf")
+# best_genome: CircuitGenome | None = None
 
 
 # ---------------------------------------------------------------------
@@ -80,7 +80,7 @@ def eval_probs_ce_and_acc(
     # Ensure qnode exists
     if getattr(genome, "circuit", None) is None or not callable(genome.circuit):
         # IMPORTANT: we want probs readout for classification
-        genome.generate_pennylane_circuit(measure_registers=True, input_mode="angle")
+        genome.generate_pennylane_circuit(return_probs=True, input_mode="angle")
 
     params = genome_to_torch_params(genome)  # empty dict if no params
     losses = []
@@ -111,7 +111,9 @@ def eval_probs_ce_and_acc(
 def save_best_circuit(genome: CircuitGenome, out_dir: str, tag: str):
     os.makedirs(out_dir, exist_ok=True)
 
-    genome.generate_pennylane_circuit(measure_registers=False, input_mode="angle")
+    genome.generate_pennylane_circuit(
+        return_probs=True, measure_registers=False, input_mode="angle"
+    )
 
     # --- Text gate list ---
     txt_path = os.path.join(out_dir, f"genome_{genome.genome_number}.txt")
@@ -176,7 +178,7 @@ def make_objective(
     def objective(
         genome: CircuitGenome, target="pennylane", loss=loss, batch_size=batch_size
     ):
-        global best_fitness, best_genome
+        # global best_fitness, best_genome
         # nonlocal train_data, test_data
 
         train_ds = train_data
@@ -210,7 +212,7 @@ def make_objective(
         # )
 
         genome.fitness = {
-            "train_loss": avg_loss,
+            "train_loss": float(train_metrics["loss"]),
             "train_acc": float(train_metrics["acc"]),
             "loss": float(test_metrics["loss"]),
             "test_acc": float(test_metrics["acc"]),
@@ -218,18 +220,18 @@ def make_objective(
 
         logger.info(
             f"[{genome.genome_number:04d}] "
-            f"loss={avg_loss:.4f} train={train_metrics["acc"]:.3f} test={test_metrics["acc"]:.3f}"
+            f"loss={avg_loss:.4f} train={train_metrics['acc']:.3f} test={test_metrics['acc']:.3f}"
         )
 
-        if avg_loss < best_fitness:
-            best_fitness = avg_loss
-            best_genome = genome
-            logger.info(
-                f"🎯 New best genome {genome.genome_number} "
-                f"loss={avg_loss:.4f} test_acc={test_metrics["acc"]:.3f}"
-            )
-            tag = f"trainloss_{avg_loss:.4f}_testacc_{genome.fitness['test_acc']:.3f}"
-            save_best_circuit(genome, f"artifacts/{dataset_name}_best", tag)
+        # if avg_loss < best_fitness:
+        #     best_fitness = avg_loss
+        #     best_genome = genome
+        #     logger.info(
+        #         f"🎯 New best genome {genome.genome_number} "
+        #         f"loss={avg_loss:.4f} test_acc={test_metrics['acc']:.3f}"
+        #     )
+        #     tag = f"trainloss_{avg_loss:.4f}_testacc_{genome.fitness['test_acc']:.3f}"
+        #     save_best_circuit(genome, f"artifacts/{dataset_name}_best", tag)
 
         return genome
 
@@ -244,6 +246,12 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument(
         "--dataset", choices=["iris", "wine", "seeds", "breast_cancer"], required=True
+    )
+    p.add_argument(
+        "--out_dir",
+        type=str,
+        default="artifacts",
+        help="Output directory to store results from runs",
     )
     p.add_argument("--loss", default="ce", choices=["ce", "mse", "kl", "fidelity"])
     p.add_argument("--steps", type=int, default=200)
@@ -275,6 +283,8 @@ if __name__ == "__main__":
     # create a new logging handler at the appropriate level
     logger.add(sys.stdout, level=args.logging_level)
 
+    logger.add(os.path.join(args.out_dir, args.dataset, "run.log"))
+
     bs = args.batch_size if args.mini_batch else None
 
     objective_fn, input_size = make_objective(
@@ -293,6 +303,8 @@ if __name__ == "__main__":
         population=SteadyStatePopulation(
             max_population_size=args.max_population_size,
             loss="loss",  # weird that the genome loss vs the objective function loss are different
+            dataset=args.dataset,
+            out_dir=args.out_dir,
         ),
         objective_function=objective_fn,
         run_for=args.number_genomes,

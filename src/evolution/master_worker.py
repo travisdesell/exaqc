@@ -58,6 +58,7 @@ def master(comm: Intracomm, rank: int, exaqc: EXAQC, run_for: int):
             exaqc.insert_genome(genome)
 
             evaluated_genomes += 1
+            logger.info(f"evaluated {evaluated_genomes} of max {run_for} genomes")
 
     # receive last genomes and cleanup
     finished_workers = 0
