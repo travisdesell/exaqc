@@ -19,7 +19,7 @@ from src.evolution.mutation import (
     reorder_gate,
     qubit_swap,
 )
-from src.population.population_strategy import PopulationStrategy
+from src.evolution.population_strategy import PopulationStrategy
 
 
 class EXAQC:
