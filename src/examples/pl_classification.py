@@ -13,7 +13,8 @@ import matplotlib.pyplot as plt
 from src.evolution.master_worker import master_worker
 
 # from src.evolution.exaqc import EXAQC
-from src.population.steady_state_population import SteadyStatePopulation
+from src.evolution.steady_state_population import SteadyStatePopulation
+from src.evolution.objective import Objective
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
 from src.circuits.circuit import CircuitGenome
 from src.objectives.genome_objectives import (
@@ -27,6 +28,7 @@ from src.quantum_datasets import (
     WineDataset,
     SeedsDataset,
     BreastCancerDataset,
+    QuantumDataset,
 )
 
 logger.add("run.log", level="INFO")
@@ -142,74 +144,45 @@ def save_best_circuit(genome: CircuitGenome, out_dir: str, tag: str):
 # Objective
 # ---------------------------------------------------------------------
 
+class ClassificationObjective(Objective):
+    def __init__(self, train_data: QuantumDataset, test_data: QuantumDataset, input_size: int, n_classes: int, loss: str = "ce"):
+        self.train_data = train_data
+        self.test_data = test_data
+        self.input_size = input_size
+        self.n_classes = n_classes
+        self.loss = loss
+        self.target = "pennylane"
 
-def make_objective(
-    dataset_name: str,
-    loss: str = "ce",
-    steps: int = 250,
-    lr: float = 1e-3,
-    log_every: int = 50,
-    batch_size: int = None,
-):
 
-    if dataset_name == "iris":
-        train_data = IrisDataset(split="train")
-        test_data = IrisDataset(split="test")
-        input_size = 4
-        n_classes = 3
-    elif dataset_name == "wine":
-        train_data = WineDataset(split="train")
-        test_data = WineDataset(split="test")
-        input_size = 13
-        n_classes = 3
-    elif dataset_name == "seeds":
-        train_data = SeedsDataset(split="train")
-        test_data = SeedsDataset(split="test")
-        input_size = 7
-        n_classes = 3
-    elif dataset_name == "breast_cancer":
-        train_data = BreastCancerDataset(split="train")
-        test_data = BreastCancerDataset(split="test")
-        input_size = 30
-        n_classes = 2
-    else:
-        raise ValueError(dataset_name)
-
-    def objective(
-        genome: CircuitGenome, target="pennylane", loss=loss, batch_size=batch_size
-    ):
-        # global best_fitness, best_genome
-        # nonlocal train_data, test_data
-
-        train_ds = train_data
-        test_ds = test_data
+    def __call__(self, genome: CircuitGenome):
+        hyperparameters = genome.hyperparameters
+        learning_rate = hyperparameters['learning_rate']
+        steps = hyperparameters['steps']
+        batch_size = hyperparameters['batch_size']
+        log_every = hyperparameters['log_every']
 
         # If there are trainable params, train. If not, just forward/eval.
         torch_params = genome_to_torch_params(genome)
         if len(torch_params) > 0:
             genome = train_genome_objective(
                 genome,
-                dataset=[train_ds, test_ds],  # train split only
+                dataset=[self.train_data, self.test_data],  # train split only
                 backend=target,
                 loss=loss,  # e.g., "ce"
                 steps=steps,
-                lr=lr,
-                n_classes=n_classes,
+                lr=learning_rate,
+                n_classes=self.n_classes,
                 log_every=log_every,
                 bath_size=batch_size,
             )
 
         # Compute fresh train/test metrics from probs (works for both param & no-param cases)
-        train_metrics = eval_probs_ce_and_acc(genome, train_ds, n_classes=n_classes)
-        test_metrics = eval_probs_ce_and_acc(genome, test_ds, n_classes=n_classes)
+        train_metrics = eval_probs_ce_and_acc(genome, self.train_data, n_classes=self.n_classes)
+        test_metrics = eval_probs_ce_and_acc(genome, self.test_data, n_classes=self.n_classes)
 
         # fit = genome.fitness or {}
         # avg_loss = float(fit.get("loss", fit.get("ce", float("inf"))))
         avg_loss = float(train_metrics["loss"])
-
-        # genome.generate_pennylane_circuit(
-        #     return_probs=True, input_mode="angle"
-        # )
 
         genome.fitness = {
             "train_loss": float(train_metrics["loss"]),
@@ -223,19 +196,34 @@ def make_objective(
             f"loss={avg_loss:.4f} train={train_metrics['acc']:.3f} test={test_metrics['acc']:.3f}"
         )
 
-        # if avg_loss < best_fitness:
-        #     best_fitness = avg_loss
-        #     best_genome = genome
-        #     logger.info(
-        #         f"🎯 New best genome {genome.genome_number} "
-        #         f"loss={avg_loss:.4f} test_acc={test_metrics['acc']:.3f}"
-        #     )
-        #     tag = f"trainloss_{avg_loss:.4f}_testacc_{genome.fitness['test_acc']:.3f}"
-        #     save_best_circuit(genome, f"artifacts/{dataset_name}_best", tag)
 
-        return genome
 
-    return objective, input_size
+def make_objective(
+    dataset_name: str,
+    loss: str = "ce",
+    steps: int = 250,
+    lr: float = 1e-3,
+    log_every: int = 50,
+    batch_size: int = None,
+):
+
+    objective = None
+    if dataset_name == "iris":
+        objective = ClassificationObjective(train_data=IrisDataset(split="train"), test_data=IrisDataset(split="test", input_size=4, n_classes=3)
+
+    elif dataset_name == "wine":
+        objective = ClassificationObjective(train_data=WineDataset(split="train"), test_data=WineDataset(split="test", input_size=13, n_classes=3)
+
+    elif dataset_name == "seeds":
+        objective = ClassificationObjective(train_data=SeedsDataset(split="train"), test_data=SeedsDataset(split="test", input_size=7, n_classes=3)
+
+    elif dataset_name == "breast_cancer":
+        objective = ClassificationObjective(train_data=BreastCancerDataset(split="train"), test_data=BreastCancerDataset(split="test", input_size=30, n_classes=2)
+
+    else:
+        raise ValueError(dataset_name)
+
+    return objective, objective.input_size
 
 
 # ---------------------------------------------------------------------
