@@ -180,6 +180,7 @@ pennylane_gate_specifications["id"] = GateSpecification(
     name="Identity",
     qubits=["qubit"],
     pennylane_op="Identity",
+    needs_validation=True,  # doesn't need validaiton but also doesn't make sense to use
 )
 
 pennylane_gate_specifications["x"] = GateSpecification(
@@ -338,8 +339,7 @@ pennylane_gate_specifications["u"] = GateSpecification(
 )
 
 
-
-'''
+"""
 print("\\begin{table}[h!]")
 print("\\begin{tabular}{llll}")
 print("\\hline")
@@ -364,4 +364,4 @@ print("\\end{tabular}")
 print("\\caption{Available Pennylane gates, their qubits and parameters (if parameterized).}")
 print("\\label{tab:pennylane_gates}")
 print("\\end{table}")
-'''
+"""

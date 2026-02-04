@@ -29,11 +29,12 @@ def genome_to_torch_params(genome: CircuitGenome) -> dict[str, torch.nn.Paramete
     for gate in genome.gates:
         if gate.enabled:
             for name, value in gate.parameters.items():
-                # key = f"{gate.innovation_number}:{name}"
-                key = name
+                key = f"{gate.innovation_number}:{name}"
+                # key = name
                 params[key] = torch.nn.Parameter(
                     torch.tensor(float(value), dtype=torch.float64)
                 )
+    # logger.info(f"GENOME TO TORCH PARAMS: {params}")
     return params
 
 
@@ -47,11 +48,12 @@ def _extract_param_value(v: torch.Tensor | float) -> float:
 def torch_params_to_genome(
     genome: CircuitGenome, trained_params: dict[str, torch.Tensor] | dict[str, float]
 ):
+    # logger.info(f"TORCH TO GENOME TRAINED PARAMS: {trained_params}")
     for gate in genome.gates:
         if gate.enabled:
             for name in gate.parameters.keys():
-                # key = f"{gate.innovation_number}:{name}"
-                key = name
+                key = f"{gate.innovation_number}:{name}"
+                # key = name
                 if key in trained_params:
                     gate.parameters[name] = _extract_param_value(trained_params[key])
 
@@ -221,7 +223,7 @@ def _train_with_pennylane(
         genome.fitness = metrics
         return metrics
 
-    opt = torch.optim.Adam(torch_params.values(), lr=lr, weight_decay=0.0001)
+    opt = torch.optim.AdamW(torch_params.values(), lr=lr, weight_decay=0.00001)
 
     n = len(train_list)
     if batch_size is not None:
@@ -342,7 +344,7 @@ def _train_with_pennylane(
                 if test_list is not None:
                     te = eval_supervised(test_list)
                     logger.info(
-                        f"[{step:04d}] loss={tr['loss']:.6f} acc={tr['acc']:.3f} | test_acc={te['acc']:.3f}"
+                            f"[{step:04d}] loss={tr['loss']:.6f} acc={tr['acc']:.3f} | test_loss={te['loss']:.3f} test_acc={te['acc']:.3f}"
                     )
                 else:
                     logger.info(

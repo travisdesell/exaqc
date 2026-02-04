@@ -1,4 +1,4 @@
-from .QuantumDataset import QuantumDataset  # noqa
+from .base import QuantumDataset  # noqa
 from .HalfAdderDataset import HalfAdderDataset  # noqa
 from .IrisDataset import IrisDataset  # noqa
 from .WineDataset import WineDataset  # noqa

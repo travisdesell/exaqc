@@ -98,6 +98,7 @@ qiskit_gate_specifications["h"] = GateSpecification(
 qiskit_gate_specifications["id"] = GateSpecification(
     name="Identity",
     qubits=["qubit"],
+    needs_validation=True, # doesn't need validation but doesnt make sense to use
 )
 
 qiskit_gate_specifications["iswap"] = GateSpecification(
@@ -281,10 +282,7 @@ qiskit_gate_specifications["z"] = GateSpecification(
 )
 
 
-
-
-
-'''
+"""
 print("\\begin{table}[h!]")
 print("\\begin{tabular}{llll}")
 print("\\hline")
@@ -309,4 +307,4 @@ print("\\end{tabular}")
 print("\\caption{Available Qiskit gates, their qubits and parameters (if parameterized).}")
 print("\\label{tab:qiskit_gates}")
 print("\\end{table}")
-'''
+"""

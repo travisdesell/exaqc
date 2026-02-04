@@ -156,6 +156,7 @@ class CircuitGenome:
             output_qubits=self.output_qubits.copy(),
         )
         new_genome.fitness = fitness
+        new_genome.hyperparameters = self.hyperparameters.copy()
 
         for gate in self.gates:
             new_genome.add_existing_gate(gate)
@@ -179,6 +180,7 @@ class CircuitGenome:
         serialized["target"] = self.target
         serialized["input_qubits"] = self.input_qubits.copy()
         serialized["output_qubits"] = self.output_qubits.copy()
+        serialized["hyperparameters"] = self.hyperparameters.copy()
         serialized["gates"] = []
 
         for gate in self.gates:
@@ -203,6 +205,7 @@ class CircuitGenome:
             output_qubits=serialized["output_qubits"],
         )
         new_genome.fitness = serialized["fitness"]
+        new_genome.hyperparameters = serialized["hyperparameters"]
 
         for serialized_gate in serialized["gates"]:
             gate = Gate.from_dict(serialized_gate)

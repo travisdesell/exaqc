@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import torch
 import sys
@@ -73,7 +74,7 @@ def eval_probs_ce_and_acc(
     genome: CircuitGenome,
     dataset: Iterable[tuple[torch.Tensor, torch.Tensor]],
     *,
-    n_classes: int = 3,
+    n_classes: int,
 ) -> dict[str, float]:
     """
     Assumes genome.circuit returns qml.probs(wires=output_wires) (real-valued).
@@ -106,46 +107,19 @@ def eval_probs_ce_and_acc(
 
 
 # ---------------------------------------------------------------------
-# Circuit saving
-# ---------------------------------------------------------------------
-
-
-def save_best_circuit(genome: CircuitGenome, out_dir: str, tag: str):
-    os.makedirs(out_dir, exist_ok=True)
-
-    genome.generate_pennylane_circuit(
-        return_probs=True, measure_registers=False, input_mode="angle"
-    )
-
-    # --- Text gate list ---
-    txt_path = os.path.join(out_dir, f"genome_{genome.genome_number}.txt")
-    with open(txt_path, "w") as f:
-        genome.sort_gates()
-        f.write(f"Genome {genome.genome_number}\n")
-        f.write(f"Qubits: {genome.qubits}\n\n")
-        for g in genome.gates:
-            if getattr(g, "enabled", True):
-                f.write(f"{g.depth:.3f}  {g.method_name}  {g.qubits}  {g.parameters}\n")
-
-    # --- PennyLane draw ---
-    try:
-        params = genome_to_torch_params(genome)
-        x0 = torch.zeros(len(genome.input_indexes))
-        fig, ax = qml.draw_mpl(genome.circuit)(x0, params)
-        ax.set_title(f"Genome {genome.genome_number} ({tag})")
-        path = os.path.join(out_dir, f"best_genome_{genome.genome_number}_{tag}.png")
-        fig.savefig(path, dpi=200, bbox_inches="tight")
-        plt.close(fig)
-    except Exception as e:
-        logger.warning(f"Could not draw circuit: {e}")
-
-
-# ---------------------------------------------------------------------
 # Objective
 # ---------------------------------------------------------------------
 
+
 class ClassificationObjective(Objective):
-    def __init__(self, train_data: QuantumDataset, test_data: QuantumDataset, input_size: int, n_classes: int, loss: str = "ce"):
+    def __init__(
+        self,
+        train_data: QuantumDataset,
+        test_data: QuantumDataset,
+        input_size: int,
+        n_classes: int,
+        loss: str = "ce",
+    ):
         self.train_data = train_data
         self.test_data = test_data
         self.input_size = input_size
@@ -153,13 +127,38 @@ class ClassificationObjective(Objective):
         self.loss = loss
         self.target = "pennylane"
 
+    def compare(self, genome1: CircuitGenome, genome2: CircuitGenome) -> int:
+        """
+        Used to sort genomes by fitness, even if there are multiple objectives, for population
+        management and crossover methods.
+
+        Returns: 0 if the two genomes have equivalent fitnesses, a ngeative value if genome1 should be
+            sorted before genome2, and a positive value if genome2 should be sorted before genome1
+        """
+
+        # this will return 0 if the losses are the same, negative if genome1 should be before
+        # genome2 (genome1's fitness would be lower), and positive if genome2 should be before
+        # genome1 (genome2's fitness would be lower)
+        return genome1.fitness['test_loss'] - genome2.fitness['test_loss']
+
 
     def __call__(self, genome: CircuitGenome):
+        """
+        Trains the circuit given the specified hyperparameters and sets its
+        loss values.
+
+        Args:
+            genome: is the CircuitGenome to train and evaluate. It will have
+                a dict of hyperparameters specified by EXAQC, and should
+                set its `fitness` attribute with a dict of fitness values
+                after training and evaluation.
+        """
+
         hyperparameters = genome.hyperparameters
-        learning_rate = hyperparameters['learning_rate']
-        steps = hyperparameters['steps']
-        batch_size = hyperparameters['batch_size']
-        log_every = hyperparameters['log_every']
+        learning_rate = hyperparameters["learning_rate"]
+        steps = hyperparameters["steps"]
+        batch_size = hyperparameters["batch_size"]
+        log_every = hyperparameters["log_every"]
 
         # If there are trainable params, train. If not, just forward/eval.
         torch_params = genome_to_torch_params(genome)
@@ -167,8 +166,8 @@ class ClassificationObjective(Objective):
             genome = train_genome_objective(
                 genome,
                 dataset=[self.train_data, self.test_data],  # train split only
-                backend=target,
-                loss=loss,  # e.g., "ce"
+                backend=self.target,
+                loss=self.loss,  # e.g., "ce"
                 steps=steps,
                 lr=learning_rate,
                 n_classes=self.n_classes,
@@ -177,53 +176,27 @@ class ClassificationObjective(Objective):
             )
 
         # Compute fresh train/test metrics from probs (works for both param & no-param cases)
-        train_metrics = eval_probs_ce_and_acc(genome, self.train_data, n_classes=self.n_classes)
-        test_metrics = eval_probs_ce_and_acc(genome, self.test_data, n_classes=self.n_classes)
-
-        # fit = genome.fitness or {}
-        # avg_loss = float(fit.get("loss", fit.get("ce", float("inf"))))
-        avg_loss = float(train_metrics["loss"])
+        train_metrics = eval_probs_ce_and_acc(
+            genome, self.train_data, n_classes=self.n_classes
+        )
+        test_metrics = eval_probs_ce_and_acc(
+            genome, self.test_data, n_classes=self.n_classes
+        )
 
         genome.fitness = {
             "train_loss": float(train_metrics["loss"]),
             "train_acc": float(train_metrics["acc"]),
-            "loss": float(test_metrics["loss"]),
+            "test_loss": float(test_metrics["loss"]),
             "test_acc": float(test_metrics["acc"]),
         }
 
         logger.info(
             f"[{genome.genome_number:04d}] "
-            f"loss={avg_loss:.4f} train={train_metrics['acc']:.3f} test={test_metrics['acc']:.3f}"
+            f"train loss={train_metrics['loss']:.4f} "
+            f"train acc={train_metrics['acc']:.4f} "
+            f"test loss={test_metrics['loss']:.4f}"
+            f"test acc={test_metrics['acc']:.4f}"
         )
-
-
-
-def make_objective(
-    dataset_name: str,
-    loss: str = "ce",
-    steps: int = 250,
-    lr: float = 1e-3,
-    log_every: int = 50,
-    batch_size: int = None,
-):
-
-    objective = None
-    if dataset_name == "iris":
-        objective = ClassificationObjective(train_data=IrisDataset(split="train"), test_data=IrisDataset(split="test", input_size=4, n_classes=3)
-
-    elif dataset_name == "wine":
-        objective = ClassificationObjective(train_data=WineDataset(split="train"), test_data=WineDataset(split="test", input_size=13, n_classes=3)
-
-    elif dataset_name == "seeds":
-        objective = ClassificationObjective(train_data=SeedsDataset(split="train"), test_data=SeedsDataset(split="test", input_size=7, n_classes=3)
-
-    elif dataset_name == "breast_cancer":
-        objective = ClassificationObjective(train_data=BreastCancerDataset(split="train"), test_data=BreastCancerDataset(split="test", input_size=30, n_classes=2)
-
-    else:
-        raise ValueError(dataset_name)
-
-    return objective, objective.input_size
 
 
 # ---------------------------------------------------------------------
@@ -247,13 +220,11 @@ if __name__ == "__main__":
     p.add_argument("--max_population_size", type=int, default=50)
     p.add_argument("--number_genomes", type=int, default=500)
     p.add_argument("--input_qubits", type=int, default=6)
-    p.add_argument("--out_qubits", type=int, default=2)  # 1 for breast cancer
-    p.add_argument("--mini_batch", action="store_true", help="Run minibatch training")
     p.add_argument(
         "--batch_size",
         type=int,
-        default=16,
-        help="Batch size for training; available only when mini_batch is set",
+        default=None,
+        help="Use mini-batch training with the given batch size, if provided",
     )
 
     p.add_argument(
@@ -270,53 +241,56 @@ if __name__ == "__main__":
     logger.remove()
     # create a new logging handler at the appropriate level
     logger.add(sys.stdout, level=args.logging_level)
-
     logger.add(os.path.join(args.out_dir, args.dataset, "run.log"))
 
-    bs = args.batch_size if args.mini_batch else None
-
-    objective_fn, input_size = make_objective(
-        args.dataset, loss=args.loss, steps=args.steps, lr=args.lr, batch_size=bs
-    )
-
-    qubits = {
-        "input": min(args.input_qubits, input_size),
-        "output": args.out_qubits,  # 2 readout qubits → 4 outcomes ≥ 3 classes
+    # specify hyperparameter options for genome evaluation
+    hyperparameters = {
+        'steps': 20,
+        'learning_rate': 5e-3,
+        'log_every': 10,
+        'batch_size': args.batch_size,
     }
-    register_map = register_wire_map(qubits)
-    logger.info(f"register map: {register_map}")
+
+    # set up the objective function
+    objective = None
+    if args.dataset == "iris":
+        objective = ClassificationObjective(
+            train_data=IrisDataset(split="train"),
+            test_data=IrisDataset(split="test"), input_size=4, n_classes=3,
+        )
+
+    elif args.dataset == "wine":
+        objective = ClassificationObjective(
+            train_data=WineDataset(split="train"),
+            test_data=WineDataset(split="test"), input_size=13, n_classes=3,
+        )
+
+    elif args.dataset == "seeds":
+        objective = ClassificationObjective(
+            train_data=SeedsDataset(split="train"),
+            test_data=SeedsDataset(split="test"), input_size=7, n_classes=3,
+        )
+
+    elif args.dataset == "breast_cancer":
+        objective = ClassificationObjective(
+            train_data=BreastCancerDataset(split="train"),
+            test_data=BreastCancerDataset(split="test"), input_size=30, n_classes=2,
+        )
+
+    else:
+        raise ValueError(dataset_name)
 
     master_worker(
         gate_specifications=pennylane_gate_specifications,
         population=SteadyStatePopulation(
             max_population_size=args.max_population_size,
-            loss="loss",  # weird that the genome loss vs the objective function loss are different
-            dataset=args.dataset,
+            compare=objective.compare,
             out_dir=args.out_dir,
         ),
-        objective_function=objective_fn,
+        objective=objective,
+        hyperparameters=hyperparameters,
         run_for=args.number_genomes,
-        input_registers={"input": min(args.input_qubits, input_size)},
-        output_registers={"output": args.out_qubits},
+        input_registers={"input": min(args.input_qubits, objective.input_size)},
+        output_registers={"output": math.ceil(math.log(objective.n_classes, 2))},
         target="pennylane",
-        loss=args.loss,
-        batch_size=bs,
     )
-
-    """
-    exaqc = EXAQC(
-        gate_specifications=pennylane_gate_specifications,
-        population=SteadyStatePopulation(
-            max_population_size=args.max_population_size,
-            loss="loss",  # weird that the genome loss vs the objective function loss are different
-        ),
-        objective_function=objective_fn,
-        input_registers={"input": min(args.input_qubits, input_size)},
-        output_registers={"output": args.out_qubits},
-        target="pennylane",
-        loss=args.loss,
-        batch_size=bs,
-    )
-
-    exaqc.run_for(args.number_genomes)
-    """

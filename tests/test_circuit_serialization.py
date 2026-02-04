@@ -62,6 +62,7 @@ def test_all_disabled_pennylane(target: str):
     assert qc.qubits == qc2.qubits
     assert qc.input_indexes == qc2.input_indexes
     assert qc.output_indexes == qc2.output_indexes
+    assert qc.hyperparameters == qc2.hyperparameters
 
     assert len(qc.gates) == len(qc2.gates)
 
