@@ -7,9 +7,7 @@ import torch
 import sys
 from typing import Iterable
 
-import pennylane as qml
 from loguru import logger
-import matplotlib.pyplot as plt
 
 from src.evolution.master_worker import master_worker
 
@@ -22,7 +20,6 @@ from src.objectives.genome_objectives import (
     train_genome_objective,
     genome_to_torch_params,
 )
-from src.utils.helpers import register_wire_map
 
 from src.quantum_datasets import (
     IrisDataset,
@@ -139,8 +136,7 @@ class ClassificationObjective(Objective):
         # this will return 0 if the losses are the same, negative if genome1 should be before
         # genome2 (genome1's fitness would be lower), and positive if genome2 should be before
         # genome1 (genome2's fitness would be lower)
-        return genome1.fitness['test_loss'] - genome2.fitness['test_loss']
-
+        return genome1.fitness["test_loss"] - genome2.fitness["test_loss"]
 
     def __call__(self, genome: CircuitGenome):
         """
@@ -245,10 +241,10 @@ if __name__ == "__main__":
 
     # specify hyperparameter options for genome evaluation
     hyperparameters = {
-        'steps': 20,
-        'learning_rate': 5e-3,
-        'log_every': 10,
-        'batch_size': args.batch_size,
+        "steps": 20,
+        "learning_rate": 5e-3,
+        "log_every": 10,
+        "batch_size": args.batch_size,
     }
 
     # set up the objective function
@@ -256,29 +252,37 @@ if __name__ == "__main__":
     if args.dataset == "iris":
         objective = ClassificationObjective(
             train_data=IrisDataset(split="train"),
-            test_data=IrisDataset(split="test"), input_size=4, n_classes=3,
+            test_data=IrisDataset(split="test"),
+            input_size=4,
+            n_classes=3,
         )
 
     elif args.dataset == "wine":
         objective = ClassificationObjective(
             train_data=WineDataset(split="train"),
-            test_data=WineDataset(split="test"), input_size=13, n_classes=3,
+            test_data=WineDataset(split="test"),
+            input_size=13,
+            n_classes=3,
         )
 
     elif args.dataset == "seeds":
         objective = ClassificationObjective(
             train_data=SeedsDataset(split="train"),
-            test_data=SeedsDataset(split="test"), input_size=7, n_classes=3,
+            test_data=SeedsDataset(split="test"),
+            input_size=7,
+            n_classes=3,
         )
 
     elif args.dataset == "breast_cancer":
         objective = ClassificationObjective(
             train_data=BreastCancerDataset(split="train"),
-            test_data=BreastCancerDataset(split="test"), input_size=30, n_classes=2,
+            test_data=BreastCancerDataset(split="test"),
+            input_size=30,
+            n_classes=2,
         )
 
     else:
-        raise ValueError(dataset_name)
+        raise ValueError(args.dataset)
 
     master_worker(
         gate_specifications=pennylane_gate_specifications,

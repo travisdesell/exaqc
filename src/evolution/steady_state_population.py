@@ -111,7 +111,9 @@ class SteadyStatePopulation(PopulationStrategy):
         # 2. if gate innovation numbers are the same but fitness different, keep both
 
         bisect.insort(
-            self.population, genome, key=cmp_to_key(self.compare),
+            self.population,
+            genome,
+            key=cmp_to_key(self.compare),
         )
 
         self.insertions += 1
@@ -126,7 +128,10 @@ class SteadyStatePopulation(PopulationStrategy):
             if test_metric is None:
                 test_metric = genome.fitness.get("test_fidelity")
 
-            tag = f"trainloss_{genome.fitness['train_loss']:.4f}_testloss_{genome.fitness['test_loss']:.4f}_testacc_{test_metric:.3f}"
+            tag = (
+                f"trainloss_{genome.fitness['train_loss']:.4f}_testloss_"
+                f"{genome.fitness['test_loss']:.4f}_testacc_{test_metric:.3f}"
+            )
 
             self._save_best_circuit(genome, out_dir=self.out_dir, tag=tag)
 

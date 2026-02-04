@@ -98,7 +98,7 @@ qiskit_gate_specifications["h"] = GateSpecification(
 qiskit_gate_specifications["id"] = GateSpecification(
     name="Identity",
     qubits=["qubit"],
-    needs_validation=True, # doesn't need validation but doesnt make sense to use
+    needs_validation=True,  # doesn't need validation but doesnt make sense to use
 )
 
 qiskit_gate_specifications["iswap"] = GateSpecification(

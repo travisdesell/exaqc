@@ -333,7 +333,8 @@ def _train_with_pennylane(
                 if test_list is not None:
                     te = eval_teacher(test_list)
                     logger.info(
-                        f"[{step:04d}] fid_l={tr['fidelity_loss']:.6f} angle_l={tr['angle_loss']:.6f} | test_fid_l={te['fidelity_loss']:.6f}"  # noqa
+                        f"[{step:04d}] fid_l={tr['fidelity_loss']:.6f} angle_l={tr['angle_loss']:.6f} "
+                        f"| test_fid_l={te['fidelity_loss']:.6f}"
                     )
                 else:
                     logger.info(
@@ -344,7 +345,8 @@ def _train_with_pennylane(
                 if test_list is not None:
                     te = eval_supervised(test_list)
                     logger.info(
-                            f"[{step:04d}] loss={tr['loss']:.6f} acc={tr['acc']:.3f} | test_loss={te['loss']:.3f} test_acc={te['acc']:.3f}"
+                        f"[{step:04d}] loss={tr['loss']:.6f} acc={tr['acc']:.3f} | "
+                        f"test_loss={te['loss']:.3f} test_acc={te['acc']:.3f}"
                     )
                 else:
                     logger.info(

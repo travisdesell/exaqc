@@ -1,6 +1,5 @@
 import random
 
-from collections.abc import Callable
 from loguru import logger
 
 from src.circuits.circuit import CircuitGenome
@@ -114,14 +113,14 @@ class EXAQC:
             input_qubits=self.input_qubits.copy(),
             output_qubits=self.output_qubits.copy(),
         )
-        
+
         self.initial_genome.hyperparameters = self.get_hyperparameters()
 
     def get_hyperparameters(self):
-        '''
+        """
         Return:
             hyperparameters for a newly created child
-        '''
+        """
 
         # TODO: make an evolutionary strategy for handling hyperparameter options
         return self.hyperparameters
@@ -157,8 +156,8 @@ class EXAQC:
             + ["reorder_gate"] * 2  # 10%
             + ["qubit_swap"] * 2  # 10%
             + ["enable_gate"]  # 5%
-            + ["disable_gate"] * 2 # 10%
-            + ["clone"] * 2 #10%
+            + ["disable_gate"] * 2  # 10%
+            + ["clone"] * 2  # 10%
         )
 
         modified = False
@@ -230,7 +229,7 @@ class EXAQC:
 
             mutation_count = random.choice([0, 1, 2, 3, 4])
 
-            logger.info(f"generating a child via {mutation_count+1} mutations.")
+            logger.info(f"generating a child via {mutation_count + 1} mutations.")
             while not valid:
                 # keep trying to create a child from the initial
                 # genome until we get a valid one, then send it out

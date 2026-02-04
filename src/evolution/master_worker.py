@@ -9,8 +9,6 @@ from src.evolution.exaqc import EXAQC
 from src.evolution.objective import Objective
 from src.evolution.population_strategy import PopulationStrategy
 
-from typing import Callable
-
 tag_ids = {
     "genome": 1,
     "genome_request": 2,
@@ -84,7 +82,9 @@ def master(comm: Intracomm, rank: int, exaqc: EXAQC, run_for: int):
 
 
 def worker(
-    comm: Intracomm, rank: int, objective: Objective,
+    comm: Intracomm,
+    rank: int,
+    objective: Objective,
 ):
     """
     This is a worker process which will repeatedly request new genomes
