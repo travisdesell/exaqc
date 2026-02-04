@@ -31,10 +31,6 @@ from src.quantum_datasets import (
 
 logger.add("run.log", level="INFO")
 
-# best_fitness = float("inf")
-# best_genome: CircuitGenome | None = None
-
-
 # ---------------------------------------------------------------------
 # Prediction + evaluation helpers
 # ---------------------------------------------------------------------
