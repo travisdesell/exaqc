@@ -98,8 +98,23 @@ def eval_probs_ce_and_acc(
 
 
 # ---------------------------------------------------------------------
-# Objective
+# Objective and single objective comparison
 # ---------------------------------------------------------------------
+
+
+def compare(genome1: CircuitGenome, genome2: CircuitGenome) -> int:
+    """
+    Used to sort genomes by fitness, even if there are multiple objectives, for population
+    management and crossover methods.
+
+    Returns: 0 if the two genomes have equivalent fitnesses, a ngeative value if genome1 should be
+        sorted before genome2, and a positive value if genome2 should be sorted before genome1
+    """
+
+    # this will return 0 if the losses are the same, negative if genome1 should be before
+    # genome2 (genome1's fitness would be lower), and positive if genome2 should be before
+    # genome1 (genome2's fitness would be lower)
+    return genome1.fitness["test_loss"] - genome2.fitness["test_loss"]
 
 
 class ClassificationObjective(Objective):
@@ -117,20 +132,6 @@ class ClassificationObjective(Objective):
         self.n_classes = n_classes
         self.loss = loss
         self.target = "pennylane"
-
-    def compare(self, genome1: CircuitGenome, genome2: CircuitGenome) -> int:
-        """
-        Used to sort genomes by fitness, even if there are multiple objectives, for population
-        management and crossover methods.
-
-        Returns: 0 if the two genomes have equivalent fitnesses, a ngeative value if genome1 should be
-            sorted before genome2, and a positive value if genome2 should be sorted before genome1
-        """
-
-        # this will return 0 if the losses are the same, negative if genome1 should be before
-        # genome2 (genome1's fitness would be lower), and positive if genome2 should be before
-        # genome1 (genome2's fitness would be lower)
-        return genome1.fitness["test_loss"] - genome2.fitness["test_loss"]
 
     def __call__(self, genome: CircuitGenome):
         """
@@ -162,7 +163,7 @@ class ClassificationObjective(Objective):
                 lr=learning_rate,
                 n_classes=self.n_classes,
                 log_every=log_every,
-                bath_size=batch_size,
+                batch_size=batch_size,
             )
 
         # Compute fresh train/test metrics from probs (works for both param & no-param cases)
@@ -206,7 +207,7 @@ if __name__ == "__main__":
     )
     p.add_argument("--loss", default="ce", choices=["ce", "mse", "kl", "fidelity"])
     p.add_argument("--steps", type=int, default=30)
-    p.add_argument("--lr", type=float, default=5e-4)
+    p.add_argument("--learning_rate", "-lr", type=float, default=5e-4)
     p.add_argument("--max_population_size", type=int, default=30)
     p.add_argument("--number_genomes", type=int, default=2000)
     p.add_argument("--input_qubits", type=int, default=6)
@@ -282,7 +283,7 @@ if __name__ == "__main__":
         gate_specifications=pennylane_gate_specifications,
         population=SteadyStatePopulation(
             max_population_size=args.max_population_size,
-            compare=objective.compare,
+            compare=compare,
             out_dir=args.out_dir,
         ),
         objective=objective,

@@ -104,6 +104,26 @@ def eval_teacher_metrics(
     }
 
 
+# ---------------------------------------------------------------------
+# Objective and single objective comparison
+# ---------------------------------------------------------------------
+
+
+def compare(genome1: CircuitGenome, genome2: CircuitGenome) -> int:
+    """
+    Used to sort genomes by fitness, even if there are multiple objectives, for population
+    management and crossover methods.
+
+    Returns: 0 if the two genomes have equivalent fitnesses, a ngeative value if genome1 should be
+        sorted before genome2, and a positive value if genome2 should be sorted before genome1
+    """
+
+    # this will return 0 if the losses are the same, negative if genome1 should be before
+    # genome2 (genome1's fitness would be lower), and positive if genome2 should be before
+    # genome1 (genome2's fitness would be lower)
+    return genome1.fitness["test_loss"] - genome2.fitness["test_loss"]
+
+
 class TeacherObjective(Objective):
     def __init__(
         self,
@@ -134,20 +154,6 @@ class TeacherObjective(Objective):
             input_dim=len(input_wires),
             seed=seed,
         )
-
-    def compare(self, genome1: CircuitGenome, genome2: CircuitGenome) -> int:
-        """
-        Used to sort genomes by fitness, even if there are multiple objectives, for population
-        management and crossover methods.
-
-        Returns: 0 if the two genomes have equivalent fitnesses, a ngeative value if genome1 should be
-            sorted before genome2, and a positive value if genome2 should be sorted before genome1
-        """
-
-        # this will return 0 if the losses are the same, negative if genome1 should be before
-        # genome2 (genome1's fitness would be lower), and positive if genome2 should be before
-        # genome1 (genome2's fitness would be lower)
-        return genome1.fitness["test_loss"] - genome2.fitness["test_loss"]
 
     def __call__(
         self,
@@ -301,7 +307,7 @@ if __name__ == "__main__":
         gate_specifications=pennylane_gate_specifications,
         population=SteadyStatePopulation(
             max_population_size=args.max_population_size,
-            compare=objective.compare,
+            compare=compare,
             out_dir=args.out_dir,
         ),
         objective=objective,
