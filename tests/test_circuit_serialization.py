@@ -20,6 +20,12 @@ def test_all_disabled_pennylane(target: str):
         output_qubits=expand_registers({"o1": 3, "o2": 3}),
         target=target,
     )
+    qc.hyperparameters = {
+        "steps": 30,
+        "learning_rate": 0.005,
+        "log_every": 15,
+        "batch_size": 12,
+    }
 
     # cswap is one control two target
     qc.add_gate(

@@ -33,6 +33,8 @@ class CircuitGenome:
         """
         self.genome_number = genome_number
 
+        # these should be specified by EXAQC
+
         # create a list of input qubits (which are tuples of register names and indexes)
         # so we can easily select random qubits to use for gate mutations
         self.qubits: list[tuple[str, int]] = []
