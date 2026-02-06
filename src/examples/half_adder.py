@@ -95,8 +95,6 @@ def half_adder_objective(
         except Exception as e:
             logger.error(f"⚠️ Could not plot circuit (adjoint issue?): {e}")
 
-    return genome
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(

@@ -6,9 +6,8 @@ from mpi4py.MPI import Intracomm
 from src.circuits.circuit import CircuitGenome
 from src.circuits.gate_specifications import GateSpecifications
 from src.evolution.exaqc import EXAQC
-from src.population.population_strategy import PopulationStrategy
-
-from typing import Callable
+from src.evolution.objective import Objective
+from src.evolution.population_strategy import PopulationStrategy
 
 tag_ids = {
     "genome": 1,
@@ -45,7 +44,7 @@ def master(comm: Intracomm, rank: int, exaqc: EXAQC, run_for: int):
         tag_id = status.Get_tag()
         source = status.Get_source()
 
-        logger.info(
+        logger.debug(
             f"master process received tag {tags[tag_id]} from source {source} and data: {data}"
         )
 
@@ -69,7 +68,7 @@ def master(comm: Intracomm, rank: int, exaqc: EXAQC, run_for: int):
         tag_id = status.Get_tag()
         source = status.Get_source()
 
-        logger.info(
+        logger.debug(
             f"master process received tag {tags[tag_id]} from source {source} and data: {data}"
         )
 
@@ -83,7 +82,9 @@ def master(comm: Intracomm, rank: int, exaqc: EXAQC, run_for: int):
 
 
 def worker(
-    comm: Intracomm, rank: int, objective_function: Callable[[CircuitGenome], None]
+    comm: Intracomm,
+    rank: int,
+    objective: Objective,
 ):
     """
     This is a worker process which will repeatedly request new genomes
@@ -93,7 +94,7 @@ def worker(
     Args:
         comm: is the MPI COMM WORLD
         rank: is the rank of the master process (should be 0)
-        objective_function: is the objective function used to evaluate genomes
+        objective: is the objective function used to evaluate genomes
     """
 
     while True:
@@ -104,7 +105,7 @@ def worker(
         data = comm.recv(source=0, tag=MPI.ANY_TAG, status=status)
         tag_id = status.Get_tag()
 
-        logger.info(
+        logger.debug(
             f"worker process {rank} received tag: {tags[tag_id]}, received data: {data}"
         )
         if data is None:
@@ -113,7 +114,7 @@ def worker(
 
         genome = CircuitGenome.from_dict(data)
 
-        objective_function(genome)
+        objective(genome)
 
         comm.send(genome.to_dict(), dest=0, tag=tag_ids["genome_response"])
 
@@ -121,15 +122,14 @@ def worker(
 def master_worker(
     gate_specifications: GateSpecifications,
     population: PopulationStrategy,
-    objective_function: Callable[[CircuitGenome], None],
+    objective: Objective,
+    hyperparameters: dict[str, any],
     run_for: int,
     input_qubits: list[tuple[str, int]] = None,
     input_registers: dict[str, int] = None,
     output_registers: dict[str, int] = None,
     output_qubits: list[tuple[str, int]] = None,
     target: str = "pennylane",
-    loss: str = "fidelity",
-    batch_size: int = None,
 ):
     """
     Creates an instance of Evolutionary Exploration of Augmenting Quantum Circuits given a
@@ -142,8 +142,10 @@ def master_worker(
             process, for either the pennylane or qiskit frameworks.
         population: is an instance of a subclass of the PopulationStrategy interface, utilized to get
             parents for mutation or crossover and insert children back into the population.
-        objective_function: a method which takes a CircuitGenome, evaluates it and sets it's fitness
-            value.
+        objective: an instantiated Objective which can be called with a CircuitGenome as an argument
+            to be trained and have its fitness evaluated.
+        hyperparameters: a dict specifying which hyperparameters to use in the training process, and if
+            this is an additional search space to search over.
         run_for: how many genomes to generate in the search process.
         input_registers: a dict of register names and sizes (the key is the qubit name, the value is its size). must
             be specified if input_qubits is not specified.
@@ -165,17 +167,16 @@ def master_worker(
         exaqc = EXAQC(
             gate_specifications=gate_specifications,
             population=population,
-            objective_function=objective_function,
+            objective=objective,
+            hyperparameters=hyperparameters,
             input_registers=input_registers,
             input_qubits=input_qubits,
             output_registers=output_registers,
             output_qubits=output_qubits,
             target=target,
-            loss=loss,
-            batch_size=batch_size,
         )
 
         master(comm=comm, rank=rank, exaqc=exaqc, run_for=run_for)
 
     else:
-        worker(comm=comm, rank=rank, objective_function=objective_function)
+        worker(comm=comm, rank=rank, objective=objective)

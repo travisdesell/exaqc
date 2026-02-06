@@ -63,7 +63,7 @@ def binary_crossover(
 
     Args:
         child: an empty CircuitGenome to have gates added to by the parents.
-        p1: The first parent to recombine.
+        p1: The first parent to recombine. This should be the more fit parent of the two.
         p2: The second parent to recombine.
         best_keep_rate: is how frequently a gate from the best fit parent (but no other
             parents) will be added to the child genome.
@@ -78,15 +78,6 @@ def binary_crossover(
     logger.info("binary crossover with parents:")
     logger.info(f"\tp1 fitness: {p1.fitness}")
     logger.info(f"\tp2 fitness: {p2.fitness}")
-
-    # TODO: handle the multi objective case where p2 doesn't
-    # p1 will be the more fit parent
-    if not p1.dominates(p2):
-        # swap them so p1 is more fit
-        logger.info("swapping parents because p2 was more fit")
-        temp = p1
-        p1 = p2
-        p2 = temp
 
     # get the random value for the randomized simplex line search
     r = (random.uniform(0.0, 1.0) * (c2 - c1)) + c1
@@ -182,7 +173,8 @@ def n_ary_crossover(
 
     Args:
         child: an empty CircuitGenome to have gates added to by the parents.
-        parents: a list (2 or more) of genomes to recombine.
+        parents: a list (2 or more) of genomes to recombine, these should be ordered by fitness,
+            so the first parent in the list is the primary (best fit) parent.
         primary_keep_rate: is how frequently a gate from the primary parent (but no other
             parents) will be added to the child genome.
         other_keep_rate: is how frequently a gate not in the primary parent will be
@@ -197,9 +189,6 @@ def n_ary_crossover(
     logger.info("parent fitnesses now:")
     for parent in parents:
         logger.info(f"\t{parent.fitness}")
-
-    # TODO: we can sort these genomes by which dominate which and then
-    # take the first as primary instead
 
     primary = parents[0]
     others = parents[1:]

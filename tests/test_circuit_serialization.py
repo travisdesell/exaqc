@@ -20,6 +20,12 @@ def test_all_disabled_pennylane(target: str):
         output_qubits=expand_registers({"o1": 3, "o2": 3}),
         target=target,
     )
+    qc.hyperparameters = {
+        "steps": 30,
+        "learning_rate": 0.005,
+        "log_every": 15,
+        "batch_size": 12,
+    }
 
     # cswap is one control two target
     qc.add_gate(
@@ -62,6 +68,7 @@ def test_all_disabled_pennylane(target: str):
     assert qc.qubits == qc2.qubits
     assert qc.input_indexes == qc2.input_indexes
     assert qc.output_indexes == qc2.output_indexes
+    assert qc.hyperparameters == qc2.hyperparameters
 
     assert len(qc.gates) == len(qc2.gates)
 

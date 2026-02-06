@@ -1,6 +1,5 @@
 import random
 
-from collections.abc import Callable
 from loguru import logger
 
 from src.circuits.circuit import CircuitGenome
@@ -19,7 +18,8 @@ from src.evolution.mutation import (
     reorder_gate,
     qubit_swap,
 )
-from src.population.population_strategy import PopulationStrategy
+from src.evolution.objective import Objective
+from src.evolution.population_strategy import PopulationStrategy
 
 
 class EXAQC:
@@ -28,14 +28,13 @@ class EXAQC:
         self,
         gate_specifications: GateSpecifications,
         population: PopulationStrategy,
-        objective_function: Callable[[CircuitGenome], None],
+        objective: Objective,
+        hyperparameters: dict[str, any],
         input_qubits: list[tuple[str, int]] = None,
         input_registers: dict[str, int] = None,
         output_registers: dict[str, int] = None,
         output_qubits: list[tuple[str, int]] = None,
         target: str = "pennylane",
-        loss: str = "fidelity",
-        batch_size: int = None,
     ):
         """
         Creates an instance of Evolutionary Exploration of Augmenting Quantum Circuits given a
@@ -46,8 +45,10 @@ class EXAQC:
                 process, for either the pennylane or qiskit frameworks.
             population: is an instance of a subclass of the PopulationStrategy interface, utilized to get
                 parents for mutation or crossover and insert children back into the population.
-            objective_function: a method which takes a CircuitGenome, evaluates it and sets it's fitness
+            objective: a method which takes a CircuitGenome, evaluates it and sets it's fitness
                 value.
+            hyperparameters: a dict specifying which hyperparameters to use in the training process, and if
+                this is an additional search space to search over.
             input_registers: a dict of register names and sizes (the key is the qubit name, the value is its size). must
                 be specified if input_qubits is not specified.
             input_qubits: a list of qubit tuples (name, register_index) which would be the expanded form of the
@@ -63,7 +64,8 @@ class EXAQC:
 
         self.gate_specifications = gate_specifications
         self.population = population
-        self.objective_function = objective_function
+        self.objective = objective
+        self.hyperparameters = hyperparameters
         self.target = target
 
         if input_registers is None and input_qubits is None:
@@ -112,6 +114,24 @@ class EXAQC:
             output_qubits=self.output_qubits.copy(),
         )
 
+        self.initial_genome.hyperparameters = self.get_hyperparameters()
+
+    def get_hyperparameters(self):
+        """
+        Return:
+            hyperparameters for a newly created child
+        """
+
+        # TODO: make an evolutionary strategy for handling hyperparameter options
+        hyperparameters = self.hyperparameters.copy()
+
+        hyperparameters["learning_rate"] = random.choice(
+            [0.001, 0.0005, 0.0001, 0.00005]
+        )
+        hyperparameters["steps"] = random.choice([5, 10, 15, 20, 25, 30, 35, 40])
+
+        return hyperparameters
+
     def next_genome_number(self) -> int:
         """
         Increments and returns the next genome number.
@@ -139,11 +159,12 @@ class EXAQC:
 
         # mutation_options = ["add_gate", "disable_gate", "enable_gate", "reorder_gate"]
         mutation_options = (
-            ["add_gate"] * 14  # 70%
+            ["add_gate"] * 11  # 65%
             + ["reorder_gate"] * 2  # 10%
             + ["qubit_swap"] * 2  # 10%
             + ["enable_gate"]  # 5%
-            + ["disable_gate"]  # 5%
+            + ["disable_gate"] * 2  # 10%
+            + ["clone"] * 2  # 10%
         )
 
         modified = False
@@ -160,6 +181,7 @@ class EXAQC:
 
             mutation = random.choice(mutation_options)
 
+            logger.info(f"\tattempting to mutate with {mutation}")
             match mutation:
                 case "add_gate":
                     modified = add_gate_with_selection(
@@ -169,20 +191,21 @@ class EXAQC:
                     # logger.info(f"\tattempting {mutation} with {gate_specification}")
                     # modified = add_gate(gate_specification, child)
 
+                case "clone":
+                    # don't need to do anything, just keep the copied child, but set
+                    # modified to true so we count this as a valid mutation
+                    modified = True
+
                 case "disable_gate":
-                    logger.info(f"\tattempting to mutate with {mutation}")
                     modified = disable_gate(child)
 
                 case "enable_gate":
-                    logger.info(f"\tattempting to mutate with {mutation}")
                     modified = enable_gate(child)
 
                 case "reorder_gate":
-                    logger.info(f"\tattempting to mutate with {mutation}")
                     modified = reorder_gate(child)
 
                 case "qubit_swap":
-                    logger.info(f"\tattempting to mutate with {mutation}")
                     modified = qubit_swap(child)
 
         return child
@@ -211,13 +234,19 @@ class EXAQC:
             # still need to populate the initial population
             valid = False
 
+            mutation_count = random.choice([0, 1, 2, 3, 4])
+
+            logger.info(f"generating a child via {mutation_count + 1} mutations.")
             while not valid:
                 # keep trying to create a child from the initial
                 # genome until we get a valid one, then send it out
                 child = self.mutate(self.initial_genome)
-                child = self.mutate(child)
+
+                for i in range(mutation_count):
+                    child = self.mutate(child)
                 valid = child.is_valid()
 
+            child.hyperparameters = self.get_hyperparameters()
             return child
 
         else:
@@ -289,6 +318,7 @@ class EXAQC:
                     child = None
 
             # successfully generated a child
+            child.hyperparameters = self.get_hyperparameters()
             return child
 
     def insert_genome(self, genome: CircuitGenome):
@@ -313,5 +343,5 @@ class EXAQC:
 
         while self.genome_number < number_genomes:
             child = self.generate_genome()
-            self.objective_function(child)
+            self.objective(child)
             self.population.insert_genome(child)

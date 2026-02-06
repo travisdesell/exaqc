@@ -1,6 +1,9 @@
 import bisect
 import random
 
+from functools import cmp_to_key
+from typing import Callable
+
 from loguru import logger
 import os
 import torch
@@ -8,7 +11,7 @@ import pennylane as qml
 import matplotlib.pyplot as plt
 
 from src.circuits.circuit import CircuitGenome
-from src.population.population_strategy import PopulationStrategy
+from src.evolution.population_strategy import PopulationStrategy
 from src.objectives.genome_objectives import (
     genome_to_torch_params,
 )
@@ -19,8 +22,7 @@ class SteadyStatePopulation(PopulationStrategy):
     def __init__(
         self,
         max_population_size: int,
-        loss: str = None,
-        dataset: str = None,
+        compare: Callable[[CircuitGenome, CircuitGenome], int],
         out_dir: str = "artifacts",
     ):
         """
@@ -33,19 +35,19 @@ class SteadyStatePopulation(PopulationStrategy):
 
         Args:
             max_population_size: is the maximum number of genomes that the population will hold.
-            loss: tag for loss value key in genome fitness
-            dataset: name of the dataset being used for training
+            compare: a compare function used for sorting genomes. this should return 0 if both
+                genomes should be ranked the same, a negative value if the first genome should
+                come before the second genome, and a positive number otherwise
         """
 
         self.max_population_size = max_population_size
-        self.loss = loss
+        self.compare = compare
+        self.out_dir = out_dir
 
         self.insertions = 0
 
         # used to store the population, should be kept in sorted order.
         self.population: list[CircuitGenome] = []
-        self.dataset = dataset
-        self.out_dir = out_dir
 
     def get_parent(self, **kwargs) -> CircuitGenome:
         """
@@ -83,7 +85,10 @@ class SteadyStatePopulation(PopulationStrategy):
             is less than n_parents, it will return None.
         """
         if len(self.population) >= n_parents:
-            return random.sample(self.population, n_parents)
+            # sort the parents so the most fit is the first parent
+            parents = random.sample(self.population, n_parents)
+            parents.sort(key=cmp_to_key(self.compare))
+            return parents
         else:
             return None
 
@@ -106,7 +111,9 @@ class SteadyStatePopulation(PopulationStrategy):
         # 2. if gate innovation numbers are the same but fitness different, keep both
 
         bisect.insort(
-            self.population, genome, key=lambda genome: genome.fitness["loss"]
+            self.population,
+            genome,
+            key=cmp_to_key(self.compare),
         )
 
         self.insertions += 1
@@ -121,10 +128,12 @@ class SteadyStatePopulation(PopulationStrategy):
             if test_metric is None:
                 test_metric = genome.fitness.get("test_fidelity")
 
-            tag = f"trainloss_{genome.fitness['train_loss']:.4f}_testacc_{test_metric:.3f}"
+            tag = (
+                f"trainloss_{genome.fitness['train_loss']:.4f}_testloss_"
+                f"{genome.fitness['test_loss']:.4f}_testacc_{test_metric:.3f}"
+            )
 
-            save_path = os.path.join(self.out_dir, self.dataset)
-            self._save_best_circuit(genome, out_dir=f"{save_path}", tag=tag)
+            self._save_best_circuit(genome, out_dir=self.out_dir, tag=tag)
 
         if len(self.population) > self.max_population_size:
             # remove the last genome from the population
