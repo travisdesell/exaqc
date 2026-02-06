@@ -29,8 +29,7 @@ def genome_to_torch_params(genome: CircuitGenome) -> dict[str, torch.nn.Paramete
     for gate in genome.gates:
         if gate.enabled:
             for name, value in gate.parameters.items():
-                # key = f"{gate.innovation_number}:{name}"
-                key = name
+                key = f"{gate.innovation_number}:{name}"
                 params[key] = torch.nn.Parameter(
                     torch.tensor(float(value), dtype=torch.float64)
                 )
@@ -50,8 +49,7 @@ def torch_params_to_genome(
     for gate in genome.gates:
         if gate.enabled:
             for name in gate.parameters.keys():
-                # key = f"{gate.innovation_number}:{name}"
-                key = name
+                key = f"{gate.innovation_number}:{name}"
                 if key in trained_params:
                     gate.parameters[name] = _extract_param_value(trained_params[key])
 
@@ -165,10 +163,10 @@ def eval_forward_only(
             else None
         )
 
-    out = {f"{k}": v for k, v in tr.items()}
+    out = {f"{k}": v for k, v in tr.items()} if te is None else {f"{k}": v for k, v in te.items()}
     if te is not None:
         out.update({f"train_{k}": v for k, v in tr.items()})
-        out.update({f"{k}": v for k, v in te.items()})
+        out.update({f"test_{k}": v for k, v in te.items()})
     return out
 
 
@@ -221,7 +219,7 @@ def _train_with_pennylane(
         genome.fitness = metrics
         return metrics
 
-    opt = torch.optim.Adam(torch_params.values(), lr=lr, weight_decay=0.0001)
+    opt = torch.optim.Adam(torch_params.values(), lr=lr, weight_decay=0.0)
 
     n = len(train_list)
     if batch_size is not None:
@@ -276,7 +274,7 @@ def _train_with_pennylane(
         losses = []
         correct = 0
         total = 0
-        for x, y in data_list:
+        for x, y in data_list:  #  y is one-hot
             p = forward_probs(x)
             losses.append(ce_onehot_on_probs(p, y))
             correct += int(torch.argmax(p).item() == torch.argmax(y).item())
@@ -320,7 +318,7 @@ def _train_with_pennylane(
                 n_classes=n_classes,
             )
             genome.fitness = metrics
-            return genome
+            return metrics
 
         loss.backward()
         opt.step()
@@ -331,11 +329,11 @@ def _train_with_pennylane(
                 if test_list is not None:
                     te = eval_teacher(test_list)
                     logger.info(
-                        f"[{step:04d}] fid_l={tr['fidelity_loss']:.6f} angle_l={tr['angle_loss']:.6f} | test_fid_l={te['fidelity_loss']:.6f}"  # noqa
+                        f"[{step:04d}] fid_loss={tr['fidelity_loss']:.6f} angle_loss={tr['angle_loss']:.6f} | test_fid_loss={te['fidelity_loss']:.6f}"  # noqa
                     )
                 else:
                     logger.info(
-                        f"[{step:04d}] fid_l={tr['fidelity_loss']:.6f} angle_l={tr['angle_loss']:.6f}"
+                        f"[{step:04d}] fid_loss={tr['fidelity_loss']:.6f} angle_loss={tr['angle_loss']:.6f}"
                     )
             else:
                 tr = eval_supervised(train_list)
@@ -361,7 +359,7 @@ def _train_with_pennylane(
     )
     genome.fitness = metrics
 
-    return genome
+    return metrics
 
 
 # ---------- Qiskit ML route (TorchConnector + output-bit loss) ----------
@@ -572,6 +570,7 @@ def train_genome_objective(
             target_qnode=teacher_qnode,
         )
         genome.fitness = metrics
+        # logger.debug(f"genome fitness: {genome.fitness}")
         return genome
 
     if backend == "qiskit":

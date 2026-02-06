@@ -29,6 +29,39 @@ class QuantumTeacherDataset:
         def _teacher_x_out4(in_wires: list, out_wires: list):
             qml.PauliX(wires=out_wires[0])
 
+        def _half_adder(in_wires: list, out_wires: list):
+            """
+            Half adder with arbitrary wire indices.
+
+            Expects:
+              in_wires  : [A_wire, B_wire]
+              out_wires : [SUM_wire, CARRY_wire]
+
+            Computes:
+              SUM   = A XOR B  onto out_wires[0]
+              CARRY = A AND B  onto out_wires[1]
+
+            Assumes SUM and CARRY wires start in |0>.
+            """
+            if len(in_wires) < 2:
+                raise ValueError("half_adder needs at least 2 input wires: [A, B]")
+            if len(out_wires) < 2:
+                raise ValueError("half_adder needs at least 2 output wires: [SUM, CARRY]")
+
+            a_w, b_w = in_wires[0], in_wires[1]
+            s_w, c_w = out_wires[0], out_wires[1]
+
+            used = [a_w, b_w, s_w, c_w]
+            if len(set(used)) != 4:
+                raise ValueError(
+                    f"half_adder requires 4 distinct wires (A,B,SUM,CARRY). Got {used}"
+                )
+
+            qml.CNOT(wires=[a_w, s_w])
+            qml.CNOT(wires=[b_w, s_w])
+            qml.Toffoli(wires=[a_w, b_w, c_w])
+
+
         def _teacher_bell_out(in_wires: list, out_wires: list):
             qml.Hadamard(wires=out_wires[0])
             qml.CNOT(wires=[out_wires[0], out_wires[1]])
@@ -83,6 +116,7 @@ class QuantumTeacherDataset:
                 "input_controlled_bell": _teacher_input_controlled_bell,
                 "2layer_out_block": _teacher_2layer_out_block,
                 "grover": _teacher_grover,
+                "half_adder": _half_adder, 
             }
 
             if teacher_name not in teachers:
@@ -100,7 +134,7 @@ class QuantumTeacherDataset:
             # ----- input encoding -----
             if input_mode == "basis":
                 # expects int tensor length 6
-                qml.BasisState(x.to(torch.int64), wires=range(n_wires))
+                qml.BasisState(x.to(torch.int64), wires=in_wires)
             elif input_mode == "angle":
                 # expects float tensor length 4
                 for i, w in enumerate(in_wires):

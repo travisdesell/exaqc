@@ -13,7 +13,6 @@ from loguru import logger
 
 from src.evolution.master_worker import master_worker
 
-# from src.evolution.exaqc import EXAQC
 from src.population.steady_state_population import SteadyStatePopulation
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
 from src.circuits.circuit import CircuitGenome
@@ -25,9 +24,6 @@ from src.utils.helpers import register_wire_map
 from src.quantum_datasets import QuantumTeacherDataset
 
 logger.add("run_teacher.log", level="INFO")
-
-# best_fitness = float("inf")
-# best_genome: CircuitGenome | None = None
 
 
 # ---------------------------------------------------------------------
@@ -182,19 +178,16 @@ def make_teacher_objective(
         loss="fidelity",
         batch_size=batch_size,
     ):
-        # global best_fitness, best_genome
 
-        # Always train against teacher (even if you have 0 params, it'll just eval)
         genome = train_genome_objective(
             genome,
-            dataset=[X_train, X_test],  # your API expects [train, test]
+            dataset=[X_train, X_test], 
             backend=target,
-            loss="fidelity",  # teacher imitation uses fidelity
+            loss="fidelity", 
             steps=steps,
             lr=lr,
             log_every=log_every,
             bath_size=batch_size,
-            # IMPORTANT: your train_genome_objective must accept these two
             teacher_qnode=teacher,
             # teacher_mode=True,
         )
@@ -205,14 +198,14 @@ def make_teacher_objective(
 
         avg_loss = float(train_metrics["loss"])
 
-        genome.fitness = {
-            "train_loss": float(train_metrics["loss"]),
-            "train_fidelity": float(train_metrics["fidelity"]),
-            "train_angle": float(train_metrics["angle"]),
-            "loss": float(test_metrics["loss"]),
-            "test_fidelity": float(test_metrics["fidelity"]),
-            "test_angle": float(test_metrics["angle"]),
-        }
+        # genome.fitness = {
+        #     "train_loss": float(train_metrics["loss"]),
+        #     "train_fidelity": float(train_metrics["fidelity"]),
+        #     "train_angle": float(train_metrics["angle"]),
+        #     "loss": float(test_metrics["loss"]),
+        #     "test_fidelity": float(test_metrics["fidelity"]),
+        #     "test_angle": float(test_metrics["angle"]),
+        # }
 
         logger.info(
             f"[{genome.genome_number:04d}] "
@@ -220,17 +213,6 @@ def make_teacher_objective(
             f"train_fid={train_metrics['fidelity']:.3f} "
             f"test_fid={test_metrics['fidelity']:.3f}"
         )
-
-        # if avg_loss < best_fitness:
-        #     best_fitness = avg_loss
-        #     best_genome = genome
-        #     logger.info(
-        #         f"🎯 New best genome {genome.genome_number} "
-        #         f"loss={avg_loss:.4f} test_fid={test_metrics['fidelity']:.3f}"
-        #     )
-        #     tag = f"trainloss_{avg_loss:.4f}_testfid_{test_metrics['fidelity']:.3f}"
-        #     save_best_circuit(genome, f"artifacts/teacher_{teacher_name}_best", tag)
-
         return genome
 
     return objective
@@ -248,6 +230,8 @@ if __name__ == "__main__":
             "identity",
             "x_out4",
             "bell_out",
+            "grover",
+            "half_adder",
             "copy_in_to_out",
             "parity012_to_out4",
             "input_controlled_bell",

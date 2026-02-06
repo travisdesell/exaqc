@@ -268,9 +268,9 @@ class Gate:
         # Resolve parameters
         if params is not None:
             param_values = [
-                # params[f"{self.innovation_number}:{name}"]
+                params[f"{self.innovation_number}:{name}"]
                 # for name in self.parameters
-                params[f"{name}"]
+                # params[f"{name}"]
                 for name in self.parameters
             ]
         else:

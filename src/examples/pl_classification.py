@@ -12,7 +12,6 @@ import matplotlib.pyplot as plt
 
 from src.evolution.master_worker import master_worker
 
-# from src.evolution.exaqc import EXAQC
 from src.population.steady_state_population import SteadyStatePopulation
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
 from src.circuits.circuit import CircuitGenome
@@ -21,6 +20,7 @@ from src.objectives.genome_objectives import (
     genome_to_torch_params,
 )
 from src.utils.helpers import register_wire_map
+from src.utils.losses import ce_onehot_on_probs
 
 from src.quantum_datasets import (
     IrisDataset,
@@ -31,26 +31,10 @@ from src.quantum_datasets import (
 
 logger.add("run.log", level="INFO")
 
-# best_fitness = float("inf")
-# best_genome: CircuitGenome | None = None
-
 
 # ---------------------------------------------------------------------
 # Prediction + evaluation helpers
 # ---------------------------------------------------------------------
-
-
-def ce_onehot_on_probs(
-    probs: torch.Tensor, y_onehot: torch.Tensor, eps: float = 1e-12
-) -> torch.Tensor:
-    """
-    probs: float tensor [K] (already marginal over output wires)
-    y_onehot: float tensor [K]
-    """
-    probs = probs.clamp_min(eps)
-    probs = probs / probs.sum()
-    y_onehot = y_onehot.to(dtype=probs.dtype, device=probs.device)
-    return -(y_onehot * torch.log(probs)).sum()
 
 
 @torch.no_grad()
@@ -178,60 +162,33 @@ def make_objective(
     def objective(
         genome: CircuitGenome, target="pennylane", loss=loss, batch_size=batch_size
     ):
-        # global best_fitness, best_genome
-        # nonlocal train_data, test_data
 
         train_ds = train_data
         test_ds = test_data
 
         # If there are trainable params, train. If not, just forward/eval.
-        torch_params = genome_to_torch_params(genome)
-        if len(torch_params) > 0:
-            genome = train_genome_objective(
-                genome,
-                dataset=[train_ds, test_ds],  # train split only
-                backend=target,
-                loss=loss,  # e.g., "ce"
-                steps=steps,
-                lr=lr,
-                n_classes=n_classes,
-                log_every=log_every,
-                bath_size=batch_size,
-            )
+        genome = train_genome_objective(
+            genome,
+            dataset=[train_ds, test_ds],  # train split only
+            backend=target,
+            loss=loss,  # e.g., "ce"
+            steps=steps,
+            lr=lr,
+            n_classes=n_classes,
+            log_every=log_every,
+            bath_size=batch_size,
+        )
 
         # Compute fresh train/test metrics from probs (works for both param & no-param cases)
         train_metrics = eval_probs_ce_and_acc(genome, train_ds, n_classes=n_classes)
         test_metrics = eval_probs_ce_and_acc(genome, test_ds, n_classes=n_classes)
 
-        # fit = genome.fitness or {}
-        # avg_loss = float(fit.get("loss", fit.get("ce", float("inf"))))
         avg_loss = float(train_metrics["loss"])
-
-        # genome.generate_pennylane_circuit(
-        #     return_probs=True, input_mode="angle"
-        # )
-
-        genome.fitness = {
-            "train_loss": float(train_metrics["loss"]),
-            "train_acc": float(train_metrics["acc"]),
-            "loss": float(test_metrics["loss"]),
-            "test_acc": float(test_metrics["acc"]),
-        }
 
         logger.info(
             f"[{genome.genome_number:04d}] "
-            f"loss={avg_loss:.4f} train={train_metrics['acc']:.3f} test={test_metrics['acc']:.3f}"
+            f"loss={avg_loss:.4f} train_acc={train_metrics['acc']:.3f} test_acc={test_metrics['acc']:.3f}"
         )
-
-        # if avg_loss < best_fitness:
-        #     best_fitness = avg_loss
-        #     best_genome = genome
-        #     logger.info(
-        #         f"🎯 New best genome {genome.genome_number} "
-        #         f"loss={avg_loss:.4f} test_acc={test_metrics['acc']:.3f}"
-        #     )
-        #     tag = f"trainloss_{avg_loss:.4f}_testacc_{genome.fitness['test_acc']:.3f}"
-        #     save_best_circuit(genome, f"artifacts/{dataset_name}_best", tag)
 
         return genome
 
