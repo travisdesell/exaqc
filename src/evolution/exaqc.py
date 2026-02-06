@@ -123,7 +123,14 @@ class EXAQC:
         """
 
         # TODO: make an evolutionary strategy for handling hyperparameter options
-        return self.hyperparameters
+        hyperparameters = self.hyperparameters.copy()
+
+        hyperparameters["learning_rate"] = random.choice(
+            [0.001, 0.0005, 0.0001, 0.00005]
+        )
+        hyperparameters["steps"] = random.choice([5, 10, 15, 20, 25, 30, 35, 40])
+
+        return hyperparameters
 
     def next_genome_number(self) -> int:
         """

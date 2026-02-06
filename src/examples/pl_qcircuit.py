@@ -4,17 +4,17 @@ import argparse
 import os
 import sys
 
-from typing import Iterable, Optional
+from datetime import datetime
+from typing import Iterable
 
 import torch
-import pennylane as qml
-import matplotlib.pyplot as plt
 from loguru import logger
 
 from src.evolution.master_worker import master_worker
 
 # from src.evolution.exaqc import EXAQC
-from src.population.steady_state_population import SteadyStatePopulation
+from src.evolution.steady_state_population import SteadyStatePopulation
+from src.evolution.objective import Objective
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
 from src.circuits.circuit import CircuitGenome
 from src.objectives.genome_objectives import (
@@ -23,11 +23,6 @@ from src.objectives.genome_objectives import (
 )
 from src.utils.helpers import register_wire_map
 from src.quantum_datasets import QuantumTeacherDataset
-
-logger.add("run_teacher.log", level="INFO")
-
-# best_fitness = float("inf")
-# best_genome: CircuitGenome | None = None
 
 
 # ---------------------------------------------------------------------
@@ -109,131 +104,105 @@ def eval_teacher_metrics(
     }
 
 
-# ---------------------------------------------------------------------
-# Circuit saving
-# ---------------------------------------------------------------------
-def save_best_circuit(genome: CircuitGenome, out_dir: str, tag: str):
-    os.makedirs(out_dir, exist_ok=True)
-
-    genome.generate_pennylane_circuit(measure_registers=False, input_mode="angle")
-
-    # --- Text gate list ---
-    txt_path = os.path.join(out_dir, f"genome_{genome.genome_number}.txt")
-    with open(txt_path, "w") as f:
-        genome.sort_gates()
-        f.write(f"Genome {genome.genome_number}\n")
-        f.write(f"Qubits: {genome.qubits}\n\n")
-        for g in genome.gates:
-            if getattr(g, "enabled", True):
-                f.write(f"{g.depth:.3f}  {g.method_name}  {g.qubits}  {g.parameters}\n")
-
-    # --- PennyLane draw ---
-    try:
-        params = genome_to_torch_params(genome)
-        x0 = torch.zeros(len(genome.qubits), dtype=torch.float32)
-        fig, ax = qml.draw_mpl(genome.circuit)(x0, params)
-        ax.set_title(f"Genome {genome.genome_number} ({tag})")
-        path = os.path.join(out_dir, f"best_genome_{genome.genome_number}_{tag}.png")
-        fig.savefig(path, dpi=200, bbox_inches="tight")
-        plt.close(fig)
-    except Exception as e:
-        logger.warning(f"Could not draw circuit: {e}")
-
-
-# ---------------------------------------------------------------------
-# Objective factory (teacher mode)
-# ---------------------------------------------------------------------
-def make_teacher_objective(
-    *,
-    teacher_name: str,
-    input_mode: str,
-    steps: int,
-    lr: float,
-    log_every: int,
-    batch_size: Optional[int],
-    n_train_inputs: int,
-    n_test_inputs: int,
-    seed: int,
-    n_wires: int,
-    input_wires: list[int],
-    output_wires: list[int],
-):
-
-    # Create teacher once
-    teacher = QuantumTeacherDataset.make_teacher_qnode(
-        n_wires=n_wires,
-        input_wires=input_wires,
-        output_wires=output_wires,
-        teacher_name=teacher_name,
-        input_mode=input_mode,
-    )
-
-    # Create synthetic splits once
-    X_train, X_test = QuantumTeacherDataset.make_teacher_inputs(
-        n_train=n_train_inputs,
-        n_test=n_test_inputs,
-        input_dim=len(input_wires),
-        seed=seed,
-    )
-
-    def objective(
-        genome: CircuitGenome,
-        target="pennylane",
-        loss="fidelity",
-        batch_size=batch_size,
+class TeacherObjective(Objective):
+    def __init__(
+        self,
+        teacher_name: str,
+        input_mode: str,
+        n_train_inputs: int,
+        n_test_inputs: int,
+        input_wires: list[int],
+        output_wires: list[int],
+        seed: int,
     ):
-        # global best_fitness, best_genome
+        self.teacher_name = teacher_name
+        self.n_wires = len(input_wires) + len(output_wires)
+
+        # Create teacher once
+        self.teacher = QuantumTeacherDataset.make_teacher_qnode(
+            n_wires=self.n_wires,
+            input_wires=input_wires,
+            output_wires=output_wires,
+            teacher_name=self.teacher_name,
+            input_mode=input_mode,
+        )
+
+        # Create synthetic splits once
+        self.X_train, self.X_test = QuantumTeacherDataset.make_teacher_inputs(
+            n_train=n_train_inputs,
+            n_test=n_test_inputs,
+            input_dim=len(input_wires),
+            seed=seed,
+        )
+
+    def compare(self, genome1: CircuitGenome, genome2: CircuitGenome) -> int:
+        """
+        Used to sort genomes by fitness, even if there are multiple objectives, for population
+        management and crossover methods.
+
+        Returns: 0 if the two genomes have equivalent fitnesses, a ngeative value if genome1 should be
+            sorted before genome2, and a positive value if genome2 should be sorted before genome1
+        """
+
+        # this will return 0 if the losses are the same, negative if genome1 should be before
+        # genome2 (genome1's fitness would be lower), and positive if genome2 should be before
+        # genome1 (genome2's fitness would be lower)
+        return genome1.fitness["test_loss"] - genome2.fitness["test_loss"]
+
+    def __call__(
+        self,
+        genome: CircuitGenome,
+    ):
+        """
+        Trains the circuit given the specified hyperparameters and sets its
+        loss values.
+
+        Args:
+            genome: is the CircuitGenome to train and evaluate. It will have
+                a dict of hyperparameters specified by EXAQC, and should
+                set its `fitness` attribute with a dict of fitness values
+                after training and evaluation.
+        """
+
+        hyperparameters = genome.hyperparameters
+        learning_rate = hyperparameters["learning_rate"]
+        steps = hyperparameters["steps"]
+        batch_size = hyperparameters["batch_size"]
+        log_every = hyperparameters["log_every"]
 
         # Always train against teacher (even if you have 0 params, it'll just eval)
         genome = train_genome_objective(
             genome,
-            dataset=[X_train, X_test],  # your API expects [train, test]
-            backend=target,
+            dataset=[self.X_train, self.X_test],  # your API expects [train, test]
+            backend="pennylane",
             loss="fidelity",  # teacher imitation uses fidelity
             steps=steps,
-            lr=lr,
+            lr=learning_rate,
             log_every=log_every,
-            bath_size=batch_size,
-            # IMPORTANT: your train_genome_objective must accept these two
-            teacher_qnode=teacher,
-            # teacher_mode=True,
+            batch_size=batch_size,
+            teacher_qnode=self.teacher,
         )
 
         # Fresh eval metrics (train/test)
-        train_metrics = eval_teacher_metrics(genome, teacher, X_train)
-        test_metrics = eval_teacher_metrics(genome, teacher, X_test)
-
-        avg_loss = float(train_metrics["loss"])
+        train_metrics = eval_teacher_metrics(genome, self.teacher, self.X_train)
+        test_metrics = eval_teacher_metrics(genome, self.teacher, self.X_test)
 
         genome.fitness = {
             "train_loss": float(train_metrics["loss"]),
             "train_fidelity": float(train_metrics["fidelity"]),
             "train_angle": float(train_metrics["angle"]),
-            "loss": float(test_metrics["loss"]),
+            "test_loss": float(test_metrics["loss"]),
             "test_fidelity": float(test_metrics["fidelity"]),
             "test_angle": float(test_metrics["angle"]),
         }
 
+        avg_loss = float(train_metrics["loss"])
         logger.info(
             f"[{genome.genome_number:04d}] "
-            f"loss={avg_loss:.4f} "
+            f"avg_loss={avg_loss:.4f} "
             f"train_fid={train_metrics['fidelity']:.3f} "
             f"test_fid={test_metrics['fidelity']:.3f}"
         )
-
-        # if avg_loss < best_fitness:
-        #     best_fitness = avg_loss
-        #     best_genome = genome
-        #     logger.info(
-        #         f"🎯 New best genome {genome.genome_number} "
-        #         f"loss={avg_loss:.4f} test_fid={test_metrics['fidelity']:.3f}"
-        #     )
-        #     tag = f"trainloss_{avg_loss:.4f}_testfid_{test_metrics['fidelity']:.3f}"
-        #     save_best_circuit(genome, f"artifacts/teacher_{teacher_name}_best", tag)
-
-        return genome
-
-    return objective
 
 
 # ---------------------------------------------------------------------
@@ -261,25 +230,24 @@ if __name__ == "__main__":
         help="Output directory to store results from runs",
     )
     p.add_argument("--input_mode", default="angle", choices=["angle", "basis"])
-    p.add_argument("--steps", type=int, default=200)
-    p.add_argument("--lr", type=float, default=0.02)
+    p.add_argument("--steps", type=int, default=30)
+    p.add_argument("--learning_rate", "-lr", type=float, default=0.02)
     p.add_argument("--log_every", type=int, default=50)
     p.add_argument(
         "--loss", default="fidelity", choices=["ce", "mse", "kl", "fidelity"]
     )
 
-    p.add_argument("--max_population_size", type=int, default=50)
-    p.add_argument("--number_genomes", type=int, default=500)
+    p.add_argument("--max_population_size", type=int, default=30)
+    p.add_argument("--number_genomes", type=int, default=2000)
 
     p.add_argument("--input_qubits", type=int, default=4)  # teacher input dim
-    p.add_argument("--out_qubits", type=int, default=2)  # teacher output block size
+    p.add_argument("--output_qubits", type=int, default=2)  # teacher output block size
 
     p.add_argument("--n_train_inputs", type=int, default=64)
     p.add_argument("--n_test_inputs", type=int, default=64)
-    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--seed", type=int, default=None)
 
-    p.add_argument("--mini_batch", action="store_true", help="Run minibatch training")
-    p.add_argument("--batch_size", type=int, default=16)
+    p.add_argument("--batch_size", type=int, default=None)
 
     p.add_argument(
         "--logging_level",
@@ -295,66 +263,51 @@ if __name__ == "__main__":
     logger.remove()
     # create a new logging handler at the appropriate level
     logger.add(sys.stdout, level=args.logging_level)
-
-    logger.add(os.path.join(args.out_dir, args.teacher, "run.log"))
-
-    bs = args.batch_size if args.mini_batch else None
+    logger.add(os.path.join(args.out_dir, "run.log"))
 
     # Registers for student genomes
-    qubits = {"input": args.input_qubits, "output": args.out_qubits}
+    qubits = {"input": args.input_qubits, "output": args.output_qubits}
     register_map = register_wire_map(qubits)
     logger.info(f"register map: {register_map}")
 
     # Teacher wiring consistent with your setup: input wires first then output wires
-    n_wires = args.input_qubits + args.out_qubits
+    n_wires = args.input_qubits + args.output_qubits
     input_wires = register_map["input"]
     output_wires = register_map["output"]
 
-    objective_fn = make_teacher_objective(
+    seed = args.seed
+    if seed is None:
+        seed = int(datetime.now().timestamp())
+
+    objective = TeacherObjective(
         teacher_name=args.teacher,
         input_mode=args.input_mode,
-        steps=args.steps,
-        lr=args.lr,
-        log_every=args.log_every,
-        batch_size=bs,
         n_train_inputs=args.n_train_inputs,
         n_test_inputs=args.n_test_inputs,
-        seed=args.seed,
-        n_wires=n_wires,
         input_wires=input_wires,
         output_wires=output_wires,
+        seed=seed,
     )
 
-    """
-    exaqc = EXAQC(
-        gate_specifications=pennylane_gate_specifications,
-        population=SteadyStatePopulation(
-            max_population_size=args.max_population_size,
-            loss="fidelity",
-        ),
-        input_registers={"input": args.input_qubits},
-        output_registers={"output": args.out_qubits},
-        objective_function=objective_fn,
-        target="pennylane",
-        loss="fidelity",
-        batch_size=bs,
-    )
-    exaqc.run_for(args.number_genomes)
-    """
+    # specify hyperparameter options for genome evaluation
+    hyperparameters = {
+        "steps": args.steps,
+        "learning_rate": args.learning_rate,
+        "log_every": 15,
+        "batch_size": args.batch_size,
+    }
 
     master_worker(
         gate_specifications=pennylane_gate_specifications,
         population=SteadyStatePopulation(
             max_population_size=args.max_population_size,
-            loss="fidelity",
-            dataset=args.teacher,
+            compare=objective.compare,
             out_dir=args.out_dir,
         ),
-        input_registers={"input": args.input_qubits},
-        output_registers={"output": args.out_qubits},
-        objective_function=objective_fn,
+        objective=objective,
+        hyperparameters=hyperparameters,
         run_for=args.number_genomes,
+        input_registers={"input": args.input_qubits},
+        output_registers={"output": args.output_qubits},
         target="pennylane",
-        loss="fidelity",
-        batch_size=bs,
     )

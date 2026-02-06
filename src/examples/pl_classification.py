@@ -29,8 +29,6 @@ from src.quantum_datasets import (
     QuantumDataset,
 )
 
-logger.add("run.log", level="INFO")
-
 # ---------------------------------------------------------------------
 # Prediction + evaluation helpers
 # ---------------------------------------------------------------------
@@ -207,10 +205,10 @@ if __name__ == "__main__":
         help="Output directory to store results from runs",
     )
     p.add_argument("--loss", default="ce", choices=["ce", "mse", "kl", "fidelity"])
-    p.add_argument("--steps", type=int, default=200)
-    p.add_argument("--lr", type=float, default=0.01)
-    p.add_argument("--max_population_size", type=int, default=50)
-    p.add_argument("--number_genomes", type=int, default=500)
+    p.add_argument("--steps", type=int, default=30)
+    p.add_argument("--lr", type=float, default=5e-4)
+    p.add_argument("--max_population_size", type=int, default=30)
+    p.add_argument("--number_genomes", type=int, default=2000)
     p.add_argument("--input_qubits", type=int, default=6)
     p.add_argument(
         "--batch_size",
@@ -233,13 +231,13 @@ if __name__ == "__main__":
     logger.remove()
     # create a new logging handler at the appropriate level
     logger.add(sys.stdout, level=args.logging_level)
-    logger.add(os.path.join(args.out_dir, args.dataset, "run.log"))
+    logger.add(os.path.join(args.out_dir, "run.log"))
 
     # specify hyperparameter options for genome evaluation
     hyperparameters = {
-        "steps": 20,
-        "learning_rate": 5e-3,
-        "log_every": 10,
+        "steps": args.steps,
+        "learning_rate": args.learning_rate,
+        "log_every": 15,
         "batch_size": args.batch_size,
     }
 

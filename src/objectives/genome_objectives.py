@@ -30,7 +30,6 @@ def genome_to_torch_params(genome: CircuitGenome) -> dict[str, torch.nn.Paramete
         if gate.enabled:
             for name, value in gate.parameters.items():
                 key = f"{gate.innovation_number}:{name}"
-                # key = name
                 params[key] = torch.nn.Parameter(
                     torch.tensor(float(value), dtype=torch.float64)
                 )
@@ -53,7 +52,6 @@ def torch_params_to_genome(
         if gate.enabled:
             for name in gate.parameters.keys():
                 key = f"{gate.innovation_number}:{name}"
-                # key = name
                 if key in trained_params:
                     gate.parameters[name] = _extract_param_value(trained_params[key])
 
@@ -223,7 +221,7 @@ def _train_with_pennylane(
         genome.fitness = metrics
         return metrics
 
-    opt = torch.optim.AdamW(torch_params.values(), lr=lr, weight_decay=0.00001)
+    opt = torch.optim.Adam(torch_params.values(), lr=lr, weight_decay=0.00000)
 
     n = len(train_list)
     if batch_size is not None:
@@ -551,7 +549,7 @@ def train_genome_objective(
     lr: float = 0.05,
     n_classes: int = 3,
     log_every: int = 50,
-    bath_size: int = None,
+    batch_size: int = None,
     qiskit_config: Optional[dict[str, Any]] = None,
 ) -> CircuitGenome:
     """
@@ -572,7 +570,7 @@ def train_genome_objective(
             loss_name=loss,
             n_classes=n_classes,
             log_every=log_every,
-            batch_size=bath_size,
+            batch_size=batch_size,
             target_qnode=teacher_qnode,
         )
         genome.fitness = metrics
