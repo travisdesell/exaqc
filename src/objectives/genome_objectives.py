@@ -224,7 +224,7 @@ def _train_with_pennylane(
             n_classes=n_classes,
         )
         genome.fitness = metrics
-        return genome
+        return
 
     opt = torch.optim.Adam(torch_params.values(), lr=lr, weight_decay=0.00000)
 
@@ -325,7 +325,7 @@ def _train_with_pennylane(
                 n_classes=n_classes,
             )
             genome.fitness = metrics
-            return genome
+            return
 
         loss.backward()
         opt.step()
@@ -367,8 +367,6 @@ def _train_with_pennylane(
         n_classes=n_classes,
     )
     genome.fitness = metrics
-
-    return genome
 
 
 # ---------- Qiskit ML route (TorchConnector + output-bit loss) ----------
@@ -578,7 +576,7 @@ def train_genome_objective(
             batch_size=batch_size,
             target_qnode=teacher_qnode,
         )
-        return genome
+        return
 
     if backend == "qiskit":
         if dataset is None:

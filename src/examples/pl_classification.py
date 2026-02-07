@@ -141,7 +141,7 @@ class ClassificationObjective(Objective):
         # If there are trainable params, train. If not, just forward/eval.
         torch_params = genome_to_torch_params(genome)
         if len(torch_params) > 0:
-            genome = train_genome_objective(
+            train_genome_objective(
                 genome,
                 dataset=[self.train_data, self.test_data],  # train split only
                 backend=self.target,

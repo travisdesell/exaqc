@@ -177,7 +177,7 @@ class TeacherObjective(Objective):
         log_every = hyperparameters["log_every"]
 
         # Always train against teacher (even if you have 0 params, it'll just eval)
-        genome = train_genome_objective(
+        train_genome_objective(
             genome,
             dataset=[self.X_train, self.X_test],  # your API expects [train, test]
             backend="pennylane",
