@@ -59,7 +59,9 @@ class QuantumTeacherDataset:
             if len(in_wires) < 2:
                 raise ValueError("half_adder needs at least 2 input wires: [A, B]")
             if len(out_wires) < 2:
-                raise ValueError("half_adder needs at least 2 output wires: [SUM, CARRY]")
+                raise ValueError(
+                    "half_adder needs at least 2 output wires: [SUM, CARRY]"
+                )
 
             a_w, b_w = in_wires[0], in_wires[1]
             s_w, c_w = out_wires[0], out_wires[1]
@@ -75,7 +77,6 @@ class QuantumTeacherDataset:
             qml.CNOT(wires=[b_w, s_w])
 
             qml.Toffoli(wires=[a_w, b_w, c_w])
-
 
         def _teacher_input_controlled_bell(in_wires: list, out_wires: list):
             qml.Hadamard(wires=out_wires[0])

@@ -113,7 +113,9 @@ def _eval_teacher_split(data, genome, params, teacher_qnode):
     return {
         "loss": float(torch.stack(losses).mean().item()) if losses else 0.0,
         "fidelity": float(torch.stack(fids).mean().item()) if fids else 0.0,
-        "angle_loss": float(torch.stack(angle_losses).mean().item()) if angle_losses else 0.0,
+        "angle_loss": (
+            float(torch.stack(angle_losses).mean().item()) if angle_losses else 0.0
+        ),
     }
 
 
