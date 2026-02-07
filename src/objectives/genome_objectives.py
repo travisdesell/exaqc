@@ -101,6 +101,7 @@ def _eval_teacher_split(data, genome, params, teacher_qnode):
         return None
     losses = []
     fids = []
+    angle_losses = []
     for item in data:
         x = item if not isinstance(item, (tuple, list)) else item[0]
         phi = torch.as_tensor(teacher_qnode(x))
@@ -108,9 +109,13 @@ def _eval_teacher_split(data, genome, params, teacher_qnode):
         L = loss_one_minus_fidelity(phi, psi)
         losses.append(L)
         fids.append(1.0 - L)
+        angle_losses.append(loss_state_angle(phi, psi))
     return {
         "loss": float(torch.stack(losses).mean().item()) if losses else 0.0,
         "fidelity": float(torch.stack(fids).mean().item()) if fids else 0.0,
+        "angle_loss": (
+            float(torch.stack(angle_losses).mean().item()) if angle_losses else 0.0
+        ),
     }
 
 
@@ -164,11 +169,11 @@ def eval_forward_only(
             if test_list is not None
             else None
         )
-
     out = {f"{k}": v for k, v in tr.items()}
     if te is not None:
         out.update({f"train_{k}": v for k, v in tr.items()})
-        out.update({f"{k}": v for k, v in te.items()})
+        out.update({f"test_{k}": v for k, v in te.items()})
+    logger.info(f"[End Step]: {out}")
     return out
 
 
@@ -219,7 +224,7 @@ def _train_with_pennylane(
             n_classes=n_classes,
         )
         genome.fitness = metrics
-        return metrics
+        return
 
     opt = torch.optim.Adam(torch_params.values(), lr=lr, weight_decay=0.00000)
 
@@ -320,7 +325,7 @@ def _train_with_pennylane(
                 n_classes=n_classes,
             )
             genome.fitness = metrics
-            return genome
+            return
 
         loss.backward()
         opt.step()
@@ -331,12 +336,12 @@ def _train_with_pennylane(
                 if test_list is not None:
                     te = eval_teacher(test_list)
                     logger.info(
-                        f"[{step:04d}] fid_l={tr['fidelity_loss']:.6f} angle_l={tr['angle_loss']:.6f} "
-                        f"| test_fid_l={te['fidelity_loss']:.6f}"
+                        f"[{step:04d}] fid_loss={tr['fidelity_loss']:.6f} angle_loss={tr['angle_loss']:.6f} "
+                        f"| test_fid_loss={te['fidelity_loss']:.6f}"
                     )
                 else:
                     logger.info(
-                        f"[{step:04d}] fid_l={tr['fidelity_loss']:.6f} angle_l={tr['angle_loss']:.6f}"
+                        f"[{step:04d}] fid_loss={tr['fidelity_loss']:.6f} angle_loss={tr['angle_loss']:.6f}"
                     )
             else:
                 tr = eval_supervised(train_list)
@@ -362,8 +367,6 @@ def _train_with_pennylane(
         n_classes=n_classes,
     )
     genome.fitness = metrics
-
-    return genome
 
 
 # ---------- Qiskit ML route (TorchConnector + output-bit loss) ----------
@@ -561,7 +564,7 @@ def train_genome_objective(
     if backend == "pennylane":
         train_data = dataset[0]
         test_data = dataset[1]
-        metrics = _train_with_pennylane(
+        _train_with_pennylane(
             genome,
             train_data=train_data,
             test_data=test_data,
@@ -573,8 +576,7 @@ def train_genome_objective(
             batch_size=batch_size,
             target_qnode=teacher_qnode,
         )
-        genome.fitness = metrics
-        return genome
+        return
 
     if backend == "qiskit":
         if dataset is None:

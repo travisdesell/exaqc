@@ -20,7 +20,7 @@ from src.objectives.genome_objectives import (
     train_genome_objective,
     genome_to_torch_params,
 )
-
+from src.utils.losses import ce_onehot_on_probs
 from src.quantum_datasets import (
     IrisDataset,
     WineDataset,
@@ -32,19 +32,6 @@ from src.quantum_datasets import (
 # ---------------------------------------------------------------------
 # Prediction + evaluation helpers
 # ---------------------------------------------------------------------
-
-
-def ce_onehot_on_probs(
-    probs: torch.Tensor, y_onehot: torch.Tensor, eps: float = 1e-12
-) -> torch.Tensor:
-    """
-    probs: float tensor [K] (already marginal over output wires)
-    y_onehot: float tensor [K]
-    """
-    probs = probs.clamp_min(eps)
-    probs = probs / probs.sum()
-    y_onehot = y_onehot.to(dtype=probs.dtype, device=probs.device)
-    return -(y_onehot * torch.log(probs)).sum()
 
 
 @torch.no_grad()
@@ -154,7 +141,7 @@ class ClassificationObjective(Objective):
         # If there are trainable params, train. If not, just forward/eval.
         torch_params = genome_to_torch_params(genome)
         if len(torch_params) > 0:
-            genome = train_genome_objective(
+            train_genome_objective(
                 genome,
                 dataset=[self.train_data, self.test_data],  # train split only
                 backend=self.target,
@@ -185,8 +172,8 @@ class ClassificationObjective(Objective):
             f"[{genome.genome_number:04d}] "
             f"train loss={train_metrics['loss']:.4f} "
             f"train acc={train_metrics['acc']:.4f} "
-            f"test loss={test_metrics['loss']:.4f}"
-            f"test acc={test_metrics['acc']:.4f}"
+            f"test loss={test_metrics['loss']:.4f} "
+            f"test acc={test_metrics['acc']:.4f} "
         )
 
 
