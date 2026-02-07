@@ -227,6 +227,8 @@ if __name__ == "__main__":
             "parity012_to_out4",
             "input_controlled_bell",
             "2layer_out_block",
+            "grover",
+            "half_adder",
         ],
     )
     p.add_argument(
