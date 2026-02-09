@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Optional, Iterable, Callable, Any
 import torch
+import copy
 from loguru import logger
 from src.circuits.circuit import CircuitGenome
 from src.utils.losses import (
@@ -194,6 +195,9 @@ def _train_with_pennylane(
     train_list = list(train_data)
     test_list = list(test_data) if test_data is not None else None
 
+    best_params = None
+    best_metrics = None
+
     # ----- choose output type -----
     use_state = (
         loss_name in {"fidelity", "angle", "kl"} and target_qnode
@@ -290,6 +294,8 @@ def _train_with_pennylane(
             "loss": float(torch.stack(losses).mean().item()),
             "acc": float(correct / max(total, 1)),
         }
+    
+    loss_global = float('inf')
 
     # ---- training loop ----
     for step in range(steps):
@@ -356,17 +362,28 @@ def _train_with_pennylane(
                         f"[{step:04d}] loss={tr['loss']:.6f} acc={tr['acc']:.3f}"
                     )
 
-    torch_params_to_genome(genome, torch_params)
+        torch_params_to_genome(genome, torch_params)
 
-    # return final metrics
-    metrics = eval_forward_only(
-        genome,
-        train_list,
-        test_list,
-        teacher_qnode=target_qnode,
-        n_classes=n_classes,
-    )
-    genome.fitness = metrics
+        # return final metrics
+        metrics = eval_forward_only(
+            genome,
+            train_list,
+            test_list,
+            teacher_qnode=target_qnode,
+            n_classes=n_classes,
+        )
+
+        if metrics["test_loss"] < loss_global:
+            loss_global = metrics["test_loss"]
+            best_params = copy.deepcopy(torch_params)
+            best_metrics = copy.deepcopy(metrics)
+            logger.info(
+                f"Saved best model to genome:{genome.genome_number}"
+            )
+
+    # Save best loss genome params and metrics
+    torch_params_to_genome(genome, best_params)
+    genome.fitness = best_metrics
 
 
 # ---------- Qiskit ML route (TorchConnector + output-bit loss) ----------
@@ -540,10 +557,6 @@ def _train_with_qiskit_ml_outputs(
 
 def train_genome_objective(
     genome: CircuitGenome,
-    *,
-    target_state: Optional[torch.Tensor] = None,
-    input_bits: Optional[torch.Tensor] = None,
-    # dataset: Optional[Iterable[tuple[torch.Tensor, torch.Tensor]]] = None,
     dataset: list = None,
     teacher_qnode: Optional[Callable] = None,
     backend: str = "pennylane",
