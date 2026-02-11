@@ -12,9 +12,7 @@ import matplotlib.pyplot as plt
 
 from src.circuits.circuit import CircuitGenome
 from src.evolution.population_strategy import PopulationStrategy
-from src.objectives.genome_objectives import (
-    genome_to_torch_params,
-)
+from src.utils.helpers import genome_to_torch_params
 
 
 class SteadyStatePopulation(PopulationStrategy):

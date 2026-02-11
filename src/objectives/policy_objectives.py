@@ -10,7 +10,7 @@ from loguru import logger
 from torch.distributions import Categorical
 
 from src.circuits.circuit import CircuitGenome
-from src.objectives.genome_objectives import genome_to_torch_params, torch_params_to_genome
+from src.utils.helpers import torch_params_to_genome, genome_to_torch_params
 from .components import ReplayBuffer
 
 

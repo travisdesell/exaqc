@@ -12,6 +12,7 @@ from src.utils.losses import (
     loss_ce,
     ce_onehot_on_probs,
 )
+from src.utils.helpers import torch_params_to_genome, genome_to_torch_params
 
 LOSS_REGISTRY: dict[str, Callable[..., torch.Tensor]] = {
     "fidelity": loss_one_minus_fidelity,
@@ -22,38 +23,6 @@ LOSS_REGISTRY: dict[str, Callable[..., torch.Tensor]] = {
 }
 
 STATEVECTOR_LOSSES = {"fidelity", "angle", "kl", "ce"}
-
-
-def genome_to_torch_params(genome: CircuitGenome) -> dict[str, torch.nn.Parameter]:
-    params: dict[str, torch.nn.Parameter] = {}
-    for gate in genome.gates:
-        if gate.enabled:
-            for name, value in gate.parameters.items():
-                key = f"{gate.innovation_number}:{name}"
-                params[key] = torch.nn.Parameter(
-                    torch.tensor(float(value), dtype=torch.float64)
-                )
-    # logger.info(f"GENOME TO TORCH PARAMS: {params}")
-    return params
-
-
-def _extract_param_value(v: torch.Tensor | float) -> float:
-    """Convert a parameter value (Tensor or float) to float."""
-    if isinstance(v, torch.Tensor):
-        return float(v.detach().cpu().item())
-    return float(v)
-
-
-def torch_params_to_genome(
-    genome: CircuitGenome, trained_params: dict[str, torch.Tensor] | dict[str, float]
-):
-    # logger.info(f"TORCH TO GENOME TRAINED PARAMS: {trained_params}")
-    for gate in genome.gates:
-        if gate.enabled:
-            for name in gate.parameters.keys():
-                key = f"{gate.innovation_number}:{name}"
-                if key in trained_params:
-                    gate.parameters[name] = _extract_param_value(trained_params[key])
 
 
 def _ensure_complex(x: torch.Tensor) -> torch.Tensor:
