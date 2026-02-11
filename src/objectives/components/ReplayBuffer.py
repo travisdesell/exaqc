@@ -6,9 +6,10 @@ Transition = tuple[torch.Tensor, int, float, torch.Tensor, float]  # (s, a, r, s
 
 
 class ReplayBuffer:
-    '''
+    """
     Replay Buffer Class to store previous state-action-reward observations
-    '''
+    """
+
     def __init__(self, capacity: int):
         self.buf: Deque[Transition] = Deque(maxlen=capacity)
 
