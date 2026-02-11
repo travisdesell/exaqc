@@ -131,7 +131,7 @@ class SteadyStatePopulation(PopulationStrategy):
                     f"trainloss_{genome.fitness['train_loss']:.4f}_testloss_"
                     f"{genome.fitness['test_loss']:.4f}_testacc_{test_metric:.3f}"
                 )
-            except Exception as e:
+            except Exception:
                 tag = (
                     f"best_ep_return_{genome.fitness['best_episode_return']:.4f}_"
                     f"eval_return_mean_{genome.fitness['eval_return_mean']:.4f}"

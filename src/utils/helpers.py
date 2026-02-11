@@ -2,6 +2,7 @@ import torch
 
 from src.circuits.circuit import CircuitGenome
 
+
 def register_wire_map(registers: dict[str, int]) -> dict:
     """Return a dict mapping register names to PennyLane wires."""
     wire_map = {}
@@ -10,6 +11,7 @@ def register_wire_map(registers: dict[str, int]) -> dict:
         wire_map[name] = list(range(offset, offset + size))
         offset += size
     return wire_map
+
 
 def genome_to_torch_params(genome: CircuitGenome) -> dict[str, torch.nn.Parameter]:
     params: dict[str, torch.nn.Parameter] = {}

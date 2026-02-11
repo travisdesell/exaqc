@@ -443,7 +443,7 @@ class CircuitGenome:
                 # encode x_i in [0,1] -> RY(pi*x_i) (common, stable)
                 for i, w in enumerate(self.input_indexes):
                     qml.RY(torch.pi * input_bits[i], wires=w)
-                    
+
             elif input_mode == "amplitude":
                 # expects float tensor of length 2**len(in_wires)
                 qml.AmplitudeEmbedding(
@@ -462,9 +462,7 @@ class CircuitGenome:
 
             # 4️⃣ Measurement
             if return_probs:
-                return qml.probs(
-                    wires=self.output_indexes
-                )  
+                return qml.probs(wires=self.output_indexes)
             elif measure_registers:
                 # fallback if you want expvals
                 expvals = [

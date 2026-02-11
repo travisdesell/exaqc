@@ -14,7 +14,9 @@ from src.utils.helpers import torch_params_to_genome, genome_to_torch_params
 from .components import ReplayBuffer
 
 
-def train_rl(genome: CircuitGenome, *, spec: "RLSpec", algo: str = "reinforce") -> CircuitGenome:
+def train_rl(
+    genome: CircuitGenome, *, spec: "RLSpec", algo: str = "reinforce"
+) -> CircuitGenome:
     """Train a genome with a selected RL algorithm.
 
     Dispatches to the matching trainer implementation based on `algo`.
@@ -89,7 +91,11 @@ def gae_advantages(
 
     for t in reversed(range(T)):
         mask = 1.0 - float(dones[t].item())
-        delta = float(rewards[t].item()) + gamma * next_value * mask - float(values[t].item())
+        delta = (
+            float(rewards[t].item())
+            + gamma * next_value * mask
+            - float(values[t].item())
+        )
         last_gae = delta + gamma * lam * mask * last_gae
         adv[t] = last_gae
         next_value = float(values[t].item())
@@ -98,7 +104,9 @@ def gae_advantages(
     return adv, returns
 
 
-def _stack_or_empty(xs: Sequence[torch.Tensor], dtype: torch.dtype = torch.float32) -> torch.Tensor:
+def _stack_or_empty(
+    xs: Sequence[torch.Tensor], dtype: torch.dtype = torch.float32
+) -> torch.Tensor:
     """Stack a sequence of tensors or return an empty tensor.
 
     Args:
@@ -133,7 +141,9 @@ def _normalize(x: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
 # ============================
 
 
-def encode_box_to_unit_interval(obs: np.ndarray, scales: Optional[np.ndarray] = None) -> torch.Tensor:
+def encode_box_to_unit_interval(
+    obs: np.ndarray, scales: Optional[np.ndarray] = None
+) -> torch.Tensor:
     """Encode a continuous Box observation into the unit interval.
 
     Produces a vector in [0, 1]^D, useful for angle encoding such as RY(pi*x).
@@ -318,7 +328,7 @@ class RLSpec:
     n_actions: int
     algo: str = "reinforce"
 
-    input_mode: str = "angle"   # "angle" or "basis"
+    input_mode: str = "angle"  # "angle" or "basis"
     return_expvals: bool = True
 
     # observation encoder
@@ -335,7 +345,7 @@ class RLSpec:
     max_steps: int = 500
     gamma: float = 0.99
     lr: float = 1e-2
-    baseline: str = "mean"   # "mean" or "none"
+    baseline: str = "mean"  # "mean" or "none"
     seed: int = 0
     log_every: int = 10
 
@@ -360,18 +370,20 @@ class RLSpec:
     target_kl: Optional[float] = None  # e.g. 0.02 to early stop updates
 
     # rollout sizing (for A2C/PPO batching)
-    rollout_steps: int = 2048  # total steps collected before an update (PPO) or per update (A2C)
+    rollout_steps: int = (
+        2048  # total steps collected before an update (PPO) or per update (A2C)
+    )
 
     # Value-based (DQN/Q-learning/SARSA)
     epsilon: float = 0.2
     epsilon_min: float = 0.05
     epsilon_decay: float = 0.995
 
-    td_batch_size: int = 64          # if using replay
+    td_batch_size: int = 64  # if using replay
     replay_capacity: int = 10_000
-    warmup_steps: int = 500          # collect before learning
-    target_update_every: int = 200   # steps between target net updates
-    train_every: int = 1             # gradient step frequency
+    warmup_steps: int = 500  # collect before learning
+    target_update_every: int = 200  # steps between target net updates
+    train_every: int = 1  # gradient step frequency
 
 
 # ============================
@@ -445,7 +457,9 @@ class QHead(nn.Module):
         """
         features = torch.as_tensor(features, dtype=torch.float32).flatten()
         if features.numel() < self.q.in_features:
-            pad = torch.zeros(self.q.in_features - features.numel(), dtype=features.dtype)
+            pad = torch.zeros(
+                self.q.in_features - features.numel(), dtype=features.dtype
+            )
             features = torch.cat([features, pad], dim=0)
         return self.q(features[: self.q.in_features])
 
@@ -651,7 +665,9 @@ def eval_policy(
             - eval_return_std
     """
     if getattr(genome, "circuit", None) is None or not callable(genome.circuit):
-        genome.generate_pennylane_circuit(input_mode=spec.input_mode, measure_registers=spec.return_expvals)
+        genome.generate_pennylane_circuit(
+            input_mode=spec.input_mode, measure_registers=spec.return_expvals
+        )
 
     params = genome_to_torch_params(genome)
 
@@ -719,13 +735,19 @@ def train_reinforce(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
     if spec.obs_encoder is None:
         raise ValueError("spec.obs_encoder must be provided")
 
-    genome.generate_pennylane_circuit(input_mode=spec.input_mode, measure_registers=spec.return_expvals)
+    genome.generate_pennylane_circuit(
+        input_mode=spec.input_mode, measure_registers=spec.return_expvals
+    )
 
     params = genome_to_torch_params(genome)
 
     if len(params) == 0:
         ev = eval_policy(genome, spec=spec, deterministic=True, seed=spec.seed + 999)
-        genome.fitness = {"note": "no trainable params", "best_episode_return": ev["eval_return_mean"], **ev}
+        genome.fitness = {
+            "note": "no trainable params",
+            "best_episode_return": ev["eval_return_mean"],
+            **ev,
+        }
         return genome
 
     opt = torch.optim.Adam(params.values(), lr=spec.lr, weight_decay=0.0)
@@ -736,7 +758,9 @@ def train_reinforce(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
     for ep in range(spec.episodes):
         opt.zero_grad()
 
-        logps, entropies, G, ep_ret = rollout_reinforce(genome, params, spec=spec, episode_seed=spec.seed + ep)
+        logps, entropies, G, ep_ret = rollout_reinforce(
+            genome, params, spec=spec, episode_seed=spec.seed + ep
+        )
         recent_returns.append(ep_ret)
         best_episode_return = max(best_episode_return, ep_ret)
 
@@ -746,7 +770,9 @@ def train_reinforce(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
         adv = G - G.mean() if spec.baseline == "mean" else G
 
         loss_pg = -(logps * adv.detach()).mean()
-        loss_ent = -spec.entropy_coef * entropies.mean() if spec.entropy_coef > 0 else 0.0
+        loss_ent = (
+            -spec.entropy_coef * entropies.mean() if spec.entropy_coef > 0 else 0.0
+        )
         loss = loss_pg + (loss_ent if isinstance(loss_ent, torch.Tensor) else 0.0)
 
         if not loss.requires_grad:
@@ -757,8 +783,14 @@ def train_reinforce(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
         opt.step()
 
         if (ep % spec.log_every) == 0:
-            avg10 = float(np.mean(recent_returns[-10:])) if len(recent_returns) >= 10 else float(np.mean(recent_returns))
-            logger.info(f"[ep {ep:04d}] loss={float(loss.item()):.4f} return={ep_ret:.1f} avg10={avg10:.1f}")
+            avg10 = (
+                float(np.mean(recent_returns[-10:]))
+                if len(recent_returns) >= 10
+                else float(np.mean(recent_returns))
+            )
+            logger.info(
+                f"[ep {ep:04d}] loss={float(loss.item()):.4f} return={ep_ret:.1f} avg10={avg10:.1f}"
+            )
 
     torch_params_to_genome(genome, params)
 
@@ -810,7 +842,9 @@ def train_actor_critic(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
     if spec.obs_encoder is None:
         raise ValueError("spec.obs_encoder must be provided")
 
-    genome.generate_pennylane_circuit(input_mode=spec.input_mode, measure_registers=spec.return_expvals)
+    genome.generate_pennylane_circuit(
+        input_mode=spec.input_mode, measure_registers=spec.return_expvals
+    )
     params = genome_to_torch_params(genome)
 
     if len(params) == 0:
@@ -827,7 +861,9 @@ def train_actor_critic(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
         in_dim = int(torch.as_tensor(out0).numel())
 
     head = PolicyValueHead(n_actions=spec.n_actions, in_dim=in_dim)
-    opt = torch.optim.Adam(list(params.values()) + list(head.parameters()), lr=spec.lr, weight_decay=0.0)
+    opt = torch.optim.Adam(
+        list(params.values()) + list(head.parameters()), lr=spec.lr, weight_decay=0.0
+    )
 
     best_episode_return = -float("inf")
     recent_returns: list[float] = []
@@ -839,7 +875,11 @@ def train_actor_critic(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
 
         while steps_collected < spec.rollout_steps:
             traj = rollout_actor_critic(
-                genome, params, spec=spec, head=head, episode_seed=spec.seed + upd * 10_000 + ep
+                genome,
+                params,
+                spec=spec,
+                head=head,
+                episode_seed=spec.seed + upd * 10_000 + ep,
             )
             ep += 1
             recent_returns.append(traj["ep_return"])
@@ -856,12 +896,19 @@ def train_actor_critic(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
 
         obs_t = torch.stack([o.to(torch.float32) for o in obs_buf], dim=0)  # [T,D]
         act_t = torch.stack(act_buf).long().view(-1)  # [T]
-        logp_old_t = torch.stack(logp_buf).to(torch.float32).view(-1)  # [T]
+        # logp_old_t = torch.stack(logp_buf).to(torch.float32).view(-1)  # [T]
         val_old_t = torch.stack(val_buf).to(torch.float32).view(-1)  # [T]
         rew_t = torch.stack(rew_buf).to(torch.float32).view(-1)  # [T]
         done_t = torch.stack(done_buf).to(torch.float32).view(-1)  # [T]
 
-        adv_t, ret_t = gae_advantages(rew_t, val_old_t, done_t, gamma=spec.gamma, lam=spec.gae_lambda, last_value=0.0)
+        adv_t, ret_t = gae_advantages(
+            rew_t,
+            val_old_t,
+            done_t,
+            gamma=spec.gamma,
+            lam=spec.gae_lambda,
+            last_value=0.0,
+        )
         adv_t = _normalize(adv_t)
 
         opt.zero_grad()
@@ -889,7 +936,11 @@ def train_actor_critic(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
         loss_v = 0.5 * (ret_t.detach() - new_val_t).pow(2).mean()
         loss_ent = -spec.entropy_coef * ent_t.mean() if spec.entropy_coef > 0 else 0.0
 
-        loss = loss_pi + spec.value_coef * loss_v + (loss_ent if isinstance(loss_ent, torch.Tensor) else 0.0)
+        loss = (
+            loss_pi
+            + spec.value_coef * loss_v
+            + (loss_ent if isinstance(loss_ent, torch.Tensor) else 0.0)
+        )
 
         if not loss.requires_grad:
             logger.warning("Loss has no grad path. Are params used inside the QNode?")
@@ -899,7 +950,11 @@ def train_actor_critic(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
         opt.step()
 
         if (upd % spec.log_every) == 0:
-            avg10 = float(np.mean(recent_returns[-10:])) if len(recent_returns) >= 10 else float(np.mean(recent_returns))
+            avg10 = (
+                float(np.mean(recent_returns[-10:]))
+                if len(recent_returns) >= 10
+                else float(np.mean(recent_returns))
+            )
             logger.info(
                 f"[A2C upd {upd:04d}] loss={float(loss.item()):.4f} "
                 f"pi={float(loss_pi.item()):.4f} v={float(loss_v.item()):.4f} avg10ret={avg10:.1f}"
@@ -908,8 +963,10 @@ def train_actor_critic(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
     torch_params_to_genome(genome, params)
 
     ev = eval_policy(genome, spec=spec, deterministic=True, seed=spec.seed + 9999)
-    train_tail = float(np.mean(recent_returns[-20:])) if len(recent_returns) >= 20 else float(
-        np.mean(recent_returns) if recent_returns else 0.0
+    train_tail = (
+        float(np.mean(recent_returns[-20:]))
+        if len(recent_returns) >= 20
+        else float(np.mean(recent_returns) if recent_returns else 0.0)
     )
 
     genome.fitness = {
@@ -955,7 +1012,9 @@ def train_ppo(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
     if spec.obs_encoder is None:
         raise ValueError("spec.obs_encoder must be provided")
 
-    genome.generate_pennylane_circuit(input_mode=spec.input_mode, measure_registers=spec.return_expvals)
+    genome.generate_pennylane_circuit(
+        input_mode=spec.input_mode, measure_registers=spec.return_expvals
+    )
     params = genome_to_torch_params(genome)
 
     if len(params) == 0:
@@ -972,7 +1031,9 @@ def train_ppo(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
         in_dim = int(torch.as_tensor(out0).numel())
 
     head = PolicyValueHead(n_actions=spec.n_actions, in_dim=in_dim)
-    opt = torch.optim.Adam(list(params.values()) + list(head.parameters()), lr=spec.lr, weight_decay=0.0)
+    opt = torch.optim.Adam(
+        list(params.values()) + list(head.parameters()), lr=spec.lr, weight_decay=0.0
+    )
 
     best_episode_return = -float("inf")
     recent_returns: list[float] = []
@@ -984,7 +1045,11 @@ def train_ppo(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
 
         while steps_collected < spec.rollout_steps:
             traj = rollout_actor_critic(
-                genome, params, spec=spec, head=head, episode_seed=spec.seed + upd * 10_000 + ep
+                genome,
+                params,
+                spec=spec,
+                head=head,
+                episode_seed=spec.seed + upd * 10_000 + ep,
             )
             ep += 1
             recent_returns.append(traj["ep_return"])
@@ -1007,7 +1072,14 @@ def train_ppo(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
         rew_t = torch.stack(rew_buf).to(torch.float32).view(-1)
         done_t = torch.stack(done_buf).to(torch.float32).view(-1)
 
-        adv_t, ret_t = gae_advantages(rew_t, val_old_t, done_t, gamma=spec.gamma, lam=spec.gae_lambda, last_value=0.0)
+        adv_t, ret_t = gae_advantages(
+            rew_t,
+            val_old_t,
+            done_t,
+            gamma=spec.gamma,
+            lam=spec.gae_lambda,
+            last_value=0.0,
+        )
         adv_t = _normalize(adv_t)
 
         mb = min(spec.ppo_minibatch, T)
@@ -1041,14 +1113,23 @@ def train_ppo(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
                 ratio = torch.exp(new_logp - logp_old_t[idx])
 
                 surr1 = ratio * adv_t[idx]
-                surr2 = torch.clamp(ratio, 1.0 - spec.ppo_clip, 1.0 + spec.ppo_clip) * adv_t[idx]
+                surr2 = (
+                    torch.clamp(ratio, 1.0 - spec.ppo_clip, 1.0 + spec.ppo_clip)
+                    * adv_t[idx]
+                )
                 loss_pi = -torch.min(surr1, surr2).mean()
 
                 loss_v = 0.5 * (ret_t[idx].detach() - new_val).pow(2).mean()
 
-                loss_ent = -spec.entropy_coef * ent.mean() if spec.entropy_coef > 0 else 0.0
+                loss_ent = (
+                    -spec.entropy_coef * ent.mean() if spec.entropy_coef > 0 else 0.0
+                )
 
-                loss = loss_pi + spec.value_coef * loss_v + (loss_ent if isinstance(loss_ent, torch.Tensor) else 0.0)
+                loss = (
+                    loss_pi
+                    + spec.value_coef * loss_v
+                    + (loss_ent if isinstance(loss_ent, torch.Tensor) else 0.0)
+                )
 
                 opt.zero_grad()
                 loss.backward()
@@ -1061,14 +1142,20 @@ def train_ppo(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
                         break
 
         if (upd % spec.log_every) == 0:
-            avg10 = float(np.mean(recent_returns[-10:])) if len(recent_returns) >= 10 else float(np.mean(recent_returns))
+            avg10 = (
+                float(np.mean(recent_returns[-10:]))
+                if len(recent_returns) >= 10
+                else float(np.mean(recent_returns))
+            )
             logger.info(f"[PPO upd {upd:04d}] avg10ret={avg10:.1f} bufferT={T}")
 
     torch_params_to_genome(genome, params)
 
     ev = eval_policy(genome, spec=spec, deterministic=True, seed=spec.seed + 9999)
-    train_tail = float(np.mean(recent_returns[-20:])) if len(recent_returns) >= 20 else float(
-        np.mean(recent_returns) if recent_returns else 0.0
+    train_tail = (
+        float(np.mean(recent_returns[-20:]))
+        if len(recent_returns) >= 20
+        else float(np.mean(recent_returns) if recent_returns else 0.0)
     )
 
     genome.fitness = {
@@ -1161,7 +1248,9 @@ def train_value_based(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
     if spec.obs_encoder is None:
         raise ValueError("spec.obs_encoder must be provided")
 
-    genome.generate_pennylane_circuit(input_mode=spec.input_mode, measure_registers=spec.return_expvals)
+    genome.generate_pennylane_circuit(
+        input_mode=spec.input_mode, measure_registers=spec.return_expvals
+    )
     params = genome_to_torch_params(genome)
 
     feat_dim = _infer_feature_dim(genome, spec)
@@ -1169,7 +1258,9 @@ def train_value_based(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
     q_tgt = QHead(n_actions=spec.n_actions, in_dim=feat_dim)
     q_tgt.load_state_dict(q_head.state_dict())
 
-    opt = torch.optim.Adam(list(params.values()) + list(q_head.parameters()), lr=spec.lr, weight_decay=0.0)
+    opt = torch.optim.Adam(
+        list(params.values()) + list(q_head.parameters()), lr=spec.lr, weight_decay=0.0
+    )
 
     rb = ReplayBuffer(spec.replay_capacity)
 
@@ -1254,16 +1345,23 @@ def train_value_based(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
         epsilon = max(spec.epsilon_min, epsilon * spec.epsilon_decay)
 
         if (ep % spec.log_every) == 0:
-            avg10 = float(np.mean(recent_returns[-10:])) if len(recent_returns) >= 10 else float(np.mean(recent_returns))
+            avg10 = (
+                float(np.mean(recent_returns[-10:]))
+                if len(recent_returns) >= 10
+                else float(np.mean(recent_returns))
+            )
             logger.info(
-                f"[{spec.algo.upper()} ep {ep:04d}] return={ep_ret:.1f} avg10={avg10:.1f} eps={epsilon:.3f} rb={len(rb)}"
+                f"[{spec.algo.upper()} ep {ep:04d}] return={ep_ret:.1f} avg10={avg10:.1f}"
+                f"eps={epsilon:.3f} rb={len(rb)}"
             )
 
     torch_params_to_genome(genome, params)
 
     ev = eval_policy(genome, spec=spec, deterministic=True, seed=spec.seed + 9999)
-    train_tail = float(np.mean(recent_returns[-20:])) if len(recent_returns) >= 20 else float(
-        np.mean(recent_returns) if recent_returns else 0.0
+    train_tail = (
+        float(np.mean(recent_returns[-20:]))
+        if len(recent_returns) >= 20
+        else float(np.mean(recent_returns) if recent_returns else 0.0)
     )
 
     genome.fitness = {
@@ -1282,7 +1380,9 @@ def train_value_based(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
 # ============================
 
 
-def cartpole_spec(*, episodes: int = 100, lr: float = 1e-2, seed: int = 0, algo: str = "reinforce") -> RLSpec:
+def cartpole_spec(
+    *, episodes: int = 100, lr: float = 1e-2, seed: int = 0, algo: str = "reinforce"
+) -> RLSpec:
     """Create a ready-to-use CartPole RLSpec.
 
     Uses angle encoding of the 4D Box state into [0,1] with simple scaling.

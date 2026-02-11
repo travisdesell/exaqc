@@ -1,1 +1,1 @@
-from .ReplayBuffer import ReplayBuffer #noqa
+from .ReplayBuffer import ReplayBuffer  # noqa

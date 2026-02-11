@@ -23,6 +23,7 @@ from src.objectives.policy_objectives import (
 # Comparison (sorting) for steady-state population
 # ---------------------------------------------------------------------
 
+
 def compare(genome1: CircuitGenome, genome2: CircuitGenome) -> int:
     """
     Sort genomes by test/eval return descending (higher is better).
@@ -42,9 +43,11 @@ def compare(genome1: CircuitGenome, genome2: CircuitGenome) -> int:
         return 1
     return 0
 
+
 # ---------------------------------------------------------------------
 # Objective
 # ---------------------------------------------------------------------
+
 
 class RLObjective(Objective):
     def __init__(self, *, spec: RLSpec):
@@ -101,9 +104,7 @@ class RLObjective(Objective):
         train_rl(genome, spec=spec, algo=spec.algo)
         # train_policy_gradient(genome, spec=spec)
 
-        logger.debug(
-            f"Genome Fitness in Objective: {genome.fitness}"
-        )
+        logger.debug(f"Genome Fitness in Objective: {genome.fitness}")
 
         # Ensure we have an evaluation metric (train_policy_gradient already writes eval_*,
         # but keep it explicit and consistent with classification code style)
@@ -128,6 +129,7 @@ class RLObjective(Objective):
             f"env={spec.env_id}"
         )
 
+
 # ---------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------
@@ -135,7 +137,12 @@ class RLObjective(Objective):
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--env", choices=["cartpole", "frozenlake"], required=True)
-    p.add_argument("--algo", choices=["reinforce", "a2c", "ppo", "q_learning", "sarsa"], required=True, default="reinforce")
+    p.add_argument(
+        "--algo",
+        choices=["reinforce", "a2c", "ppo", "q_learning", "sarsa"],
+        required=True,
+        default="reinforce",
+    )
     p.add_argument(
         "--out_dir",
         type=str,
@@ -149,7 +156,9 @@ if __name__ == "__main__":
 
     # Registers
     p.add_argument("--input_qubits", type=int, default=6)
-    p.add_argument("--output_qubits", type=int, default=None)  # if None, we pick sensible default
+    p.add_argument(
+        "--output_qubits", type=int, default=None
+    )  # if None, we pick sensible default
 
     # RL hyperparams
     p.add_argument("--episodes", type=int, default=80)
@@ -185,7 +194,12 @@ if __name__ == "__main__":
 
     # Build RL spec from rl_objectives.py
     if args.env == "cartpole":
-        spec = cartpole_spec(episodes=args.episodes, lr=args.learning_rate, seed=args.seed, algo=args.algo)
+        spec = cartpole_spec(
+            episodes=args.episodes,
+            lr=args.learning_rate,
+            seed=args.seed,
+            algo=args.algo,
+        )
         # 2 actions => can use 2 output qubits as logits directly
         default_out_qubits = 2
     else:
@@ -206,7 +220,11 @@ if __name__ == "__main__":
     objective = RLObjective(spec=spec)
 
     # choose output qubits
-    out_qubits = int(args.output_qubits) if args.output_qubits is not None else default_out_qubits
+    out_qubits = (
+        int(args.output_qubits)
+        if args.output_qubits is not None
+        else default_out_qubits
+    )
 
     # hyperparameters injected into each genome (like your classification script)
     hyperparameters = {
@@ -227,7 +245,9 @@ if __name__ == "__main__":
     input_registers = {"input": min(args.input_qubits, objective.input_size)}
     output_registers = {"output": out_qubits}
 
-    logger.info(f"env={spec.env_id} input_registers={input_registers} output_registers={output_registers}")
+    logger.info(
+        f"env={spec.env_id} input_registers={input_registers} output_registers={output_registers}"
+    )
 
     # run
     master_worker(
