@@ -21,13 +21,13 @@ from src.objectives.genome_objectives import (
 )
 from src.utils.helpers import genome_to_torch_params
 from src.utils.losses import ce_onehot_on_probs
-from src.quantum_datasets import (
+from src.datasets.classification import (
     IrisDataset,
     WineDataset,
     SeedsDataset,
     BreastCancerDataset,
-    QuantumDataset,
 )
+from src.datasets import QuantumDataset
 
 # ---------------------------------------------------------------------
 # Prediction + evaluation helpers

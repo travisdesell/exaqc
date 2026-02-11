@@ -2,7 +2,7 @@ import bisect
 import random
 
 from functools import cmp_to_key
-from typing import Callable
+from typing import Callable, Optional
 
 from loguru import logger
 import os
@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 from src.circuits.circuit import CircuitGenome
 from src.evolution.population_strategy import PopulationStrategy
 from src.utils.helpers import genome_to_torch_params
+from src.utils.profiler import EXAQCProfiler
 
 
 class SteadyStatePopulation(PopulationStrategy):
@@ -22,6 +23,7 @@ class SteadyStatePopulation(PopulationStrategy):
         max_population_size: int,
         compare: Callable[[CircuitGenome, CircuitGenome], int],
         out_dir: str = "artifacts",
+        profiler: Optional[EXAQCProfiler] = None,
     ):
         """
         Creates a steady state population with the specified max population size.  The population
@@ -36,6 +38,8 @@ class SteadyStatePopulation(PopulationStrategy):
             compare: a compare function used for sorting genomes. this should return 0 if both
                 genomes should be ranked the same, a negative value if the first genome should
                 come before the second genome, and a positive number otherwise
+            out_dir: Directory to store results
+            profiler: A profiler class for recording execution steps to plot later
         """
 
         self.max_population_size = max_population_size
@@ -46,6 +50,8 @@ class SteadyStatePopulation(PopulationStrategy):
 
         # used to store the population, should be kept in sorted order.
         self.population: list[CircuitGenome] = []
+
+        self.profiler = profiler
 
     def get_parent(self, **kwargs) -> CircuitGenome:
         """
@@ -67,7 +73,7 @@ class SteadyStatePopulation(PopulationStrategy):
         else:
             return None
 
-    def get_parents(self, n_parents: int = 2, **kwargs) -> list[CircuitGenome]:
+    def get_parents(self, n_parents: int = 2, **kwargs) -> list[CircuitGenome] | None:
         """
         Used to get two or more parents to be used in crossover or
         other operations to generate children.
@@ -115,6 +121,9 @@ class SteadyStatePopulation(PopulationStrategy):
         )
 
         self.insertions += 1
+
+        if self.profiler is not None:
+            self.profiler.record(step=self.insertions, population=self.population)
 
         if genome.genome_number == self.population[0].genome_number:
             # this was a new global best genome

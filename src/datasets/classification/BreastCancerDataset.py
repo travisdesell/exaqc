@@ -2,21 +2,20 @@ from __future__ import annotations
 
 import torch
 from typing import Tuple
-from .base import QuantumDataset
+from src.datasets.base import QuantumDataset
 
 
-class SeedsDataset(QuantumDataset):
+class BreastCancerDataset(QuantumDataset):
     """
-    UCI Seeds dataset (Wheat kernels)
+    Breast Cancer Wisconsin (Diagnostic)
 
     Returns:
-      x: torch.float32 shape [7]
-      y: torch.float32 shape [3] (one-hot)
+      x: torch.float32 shape [30]
+      y: torch.float32 shape [2] (one-hot)
 
     Classes:
-      0 -> Kama
-      1 -> Rosa
-      2 -> Canadian
+      0 -> benign
+      1 -> malignant
     """
 
     def __init__(
@@ -26,27 +25,21 @@ class SeedsDataset(QuantumDataset):
         train_frac: float = 0.8,
         seed: int = 0,
     ):
-        import numpy as np
-        from sklearn.preprocessing import MinMaxScaler
+        from sklearn.datasets import load_breast_cancer
         from sklearn.model_selection import train_test_split
+        from sklearn.preprocessing import MinMaxScaler
 
-        # ---- Load raw data ----
-        # Format: 7 features + 1 class label (1,2,3)
-        data = np.loadtxt("src/quantum_datasets/data/seeds_dataset.txt")
+        data = load_breast_cancer()
 
-        X = data[:, :7]  # (210, 7)
-        y = data[:, 7].astype(int)  # {1,2,3}
+        X = data.data  # (569, 30)
+        y = data.target  # {0,1}
 
-        # Convert labels -> {0,1,2}
-        y = y - 1
+        self.num_classes = 2
 
-        self.num_classes = 3
-
-        # ---- Scale features to [0,1] ----
+        # ---- Scale to [0,1] for angle embedding ----
         scaler = MinMaxScaler()
         X = scaler.fit_transform(X)
 
-        # ---- Train/test split ----
         X_train, X_test, y_train, y_test = train_test_split(
             X,
             y,
@@ -68,10 +61,10 @@ class SeedsDataset(QuantumDataset):
         return self.X.shape[0]
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        x = self.X[idx]  # [7]
+        x = self.X[idx]  # [30]
         cls = int(self.y[idx].item())
 
-        y_onehot = torch.zeros(3, dtype=torch.float32)
+        y_onehot = torch.zeros(2, dtype=torch.float32)
         y_onehot[cls] = 1.0
 
         return x, y_onehot

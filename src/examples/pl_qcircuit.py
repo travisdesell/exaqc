@@ -22,7 +22,7 @@ from src.objectives.genome_objectives import (
 )
 from src.utils.helpers import genome_to_torch_params
 from src.utils.helpers import register_wire_map
-from src.quantum_datasets import QuantumTeacherDataset
+from src.datasets.quantum import QuantumTeacherDataset
 
 
 # ---------------------------------------------------------------------
