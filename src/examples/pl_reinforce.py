@@ -29,6 +29,9 @@ def compare(genome1: CircuitGenome, genome2: CircuitGenome) -> int:
     Your SteadyStatePopulation expects:
       negative => genome1 before genome2
       positive => genome2 before genome1
+
+    Returns: 0 if the two genomes have equivalent fitnesses, a ngeative value if genome1 should be
+        sorted before genome2, and a positive value if genome2 should be sorted before genome1
     """
     r1 = float(genome1.fitness.get("eval_return_mean", -1e9))
     r2 = float(genome2.fitness.get("eval_return_mean", -1e9))
@@ -69,6 +72,12 @@ class RLObjective(Objective):
         Trains the circuit as a policy (REINFORCE) and sets fitness keys:
           - train_return_mean
           - eval_return_mean / eval_return_std
+
+        Args:
+            genome: is the CircuitGenome to train and evaluate. It will have
+                a dict of hyperparameters specified by EXAQC, and should
+                set its `fitness` attribute with a dict of fitness values
+                after training and evaluation.
         """
         hp = genome.hyperparameters
         # Map your hyperparameters into the RLSpec (do not mutate original spec in place)

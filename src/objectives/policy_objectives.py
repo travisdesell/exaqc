@@ -1,20 +1,42 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any, Callable, Optional, Sequence
 
 import numpy as np
 import torch
-from torch.distributions import Categorical
-from loguru import logger
 import torch.nn as nn
+from loguru import logger
+from torch.distributions import Categorical
 
 from src.circuits.circuit import CircuitGenome
 from src.objectives.genome_objectives import genome_to_torch_params, torch_params_to_genome
 from .components import ReplayBuffer
 
 
-def train_rl(genome: CircuitGenome, *, spec: RLSpec, algo: str = "reinforce") -> CircuitGenome:
+def train_rl(genome: CircuitGenome, *, spec: "RLSpec", algo: str = "reinforce") -> CircuitGenome:
+    """Train a genome with a selected RL algorithm.
+
+    Dispatches to the matching trainer implementation based on `algo`.
+
+    Args:
+        genome: Quantum circuit genome to train. Must be compatible with
+            `genome.generate_pennylane_circuit(...)` and callable via
+            `genome.circuit(x, params)`.
+        spec: Training configuration and environment settings.
+        algo: Algorithm name. Supported values:
+            - "reinforce"
+            - "a2c" or "actor_critic"
+            - "ppo"
+            - "q_learning" or "sarsa"
+
+    Returns:
+        The updated genome with trained parameters written back and fitness
+        metadata populated.
+
+    Raises:
+        ValueError: If an unknown algorithm is provided.
+    """
     if algo == "reinforce":
         return train_reinforce(genome, spec=spec)
     if algo in {"a2c", "actor_critic"}:
@@ -30,18 +52,35 @@ def train_rl(genome: CircuitGenome, *, spec: RLSpec, algo: str = "reinforce") ->
 # GAE + batching utilities
 # ============================
 
+
 def gae_advantages(
-    rewards: torch.Tensor,      # [T]
-    values: torch.Tensor,       # [T]
-    dones: torch.Tensor,        # [T] float {0,1}
+    rewards: torch.Tensor,  # [T]
+    values: torch.Tensor,  # [T]
+    dones: torch.Tensor,  # [T] float {0,1}
     *,
     gamma: float,
     lam: float,
     last_value: float = 0.0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Generalized Advantage Estimation.
-    Returns: (advantages [T], returns [T])
+    """Compute Generalized Advantage Estimation (GAE) advantages and returns.
+
+    This implementation follows the standard recursive definition:
+        delta_t = r_t + gamma * V_{t+1} * (1 - done_t) - V_t
+        A_t = delta_t + gamma * lam * (1 - done_t) * A_{t+1}
+        R_t = A_t + V_t
+
+    Args:
+        rewards: Reward tensor of shape [T].
+        values: Value estimates tensor of shape [T].
+        dones: Done flags tensor of shape [T], values in {0, 1} (float).
+        gamma: Discount factor.
+        lam: GAE lambda parameter.
+        last_value: Bootstrap value for V_{T} (typically 0 for episodic rollouts).
+
+    Returns:
+        A tuple (advantages, returns):
+            advantages: Tensor of shape [T].
+            returns: Tensor of shape [T], computed as advantages + values.
     """
     T = rewards.numel()
     adv = torch.zeros(T, dtype=torch.float32)
@@ -59,30 +98,58 @@ def gae_advantages(
     return adv, returns
 
 
-def _stack_or_empty(xs, dtype=torch.float32):
+def _stack_or_empty(xs: Sequence[torch.Tensor], dtype: torch.dtype = torch.float32) -> torch.Tensor:
+    """Stack a sequence of tensors or return an empty tensor.
+
+    Args:
+        xs: Sequence of tensors to stack.
+        dtype: Dtype used for the empty tensor case.
+
+    Returns:
+        Stacked tensor if non-empty, else an empty tensor.
+    """
     if len(xs) == 0:
         return torch.tensor([], dtype=dtype)
-    return torch.stack(xs)
+    return torch.stack(list(xs))
 
 
 def _normalize(x: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    """Normalize a tensor to zero mean and unit variance.
+
+    Args:
+        x: Input tensor.
+        eps: Numerical stability epsilon added to the standard deviation.
+
+    Returns:
+        Normalized tensor (same shape as input).
+    """
     if x.numel() == 0:
         return x
     return (x - x.mean()) / (x.std() + eps)
-
 
 
 # ============================
 # Encoders
 # ============================
 
+
 def encode_box_to_unit_interval(obs: np.ndarray, scales: Optional[np.ndarray] = None) -> torch.Tensor:
-    """
-    Map a Box observation to [0,1]^D (good for angle encoding RY(pi*x)).
+    """Encode a continuous Box observation into the unit interval.
+
+    Produces a vector in [0, 1]^D, useful for angle encoding such as RY(pi*x).
+    If `scales` is provided, performs a clipped linear scaling. Otherwise uses a
+    tanh squash for a safe fallback.
+
+    Args:
+        obs: Observation array-like.
+        scales: Optional scale factors per dimension. Typical use: normalize by
+            plausible max magnitudes for each observation dimension.
+
+    Returns:
+        A float tensor with values in [0, 1].
     """
     obs = np.asarray(obs, dtype=np.float32)
     if scales is None:
-        # fallback: tanh squashing
         z = np.tanh(obs)
         z = (z + 1.0) / 2.0
         return torch.tensor(z, dtype=torch.float32)
@@ -94,17 +161,28 @@ def encode_box_to_unit_interval(obs: np.ndarray, scales: Optional[np.ndarray] = 
 
 
 def encode_discrete_to_bits(s: int, n_bits: int) -> torch.Tensor:
-    """
-    Encode a discrete state index into a basis bitstring tensor of length n_bits.
-    Output is int64 bits.
+    """Encode a discrete integer state into a binary bitstring tensor.
+
+    Args:
+        s: Discrete state index.
+        n_bits: Number of bits to output.
+
+    Returns:
+        An int64 tensor of shape [n_bits] containing 0/1 bits.
     """
     bits = [(s >> (n_bits - 1 - i)) & 1 for i in range(n_bits)]
     return torch.tensor(bits, dtype=torch.int64)
 
 
 def encode_discrete_to_onehot_unit(s: int, n_states: int) -> torch.Tensor:
-    """
-    One-hot in {0,1} then cast to float; useful for angle encoding.
+    """Encode a discrete state index into a one-hot float vector.
+
+    Args:
+        s: Discrete state index.
+        n_states: Total number of states.
+
+    Returns:
+        A float tensor of shape [n_states] containing a one-hot representation.
     """
     x = torch.zeros(n_states, dtype=torch.float32)
     x[s] = 1.0
@@ -112,13 +190,18 @@ def encode_discrete_to_onehot_unit(s: int, n_states: int) -> torch.Tensor:
 
 
 # ============================
-# Policy head
+# Policy head (logits helpers)
 # ============================
 
+
 def logits_from_2expvals(z: torch.Tensor) -> torch.Tensor:
-    """
-    z: expvals on output qubits, shape [2] (each in [-1,1])
-    Use as logits for a 2-action policy.
+    """Convert two expectation values into logits for a 2-action policy.
+
+    Args:
+        z: Expectation values on output qubits, shape [2] (each in [-1, 1]).
+
+    Returns:
+        A tensor of shape [2] suitable as logits for `torch.distributions.Categorical`.
     """
     z = torch.as_tensor(z, dtype=torch.float32).flatten()
     if z.numel() < 2:
@@ -128,13 +211,20 @@ def logits_from_2expvals(z: torch.Tensor) -> torch.Tensor:
 
 
 def logits_from_kexpvals(z: torch.Tensor, n_actions: int) -> torch.Tensor:
-    """
-    General: use first n_actions expvals as logits.
-    Requires len(output_qubits) >= n_actions.
+    """Convert expectation values into logits for a K-action policy.
+
+    Uses the first `n_actions` values as logits. If the feature vector is shorter,
+    pads deterministically with zeros.
+
+    Args:
+        z: Feature tensor (expvals or any real-valued features).
+        n_actions: Number of actions.
+
+    Returns:
+        A float tensor of shape [n_actions] used as logits.
     """
     z = torch.as_tensor(z, dtype=torch.float32).flatten()
     if z.numel() < n_actions:
-        # pad deterministically
         pad = torch.zeros(n_actions - z.numel(), dtype=z.dtype)
         z = torch.cat([z, pad], dim=0)
     return z[:n_actions]
@@ -144,9 +234,19 @@ def logits_from_kexpvals(z: torch.Tensor, n_actions: int) -> torch.Tensor:
 # Returns
 # ============================
 
+
 def discounted_returns(rewards: Sequence[torch.Tensor], gamma: float) -> torch.Tensor:
+    """Compute discounted returns for a sequence of rewards.
+
+    Args:
+        rewards: Sequence of scalar reward tensors.
+        gamma: Discount factor.
+
+    Returns:
+        Tensor of discounted returns of shape [T]. If empty, returns an empty tensor.
+    """
     running = torch.tensor(0.0, dtype=torch.float32)
-    out = []
+    out: list[torch.Tensor] = []
     for r in reversed(rewards):
         running = r + gamma * running
         out.append(running)
@@ -158,14 +258,66 @@ def discounted_returns(rewards: Sequence[torch.Tensor], gamma: float) -> torch.T
 # Config
 # ============================
 
+
 @dataclass
 class RLSpec:
+    """Configuration for RL training and evaluation.
+
+    Attributes:
+        env_id: Gymnasium environment id.
+        n_actions: Number of discrete actions.
+        algo: Algorithm name (used by some trainers).
+
+        input_mode: How the genome encodes inputs ("angle" or "basis").
+        return_expvals: If True, assume circuit returns expectation values.
+            If False, assume circuit returns probabilities.
+
+        obs_encoder: Callable that maps a raw env observation into a tensor used
+            by the circuit.
+
+        n_state_bits: Optional number of bits for discrete env basis encoding.
+        box_scales: Optional scaling for continuous observations.
+
+        episodes: Number of training episodes/updates.
+        max_steps: Max steps per episode.
+        gamma: Discount factor.
+        lr: Learning rate.
+        baseline: Baseline type for REINFORCE ("mean" or "none").
+        seed: Random seed.
+        log_every: Logging frequency.
+
+        eval_episodes: Number of evaluation episodes.
+
+        entropy_coef: Entropy regularization coefficient.
+
+        env_kwargs: Keyword arguments passed into `gym.make(...)`.
+
+        gae_lambda: Lambda for GAE.
+
+        value_coef: Weight on the value loss term.
+
+        ppo_clip: PPO clip range.
+        ppo_epochs: PPO epochs per update.
+        ppo_minibatch: PPO minibatch size.
+        target_kl: Optional KL threshold for early stopping.
+
+        rollout_steps: Number of steps collected per update in on-policy methods.
+
+        epsilon: Initial epsilon for epsilon-greedy exploration in value-based RL.
+        epsilon_min: Minimum epsilon.
+        epsilon_decay: Multiplicative decay per episode.
+
+        td_batch_size: TD minibatch size when sampling replay.
+        replay_capacity: Replay buffer capacity.
+        warmup_steps: Steps collected before learning begins.
+        target_update_every: Steps between target net updates.
+        train_every: Gradient step frequency (in env steps).
+    """
+
     env_id: str
     n_actions: int
     algo: str = "reinforce"
 
-    # how to build circuit output
-    # assumes genome.generate_pennylane_circuit(... return_expvals=True/False etc.)
     input_mode: str = "angle"   # "angle" or "basis"
     return_expvals: bool = True
 
@@ -195,7 +347,7 @@ class RLSpec:
 
     env_kwargs: dict[str, Any] = None
 
-    # ---- Actor-Critic / PPO ----
+    # Actor-Critic / PPO
     gae_lambda: float = 0.95
 
     # value function loss weight
@@ -210,10 +362,7 @@ class RLSpec:
     # rollout sizing (for A2C/PPO batching)
     rollout_steps: int = 2048  # total steps collected before an update (PPO) or per update (A2C)
 
-    # ============================
     # Value-based (DQN/Q-learning/SARSA)
-    # ============================
-
     epsilon: float = 0.2
     epsilon_min: float = 0.05
     epsilon_decay: float = 0.995
@@ -229,53 +378,95 @@ class RLSpec:
 # Policy+Value head
 # ============================
 
+
 class PolicyValueHead(nn.Module):
+    """Small policy-value head over circuit features.
+
+    This head maps circuit output features into:
+      - policy logits (for Categorical action selection)
+      - a scalar value estimate
+
+    The policy logits are derived directly from features via `logits_from_kexpvals`,
+    while the value is produced by a linear layer.
+
+    Args:
+        n_actions: Number of discrete actions.
+        in_dim: Feature dimension expected by the value layer.
     """
-    Turns circuit outputs (expvals or probs) into:
-      - policy logits (n_actions)
-      - value scalar
-    We keep it tiny: linear value head over the same features.
-    """
+
     def __init__(self, n_actions: int, in_dim: int):
         super().__init__()
         self.n_actions = n_actions
         self.value = nn.Linear(in_dim, 1)
 
     def forward(self, features: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        # features: [K]
+        """Compute policy logits and value estimate.
+
+        Args:
+            features: Feature tensor of shape [K] (flattened).
+
+        Returns:
+            A tuple (logits, value):
+                logits: Tensor of shape [n_actions].
+                value: Scalar tensor.
+        """
         logits = logits_from_kexpvals(features, self.n_actions)
         v = self.value(features[: self.value.in_features]).squeeze(-1)
         return logits, v
-    
+
 
 # ============================
 # Q head
 # ============================
 
+
 class QHead(nn.Module):
+    """Linear Q-value head over circuit features.
+
+    Args:
+        n_actions: Number of discrete actions.
+        in_dim: Feature dimension expected by the linear layer.
     """
-    Turns circuit outputs (expvals or probs) into Q-values for each action.
-    """
+
     def __init__(self, n_actions: int, in_dim: int):
         super().__init__()
         self.q = nn.Linear(in_dim, n_actions)
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:
+        """Compute Q-values for each action.
+
+        Pads features with zeros if fewer than `in_dim` are provided.
+
+        Args:
+            features: Feature tensor.
+
+        Returns:
+            Tensor of shape [n_actions] containing Q-values.
+        """
         features = torch.as_tensor(features, dtype=torch.float32).flatten()
-        # if features shorter than expected, pad
         if features.numel() < self.q.in_features:
             pad = torch.zeros(self.q.in_features - features.numel(), dtype=features.dtype)
             features = torch.cat([features, pad], dim=0)
         return self.q(features[: self.q.in_features])
 
 
-
 # ============================
 # Core rollout (generic)
 # ============================
 
+
 def _make_env(env_id: str, **kwargs):
+    """Instantiate a Gymnasium environment.
+
+    Args:
+        env_id: Gymnasium environment id.
+        **kwargs: Passed to `gym.make`.
+
+    Returns:
+        A Gymnasium environment instance.
+    """
     import gymnasium as gym
+
     return gym.make(env_id, **kwargs)
 
 
@@ -285,8 +476,30 @@ def rollout_reinforce(
     *,
     spec: RLSpec,
     episode_seed: int,
-) -> tuple[torch.Tensor, torch.Tensor, float]:
-    env = _make_env(spec.env_id)
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float]:
+    """Collect one REINFORCE episode rollout.
+
+    For each step:
+      - encode observation via `spec.obs_encoder`
+      - run `genome.circuit(x, params)` to produce outputs
+      - convert outputs into logits (from expvals or probs)
+      - sample action, step environment
+      - store log-prob and entropy for policy gradient
+
+    Args:
+        genome: CircuitGenome policy.
+        params: Trainable parameters dict for the genome.
+        spec: RLSpec configuration.
+        episode_seed: Seed for environment reset.
+
+    Returns:
+        A tuple (logps, entropies, returns, ep_return):
+            logps: Tensor [T] of log-probabilities.
+            entropies: Tensor [T] of entropies.
+            returns: Tensor [T] of discounted returns.
+            ep_return: Episode return as float.
+    """
+    env = _make_env(spec.env_id, **(spec.env_kwargs or {}))
     obs, _ = env.reset(seed=episode_seed)
 
     logps: list[torch.Tensor] = []
@@ -298,15 +511,13 @@ def rollout_reinforce(
     for _ in range(spec.max_steps):
         x = spec.obs_encoder(obs)
 
-        # forward
-        out = genome.circuit(x, params)  # expvals/probs depending on spec
+        out = genome.circuit(x, params)
         if spec.return_expvals:
             out = torch.stack(list(out))
             logits = logits_from_kexpvals(out, spec.n_actions)
         else:
-            # if you decide to use probs instead, convert to logits safely
             probs = torch.as_tensor(out, dtype=torch.float32).flatten()
-            probs = probs[:spec.n_actions]
+            probs = probs[: spec.n_actions]
             probs = probs / (probs.sum() + 1e-12)
             logits = torch.log(probs.clamp_min(1e-12))
 
@@ -328,9 +539,11 @@ def rollout_reinforce(
     G = discounted_returns(rewards, spec.gamma)
     return torch.stack(logps), torch.stack(entropies), G, ep_return
 
+
 # ============================
 # Actor-Critic/PPO rollout (generic)
 # ============================
+
 
 @torch.no_grad()
 def rollout_actor_critic(
@@ -341,15 +554,26 @@ def rollout_actor_critic(
     head: PolicyValueHead,
     episode_seed: int,
 ) -> dict[str, Any]:
-    """
-    Collect one episode worth of transitions (or until max_steps).
-    Stores:
-      obs_tensors: list[Tensor] each shape [D]
-      actions:     list[int]
-      logps_old:   list[Tensor] scalar
-      values_old:  list[Tensor] scalar
-      rewards:     list[Tensor] scalar
-      dones:       list[Tensor] scalar {0,1}
+    """Collect transitions for Actor-Critic or PPO.
+
+    Stores per-step tensors for later batch processing:
+      - obs tensors (encoded)
+      - sampled actions
+      - log probabilities under the behavior policy (old logps)
+      - value estimates under the behavior policy (old values)
+      - rewards
+      - done flags
+
+    Args:
+        genome: CircuitGenome policy.
+        params: Trainable parameters dict for the genome.
+        spec: RLSpec configuration.
+        head: Policy+value head over circuit features.
+        episode_seed: Seed for environment reset.
+
+    Returns:
+        Dict with keys:
+            obs, actions, logps_old, values_old, rewards, dones, ep_return
     """
     env = _make_env(spec.env_id, **(spec.env_kwargs or {}))
     obs, _ = env.reset(seed=episode_seed)
@@ -363,9 +587,9 @@ def rollout_actor_critic(
 
     ep_return = 0.0
 
-    for t in range(spec.max_steps):
-        x = spec.obs_encoder(obs)  # Tensor[D] float or int bits
-        out = genome.circuit(x, params)  # expvals/probs
+    for _ in range(spec.max_steps):
+        x = spec.obs_encoder(obs)
+        out = genome.circuit(x, params)
         feats = torch.as_tensor(out, dtype=torch.float32).flatten()
 
         logits, v = head(feats)
@@ -400,10 +624,10 @@ def rollout_actor_critic(
     }
 
 
-
 # ============================
 # Train / Eval (generic)
 # ============================
+
 
 @torch.no_grad()
 def eval_policy(
@@ -413,13 +637,25 @@ def eval_policy(
     deterministic: bool = True,
     seed: int = 1234,
 ) -> dict[str, float]:
-    # ensure qnode exists
+    """Evaluate a policy across multiple episodes.
+
+    Args:
+        genome: CircuitGenome policy to evaluate.
+        spec: RLSpec configuration.
+        deterministic: If True, uses argmax action; otherwise samples from policy.
+        seed: Base seed for evaluation episodes.
+
+    Returns:
+        Dict with mean and std return:
+            - eval_return_mean
+            - eval_return_std
+    """
     if getattr(genome, "circuit", None) is None or not callable(genome.circuit):
         genome.generate_pennylane_circuit(input_mode=spec.input_mode, measure_registers=spec.return_expvals)
 
     params = genome_to_torch_params(genome)
 
-    returns = []
+    returns: list[float] = []
     for ep in range(spec.eval_episodes):
         env = _make_env(spec.env_id, **(spec.env_kwargs or {}))
         obs, _ = env.reset(seed=seed + ep)
@@ -434,7 +670,7 @@ def eval_policy(
                 logits = logits_from_kexpvals(out, spec.n_actions)
             else:
                 probs = torch.as_tensor(out, dtype=torch.float32).flatten()
-                probs = probs[:spec.n_actions]
+                probs = probs[: spec.n_actions]
                 probs = probs / (probs.sum() + 1e-12)
                 logits = torch.log(probs.clamp_min(1e-12))
 
@@ -457,33 +693,39 @@ def eval_policy(
     }
 
 
-def train_reinforce(
-    genome: CircuitGenome,
-    *,
-    spec: RLSpec,
-) -> CircuitGenome:
-    """
-    Generic REINFORCE trainer for any env.
-    Needs:
-      - spec.obs_encoder
-      - circuit returning expvals or probs
-      - spec.n_actions
+def train_reinforce(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
+    """Train a genome using REINFORCE (Monte-Carlo policy gradient).
+
+    Requires:
+      - `spec.obs_encoder` to encode observations
+      - `genome.generate_pennylane_circuit(...)` to create `genome.circuit`
+      - circuit to return either expvals (preferred) or probabilities
+
+    The objective is:
+        L = -E[ log pi(a_t|s_t) * advantage_t ] - entropy_coef * H[pi]
+
+    Where advantage is either `G_t - mean(G)` or `G_t` depending on baseline.
+
+    Args:
+        genome: CircuitGenome policy to train.
+        spec: RLSpec configuration.
+
+    Returns:
+        Updated genome with parameters written back and fitness populated.
+
+    Raises:
+        ValueError: If `spec.obs_encoder` is not provided.
     """
     if spec.obs_encoder is None:
         raise ValueError("spec.obs_encoder must be provided")
 
-    # build qnode
     genome.generate_pennylane_circuit(input_mode=spec.input_mode, measure_registers=spec.return_expvals)
 
     params = genome_to_torch_params(genome)
 
     if len(params) == 0:
         ev = eval_policy(genome, spec=spec, deterministic=True, seed=spec.seed + 999)
-        genome.fitness = {
-            "note": "no trainable params", 
-            "best_episode_return": ev["eval_return_mean"],
-            **ev
-            }
+        genome.fitness = {"note": "no trainable params", "best_episode_return": ev["eval_return_mean"], **ev}
         return genome
 
     opt = torch.optim.Adam(params.values(), lr=spec.lr, weight_decay=0.0)
@@ -494,26 +736,17 @@ def train_reinforce(
     for ep in range(spec.episodes):
         opt.zero_grad()
 
-        logps, entropies, G, ep_ret = rollout_reinforce(
-            genome, params, spec=spec, episode_seed=spec.seed + ep
-        )
+        logps, entropies, G, ep_ret = rollout_reinforce(genome, params, spec=spec, episode_seed=spec.seed + ep)
         recent_returns.append(ep_ret)
         best_episode_return = max(best_episode_return, ep_ret)
 
         if G.numel() == 0:
             continue
 
-        if spec.baseline == "mean":
-            adv = G - G.mean()
-        else:
-            adv = G
+        adv = G - G.mean() if spec.baseline == "mean" else G
 
-        # REINFORCE
         loss_pg = -(logps * adv.detach()).mean()
-
-        # entropy bonus
         loss_ent = -spec.entropy_coef * entropies.mean() if spec.entropy_coef > 0 else 0.0
-
         loss = loss_pg + (loss_ent if isinstance(loss_ent, torch.Tensor) else 0.0)
 
         if not loss.requires_grad:
@@ -527,10 +760,8 @@ def train_reinforce(
             avg10 = float(np.mean(recent_returns[-10:])) if len(recent_returns) >= 10 else float(np.mean(recent_returns))
             logger.info(f"[ep {ep:04d}] loss={float(loss.item()):.4f} return={ep_ret:.1f} avg10={avg10:.1f}")
 
-    # write back
     torch_params_to_genome(genome, params)
 
-    # final eval
     ev = eval_policy(genome, spec=spec, deterministic=True, seed=spec.seed + 9999)
     if len(recent_returns) >= 20:
         train_tail = float(np.mean(recent_returns[-20:]))
@@ -550,19 +781,31 @@ def train_reinforce(
 
 
 # ============================
-# Train Actor-Critic 
+# Train Actor-Critic
 # ============================
 
-def train_actor_critic(
-    genome: CircuitGenome,
-    *,
-    spec: RLSpec,
-) -> CircuitGenome:
-    """
-    On-policy Actor-Critic (A2C-ish):
-      - collect transitions up to spec.rollout_steps
-      - compute GAE advantages + returns
-      - update policy+value jointly
+
+def train_actor_critic(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
+    """Train a genome using an on-policy Actor-Critic (A2C-style) update.
+
+    Flow:
+      1) Collect `spec.rollout_steps` transitions (may span multiple episodes).
+      2) Compute GAE advantages and returns.
+      3) Update policy + value head jointly using:
+            L = L_pi + value_coef * L_v - entropy_coef * H
+         where
+            L_pi = -E[ log pi(a|s) * A ]
+            L_v  = 0.5 * E[ (R - V)^2 ]
+
+    Args:
+        genome: CircuitGenome policy to train.
+        spec: RLSpec configuration.
+
+    Returns:
+        Updated genome with trained parameters and fitness.
+
+    Raises:
+        ValueError: If `spec.obs_encoder` is not provided.
     """
     if spec.obs_encoder is None:
         raise ValueError("spec.obs_encoder must be provided")
@@ -570,17 +813,16 @@ def train_actor_critic(
     genome.generate_pennylane_circuit(input_mode=spec.input_mode, measure_registers=spec.return_expvals)
     params = genome_to_torch_params(genome)
 
-    # handle no-params case
     if len(params) == 0:
         ev = eval_policy(genome, spec=spec, deterministic=True, seed=spec.seed + 999)
         genome.fitness = {"note": "no trainable params", **ev, "env_id": spec.env_id}
         return genome
 
-    # policy/value head input dim = number of outputs from circuit
-    # for expvals: should be len(output_qubits) because circuit returns one expval per output wire.
-    # we infer it by one forward pass
     with torch.no_grad():
-        dummy = spec.obs_encoder(_make_env(spec.env_id, **(spec.env_kwargs or {})).reset(seed=spec.seed)[0])
+        env0 = _make_env(spec.env_id, **(spec.env_kwargs or {}))
+        o0, _ = env0.reset(seed=spec.seed)
+        env0.close()
+        dummy = spec.obs_encoder(o0)
         out0 = genome.circuit(dummy, params)
         in_dim = int(torch.as_tensor(out0).numel())
 
@@ -590,9 +832,7 @@ def train_actor_critic(
     best_episode_return = -float("inf")
     recent_returns: list[float] = []
 
-    # We run multiple updates, reusing spec.episodes as "num updates"
     for upd in range(spec.episodes):
-        # collect rollout_steps transitions total
         obs_buf, act_buf, logp_buf, val_buf, rew_buf, done_buf = [], [], [], [], [], []
         steps_collected = 0
         ep = 0
@@ -614,26 +854,21 @@ def train_actor_critic(
 
             steps_collected = len(obs_buf)
 
-        # tensors
-        obs_t = torch.stack([o.to(torch.float32) for o in obs_buf], dim=0)  # [T,D] (basis bits will cast)
-        act_t = torch.stack(act_buf).long().view(-1)                        # [T]
-        logp_old_t = torch.stack(logp_buf).to(torch.float32).view(-1)       # [T]
-        val_old_t = torch.stack(val_buf).to(torch.float32).view(-1)         # [T]
-        rew_t = torch.stack(rew_buf).to(torch.float32).view(-1)             # [T]
-        done_t = torch.stack(done_buf).to(torch.float32).view(-1)           # [T]
+        obs_t = torch.stack([o.to(torch.float32) for o in obs_buf], dim=0)  # [T,D]
+        act_t = torch.stack(act_buf).long().view(-1)  # [T]
+        logp_old_t = torch.stack(logp_buf).to(torch.float32).view(-1)  # [T]
+        val_old_t = torch.stack(val_buf).to(torch.float32).view(-1)  # [T]
+        rew_t = torch.stack(rew_buf).to(torch.float32).view(-1)  # [T]
+        done_t = torch.stack(done_buf).to(torch.float32).view(-1)  # [T]
 
-        # GAE
-        adv_t, ret_t = gae_advantages(
-            rew_t, val_old_t, done_t, gamma=spec.gamma, lam=spec.gae_lambda, last_value=0.0
-        )
+        adv_t, ret_t = gae_advantages(rew_t, val_old_t, done_t, gamma=spec.gamma, lam=spec.gae_lambda, last_value=0.0)
         adv_t = _normalize(adv_t)
 
-        # ---- update ----
         opt.zero_grad()
 
-        new_logps = []
-        new_vals = []
-        entropies = []
+        new_logps: list[torch.Tensor] = []
+        new_vals: list[torch.Tensor] = []
+        entropies: list[torch.Tensor] = []
 
         for i in range(obs_t.shape[0]):
             x = obs_t[i]
@@ -646,17 +881,12 @@ def train_actor_critic(
             entropies.append(dist.entropy())
             new_vals.append(v)
 
-        new_logp_t = torch.stack(new_logps)      # [T]
-        new_val_t = torch.stack(new_vals)        # [T]
-        ent_t = torch.stack(entropies)           # [T]
+        new_logp_t = torch.stack(new_logps)  # [T]
+        new_val_t = torch.stack(new_vals)  # [T]
+        ent_t = torch.stack(entropies)  # [T]
 
-        # policy loss
         loss_pi = -(new_logp_t * adv_t.detach()).mean()
-
-        # value loss
         loss_v = 0.5 * (ret_t.detach() - new_val_t).pow(2).mean()
-
-        # entropy bonus
         loss_ent = -spec.entropy_coef * ent_t.mean() if spec.entropy_coef > 0 else 0.0
 
         loss = loss_pi + spec.value_coef * loss_v + (loss_ent if isinstance(loss_ent, torch.Tensor) else 0.0)
@@ -670,13 +900,17 @@ def train_actor_critic(
 
         if (upd % spec.log_every) == 0:
             avg10 = float(np.mean(recent_returns[-10:])) if len(recent_returns) >= 10 else float(np.mean(recent_returns))
-            logger.info(f"[A2C upd {upd:04d}] loss={float(loss.item()):.4f} pi={float(loss_pi.item()):.4f} v={float(loss_v.item()):.4f} avg10ret={avg10:.1f}")
+            logger.info(
+                f"[A2C upd {upd:04d}] loss={float(loss.item()):.4f} "
+                f"pi={float(loss_pi.item()):.4f} v={float(loss_v.item()):.4f} avg10ret={avg10:.1f}"
+            )
 
-    # write back circuit params
     torch_params_to_genome(genome, params)
 
     ev = eval_policy(genome, spec=spec, deterministic=True, seed=spec.seed + 9999)
-    train_tail = float(np.mean(recent_returns[-20:])) if len(recent_returns) >= 20 else float(np.mean(recent_returns) if recent_returns else 0.0)
+    train_tail = float(np.mean(recent_returns[-20:])) if len(recent_returns) >= 20 else float(
+        np.mean(recent_returns) if recent_returns else 0.0
+    )
 
     genome.fitness = {
         "train_return_mean": train_tail,
@@ -693,13 +927,30 @@ def train_actor_critic(
 # Train PPO
 # ============================
 
-def train_ppo(
-    genome: CircuitGenome,
-    *,
-    spec: RLSpec,
-) -> CircuitGenome:
-    """
-    PPO (clip) with GAE and multiple epochs over collected rollout buffer.
+
+def train_ppo(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
+    """Train a genome using PPO (clipped objective) with GAE.
+
+    Flow:
+      1) Collect `spec.rollout_steps` transitions (may span multiple episodes).
+      2) Compute GAE advantages and returns.
+      3) Perform `spec.ppo_epochs` passes of minibatch updates using:
+            ratio = exp(logp_new - logp_old)
+            L_pi  = -E[min(ratio*A, clip(ratio)*A)]
+            L_v   = 0.5 * E[(R - V)^2]
+            L_ent = -entropy_coef * E[H]
+            L = L_pi + value_coef * L_v + L_ent
+      4) Optional early stop if approximate KL exceeds `spec.target_kl`.
+
+    Args:
+        genome: CircuitGenome policy to train.
+        spec: RLSpec configuration.
+
+    Returns:
+        Updated genome with trained parameters and fitness.
+
+    Raises:
+        ValueError: If `spec.obs_encoder` is not provided.
     """
     if spec.obs_encoder is None:
         raise ValueError("spec.obs_encoder must be provided")
@@ -712,7 +963,6 @@ def train_ppo(
         genome.fitness = {"note": "no trainable params", **ev, "env_id": spec.env_id}
         return genome
 
-    # infer feature dim from one forward pass
     with torch.no_grad():
         env = _make_env(spec.env_id, **(spec.env_kwargs or {}))
         o0, _ = env.reset(seed=spec.seed)
@@ -728,7 +978,6 @@ def train_ppo(
     recent_returns: list[float] = []
 
     for upd in range(spec.episodes):
-        # -------- collect rollout buffer --------
         obs_buf, act_buf, logp_buf, val_buf, rew_buf, done_buf = [], [], [], [], [], []
         steps_collected = 0
         ep = 0
@@ -751,33 +1000,28 @@ def train_ppo(
 
         T = len(obs_buf)
 
-        obs_t = torch.stack([o.to(torch.float32) for o in obs_buf], dim=0)      # [T,D]
-        act_t = torch.stack(act_buf).long().view(-1)                            # [T]
-        logp_old_t = torch.stack(logp_buf).to(torch.float32).view(-1)           # [T]
-        val_old_t = torch.stack(val_buf).to(torch.float32).view(-1)             # [T]
-        rew_t = torch.stack(rew_buf).to(torch.float32).view(-1)                 # [T]
-        done_t = torch.stack(done_buf).to(torch.float32).view(-1)               # [T]
+        obs_t = torch.stack([o.to(torch.float32) for o in obs_buf], dim=0)
+        act_t = torch.stack(act_buf).long().view(-1)
+        logp_old_t = torch.stack(logp_buf).to(torch.float32).view(-1)
+        val_old_t = torch.stack(val_buf).to(torch.float32).view(-1)
+        rew_t = torch.stack(rew_buf).to(torch.float32).view(-1)
+        done_t = torch.stack(done_buf).to(torch.float32).view(-1)
 
-        adv_t, ret_t = gae_advantages(
-            rew_t, val_old_t, done_t, gamma=spec.gamma, lam=spec.gae_lambda, last_value=0.0
-        )
+        adv_t, ret_t = gae_advantages(rew_t, val_old_t, done_t, gamma=spec.gamma, lam=spec.gae_lambda, last_value=0.0)
         adv_t = _normalize(adv_t)
 
-        # indices for minibatches
         mb = min(spec.ppo_minibatch, T)
         idx_all = torch.randperm(T)
 
-        # -------- PPO updates --------
-        for epoch in range(spec.ppo_epochs):
-            idx_all = idx_all[torch.randperm(T)]  # reshuffle each epoch
+        for _epoch in range(spec.ppo_epochs):
+            idx_all = idx_all[torch.randperm(T)]
 
             for start in range(0, T, mb):
                 idx = idx_all[start : start + mb]
 
-                # recompute under current params (grad-enabled)
-                new_logps = []
-                new_vals = []
-                entropies = []
+                new_logps: list[torch.Tensor] = []
+                new_vals: list[torch.Tensor] = []
+                entropies: list[torch.Tensor] = []
 
                 for i in idx.tolist():
                     x = obs_t[i]
@@ -790,9 +1034,9 @@ def train_ppo(
                     entropies.append(dist.entropy())
                     new_vals.append(v)
 
-                new_logp = torch.stack(new_logps)   # [B]
-                new_val = torch.stack(new_vals)     # [B]
-                ent = torch.stack(entropies)        # [B]
+                new_logp = torch.stack(new_logps)
+                new_val = torch.stack(new_vals)
+                ent = torch.stack(entropies)
 
                 ratio = torch.exp(new_logp - logp_old_t[idx])
 
@@ -810,7 +1054,6 @@ def train_ppo(
                 loss.backward()
                 opt.step()
 
-                # optional early stop on KL
                 if spec.target_kl is not None:
                     with torch.no_grad():
                         approx_kl = (logp_old_t[idx] - new_logp).mean().item()
@@ -821,11 +1064,12 @@ def train_ppo(
             avg10 = float(np.mean(recent_returns[-10:])) if len(recent_returns) >= 10 else float(np.mean(recent_returns))
             logger.info(f"[PPO upd {upd:04d}] avg10ret={avg10:.1f} bufferT={T}")
 
-    # write back circuit params
     torch_params_to_genome(genome, params)
 
     ev = eval_policy(genome, spec=spec, deterministic=True, seed=spec.seed + 9999)
-    train_tail = float(np.mean(recent_returns[-20:])) if len(recent_returns) >= 20 else float(np.mean(recent_returns) if recent_returns else 0.0)
+    train_tail = float(np.mean(recent_returns[-20:])) if len(recent_returns) >= 20 else float(
+        np.mean(recent_returns) if recent_returns else 0.0
+    )
 
     genome.fitness = {
         "train_return_mean": train_tail,
@@ -842,18 +1086,48 @@ def train_ppo(
 # Train Q-Learning/SARSA
 # ============================
 
-def _forward_features(genome: CircuitGenome, x: torch.Tensor, params):
-    out = genome.circuit(x, params)  # expvals/probs
+
+def _forward_features(genome: CircuitGenome, x: torch.Tensor, params) -> torch.Tensor:
+    """Compute circuit features for a given encoded observation.
+
+    Args:
+        genome: CircuitGenome with a callable `circuit`.
+        x: Encoded observation tensor.
+        params: Trainable parameters dict for the circuit.
+
+    Returns:
+        Flattened float feature tensor.
+    """
+    out = genome.circuit(x, params)
     return torch.as_tensor(out, dtype=torch.float32).flatten()
 
 
 @torch.no_grad()
 def _epsilon_greedy_action(q_values: torch.Tensor, epsilon: float) -> int:
+    """Select an action via epsilon-greedy exploration.
+
+    Args:
+        q_values: Tensor of Q-values (shape [n_actions]).
+        epsilon: Probability of sampling a random action.
+
+    Returns:
+        Selected action index.
+    """
     if torch.rand(()) < epsilon:
         return int(torch.randint(low=0, high=q_values.numel(), size=(1,)).item())
     return int(torch.argmax(q_values).item())
 
+
 def _infer_feature_dim(genome: CircuitGenome, spec: RLSpec) -> int:
+    """Infer the circuit output dimensionality via a dummy forward pass.
+
+    Args:
+        genome: CircuitGenome policy.
+        spec: RLSpec configuration.
+
+    Returns:
+        Number of scalar features produced by `genome.circuit(...)`.
+    """
     env = _make_env(spec.env_id, **(spec.env_kwargs or {}))
     obs, _ = env.reset(seed=spec.seed)
     env.close()
@@ -863,31 +1137,33 @@ def _infer_feature_dim(genome: CircuitGenome, spec: RLSpec) -> int:
         out0 = genome.circuit(x, params0)
     return int(torch.as_tensor(out0).numel())
 
-def train_value_based(
-    genome: CircuitGenome,
-    *,
-    spec: RLSpec,
-) -> CircuitGenome:
-    """
-    Value-based learning with function approximation:
-      - algo="q_learning": DQN-style TD target uses max_a' Q_target(s', a')
-      - algo="sarsa":      TD target uses Q_target(s', a'_epsilon_greedy)  (on-policy)
 
-    Uses:
-      - circuit outputs -> features
-      - small linear QHead -> Q-values
-      - optional replay buffer + target QHead
+def train_value_based(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
+    """Train a genome using value-based RL (Q-learning or SARSA).
+
+    Uses circuit outputs as features and learns a small linear Q-function head.
+    Stability is improved using a target network and optional replay buffer.
+
+    Targets:
+      - Q-learning (DQN-style): y = r + gamma * (1-done) * max_a' Q_tgt(s', a')
+      - SARSA:                 y = r + gamma * (1-done) * Q_tgt(s', a'_eps)
+
+    Args:
+        genome: CircuitGenome policy to train.
+        spec: RLSpec configuration.
+
+    Returns:
+        Updated genome with trained circuit parameters written back and fitness.
+
+    Raises:
+        ValueError: If `spec.obs_encoder` is not provided.
     """
     if spec.obs_encoder is None:
         raise ValueError("spec.obs_encoder must be provided")
 
-    # Build qnode: expvals are ideal as features; probs also work.
     genome.generate_pennylane_circuit(input_mode=spec.input_mode, measure_registers=spec.return_expvals)
-
     params = genome_to_torch_params(genome)
 
-    # If no trainable circuit params exist, we can still train QHead, but you probably want params.
-    # We'll allow it: QHead learns on top of fixed circuit.
     feat_dim = _infer_feature_dim(genome, spec)
     q_head = QHead(n_actions=spec.n_actions, in_dim=feat_dim)
     q_tgt = QHead(n_actions=spec.n_actions, in_dim=feat_dim)
@@ -909,10 +1185,9 @@ def train_value_based(
 
         ep_ret = 0.0
 
-        for t in range(spec.max_steps):
+        for _ in range(spec.max_steps):
             x = spec.obs_encoder(obs)
 
-            # current Q(s, ·)
             feats = _forward_features(genome, x, params)
             q_vals = q_head(feats)
 
@@ -928,7 +1203,6 @@ def train_value_based(
             obs = next_obs
             global_step += 1
 
-            # learn
             if len(rb) >= spec.warmup_steps and (global_step % spec.train_every) == 0:
                 batch = rb.sample(spec.td_batch_size)
 
@@ -938,35 +1212,29 @@ def train_value_based(
                 s2 = torch.stack([b[3].to(torch.float32) for b in batch], dim=0)
                 d_b = torch.tensor([b[4] for b in batch], dtype=torch.float32)
 
-                # compute Q(s,a)
-                q_sa = []
+                q_sa: list[torch.Tensor] = []
                 for i in range(s.shape[0]):
                     feats_i = _forward_features(genome, s[i], params)
                     q_i = q_head(feats_i)
                     q_sa.append(q_i[a_b[i]])
-                q_sa = torch.stack(q_sa)  # [B]
+                q_sa_t = torch.stack(q_sa)
 
-                # TD target
                 with torch.no_grad():
-                    q_next = []
+                    q_next: list[torch.Tensor] = []
                     for i in range(s2.shape[0]):
                         feats2_i = _forward_features(genome, s2[i], params)
                         q2_i = q_tgt(feats2_i)
 
                         if spec.algo == "sarsa":
-                            # on-policy next action via epsilon-greedy under current QHead (or target)
-                            # using target net for stability is fine.
                             a2 = _epsilon_greedy_action(q2_i, epsilon)
                             q_next.append(q2_i[a2])
                         else:
-                            # q_learning / DQN target: max
                             q_next.append(torch.max(q2_i))
 
-                    q_next = torch.stack(q_next)  # [B]
+                    q_next_t = torch.stack(q_next)
+                    target = r_b + spec.gamma * (1.0 - d_b) * q_next_t
 
-                    target = r_b + spec.gamma * (1.0 - d_b) * q_next
-
-                loss = torch.mean((q_sa - target) ** 2)
+                loss = torch.mean((q_sa_t - target) ** 2)
 
                 opt.zero_grad()
                 loss.backward()
@@ -983,7 +1251,6 @@ def train_value_based(
         recent_returns.append(ep_ret)
         best_episode_return = max(best_episode_return, ep_ret)
 
-        # epsilon schedule
         epsilon = max(spec.epsilon_min, epsilon * spec.epsilon_decay)
 
         if (ep % spec.log_every) == 0:
@@ -992,11 +1259,12 @@ def train_value_based(
                 f"[{spec.algo.upper()} ep {ep:04d}] return={ep_ret:.1f} avg10={avg10:.1f} eps={epsilon:.3f} rb={len(rb)}"
             )
 
-    # write back circuit params
     torch_params_to_genome(genome, params)
 
     ev = eval_policy(genome, spec=spec, deterministic=True, seed=spec.seed + 9999)
-    train_tail = float(np.mean(recent_returns[-20:])) if len(recent_returns) >= 20 else float(np.mean(recent_returns) if recent_returns else 0.0)
+    train_tail = float(np.mean(recent_returns[-20:])) if len(recent_returns) >= 20 else float(
+        np.mean(recent_returns) if recent_returns else 0.0
+    )
 
     genome.fitness = {
         "train_return_mean": train_tail,
@@ -1009,20 +1277,25 @@ def train_value_based(
     return genome
 
 
-
-
 # ============================
 # Ready-made specs
 # ============================
 
-def cartpole_spec(
-    *,
-    episodes: int = 100,
-    lr: float = 1e-2,
-    seed: int = 0,
-    algo: str = "reinforce",
-) -> RLSpec:
-    # CartPole obs dim=4, actions=2
+
+def cartpole_spec(*, episodes: int = 100, lr: float = 1e-2, seed: int = 0, algo: str = "reinforce") -> RLSpec:
+    """Create a ready-to-use CartPole RLSpec.
+
+    Uses angle encoding of the 4D Box state into [0,1] with simple scaling.
+
+    Args:
+        episodes: Number of training episodes/updates.
+        lr: Learning rate.
+        seed: Random seed.
+        algo: Algorithm name stored in the spec.
+
+    Returns:
+        RLSpec configured for "CartPole-v1".
+    """
     scales = np.array([2.4, 3.0, 0.21, 3.5], dtype=np.float32)
 
     def encoder(obs):
@@ -1053,21 +1326,28 @@ def frozenlake_spec(
     seed: int = 0,
     algo: str = "reinforce",
 ) -> RLSpec:
+    """Create a ready-to-use FrozenLake RLSpec.
+
+    FrozenLake observations are discrete states (0..n_states-1). This helper
+    uses basis encoding into a fixed number of bits.
+
+    Args:
+        map_name: FrozenLake map name ("4x4" or "8x8").
+        is_slippery: Whether the environment is stochastic.
+        episodes: Number of training episodes/updates.
+        lr: Learning rate.
+        seed: Random seed.
+        algo: Algorithm name stored in the spec.
+
+    Returns:
+        RLSpec configured for "FrozenLake-v1".
     """
-    FrozenLake observations are discrete states: 0..n_states-1
-    We'll basis-encode into bits => input_mode="basis".
-    """
-    # 4x4 => 16 states => 4 bits
     n_states = 16 if map_name == "4x4" else 64
     n_bits = int(np.ceil(np.log2(n_states)))
 
     def encoder(obs):
-        # obs is an int state index
         return encode_discrete_to_bits(int(obs), n_bits)
 
-    # IMPORTANT: gymnasium FrozenLake config is set in env creation, not here.
-    # If you need map_name / is_slippery, you can implement a custom _make_env.
-    # For now, use standard FrozenLake-v1 defaults, or patch _make_env accordingly.
     return RLSpec(
         env_id="FrozenLake-v1",
         n_actions=4,
@@ -1081,7 +1361,5 @@ def frozenlake_spec(
         seed=seed,
         max_steps=100,
         eval_episodes=20,
-        env_kwargs={
-            "is_slippery": is_slippery,
-        }
+        env_kwargs={"is_slippery": is_slippery},
     )
