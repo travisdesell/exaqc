@@ -1,13 +1,16 @@
-from collections import deque
-from typing import Deque, Tuple
+from typing import Deque
 import torch
+import random
 
-Transition = Tuple[torch.Tensor, int, float, torch.Tensor, float]  # (s, a, r, s2, done)
+Transition = tuple[torch.Tensor, int, float, torch.Tensor, float]  # (s, a, r, s2, done)
 
 
 class ReplayBuffer:
+    '''
+    Replay Buffer Class to store previous state-action-reward observations
+    '''
     def __init__(self, capacity: int):
-        self.buf: Deque[Transition] = deque(maxlen=capacity)
+        self.buf: Deque[Transition] = Deque(maxlen=capacity)
 
     def push(self, s, a, r, s2, done):
         self.buf.append(
@@ -15,8 +18,6 @@ class ReplayBuffer:
         )
 
     def sample(self, batch_size: int) -> list[Transition]:
-        import random
-
         batch_size = min(batch_size, len(self.buf))
         return random.sample(self.buf, batch_size)
 
