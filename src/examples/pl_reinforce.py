@@ -52,12 +52,12 @@ def compare(genome1: CircuitGenome, genome2: CircuitGenome) -> int:
 class RLObjective(Objective):
     def __init__(self, *, spec: RLSpec):
         self.spec = spec
-        self.target = "pennylane"  # consistent with your other scripts
+        self.target = "pennylane"
 
         # For register sizing in main
         # - CartPole encoder outputs 4 floats (angle input)
         # - FrozenLake encoder outputs n_bits int64 (basis input)
-        # We'll set input_size based on spec.
+        # Set input_size based on spec.
         if spec.input_mode == "angle":
             # CartPole obs encoder -> length 4 floats
             self.input_size = 4
@@ -83,7 +83,7 @@ class RLObjective(Objective):
                 after training and evaluation.
         """
         hp = genome.hyperparameters
-        # Map your hyperparameters into the RLSpec (do not mutate original spec in place)
+        # Map hyperparameters into the RLSpec
         spec = RLSpec(**{**self.spec.__dict__})
 
         # Override from genome hyperparameters
@@ -100,17 +100,15 @@ class RLObjective(Objective):
         # For FrozenLake, pass env kwargs (map_name/is_slippery) through
         spec.env_kwargs = hp.get("env_kwargs", spec.env_kwargs)
 
-        # Train with your RL module
+        # Train with RL module
         train_rl(genome, spec=spec, algo=spec.algo)
         # train_policy_gradient(genome, spec=spec)
 
         logger.debug(f"Genome Fitness in Objective: {genome.fitness}")
 
-        # Ensure we have an evaluation metric (train_policy_gradient already writes eval_*,
-        # but keep it explicit and consistent with classification code style)
         ev = eval_policy(genome, spec=spec, deterministic=True, seed=spec.seed + 9999)
 
-        # train_policy_gradient sets genome.fitness; we can enrich/standardize keys:
+        # train_policy_gradient sets genome.fitness
         genome.fitness = {
             **(genome.fitness or {}),
             "eval_return_mean": float(ev["eval_return_mean"]),
