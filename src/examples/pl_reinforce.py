@@ -226,7 +226,7 @@ if __name__ == "__main__":
         else default_out_qubits
     )
 
-    # hyperparameters injected into each genome (like your classification script)
+    # hyperparameters injected into each genome
     hyperparameters = {
         "episodes": args.episodes,
         "eval_episodes": args.eval_episodes,
