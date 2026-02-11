@@ -436,7 +436,7 @@ class CircuitGenome:
             # --- Input preparation ---
             if input_mode == "basis":
                 # expects int tensor length == total_qubits
-                qml.BasisState(input_bits, wires=range(self.total_qubits))
+                qml.BasisState(input_bits, wires=self.input_indexes)
 
             elif input_mode == "angle":
                 # expects float tensor on "input" register wires

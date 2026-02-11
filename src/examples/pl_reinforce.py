@@ -3,10 +3,6 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-import math
-from typing import Optional
-
-import numpy as np
 from loguru import logger
 
 from src.evolution.master_worker import master_worker
@@ -19,8 +15,8 @@ from src.objectives.policy_objectives import (
     RLSpec,
     cartpole_spec,
     frozenlake_spec,
-    train_policy_gradient,
     eval_policy,
+    train_rl,
 )
 
 # ---------------------------------------------------------------------
@@ -93,7 +89,8 @@ class RLObjective(Objective):
         spec.env_kwargs = hp.get("env_kwargs", spec.env_kwargs)
 
         # Train with your RL module
-        train_policy_gradient(genome, spec=spec)
+        train_rl(genome, spec=spec, algo=spec.algo)
+        # train_policy_gradient(genome, spec=spec)
 
         logger.debug(
             f"Genome Fitness in Objective: {genome.fitness}"
@@ -129,7 +126,7 @@ class RLObjective(Objective):
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--env", choices=["cartpole", "frozenlake"], required=True)
-
+    p.add_argument("--algo", choices=["reinforce", "a2c", "ppo", "q_learning", "sarsa"], required=True, default="reinforce")
     p.add_argument(
         "--out_dir",
         type=str,
@@ -143,7 +140,7 @@ if __name__ == "__main__":
 
     # Registers
     p.add_argument("--input_qubits", type=int, default=6)
-    p.add_argument("--out_qubits", type=int, default=None)  # if None, we pick sensible default
+    p.add_argument("--output_qubits", type=int, default=None)  # if None, we pick sensible default
 
     # RL hyperparams
     p.add_argument("--episodes", type=int, default=80)
@@ -179,7 +176,7 @@ if __name__ == "__main__":
 
     # Build RL spec from rl_objectives.py
     if args.env == "cartpole":
-        spec = cartpole_spec(episodes=args.episodes, lr=args.learning_rate, seed=args.seed)
+        spec = cartpole_spec(episodes=args.episodes, lr=args.learning_rate, seed=args.seed, algo=args.algo)
         # 2 actions => can use 2 output qubits as logits directly
         default_out_qubits = 2
     else:
@@ -190,6 +187,7 @@ if __name__ == "__main__":
             episodes=args.episodes,
             lr=args.learning_rate,
             seed=args.seed,
+            algo=args.algo,
         )
         default_out_qubits = 4  # recommended
 
@@ -199,7 +197,7 @@ if __name__ == "__main__":
     objective = RLObjective(spec=spec)
 
     # choose output qubits
-    out_qubits = int(args.out_qubits) if args.out_qubits is not None else default_out_qubits
+    out_qubits = int(args.output_qubits) if args.output_qubits is not None else default_out_qubits
 
     # hyperparameters injected into each genome (like your classification script)
     hyperparameters = {
