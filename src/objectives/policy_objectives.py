@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 from loguru import logger
 from torch.distributions import Categorical
+import gymnasium as gym
 
 from src.circuits.circuit import CircuitGenome
 from src.utils.helpers import torch_params_to_genome, genome_to_torch_params
@@ -479,8 +480,6 @@ def _make_env(env_id: str, **kwargs):
     Returns:
         A Gymnasium environment instance.
     """
-    import gymnasium as gym
-
     return gym.make(env_id, **kwargs)
 
 
