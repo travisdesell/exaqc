@@ -6,10 +6,10 @@ mpiexec -n 4 python -m src.examples.pl_reinforce \
  --input_qubits 4 \
  --output_qubits 2 \
  --episodes 80 \
- --out_dir artifacts/cartpole
+ --out_dir artifacts/cartpole_mc
 
 
-python -m src.examples.pl_reinforce \
+mpiexec -n 4 python -m src.examples.pl_reinforce \
   --env cartpole \
   --algo q_learning \
   --out_dir artifacts/cartpole_q_learning \
@@ -21,7 +21,7 @@ python -m src.examples.pl_reinforce \
   --episodes 300 \
   --max_steps 500 \
   --gamma 0.99 \
-  --q_lr 1e-2 \
+  --lr 1e-2 \
   --epsilon 0.20 \
   --epsilon_min 0.02 \
   --epsilon_decay 0.995 \
@@ -34,20 +34,19 @@ python -m src.examples.pl_reinforce \
 
 
 
-python -m src.examples.pl_reinforce \
+mpiexec -n 4 python -m src.examples.pl_reinforce \
   --env cartpole \
-  --algo actor_critic \
+  --algo a2c \
   --out_dir artifacts/cartpole_actor_critic \
   --logging_level INFO \
   --max_population_size 30 \
   --number_genomes 1200 \
   --input_qubits 4 \
-  --out_qubits 2 \
+  --output_qubits 2 \
   --episodes 200 \
   --max_steps 500 \
   --gamma 0.99 \
-  --actor_lr 3e-3 \
-  --critic_lr 1e-2 \
+  --lr 3e-3 \
   --entropy_coef 1e-2 \
   --baseline mean \
   --eval_episodes 10 \
