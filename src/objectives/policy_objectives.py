@@ -849,10 +849,10 @@ def train_actor_critic(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
     if len(params) == 0:
         ev = eval_policy(genome, spec=spec, deterministic=True, seed=spec.seed + 999)
         genome.fitness = {
-            "note": "no trainable params", 
+            "note": "no trainable params",
             "best_episode_return": ev["eval_return_mean"],
-            **ev, 
-            "env_id": spec.env_id
+            **ev,
+            "env_id": spec.env_id,
         }
         return genome
 
@@ -1024,10 +1024,10 @@ def train_ppo(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
     if len(params) == 0:
         ev = eval_policy(genome, spec=spec, deterministic=True, seed=spec.seed + 999)
         genome.fitness = {
-            "note": "no trainable params", 
+            "note": "no trainable params",
             "best_episode_return": ev["eval_return_mean"],
-            **ev, 
-            "env_id": spec.env_id
+            **ev,
+            "env_id": spec.env_id,
         }
         return genome
 
