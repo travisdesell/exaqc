@@ -116,18 +116,6 @@ def default_fitness_extractor(genome: CircuitGenome) -> float:
     return _safe_float(getattr(genome, "fitness", np.nan))
 
 
-def _is_minimization(fitness_mode: str) -> bool:
-    """Return whether the optimization objective is minimization.
-
-    Args:
-        fitness_mode: Mode string such as ``"max"`` or ``"min"``.
-
-    Returns:
-        True if the mode indicates minimization; otherwise False.
-    """
-    return fitness_mode.lower() == "min"
-
-
 def _sort_population(
     pop: list[CircuitGenome],
     fitness_fn: Callable[[CircuitGenome], float],
@@ -225,7 +213,7 @@ class EXAQCProfiler:
         self.out_dir = out_dir
         self.run_name = run_name
         self.fitness_fn = fitness_fn
-        self.minimize = _is_minimization(fitness_mode)
+        self.minimize = fitness_mode.lower() == "min"
         self.topk = int(topk)
 
         os.makedirs(self.out_dir, exist_ok=True)
