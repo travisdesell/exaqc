@@ -24,6 +24,7 @@ class SteadyStatePopulation(PopulationStrategy):
         compare: Callable[[CircuitGenome, CircuitGenome], int],
         out_dir: str = "artifacts",
         profiler: Optional[EXAQCProfiler] = None,
+        fitness_mode: str = "min",
     ):
         """
         Creates a steady state population with the specified max population size.  The population
@@ -40,6 +41,7 @@ class SteadyStatePopulation(PopulationStrategy):
                 come before the second genome, and a positive number otherwise
             out_dir: Directory to store results
             profiler: A profiler class for recording execution steps to plot later
+            fitness_mode: "max" for RL tasks where reward needs to be maximized, "min" for other tasks
         """
 
         self.max_population_size = max_population_size
@@ -52,6 +54,11 @@ class SteadyStatePopulation(PopulationStrategy):
         self.population: list[CircuitGenome] = []
 
         self.profiler = profiler
+        if self.profiler is None:
+            run = out_dir.split("/")[-1]
+            self.profiler = EXAQCProfiler(
+                out_dir=out_dir, run_name=run, fitness_mode=fitness_mode
+            )
 
     def get_parent(self, **kwargs) -> CircuitGenome:
         """

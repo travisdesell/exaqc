@@ -145,7 +145,8 @@ if __name__ == "__main__":
         "--out_dir",
         type=str,
         default="artifacts",
-        help="Output directory to store results from runs",
+        help="Output directory to store results from runs; "
+        "make sure to mention the run number as 'run#' at the end",
     )
 
     # Evolution
@@ -254,6 +255,7 @@ if __name__ == "__main__":
             max_population_size=args.max_population_size,
             compare=compare,
             out_dir=args.out_dir,
+            fitness_mode="max",
         ),
         objective=objective,
         hyperparameters=hyperparameters,
