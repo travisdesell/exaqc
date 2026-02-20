@@ -1,6 +1,8 @@
 from __future__ import annotations
 import torch
 from .base import QuantumDataset
+from imblearn.combine import SMOTEENN
+import numpy as np
 
 
 class IrisDataset(QuantumDataset):
@@ -18,8 +20,9 @@ class IrisDataset(QuantumDataset):
         iris = load_iris()
         X = iris.data  # (150,4)
         y = iris.target  # (150,)
+        self.labels = iris.target_names
 
-        self.num_classes = len(iris.target_names)
+        self.num_classes = len(self.labels)
 
         # scale to [0,1] (nice for RY(pi*x))
         scaler = MinMaxScaler()
@@ -30,6 +33,8 @@ class IrisDataset(QuantumDataset):
         )
 
         if split == "train":
+            smote = SMOTEENN(random_state=42)
+            X_train, y_train = smote.fit_resample(X_train, y_train)
             x_use, y_use = X_train, y_train
         elif split == "test":
             x_use, y_use = X_test, y_test
@@ -39,12 +44,15 @@ class IrisDataset(QuantumDataset):
         self.X = torch.tensor(x_use, dtype=torch.float32)
         self.y = torch.tensor(y_use, dtype=torch.long)
 
+        _, counts = np.unique(self.y, return_counts=True)
+        self.class_counts = dict(zip(iris.target_names, counts))
+
     def __len__(self) -> int:
         return self.X.shape[0]
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         x = self.X[idx]  # [4]
-        c = int(self.y[idx].item())
+        cls = int(self.y[idx].item())
         y_onehot = torch.zeros(3, dtype=torch.float32)
-        y_onehot[c] = 1.0
-        return x, y_onehot
+        y_onehot[cls] = 1.0
+        return x, y_onehot, self.labels[cls]

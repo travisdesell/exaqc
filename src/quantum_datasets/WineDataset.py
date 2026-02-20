@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import torch
 from .base import QuantumDataset
+from imblearn.combine import SMOTEENN
+import numpy as np
 
 
 class WineDataset(QuantumDataset):
@@ -21,6 +23,7 @@ class WineDataset(QuantumDataset):
         data = load_wine()
         X = data.data  # (178, 13)
         y = data.target  # (178,)
+        self.labels = data.target_names
         n_classes = len(set(y.tolist()))
 
         self.num_classes = n_classes  # IMPORTANT: int (3)
@@ -33,6 +36,8 @@ class WineDataset(QuantumDataset):
         )
 
         if split == "train":
+            smote = SMOTEENN(random_state=42)
+            X_train, y_train = smote.fit_resample(X_train, y_train)
             x_use, y_use = X_train, y_train
         elif split == "test":
             x_use, y_use = X_test, y_test
@@ -42,12 +47,15 @@ class WineDataset(QuantumDataset):
         self.X = torch.tensor(x_use, dtype=torch.float32)
         self.y = torch.tensor(y_use, dtype=torch.long)
 
+        _, counts = np.unique(self.y, return_counts=True)
+        self.class_counts = dict(zip(data.target_names, counts))
+
     def __len__(self) -> int:
         return self.X.shape[0]
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         x = self.X[idx]  # [13]
-        c = int(self.y[idx].item())
+        cls = int(self.y[idx].item())
         y_onehot = torch.zeros(self.num_classes, dtype=torch.float32)
-        y_onehot[c] = 1.0
-        return x, y_onehot
+        y_onehot[cls] = 1.0
+        return x, y_onehot, self.labels[cls]

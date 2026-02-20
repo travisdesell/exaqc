@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Optional, Iterable, Callable, Any
 import torch
 from loguru import logger
+import numpy as np
 from src.circuits.circuit import CircuitGenome
 from src.utils.losses import (
     loss_one_minus_fidelity,
@@ -11,15 +12,11 @@ from src.utils.losses import (
     loss_obs_mse,
     loss_ce,
     ce_onehot_on_probs,
+    balanced_ce_onehot_on_probs,
+    focal_onehot_on_probs,
+    LOSS_REGISTRY,
 )
-
-LOSS_REGISTRY: dict[str, Callable[..., torch.Tensor]] = {
-    "fidelity": loss_one_minus_fidelity,
-    "angle": loss_state_angle,
-    "kl": loss_kl_divergence,
-    "mse": loss_obs_mse,
-    "ce": loss_ce,
-}
+# from src.utils.helpers import sample_batch, sample_even_batch
 
 STATEVECTOR_LOSSES = {"fidelity", "angle", "kl", "ce"}
 
@@ -95,7 +92,7 @@ def compute_teacher_metrics(
 
 
 @torch.no_grad()
-def _eval_teacher_split(data, genome, params, teacher_qnode):
+def _eval_teacher_split(data, genome, params, teacher_qnode, loss_fn: Optional[Callable] = None):
     """Evaluate teacher mode metrics on a data split."""
     if data is None:
         return None
@@ -106,7 +103,7 @@ def _eval_teacher_split(data, genome, params, teacher_qnode):
         x = item if not isinstance(item, (tuple, list)) else item[0]
         phi = torch.as_tensor(teacher_qnode(x))
         psi = genome.circuit(x, params)
-        L = loss_one_minus_fidelity(phi, psi)
+        L = loss_one_minus_fidelity(phi, psi) if loss_fn is None else loss_fn(phi, psi)
         losses.append(L)
         fids.append(1.0 - L)
         angle_losses.append(loss_state_angle(phi, psi))
@@ -120,24 +117,34 @@ def _eval_teacher_split(data, genome, params, teacher_qnode):
 
 
 @torch.no_grad()
-def _eval_supervised_split(data, genome, params, n_classes):
+def _eval_supervised_split(data, genome, params, n_classes, loss_fn: Optional[Callable] = None, class_counts: Optional[dict] = None):
     """Evaluate supervised mode metrics on a data split."""
     if data is None:
         return None
     losses = []
     correct = 0
+    # per_class_pred = {}
     total = 0
-    for x, y in data:
+    for x, y, cls in data:
+        # if cls not in per_class_pred:
+        #     per_class_pred[cls] = 0
         probs = genome.circuit(x, params)
         probs = torch.as_tensor(probs, dtype=torch.float32)
         probs = probs[:n_classes]
         probs = probs / (probs.sum() + 1e-12)
-        L = ce_onehot_on_probs(probs, y)
+        L = ce_onehot_on_probs(probs, y) if loss_fn is None else loss_fn(probs, y)
         losses.append(L)
         pred = int(torch.argmax(probs).item())
         true = int(torch.argmax(y).item())
         correct += int(pred == true)
+        # if pred == true:
+        #     per_class_pred[cls] += 1
         total += 1
+
+    # log = ""
+    # for k, v in class_counts.items():
+    #     log += f"[{k}] Accuracy: {per_class_pred[k]/v} | "
+    # logger.info(f"{log}")
     return {
         "loss": float(torch.stack(losses).mean().item()) if losses else 0.0,
         "acc": float(correct / max(total, 1)),
@@ -151,21 +158,23 @@ def eval_forward_only(
     test_list: list = None,
     teacher_qnode=None,
     n_classes: int = 3,
+    loss_fn: Optional[Callable] = None,
+    class_counts: Optional[tuple] = None
 ):
     mode = "teacher" if teacher_qnode is not None else "supervised"
     params = genome_to_torch_params(genome)
 
     if mode == "teacher":
-        tr = _eval_teacher_split(train_list, genome, params, teacher_qnode)
+        tr = _eval_teacher_split(train_list, genome, params, teacher_qnode, loss_fn=loss_fn)
         te = (
-            _eval_teacher_split(test_list, genome, params, teacher_qnode)
+            _eval_teacher_split(test_list, genome, params, teacher_qnode, loss_fn=loss_fn)
             if test_list is not None
             else None
         )
     else:
-        tr = _eval_supervised_split(train_list, genome, params, n_classes)
+        tr = _eval_supervised_split(train_list, genome, params, n_classes, loss_fn=loss_fn, class_counts=class_counts[0])
         te = (
-            _eval_supervised_split(test_list, genome, params, n_classes)
+            _eval_supervised_split(test_list, genome, params, n_classes, loss_fn=loss_fn, class_counts=class_counts[1])
             if test_list is not None
             else None
         )
@@ -193,6 +202,12 @@ def _train_with_pennylane(
 ):
     train_list = list(train_data)
     test_list = list(test_data) if test_data is not None else None
+
+    loss_fn = LOSS_REGISTRY[loss_name]
+
+    # For balanced loss
+    alpha = len(train_data) / (train_data.num_classes * np.array(list(train_data.class_counts.values()), dtype=np.float32))
+    alpha = alpha / alpha.mean()
 
     # ----- choose output type -----
     use_state = (
@@ -222,6 +237,8 @@ def _train_with_pennylane(
             test_list,
             teacher_qnode=target_qnode,
             n_classes=n_classes,
+            loss_fn=loss_fn,
+            class_counts=(train_data.class_counts, test_data.class_counts),
         )
         genome.fitness = metrics
         return
@@ -232,11 +249,23 @@ def _train_with_pennylane(
     if batch_size is not None:
         batch_size = max(1, min(batch_size, n))
 
-    def sample_batch():
+    def sample_batch() -> list:
+        """Creates a mini-batch from provided data list of given size
+
+        Args:
+            data (list): The dataset list where each element is a tuple (x, y, cls)
+            batch_size (int): Size of the batch
+            shuffle_each_step (bool): If you want random shuffling or sequential
+            step (int): The current step in training
+
+        Returns:
+            list: The mini-batch of data
+        """
+        n = len(train_list)
         if batch_size is None:
-            return train_list
+            return data
         if shuffle_each_step:
-            idx = torch.randint(low=0, high=n, size=(batch_size,))
+            idx = np.randint(low=0, high=n, size=(batch_size,))
             return [train_list[i] for i in idx.tolist()]
         start = (step * batch_size) % n
         return [train_list[(start + i) % n] for i in range(batch_size)]
@@ -264,7 +293,8 @@ def _train_with_pennylane(
         for x in data_list:
             phi = _normalize_state(_ensure_complex(target_qnode(x)))
             psi = forward_state(x)
-            fid_loss = loss_one_minus_fidelity(phi, psi)
+            # fid_loss = loss_one_minus_fidelity(phi, psi)
+            fid_loss = loss_fn(phi, psi)
             losses.append(fid_loss)
             fidelities.append(1.0 - fid_loss)
             angle_losses.append(loss_state_angle(phi, psi))
@@ -275,17 +305,30 @@ def _train_with_pennylane(
             "angle_loss": float(torch.stack(angle_losses).mean().item()),
         }
 
-    # --- eval supervised metrics (your old path) ---
+    # --- eval supervised metrics ---
     @torch.no_grad()
-    def eval_supervised(data_list):
+    def eval_supervised(data_list, class_counts: Optional[dict]):
         losses = []
+        # per_class_pred = {}
         correct = 0
         total = 0
-        for x, y in data_list:
+        for x, y, cls in data_list:
+            # if cls not in per_class_pred:
+            #     per_class_pred[cls] = 0
             p = forward_probs(x)
-            losses.append(ce_onehot_on_probs(p, y))
-            correct += int(torch.argmax(p).item() == torch.argmax(y).item())
+            eval_loss = ce_onehot_on_probs(p, y) if loss_fn is None else loss_fn(p, y)
+            losses.append(eval_loss)
+            pred = int(torch.argmax(p).item())
+            true = int(torch.argmax(y).item())
+            correct += int(pred == true)
             total += 1
+            # if pred == true:
+            #     per_class_pred[cls] += 1
+
+        # log = ""
+        # for k, v in class_counts.items():
+        #     log += f"[{k}] Accuracy: {per_class_pred[k]/v} | "
+        # logger.info(f"{log}")
         return {
             "loss": float(torch.stack(losses).mean().item()),
             "acc": float(correct / max(total, 1)),
@@ -294,7 +337,18 @@ def _train_with_pennylane(
     # ---- training loop ----
     for step in range(steps):
         opt.zero_grad()
-        batch = sample_batch()
+
+        # if use_state:
+        batch = sample_batch(data=train_list, 
+                            batch_size=batch_size, 
+                            shuffle_each_step=shuffle_each_step,
+                            step=step,
+                            )
+        # else:
+        #     batch = sample_even_batch(data=train_list,
+        #                               batch_size=batch_size,
+        #                               shuffle_each_step=shuffle_each_step,
+        #                               )
 
         losses = []
         if use_state:
@@ -303,12 +357,12 @@ def _train_with_pennylane(
                 with torch.no_grad():
                     phi = _normalize_state(_ensure_complex(target_qnode(x)))
                 psi = forward_state(x)
-                L = loss_one_minus_fidelity(phi, psi)
+                L = loss_one_minus_fidelity(phi, psi) if loss_fn is None else loss_fn(phi, psi)
                 losses.append(L)
         else:
-            for x, y in batch:
+            for x, y, _ in batch:
                 p = forward_probs(x)
-                L = ce_onehot_on_probs(p, y)
+                L = ce_onehot_on_probs(p, y, alpha_per_class=alpha) if loss_fn is None else loss_fn(p, y, alpha_per_class=alpha)
                 losses.append(L)
 
         loss = torch.stack(losses).mean()
@@ -323,6 +377,7 @@ def _train_with_pennylane(
                 test_list,
                 teacher_qnode=target_qnode,
                 n_classes=n_classes,
+                loss_fn=loss_fn,
             )
             genome.fitness = metrics
             return
@@ -344,9 +399,9 @@ def _train_with_pennylane(
                         f"[{step:04d}] fid_loss={tr['fidelity_loss']:.6f} angle_loss={tr['angle_loss']:.6f}"
                     )
             else:
-                tr = eval_supervised(train_list)
+                tr = eval_supervised(train_list, train_data.class_counts)
                 if test_list is not None:
-                    te = eval_supervised(test_list)
+                    te = eval_supervised(test_list, test_data.class_counts)
                     logger.info(
                         f"[{step:04d}] loss={tr['loss']:.6f} acc={tr['acc']:.3f} | "
                         f"test_loss={te['loss']:.3f} test_acc={te['acc']:.3f}"
@@ -365,6 +420,8 @@ def _train_with_pennylane(
         test_list,
         teacher_qnode=target_qnode,
         n_classes=n_classes,
+        loss_fn=loss_fn,
+        class_counts=(train_data.class_counts, test_data.class_counts),
     )
     genome.fitness = metrics
 
@@ -541,9 +598,6 @@ def _train_with_qiskit_ml_outputs(
 def train_genome_objective(
     genome: CircuitGenome,
     *,
-    target_state: Optional[torch.Tensor] = None,
-    input_bits: Optional[torch.Tensor] = None,
-    # dataset: Optional[Iterable[tuple[torch.Tensor, torch.Tensor]]] = None,
     dataset: list = None,
     teacher_qnode: Optional[Callable] = None,
     backend: str = "pennylane",

@@ -5,7 +5,7 @@ import math
 import os
 import torch
 import sys
-from typing import Iterable
+from typing import Iterable, Optional
 
 from loguru import logger
 
@@ -20,7 +20,7 @@ from src.objectives.genome_objectives import (
     train_genome_objective,
     genome_to_torch_params,
 )
-from src.utils.losses import ce_onehot_on_probs
+from src.utils.losses import ce_onehot_on_probs, LOSS_REGISTRY
 from src.quantum_datasets import (
     IrisDataset,
     WineDataset,
@@ -50,9 +50,10 @@ def predict_from_probs(
 @torch.no_grad()
 def eval_probs_ce_and_acc(
     genome: CircuitGenome,
-    dataset: Iterable[tuple[torch.Tensor, torch.Tensor]],
+    dataset: Iterable[tuple[torch.Tensor, torch.Tensor, str]],
     *,
     n_classes: int,
+    loss: Optional[str],
 ) -> dict[str, float]:
     """
     Assumes genome.circuit returns qml.probs(wires=output_wires) (real-valued).
@@ -67,20 +68,34 @@ def eval_probs_ce_and_acc(
     losses = []
     correct = 0
     total = 0
+    per_class_pred = {}
 
-    for x, y in dataset:
+    for x, y, cls in dataset:
+        if cls not in per_class_pred:
+            per_class_pred[cls] = 0
+            
         probs_full = genome.circuit(x, params)
         probs_full = torch.as_tensor(probs_full, dtype=torch.float32)
 
         pred, probs = predict_from_probs(probs_full, n_classes=n_classes)
-        L = ce_onehot_on_probs(probs, y)
+        L = ce_onehot_on_probs(probs, y) if loss is None else LOSS_REGISTRY[loss](probs, y)
 
         losses.append(L)
-        correct += int(pred == int(torch.argmax(y).item()))
+        true = int(torch.argmax(y).item())
+        correct += int(pred == true)
         total += 1
+
+        if pred == true:
+            per_class_pred[cls] += 1
 
     avg_loss = float(torch.stack(losses).mean().item()) if losses else 0.0
     acc = float(correct / max(total, 1))
+
+    log = ""
+    for k, v in dataset.class_counts.items():
+        log += f"[{k}] Accuracy: {per_class_pred[k]/v:.4f} ({per_class_pred[k]}/{v}) | "
+    logger.info(f"{log}")
+    
     return {"loss": avg_loss, "acc": acc}
 
 
@@ -155,10 +170,10 @@ class ClassificationObjective(Objective):
 
         # Compute fresh train/test metrics from probs (works for both param & no-param cases)
         train_metrics = eval_probs_ce_and_acc(
-            genome, self.train_data, n_classes=self.n_classes
+            genome, self.train_data, n_classes=self.n_classes, loss=self.loss
         )
         test_metrics = eval_probs_ce_and_acc(
-            genome, self.test_data, n_classes=self.n_classes
+            genome, self.test_data, n_classes=self.n_classes, loss=self.loss
         )
 
         genome.fitness = {
@@ -192,7 +207,7 @@ if __name__ == "__main__":
         default="artifacts",
         help="Output directory to store results from runs",
     )
-    p.add_argument("--loss", default="ce", choices=["ce", "mse", "kl", "fidelity"])
+    p.add_argument("--loss", default="ce", choices=["bce", "focal", "ce", "mse", "kl", "fidelity"])
     p.add_argument("--steps", type=int, default=30)
     p.add_argument("--learning_rate", "-lr", type=float, default=5e-4)
     p.add_argument("--max_population_size", type=int, default=30)

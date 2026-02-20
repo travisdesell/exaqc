@@ -3,6 +3,8 @@ from __future__ import annotations
 import torch
 from typing import Tuple
 from .base import QuantumDataset
+from imblearn.combine import SMOTEENN
+import numpy as np
 
 
 class BreastCancerDataset(QuantumDataset):
@@ -33,6 +35,7 @@ class BreastCancerDataset(QuantumDataset):
 
         X = data.data  # (569, 30)
         y = data.target  # {0,1}
+        self.labels = data.target_names
 
         self.num_classes = 2
 
@@ -49,6 +52,8 @@ class BreastCancerDataset(QuantumDataset):
         )
 
         if split == "train":
+            smote = SMOTEENN(random_state=42)
+            X_train, y_train = smote.fit_resample(X_train, y_train)
             self.X = torch.tensor(X_train, dtype=torch.float32)
             self.y = torch.tensor(y_train, dtype=torch.long)
         elif split == "test":
@@ -56,6 +61,9 @@ class BreastCancerDataset(QuantumDataset):
             self.y = torch.tensor(y_test, dtype=torch.long)
         else:
             raise ValueError("split must be 'train' or 'test'")
+        
+        _, counts = np.unique(self.y, return_counts=True)
+        self.class_counts = dict(zip(data.target_names, counts))
 
     def __len__(self) -> int:
         return self.X.shape[0]
@@ -67,4 +75,4 @@ class BreastCancerDataset(QuantumDataset):
         y_onehot = torch.zeros(2, dtype=torch.float32)
         y_onehot[cls] = 1.0
 
-        return x, y_onehot
+        return x, y_onehot, self.labels[cls]

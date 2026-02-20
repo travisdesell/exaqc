@@ -24,4 +24,5 @@ dependencies = [
     "pylatexenc",
     "scikit-learn",
     "mpi4py",
+    "imbalanced-learn",
 ]
