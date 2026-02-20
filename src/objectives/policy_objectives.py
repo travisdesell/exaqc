@@ -240,6 +240,14 @@ def logits_from_kexpvals(z: torch.Tensor, n_actions: int) -> torch.Tensor:
         z = torch.cat([z, pad], dim=0)
     return z[:n_actions]
 
+def _clip_action(a: np.ndarray, spec: RLSpec) -> np.ndarray:
+    if not spec.clip_actions:
+        return a
+    if spec.action_low is not None and spec.action_high is not None:
+        return np.clip(a, spec.action_low, spec.action_high)
+    return a
+
+
 
 # ============================
 # Returns
@@ -278,6 +286,8 @@ class RLSpec:
         env_id: Gymnasium environment id.
         n_actions: Number of discrete actions.
         algo: Algorithm name (used by some trainers).
+
+        action_space: Specify whether the environment is discreet or continuous
 
         input_mode: How the genome encodes inputs ("angle" or "basis").
         return_expvals: If True, assume circuit returns expectation values.
@@ -328,6 +338,8 @@ class RLSpec:
     env_id: str
     n_actions: int
     algo: str = "reinforce"
+
+    action_space: str = "discrete"  # "discrete" or "continuous"
 
     input_mode: str = "angle"  # "angle" or "basis"
     return_expvals: bool = True
@@ -386,6 +398,19 @@ class RLSpec:
     target_update_every: int = 200  # steps between target net updates
     train_every: int = 1  # gradient step frequency
 
+    # continuous action handling
+    action_low: Optional[np.ndarray] = None
+    action_high: Optional[np.ndarray] = None
+    clip_actions: bool = True
+
+    # gaussian policy params
+    init_log_std: float = -0.5          # exp(-0.5) ~ 0.61
+    learn_std: bool = True              # if False -> fixed std
+    shared_std: bool = True             # if True -> one std for all dims
+    min_log_std: float = -5.0
+    max_log_std: float = 2.0
+
+
 
 # ============================
 # Policy+Value head
@@ -426,6 +451,66 @@ class PolicyValueHead(nn.Module):
         logits = logits_from_kexpvals(features, self.n_actions)
         v = self.value(features[: self.value.in_features]).squeeze(-1)
         return logits, v
+    
+
+class GaussianPolicyValueHead(nn.Module):
+    """
+    Maps circuit features -> (mu, log_std, value) for continuous actions.
+    """
+    def __init__(
+        self,
+        action_dim: int,
+        in_dim: int,
+        *,
+        init_log_std: float = -0.5,
+        learn_std: bool = True,
+        shared_std: bool = True,
+        min_log_std: float = -5.0,
+        max_log_std: float = 2.0,
+    ):
+        super().__init__()
+        self.action_dim = action_dim
+        self.in_dim = in_dim
+
+        self.mu = nn.Linear(in_dim, action_dim)
+        self.value = nn.Linear(in_dim, 1)
+
+        self.learn_std = learn_std
+        self.shared_std = shared_std
+        self.min_log_std = min_log_std
+        self.max_log_std = max_log_std
+
+        if learn_std:
+            if shared_std:
+                self.log_std = nn.Parameter(torch.tensor([init_log_std], dtype=torch.float32))
+            else:
+                self.log_std = nn.Parameter(torch.full((action_dim,), init_log_std, dtype=torch.float32))
+        else:
+            self.register_buffer("log_std_buf", torch.full((1 if shared_std else action_dim,), init_log_std))
+
+    def forward(self, features: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        f = torch.as_tensor(features, dtype=torch.float32).flatten()
+        if f.numel() < self.in_dim:
+            pad = torch.zeros(self.in_dim - f.numel(), dtype=f.dtype)
+            f = torch.cat([f, pad], dim=0)
+        f = f[: self.in_dim]
+
+        mu = self.mu(f)  # [A]
+
+        if self.learn_std:
+            ls = self.log_std
+        else:
+            ls = self.log_std_buf
+
+        if self.shared_std:
+            log_std = ls.expand(self.action_dim)
+        else:
+            log_std = ls
+
+        log_std = torch.clamp(log_std, self.min_log_std, self.max_log_std)
+        v = self.value(f).squeeze(-1)
+
+        return mu, log_std, v
 
 
 # ============================
@@ -564,7 +649,7 @@ def rollout_actor_critic(
     params: dict[str, torch.nn.Parameter],
     *,
     spec: RLSpec,
-    head: PolicyValueHead,
+    head: nn.Module,  # PolicyValueHead OR GaussianPolicyValueHead
     episode_seed: int,
 ) -> dict[str, Any]:
     """Collect transitions for Actor-Critic or PPO.
@@ -605,16 +690,39 @@ def rollout_actor_critic(
         out = genome.circuit(x, params)
         feats = torch.as_tensor(out, dtype=torch.float32).flatten()
 
-        logits, v = head(feats)
-        dist = Categorical(logits=logits)
-        a = dist.sample()
+        if spec.action_space == "discrete":
+            # ---- existing discrete behavior ----
+            logits, v = head(feats)  # PolicyValueHead
+            dist = Categorical(logits=logits)
+            a = dist.sample()
+            a_env = int(a.item())
+            logp = dist.log_prob(a)
+            ent = dist.entropy()
 
-        next_obs, r, terminated, truncated, _ = env.step(int(a.item()))
+        else:
+            # ---- continuous (Gaussian) behavior ----
+            # head is GaussianPolicyValueHead
+            mu, log_std, v = head(feats)
+            std = torch.exp(log_std)
+            dist = torch.distributions.Normal(mu, std)
+
+            a = dist.sample()  # [action_dim]
+            # IMPORTANT: for multivariate independent Normal, sum logprob across dims
+            logp = dist.log_prob(a).sum()
+            ent = dist.entropy().sum()
+
+            a_np = a.detach().cpu().numpy()
+            if getattr(spec, "clip_actions", True):
+                if spec.action_low is not None and spec.action_high is not None:
+                    a_np = np.clip(a_np, spec.action_low, spec.action_high)
+            a_env = a_np
+
+        next_obs, r, terminated, truncated, _ = env.step(a_env)
         done = terminated or truncated
 
         obs_tensors.append(x.detach().cpu())
         actions.append(a.detach().cpu())
-        logps_old.append(dist.log_prob(a).detach().cpu())
+        logps_old.append(logp.detach().cpu())
         values_old.append(v.detach().cpu())
         rewards.append(torch.tensor(float(r), dtype=torch.float32))
         dones.append(torch.tensor(1.0 if done else 0.0, dtype=torch.float32))
@@ -848,23 +956,35 @@ def train_actor_critic(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
 
     if len(params) == 0:
         ev = eval_policy(genome, spec=spec, deterministic=True, seed=spec.seed + 999)
-        genome.fitness = {
-            "note": "no trainable params",
-            "best_episode_return": ev["eval_return_mean"],
-            **ev,
-            "env_id": spec.env_id,
-        }
+        genome.fitness = {"note": "no trainable params", **ev, "env_id": spec.env_id}
         return genome
 
+    # ---- infer circuit feature dim ----
     with torch.no_grad():
         env0 = _make_env(spec.env_id, **(spec.env_kwargs or {}))
         o0, _ = env0.reset(seed=spec.seed)
         env0.close()
-        dummy = spec.obs_encoder(o0)
-        out0 = genome.circuit(dummy, params)
+        x0 = spec.obs_encoder(o0)
+        out0 = genome.circuit(x0, params)
         in_dim = int(torch.as_tensor(out0).numel())
 
-    head = PolicyValueHead(n_actions=spec.n_actions, in_dim=in_dim)
+    # ---- build correct head ----
+    if spec.action_space == "discrete":
+        head: nn.Module = PolicyValueHead(n_actions=spec.n_actions, in_dim=in_dim)
+    else:
+        if spec.action_dim is None:
+            raise ValueError("spec.action_dim must be set for continuous action envs")
+
+        head = GaussianPolicyValueHead(
+            action_dim=spec.n_actions,
+            in_dim=in_dim,
+            init_log_std=getattr(spec, "init_log_std", -0.5),
+            learn_std=getattr(spec, "learn_std", True),
+            shared_std=getattr(spec, "shared_std", True),
+            min_log_std=getattr(spec, "min_log_std", -5.0),
+            max_log_std=getattr(spec, "max_log_std", 2.0),
+        )
+
     opt = torch.optim.Adam(
         list(params.values()) + list(head.parameters()), lr=spec.lr, weight_decay=0.0
     )
@@ -873,10 +993,11 @@ def train_actor_critic(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
     recent_returns: list[float] = []
 
     for upd in range(spec.episodes):
-        obs_buf, act_buf, logp_buf, val_buf, rew_buf, done_buf = [], [], [], [], [], []
+        obs_buf, act_buf, val_buf, rew_buf, done_buf = [], [], [], [], []
         steps_collected = 0
         ep = 0
 
+        # ---- collect on-policy steps across episodes until rollout_steps ----
         while steps_collected < spec.rollout_steps:
             traj = rollout_actor_critic(
                 genome,
@@ -891,20 +1012,25 @@ def train_actor_critic(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
 
             obs_buf += traj["obs"]
             act_buf += traj["actions"]
-            logp_buf += traj["logps_old"]
             val_buf += traj["values_old"]
             rew_buf += traj["rewards"]
             done_buf += traj["dones"]
 
             steps_collected = len(obs_buf)
 
+        # ---- pack tensors ----
         obs_t = torch.stack([o.to(torch.float32) for o in obs_buf], dim=0)  # [T,D]
-        act_t = torch.stack(act_buf).long().view(-1)  # [T]
-        # logp_old_t = torch.stack(logp_buf).to(torch.float32).view(-1)  # [T]
-        val_old_t = torch.stack(val_buf).to(torch.float32).view(-1)  # [T]
-        rew_t = torch.stack(rew_buf).to(torch.float32).view(-1)  # [T]
-        done_t = torch.stack(done_buf).to(torch.float32).view(-1)  # [T]
 
+        if spec.action_space == "discrete":
+            act_t = torch.stack(act_buf).long().view(-1)  # [T]
+        else:
+            act_t = torch.stack([a.to(torch.float32) for a in act_buf], dim=0)  # [T,A]
+
+        val_old_t = torch.stack(val_buf).to(torch.float32).view(-1)  # [T]
+        rew_t = torch.stack(rew_buf).to(torch.float32).view(-1)      # [T]
+        done_t = torch.stack(done_buf).to(torch.float32).view(-1)    # [T]
+
+        # ---- GAE ----
         adv_t, ret_t = gae_advantages(
             rew_t,
             val_old_t,
@@ -915,6 +1041,7 @@ def train_actor_critic(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
         )
         adv_t = _normalize(adv_t)
 
+        # ---- compute new logps, values, entropies ----
         opt.zero_grad()
 
         new_logps: list[torch.Tensor] = []
@@ -925,26 +1052,34 @@ def train_actor_critic(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
             x = obs_t[i]
             out = genome.circuit(x, params)
             feats = torch.as_tensor(out, dtype=torch.float32).flatten()
-            logits, v = head(feats)
-            dist = Categorical(logits=logits)
 
-            new_logps.append(dist.log_prob(act_t[i]))
-            entropies.append(dist.entropy())
+            if spec.action_space == "discrete":
+                logits, v = head(feats)
+                dist = Categorical(logits=logits)
+                logp = dist.log_prob(act_t[i])
+                ent = dist.entropy()
+            else:
+                mu, log_std, v = head(feats)
+                std = torch.exp(log_std)
+                dist = torch.distributions.Normal(mu, std)
+                # act_t[i] is [A]
+                logp = dist.log_prob(act_t[i]).sum()
+                ent = dist.entropy().sum()
+
+            new_logps.append(logp)
+            entropies.append(ent)
             new_vals.append(v)
 
-        new_logp_t = torch.stack(new_logps)  # [T]
-        new_val_t = torch.stack(new_vals)  # [T]
-        ent_t = torch.stack(entropies)  # [T]
+        new_logp_t = torch.stack(new_logps)     # [T]
+        new_val_t = torch.stack(new_vals).view(-1)  # [T]
+        ent_t = torch.stack(entropies)          # [T]
 
+        # ---- losses ----
         loss_pi = -(new_logp_t * adv_t.detach()).mean()
         loss_v = 0.5 * (ret_t.detach() - new_val_t).pow(2).mean()
         loss_ent = -spec.entropy_coef * ent_t.mean() if spec.entropy_coef > 0 else 0.0
 
-        loss = (
-            loss_pi
-            + spec.value_coef * loss_v
-            + (loss_ent if isinstance(loss_ent, torch.Tensor) else 0.0)
-        )
+        loss = loss_pi + spec.value_coef * loss_v + (loss_ent if isinstance(loss_ent, torch.Tensor) else 0.0)
 
         if not loss.requires_grad:
             logger.warning("Loss has no grad path. Are params used inside the QNode?")
@@ -954,24 +1089,17 @@ def train_actor_critic(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
         opt.step()
 
         if (upd % spec.log_every) == 0:
-            avg10 = (
-                float(np.mean(recent_returns[-10:]))
-                if len(recent_returns) >= 10
-                else float(np.mean(recent_returns))
-            )
+            avg10 = float(np.mean(recent_returns[-10:])) if len(recent_returns) >= 10 else float(np.mean(recent_returns))
             logger.info(
                 f"[A2C upd {upd:04d}] loss={float(loss.item()):.4f} "
-                f"pi={float(loss_pi.item()):.4f} v={float(loss_v.item()):.4f} avg10ret={avg10:.1f}"
+                f"pi={float(loss_pi.item()):.4f} v={float(loss_v.item()):.4f} "
+                f"avg10ret={avg10:.1f}"
             )
 
     torch_params_to_genome(genome, params)
 
     ev = eval_policy(genome, spec=spec, deterministic=True, seed=spec.seed + 9999)
-    train_tail = (
-        float(np.mean(recent_returns[-20:]))
-        if len(recent_returns) >= 20
-        else float(np.mean(recent_returns) if recent_returns else 0.0)
-    )
+    train_tail = float(np.mean(recent_returns[-20:])) if len(recent_returns) >= 20 else float(np.mean(recent_returns) if recent_returns else 0.0)
 
     genome.fitness = {
         "train_return_mean": train_tail,
@@ -987,6 +1115,7 @@ def train_actor_critic(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
 # ============================
 # Train PPO
 # ============================
+
 
 
 def train_ppo(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
@@ -1023,14 +1152,10 @@ def train_ppo(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
 
     if len(params) == 0:
         ev = eval_policy(genome, spec=spec, deterministic=True, seed=spec.seed + 999)
-        genome.fitness = {
-            "note": "no trainable params",
-            "best_episode_return": ev["eval_return_mean"],
-            **ev,
-            "env_id": spec.env_id,
-        }
+        genome.fitness = {"note": "no trainable params", **ev, "env_id": spec.env_id}
         return genome
 
+    # ---- infer feature dim ----
     with torch.no_grad():
         env = _make_env(spec.env_id, **(spec.env_kwargs or {}))
         o0, _ = env.reset(seed=spec.seed)
@@ -1039,7 +1164,23 @@ def train_ppo(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
         out0 = genome.circuit(x0, params)
         in_dim = int(torch.as_tensor(out0).numel())
 
-    head = PolicyValueHead(n_actions=spec.n_actions, in_dim=in_dim)
+    # ---- build head ----
+    if spec.action_space == "discrete":
+        head: nn.Module = PolicyValueHead(n_actions=spec.n_actions, in_dim=in_dim)
+    else:
+        if spec.action_dim is None:
+            raise ValueError("spec.action_dim must be set for continuous action envs")
+
+        head = GaussianPolicyValueHead(
+            action_dim=spec.n_actions,
+            in_dim=in_dim,
+            init_log_std=getattr(spec, "init_log_std", -0.5),
+            learn_std=getattr(spec, "learn_std", True),
+            shared_std=getattr(spec, "shared_std", True),
+            min_log_std=getattr(spec, "min_log_std", -5.0),
+            max_log_std=getattr(spec, "max_log_std", 2.0),
+        )
+
     opt = torch.optim.Adam(
         list(params.values()) + list(head.parameters()), lr=spec.lr, weight_decay=0.0
     )
@@ -1052,6 +1193,7 @@ def train_ppo(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
         steps_collected = 0
         ep = 0
 
+        # ---- collect rollout buffer ----
         while steps_collected < spec.rollout_steps:
             traj = rollout_actor_critic(
                 genome,
@@ -1074,12 +1216,16 @@ def train_ppo(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
 
         T = len(obs_buf)
 
-        obs_t = torch.stack([o.to(torch.float32) for o in obs_buf], dim=0)
-        act_t = torch.stack(act_buf).long().view(-1)
-        logp_old_t = torch.stack(logp_buf).to(torch.float32).view(-1)
-        val_old_t = torch.stack(val_buf).to(torch.float32).view(-1)
-        rew_t = torch.stack(rew_buf).to(torch.float32).view(-1)
-        done_t = torch.stack(done_buf).to(torch.float32).view(-1)
+        obs_t = torch.stack([o.to(torch.float32) for o in obs_buf], dim=0)  # [T,D]
+        logp_old_t = torch.stack(logp_buf).to(torch.float32).view(-1)       # [T]
+        val_old_t = torch.stack(val_buf).to(torch.float32).view(-1)         # [T]
+        rew_t = torch.stack(rew_buf).to(torch.float32).view(-1)             # [T]
+        done_t = torch.stack(done_buf).to(torch.float32).view(-1)           # [T]
+
+        if spec.action_space == "discrete":
+            act_t = torch.stack(act_buf).long().view(-1)  # [T]
+        else:
+            act_t = torch.stack([a.to(torch.float32) for a in act_buf], dim=0)  # [T,A]
 
         adv_t, ret_t = gae_advantages(
             rew_t,
@@ -1108,16 +1254,28 @@ def train_ppo(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
                     x = obs_t[i]
                     out = genome.circuit(x, params)
                     feats = torch.as_tensor(out, dtype=torch.float32).flatten()
-                    logits, v = head(feats)
-                    dist = Categorical(logits=logits)
-                    a = act_t[i]
-                    new_logps.append(dist.log_prob(a))
-                    entropies.append(dist.entropy())
-                    new_vals.append(v)
 
-                new_logp = torch.stack(new_logps)
-                new_val = torch.stack(new_vals)
-                ent = torch.stack(entropies)
+                    if spec.action_space == "discrete":
+                        logits, v = head(feats)
+                        dist = Categorical(logits=logits)
+                        a = act_t[i]
+                        logp = dist.log_prob(a)
+                        ent = dist.entropy()
+                    else:
+                        mu, log_std, v = head(feats)
+                        std = torch.exp(log_std)
+                        dist = torch.distributions.Normal(mu, std)
+                        a = act_t[i]  # [A]
+                        logp = dist.log_prob(a).sum()
+                        ent = dist.entropy().sum()
+
+                    new_logps.append(logp)
+                    new_vals.append(v)
+                    entropies.append(ent)
+
+                new_logp = torch.stack(new_logps).to(torch.float32)  # [mb]
+                new_val = torch.stack(new_vals).to(torch.float32).view(-1)  # [mb]
+                ent = torch.stack(entropies).to(torch.float32)  # [mb]
 
                 ratio = torch.exp(new_logp - logp_old_t[idx])
 
@@ -1130,15 +1288,9 @@ def train_ppo(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
 
                 loss_v = 0.5 * (ret_t[idx].detach() - new_val).pow(2).mean()
 
-                loss_ent = (
-                    -spec.entropy_coef * ent.mean() if spec.entropy_coef > 0 else 0.0
-                )
+                loss_ent = -spec.entropy_coef * ent.mean() if spec.entropy_coef > 0 else 0.0
 
-                loss = (
-                    loss_pi
-                    + spec.value_coef * loss_v
-                    + (loss_ent if isinstance(loss_ent, torch.Tensor) else 0.0)
-                )
+                loss = loss_pi + spec.value_coef * loss_v + (loss_ent if isinstance(loss_ent, torch.Tensor) else 0.0)
 
                 opt.zero_grad()
                 loss.backward()
@@ -1151,21 +1303,13 @@ def train_ppo(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
                         break
 
         if (upd % spec.log_every) == 0:
-            avg10 = (
-                float(np.mean(recent_returns[-10:]))
-                if len(recent_returns) >= 10
-                else float(np.mean(recent_returns))
-            )
+            avg10 = float(np.mean(recent_returns[-10:])) if len(recent_returns) >= 10 else float(np.mean(recent_returns))
             logger.info(f"[PPO upd {upd:04d}] avg10ret={avg10:.1f} bufferT={T}")
 
     torch_params_to_genome(genome, params)
 
     ev = eval_policy(genome, spec=spec, deterministic=True, seed=spec.seed + 9999)
-    train_tail = (
-        float(np.mean(recent_returns[-20:]))
-        if len(recent_returns) >= 20
-        else float(np.mean(recent_returns) if recent_returns else 0.0)
-    )
+    train_tail = float(np.mean(recent_returns[-20:])) if len(recent_returns) >= 20 else float(np.mean(recent_returns) if recent_returns else 0.0)
 
     genome.fitness = {
         "train_return_mean": train_tail,
@@ -1471,4 +1615,124 @@ def frozenlake_spec(
         max_steps=100,
         eval_episodes=20,
         env_kwargs={"is_slippery": is_slippery},
+    )
+
+def halfcheetah_spec(
+    *,
+    episodes: int = 200,
+    lr: float = 3e-4,
+    seed: int = 0,
+    algo: str = "ppo",
+) -> RLSpec:
+    env_id = "HalfCheetah-v5"
+
+    def encoder(obs):
+        # tanh fallback is fine; MuJoCo obs magnitudes can vary
+        return encode_box_to_unit_interval(obs, scales=None)
+
+    # HalfCheetah action_dim = 6
+    # bounds usually [-1, 1] each
+    low = -np.ones(6, dtype=np.float32)
+    high = np.ones(6, dtype=np.float32)
+
+    return RLSpec(
+        env_id=env_id,
+        n_actions=6,  # unused for continuous
+        algo=algo,
+        action_space="continuous",
+        action_low=low,
+        action_high=high,
+        input_mode="angle",
+        return_expvals=True,   # use circuit expvals as features
+        obs_encoder=encoder,
+        episodes=episodes,
+        lr=lr,
+        seed=seed,
+        max_steps=1000,
+        eval_episodes=10,
+        rollout_steps=2048,
+        ppo_epochs=10,
+        ppo_minibatch=256,
+        entropy_coef=0.0,
+        value_coef=0.5,
+        gae_lambda=0.95,
+        ppo_clip=0.2,
+        target_kl=0.02,
+    )
+
+def walker2d_spec(
+    *,
+    episodes: int = 200,
+    lr: float = 3e-4,
+    seed: int = 0,
+    algo: str = "ppo",
+) -> RLSpec:
+    env_id = "Walker2d-v5"
+
+    def encoder(obs):
+        return encode_box_to_unit_interval(obs, scales=None)
+
+    # Walker2d action_dim = 6
+    low = -np.ones(6, dtype=np.float32)
+    high = np.ones(6, dtype=np.float32)
+
+    return RLSpec(
+        env_id=env_id,
+        n_actions=6,
+        algo=algo,
+        action_space="continuous",
+        action_low=low,
+        action_high=high,
+        input_mode="angle",
+        return_expvals=True,
+        obs_encoder=encoder,
+        episodes=episodes,
+        lr=lr,
+        seed=seed,
+        max_steps=1000,
+        eval_episodes=10,
+        rollout_steps=2048,
+        ppo_epochs=10,
+        ppo_minibatch=256,
+        entropy_coef=0.0,
+        value_coef=0.5,
+        gae_lambda=0.95,
+        ppo_clip=0.2,
+        target_kl=0.02,
+    )
+
+def mountaincar_continuous_spec(
+    *,
+    episodes: int = 200,
+    lr: float = 3e-4,
+    seed: int = 0,
+    algo: str = "ppo",
+) -> RLSpec:
+    # obs dim = 2 (position, velocity), action dim = 1 in [-1, 1]
+    scales = np.array([1.2, 0.07], dtype=np.float32)
+
+    def encoder(obs):
+        return encode_box_to_unit_interval(obs, scales=scales)
+
+    return RLSpec(
+        env_id="MountainCarContinuous-v0",
+        n_actions=1,
+        algo=algo,
+        action_space="continuous",
+        action_low=np.array([-1.0], dtype=np.float32),
+        action_high=np.array([1.0], dtype=np.float32),
+        clip_actions=True,
+        input_mode="angle",
+        return_expvals=True,
+        obs_encoder=encoder,
+        episodes=episodes,
+        lr=lr,
+        seed=seed,
+        max_steps=999,
+        eval_episodes=10,
+        rollout_steps=2048,
+        ppo_epochs=10,
+        ppo_minibatch=256,
+        entropy_coef=0.0,
+        value_coef=0.5,
     )
