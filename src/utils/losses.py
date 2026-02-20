@@ -48,7 +48,9 @@ def marginal_probs_from_statevector(
     return probs_marg.reshape(-1)
 
 
-def fidelity(phi: torch.Tensor, psi: torch.Tensor, eps: float = 1e-12, **kwargs) -> torch.Tensor:
+def fidelity(
+    phi: torch.Tensor, psi: torch.Tensor, eps: float = 1e-12, **kwargs
+) -> torch.Tensor:
     """Compute the quantum state fidelity between two pure states.
 
     Fidelity is defined as:
@@ -192,10 +194,7 @@ def loss_obs_mse(phi: torch.Tensor, psi: torch.Tensor, **kwargs) -> torch.Tensor
 
 
 def loss_ce(
-    phi: torch.Tensor,
-    psi: torch.Tensor,
-    eps: float = 1e-12,
-    **kwargs
+    phi: torch.Tensor, psi: torch.Tensor, eps: float = 1e-12, **kwargs
 ) -> torch.Tensor:
     """Compute mean-squared error between observable outputs.
 
@@ -241,7 +240,7 @@ def balanced_ce_onehot_on_probs(
     y_onehot: torch.Tensor,
     alpha_per_class: torch.Tensor,
     eps: float = 1e-12,
-    **kwargs
+    **kwargs,
 ) -> torch.Tensor:
     """
     This computes the balance cross entropy loss
@@ -268,7 +267,7 @@ def focal_onehot_on_probs(
     alpha_per_class: torch.Tensor,
     gamma: float = 2.0,
     eps: float = 1e-12,
-    **kwargs
+    **kwargs,
 ) -> torch.Tensor:
     """
     This computes the alpha balanced focal loss
@@ -278,7 +277,7 @@ def focal_onehot_on_probs(
         y_onehot: shape [K], one-hot (or soft labels)
         alpha_per_class: shape [K], per-class alpha weights
         gamma: focusing parameter (>= 0)
-    
+
     Returns:
         A scalar tensor denoting the loss
     """
@@ -300,7 +299,7 @@ def loss_readout_ce_from_state(
     readout_wires: list[int] = None,
     n_classes: int = 3,
     eps: float = 1e-12,
-    **kwargs
+    **kwargs,
 ) -> torch.Tensor:
     """Compute mean-squared error between observable outputs.
 

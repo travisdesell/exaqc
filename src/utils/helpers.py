@@ -1,6 +1,7 @@
 import numpy as np
 from collections import defaultdict
 
+
 def register_wire_map(registers: dict[str, int]) -> dict:
     """Return a dict mapping register names to PennyLane wires."""
     wire_map = {}
@@ -11,12 +12,32 @@ def register_wire_map(registers: dict[str, int]) -> dict:
     return wire_map
 
 
+def sample_batch(
+    data: list, batch_size: int, shuffle_each_step: bool, step: int
+) -> list:
+    """Creates a mini-batch from provided data list of given size
+
+    Args:
+        data (list): The dataset list where each element is a tuple (x, y, cls)
+        batch_size (int): Size of the batch
+        shuffle_each_step (bool): If you want random shuffling or sequential
+        step (int): The current step in training
+
+    Returns:
+        list: The mini-batch of data
+    """
+    n = len(data)
+    if batch_size is None:
+        return data
+    if shuffle_each_step:
+        idx = np.randint(low=0, high=n, size=(batch_size,))
+        return [data[i] for i in idx.tolist()]
+    start = (step * batch_size) % n
+    return [data[(start + i) % n] for i in range(batch_size)]
+
+
 def sample_even_batch(
-    data,
-    batch_size: int | None,
-    shuffle_each_step: bool,
-    seed: int = 42,
-    **kwargs
+    data, batch_size: int | None, shuffle_each_step: bool, seed: int = 42, **kwargs
 ):
     """Creates a mini-batch from provided classification data list of given size
         Maintains equal class distrubution in batch
@@ -30,7 +51,6 @@ def sample_even_batch(
     Returns:
         list: The mini-batch of data
     """
-    n = len(data)
     if batch_size is None:
         return data
 
@@ -38,33 +58,32 @@ def sample_even_batch(
 
     idx_by_class = defaultdict(list)
     for i, (_, y_onehot, _) in enumerate(data):
-        k = int(np.array(y_onehot).argmax().item())
+        k = int(np.array(y_onehot.cpu()).argmax().item())
         idx_by_class[k].append(i)
 
     classes = sorted(idx_by_class.keys())
     K = len(classes)
-
     if batch_size < K:
         raise ValueError("batch_size must be >= number of classes.")
+
     per_class = batch_size // K
     remainder = batch_size - per_class * K
 
-    # Shuffle each pool initially
+    # shuffle each pool initially
     for c in classes:
         rng.shuffle(idx_by_class[c])
 
-    ptr = dict.fromkeys(classes, 0)
+    ptr = {c: 0 for c in classes}  # <-- persists!
 
     batch_idx = []
 
-    # Draw equal items per class
     for c in classes:
         pool = idx_by_class[c]
         start = ptr[c]
         end = start + per_class
 
         if end > len(pool):
-            # wrap-around (oversample) + reshuffle
+            # wrap-around oversampling for minority classes
             if shuffle_each_step:
                 rng.shuffle(pool)
             start, end = 0, per_class
@@ -72,7 +91,6 @@ def sample_even_batch(
         batch_idx.extend(pool[start:end])
         ptr[c] = end
 
-    # Fill remainder (if batch_size not divisible by K)
     if remainder > 0:
         extra_classes = rng.choice(classes, size=remainder, replace=True)
         for c in extra_classes:

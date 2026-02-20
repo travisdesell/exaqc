@@ -20,7 +20,7 @@ from src.objectives.genome_objectives import (
     train_genome_objective,
     genome_to_torch_params,
 )
-from src.utils.losses import ce_onehot_on_probs, LOSS_REGISTRY
+from src.utils.losses import ce_onehot_on_probs
 from src.quantum_datasets import (
     IrisDataset,
     WineDataset,
@@ -73,12 +73,12 @@ def eval_probs_ce_and_acc(
     for x, y, cls in dataset:
         if cls not in per_class_pred:
             per_class_pred[cls] = 0
-            
+
         probs_full = genome.circuit(x, params)
         probs_full = torch.as_tensor(probs_full, dtype=torch.float32)
 
         pred, probs = predict_from_probs(probs_full, n_classes=n_classes)
-        L = ce_onehot_on_probs(probs, y) if loss is None else LOSS_REGISTRY[loss](probs, y)
+        L = ce_onehot_on_probs(probs, y)
 
         losses.append(L)
         true = int(torch.argmax(y).item())
@@ -93,9 +93,11 @@ def eval_probs_ce_and_acc(
 
     log = ""
     for k, v in dataset.class_counts.items():
-        log += f"[{k}] Accuracy: {per_class_pred[k]/v:.4f} ({per_class_pred[k]}/{v}) | "
+        log += (
+            f"[{k}] Accuracy: {per_class_pred[k] / v:.4f} ({per_class_pred[k]}/{v}) | "
+        )
     logger.info(f"{log}")
-    
+
     return {"loss": avg_loss, "acc": acc}
 
 
@@ -207,7 +209,9 @@ if __name__ == "__main__":
         default="artifacts",
         help="Output directory to store results from runs",
     )
-    p.add_argument("--loss", default="ce", choices=["bce", "focal", "ce", "mse", "kl", "fidelity"])
+    p.add_argument(
+        "--loss", default="ce", choices=["bce", "focal", "ce", "mse", "kl", "fidelity"]
+    )
     p.add_argument("--steps", type=int, default=30)
     p.add_argument("--learning_rate", "-lr", type=float, default=5e-4)
     p.add_argument("--max_population_size", type=int, default=30)
