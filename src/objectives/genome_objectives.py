@@ -202,6 +202,7 @@ def _eval_supervised_split(
         n_classes (int): Number of output classes.
         loss_fn (Callable, optional): Custom loss function.
         class_counts (dict, optional): Per-class counts.
+        alpha (np.array, optional): Per-class alpha values for balanced loss.
 
     Returns:
         dict[str, float] | None: Loss and accuracy metrics.
@@ -252,6 +253,7 @@ def eval_forward_only(
         n_classes (int): Number of classes.
         loss_fn (Callable, optional): Loss function.
         class_counts (tuple, optional): Per-class counts.
+        alpha (np.array, optional): Per-class alpha values for balanced loss.
 
     Returns:
         dict[str, float]: Evaluation metrics.
@@ -470,6 +472,7 @@ def _train_with_pennylane(
         Args:
             data_list (Iterable): Dataset samples `(x, y, class_id)`.
             class_counts (dict, optional): Per-class sample counts.
+            alpha (np.array, optional): Per-class alpha values for balanced loss.
 
         Returns:
             dict[str, float]: Mean loss and classification accuracy.
@@ -569,9 +572,9 @@ def _train_with_pennylane(
                         f"[{step:04d}] fid_loss={tr['fidelity_loss']:.6f} angle_loss={tr['angle_loss']:.6f}"
                     )
             else:
-                tr = eval_supervised(train_list, train_data.class_counts)
+                tr = eval_supervised(train_list, train_data.class_counts, alpha=alpha)
                 if test_list is not None:
-                    te = eval_supervised(test_list, test_data.class_counts)
+                    te = eval_supervised(test_list, test_data.class_counts, alpha=alpha)
                     logger.info(
                         f"[{step:04d}] loss={tr['loss']:.6f} acc={tr['acc']:.3f} | "
                         f"test_loss={te['loss']:.3f} test_acc={te['acc']:.3f}"
