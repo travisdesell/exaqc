@@ -4,6 +4,7 @@ import torch
 from collections import defaultdict
 from src.circuits.circuit import CircuitGenome
 
+
 def register_wire_map(registers: dict[str, int]) -> dict:
     """Return a dict mapping register names to PennyLane wires."""
     wire_map = {}
@@ -12,7 +13,6 @@ def register_wire_map(registers: dict[str, int]) -> dict:
         wire_map[name] = list(range(offset, offset + size))
         offset += size
     return wire_map
-
 
 
 def sample_batch(
@@ -106,7 +106,20 @@ def sample_even_batch(
 
     return [data[i] for i in batch_idx]
 
+
 def genome_to_torch_params(genome: CircuitGenome) -> dict[str, torch.nn.Parameter]:
+    """Extract trainable genome parameters into torch Parameters.
+
+    Iterates over enabled gates in the genome and converts each gate parameter
+    into a `torch.nn.Parameter`. Parameters are keyed using the stable identifier
+    `<innovation_number>:<parameter_name>`.
+
+    Args:
+        genome (CircuitGenome): Quantum circuit genome with parametric gates.
+
+    Returns:
+        dict[str, torch.nn.Parameter]: Mapping from parameter keys to torch Parameters.
+    """
     params: dict[str, torch.nn.Parameter] = {}
     for gate in genome.gates:
         if gate.enabled:
@@ -115,12 +128,18 @@ def genome_to_torch_params(genome: CircuitGenome) -> dict[str, torch.nn.Paramete
                 params[key] = torch.nn.Parameter(
                     torch.tensor(float(value), dtype=torch.float64)
                 )
-    # logger.info(f"GENOME TO TORCH PARAMS: {params}")
     return params
 
 
 def _extract_param_value(v: torch.Tensor | float) -> float:
-    """Convert a parameter value (Tensor or float) to float."""
+    """Convert a tensor or scalar parameter to a Python float.
+
+    Args:
+        v (torch.Tensor | float): Parameter value.
+
+    Returns:
+        float: Extracted scalar value.
+    """
     if isinstance(v, torch.Tensor):
         return float(v.detach().cpu().item())
     return float(v)
@@ -129,11 +148,17 @@ def _extract_param_value(v: torch.Tensor | float) -> float:
 def torch_params_to_genome(
     genome: CircuitGenome, trained_params: dict[str, torch.Tensor] | dict[str, float]
 ):
-    # logger.info(f"TORCH TO GENOME TRAINED PARAMS: {trained_params}")
+    """Write trained torch parameters back into a genome.
+
+    Parameters are matched using `<innovation_number>:<parameter_name>` keys.
+
+    Args:
+        genome (CircuitGenome): Genome to update.
+        trained_params (dict[str, torch.Tensor | float]): Trained parameters.
+    """
     for gate in genome.gates:
         if gate.enabled:
             for name in gate.parameters.keys():
                 key = f"{gate.innovation_number}:{name}"
                 if key in trained_params:
                     gate.parameters[name] = _extract_param_value(trained_params[key])
-
