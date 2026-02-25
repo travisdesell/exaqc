@@ -12,9 +12,7 @@ import matplotlib.pyplot as plt
 
 from src.circuits.circuit import CircuitGenome
 from src.evolution.population_strategy import PopulationStrategy
-from src.objectives.genome_objectives import (
-    genome_to_torch_params,
-)
+from src.utils.helpers import genome_to_torch_params
 
 
 class SteadyStatePopulation(PopulationStrategy):
@@ -128,10 +126,16 @@ class SteadyStatePopulation(PopulationStrategy):
             if test_metric is None:
                 test_metric = genome.fitness.get("test_fidelity")
 
-            tag = (
-                f"trainloss_{genome.fitness['train_loss']:.4f}_testloss_"
-                f"{genome.fitness['test_loss']:.4f}_testacc_{test_metric:.3f}"
-            )
+            try:
+                tag = (
+                    f"trainloss_{genome.fitness['train_loss']:.4f}_testloss_"
+                    f"{genome.fitness['test_loss']:.4f}_testacc_{test_metric:.3f}"
+                )
+            except Exception:
+                tag = (
+                    f"best_ep_return_{genome.fitness['best_episode_return']:.4f}_"
+                    f"eval_return_mean_{genome.fitness['eval_return_mean']:.4f}"
+                )
 
             self._save_best_circuit(genome, out_dir=self.out_dir, tag=tag)
 

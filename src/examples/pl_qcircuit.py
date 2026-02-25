@@ -19,8 +19,8 @@ from src.circuits.pennylane_gate_specifications import pennylane_gate_specificat
 from src.circuits.circuit import CircuitGenome
 from src.objectives.genome_objectives import (
     train_genome_objective,
-    genome_to_torch_params,
 )
+from src.utils.helpers import genome_to_torch_params
 from src.utils.helpers import register_wire_map
 from src.quantum_datasets import QuantumTeacherDataset
 
