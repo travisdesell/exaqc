@@ -14,80 +14,14 @@ from src.utils.losses import (
 )
 
 from src.utils.helpers import (
-  sample_batch,
-  torch_params_to_genome,
-  genome_to_torch_params,
+    sample_batch,
+    torch_params_to_genome,
+    genome_to_torch_params,
 )
-
-LOSS_REGISTRY: dict[str, Callable[..., torch.Tensor]] = {
-    "fidelity": loss_one_minus_fidelity,
-    "angle": loss_state_angle,
-    "kl": loss_kl_divergence,
-    "mse": loss_obs_mse,
-    "ce": loss_ce,
-}
 
 STATEVECTOR_LOSSES = {"fidelity", "angle", "kl", "ce"}
 
 
-
-def genome_to_torch_params(genome: CircuitGenome) -> dict[str, torch.nn.Parameter]:
-    """Extract trainable genome parameters into torch Parameters.
-
-    Iterates over enabled gates in the genome and converts each gate parameter
-    into a `torch.nn.Parameter`. Parameters are keyed using the stable identifier
-    `<innovation_number>:<parameter_name>`.
-
-    Args:
-        genome (CircuitGenome): Quantum circuit genome with parametric gates.
-
-    Returns:
-        dict[str, torch.nn.Parameter]: Mapping from parameter keys to torch Parameters.
-    """
-    params: dict[str, torch.nn.Parameter] = {}
-    for gate in genome.gates:
-        if gate.enabled:
-            for name, value in gate.parameters.items():
-                key = f"{gate.innovation_number}:{name}"
-                params[key] = torch.nn.Parameter(
-                    torch.tensor(float(value), dtype=torch.float64)
-                )
-    return params
-
-
-def _extract_param_value(v: torch.Tensor | float) -> float:
-    """Convert a tensor or scalar parameter to a Python float.
-
-    Args:
-        v (torch.Tensor | float): Parameter value.
-
-    Returns:
-        float: Extracted scalar value.
-    """
-    if isinstance(v, torch.Tensor):
-        return float(v.detach().cpu().item())
-    return float(v)
-
-
-def torch_params_to_genome(
-    genome: CircuitGenome, trained_params: dict[str, torch.Tensor] | dict[str, float]
-):
-    """Write trained torch parameters back into a genome.
-
-    Parameters are matched using `<innovation_number>:<parameter_name>` keys.
-
-    Args:
-        genome (CircuitGenome): Genome to update.
-        trained_params (dict[str, torch.Tensor | float]): Trained parameters.
-    """
-    for gate in genome.gates:
-        if gate.enabled:
-            for name in gate.parameters.keys():
-                key = f"{gate.innovation_number}:{name}"
-                if key in trained_params:
-                    gate.parameters[name] = _extract_param_value(trained_params[key])
-
-                    
 def _ensure_complex(x: torch.Tensor) -> torch.Tensor:
     """Ensure tensor is represented as a complex-valued tensor.
 
@@ -199,6 +133,7 @@ def _eval_supervised_split(
     n_classes,
     loss_fn: Optional[Callable] = None,
     class_counts: Optional[dict] = None,
+    alpha=None,
 ):
     """Evaluate supervised classification metrics on a dataset split.
 
@@ -209,6 +144,7 @@ def _eval_supervised_split(
         n_classes (int): Number of output classes.
         loss_fn (Callable, optional): Custom loss function.
         class_counts (dict, optional): Per-class counts.
+        alpha (np.array, optional): Per-class alpha values for balanced loss.
 
     Returns:
         dict[str, float] | None: Loss and accuracy metrics.
@@ -223,7 +159,7 @@ def _eval_supervised_split(
         probs = torch.as_tensor(probs, dtype=torch.float32)
         probs = probs[:n_classes]
         probs = probs / (probs.sum() + 1e-12)
-        L = ce_onehot_on_probs(probs, y)
+        L = loss_fn(probs, y, alpha_per_class=alpha)
         losses.append(L)
         pred = int(torch.argmax(probs).item())
         true = int(torch.argmax(y).item())
@@ -245,6 +181,7 @@ def eval_forward_only(
     n_classes: int = 3,
     loss_fn: Optional[Callable] = None,
     class_counts: Optional[tuple] = None,
+    alpha: Optional[list] = None,
 ):
     """Evaluate a genome without gradient updates.
 
@@ -258,6 +195,7 @@ def eval_forward_only(
         n_classes (int): Number of classes.
         loss_fn (Callable, optional): Loss function.
         class_counts (tuple, optional): Per-class counts.
+        alpha (np.array, optional): Per-class alpha values for balanced loss.
 
     Returns:
         dict[str, float]: Evaluation metrics.
@@ -284,6 +222,7 @@ def eval_forward_only(
             n_classes,
             loss_fn=loss_fn,
             class_counts=class_counts[0],
+            alpha=alpha,
         )
         te = (
             _eval_supervised_split(
@@ -293,6 +232,7 @@ def eval_forward_only(
                 n_classes,
                 loss_fn=loss_fn,
                 class_counts=class_counts[1],
+                alpha=alpha,
             )
             if test_list is not None
             else None
@@ -396,6 +336,7 @@ def _train_with_pennylane(
             n_classes=n_classes,
             loss_fn=loss_fn,
             class_counts=(train_data.class_counts, test_data.class_counts),
+            alpha=alpha,
         )
         genome.fitness = metrics
         return
@@ -467,12 +408,17 @@ def _train_with_pennylane(
 
     # --- eval supervised metrics ---
     @torch.no_grad()
-    def eval_supervised(data_list, class_counts: Optional[dict]):
+    def eval_supervised(
+        data_list,
+        class_counts: Optional[dict],
+        alpha=None,
+    ):
         """Evaluate supervised classification metrics.
 
         Args:
             data_list (Iterable): Dataset samples `(x, y, class_id)`.
             class_counts (dict, optional): Per-class sample counts.
+            alpha (np.array, optional): Per-class alpha values for balanced loss.
 
         Returns:
             dict[str, float]: Mean loss and classification accuracy.
@@ -485,7 +431,11 @@ def _train_with_pennylane(
             # if cls not in per_class_pred:
             #     per_class_pred[cls] = 0
             p = forward_probs(x)
-            eval_loss = ce_onehot_on_probs(p, y)
+            eval_loss = loss_fn(
+                p,
+                y,
+                alpha_per_class=alpha,
+            )
             losses.append(eval_loss)
             pred = int(torch.argmax(p).item())
             true = int(torch.argmax(y).item())
@@ -550,6 +500,7 @@ def _train_with_pennylane(
                 teacher_qnode=target_qnode,
                 n_classes=n_classes,
                 loss_fn=loss_fn,
+                alpha=alpha,
             )
             genome.fitness = metrics
             return
@@ -571,9 +522,9 @@ def _train_with_pennylane(
                         f"[{step:04d}] fid_loss={tr['fidelity_loss']:.6f} angle_loss={tr['angle_loss']:.6f}"
                     )
             else:
-                tr = eval_supervised(train_list, train_data.class_counts)
+                tr = eval_supervised(train_list, train_data.class_counts, alpha=alpha)
                 if test_list is not None:
-                    te = eval_supervised(test_list, test_data.class_counts)
+                    te = eval_supervised(test_list, test_data.class_counts, alpha=alpha)
                     logger.info(
                         f"[{step:04d}] loss={tr['loss']:.6f} acc={tr['acc']:.3f} | "
                         f"test_loss={te['loss']:.3f} test_acc={te['acc']:.3f}"
