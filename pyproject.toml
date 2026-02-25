@@ -25,4 +25,5 @@ dependencies = [
     "scikit-learn",
     "mpi4py",
     "imbalanced-learn",
+    "gymnasium",
 ]

@@ -12,9 +12,23 @@ from src.utils.losses import (
     ce_onehot_on_probs,
     LOSS_REGISTRY,
 )
-from src.utils.helpers import sample_batch
+
+from src.utils.helpers import (
+  sample_batch,
+  torch_params_to_genome,
+  genome_to_torch_params,
+)
+
+LOSS_REGISTRY: dict[str, Callable[..., torch.Tensor]] = {
+    "fidelity": loss_one_minus_fidelity,
+    "angle": loss_state_angle,
+    "kl": loss_kl_divergence,
+    "mse": loss_obs_mse,
+    "ce": loss_ce,
+}
 
 STATEVECTOR_LOSSES = {"fidelity", "angle", "kl", "ce"}
+
 
 
 def genome_to_torch_params(genome: CircuitGenome) -> dict[str, torch.nn.Parameter]:
@@ -73,7 +87,7 @@ def torch_params_to_genome(
                 if key in trained_params:
                     gate.parameters[name] = _extract_param_value(trained_params[key])
 
-
+                    
 def _ensure_complex(x: torch.Tensor) -> torch.Tensor:
     """Ensure tensor is represented as a complex-valued tensor.
 
