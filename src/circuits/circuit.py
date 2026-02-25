@@ -88,7 +88,7 @@ class CircuitGenome:
         self.sort_gates()
 
         reached_indexes = set(self.input_indexes)
-        logger.info(f"inital reached indexes now: {reached_indexes}")
+        logger.debug(f"inital reached indexes now: {reached_indexes}")
 
         for gate in self.gates:
             if not gate.enabled:
@@ -104,10 +104,10 @@ class CircuitGenome:
             if not set(input_circuit_indexes).isdisjoint(reached_indexes):
                 reached_indexes.update(output_circuit_indexes)
 
-            logger.info(f"\treached indexes now: {reached_indexes}")
+            logger.debug(f"\treached indexes now: {reached_indexes}")
 
         valid = not reached_indexes.isdisjoint(self.output_indexes)
-        logger.info(
+        logger.debug(
             f"output indexes are: {self.output_indexes}, circuit valid? {valid}"
         )
 

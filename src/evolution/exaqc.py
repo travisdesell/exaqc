@@ -125,10 +125,14 @@ class EXAQC:
         # TODO: make an evolutionary strategy for handling hyperparameter options
         hyperparameters = self.hyperparameters.copy()
 
+        '''
         hyperparameters["learning_rate"] = random.choice(
             [0.001, 0.0005, 0.0001, 0.00005]
         )
         hyperparameters["steps"] = random.choice([5, 10, 15, 20, 25, 30, 35, 40])
+        '''
+        hyperparameters["learning_rate"] = 0.0005
+        hyperparameters["steps"] = 25
 
         return hyperparameters
 
@@ -155,7 +159,7 @@ class EXAQC:
             A mutated copy of the parent genome as a child.
         """
 
-        child = parent.copy(genome_number=self.next_genome_number())
+        child = parent.copy(genome_number=None)
 
         # mutation_options = ["add_gate", "disable_gate", "enable_gate", "reorder_gate"]
         mutation_options = (
@@ -232,9 +236,10 @@ class EXAQC:
 
         if len(self.population.population) < self.population.max_population_size:
             # still need to populate the initial population
+            # mutation_count = random.choice([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+            mutation_count = random.choice([0, 1, 2])
+            # mutation_count = random.choice([0, 1, 2, 3, 4])
             valid = False
-
-            mutation_count = random.choice([0, 1, 2, 3, 4])
 
             logger.info(f"generating a child via {mutation_count + 1} mutations.")
             while not valid:
@@ -246,6 +251,7 @@ class EXAQC:
                     child = self.mutate(child)
                 valid = child.is_valid()
 
+            child.genome_number = self.next_genome_number()
             child.hyperparameters = self.get_hyperparameters()
             return child
 
@@ -267,7 +273,7 @@ class EXAQC:
                 ):
                     parents = self.population.get_parents(2)
                     child = CircuitGenome(
-                        genome_number=self.next_genome_number(),
+                        genome_number=None,
                         target=self.target,
                         input_qubits=self.input_qubits.copy(),
                         output_qubits=self.output_qubits.copy(),
@@ -284,7 +290,7 @@ class EXAQC:
                 ):
                     parents = self.population.get_parents(n_ary_parents)
                     child = CircuitGenome(
-                        genome_number=self.next_genome_number(),
+                        genome_number=None,
                         target=self.target,
                         input_qubits=self.input_qubits.copy(),
                         output_qubits=self.output_qubits.copy(),
@@ -298,7 +304,7 @@ class EXAQC:
                 ):
                     parents = self.population.get_parents(2)
                     child = CircuitGenome(
-                        genome_number=self.next_genome_number(),
+                        genome_number=None,
                         target=self.target,
                         input_qubits=self.input_qubits.copy(),
                         output_qubits=self.output_qubits.copy(),
@@ -308,8 +314,20 @@ class EXAQC:
 
                 else:
                     parent = self.population.get_parent()
-                    child = self.mutate(parent)
-                    child = self.mutate(child)
+
+                    # mutation_count = random.choice([0, 1, 2, 3, 4])
+                    mutation_count = random.choice([1, 2])
+                    valid = False
+
+                    logger.info(f"generating a child via {mutation_count + 1} mutations.")
+                    while not valid:
+                        # keep trying to create a child from the initial
+                        # genome until we get a valid one, then send it out
+                        child = self.mutate(parent)
+
+                        for i in range(mutation_count):
+                            child = self.mutate(child)
+                        valid = child.is_valid()
 
                 if not child.is_valid():
                     logger.warning(
@@ -318,6 +336,7 @@ class EXAQC:
                     child = None
 
             # successfully generated a child
+            child.genome_number = self.next_genome_number()
             child.hyperparameters = self.get_hyperparameters()
             return child
 

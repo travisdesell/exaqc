@@ -37,4 +37,9 @@ mpiexec -n 4 python -m src.examples.pl_qcircuit --logging_level INFO --teacher 2
 ```
 
 
+### Docstring Formatting
 
+We use Google format for docstrings. See https://www.sphinx-doc.org/en/master/usage/extensions/example_google.html
+
+> If you use an editor like `PyCharm` you can enable auto doc string comments by going to
+> Settings -> Tools -> Python Integrated Tools -> Docstrings -> Select Google

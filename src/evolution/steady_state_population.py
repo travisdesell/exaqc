@@ -1,5 +1,6 @@
 import bisect
 import random
+import json
 
 from functools import cmp_to_key
 from typing import Callable
@@ -38,6 +39,7 @@ class SteadyStatePopulation(PopulationStrategy):
             compare: a compare function used for sorting genomes. this should return 0 if both
                 genomes should be ranked the same, a negative value if the first genome should
                 come before the second genome, and a positive number otherwise
+            out_dir: is the directory to write out the logs and best found genomes
         """
 
         self.max_population_size = max_population_size
@@ -150,6 +152,11 @@ class SteadyStatePopulation(PopulationStrategy):
 
         genome.generate_pennylane_circuit(return_probs=True, input_mode="angle")
         # logger.info(f"genome circuit: {genome.circuit}")
+
+        json_path = os.path.join(out_dir, f"genome_{genome.genome_number}.json")
+        logger.info(f"writing NEW BEST gnome to {json_path}")
+        with open(json_path, 'w') as json_file:
+            json.dump(genome.to_dict(), json_file, ensure_ascii=False, indent=4)
 
         # --- Text gate list ---
         txt_path = os.path.join(out_dir, f"genome_{genome.genome_number}.txt")
