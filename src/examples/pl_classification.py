@@ -5,9 +5,10 @@ import math
 import os
 import torch
 import sys
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Callable
 
 from loguru import logger
+import numpy as np
 
 from src.evolution.master_worker import master_worker
 
@@ -20,7 +21,7 @@ from src.objectives.genome_objectives import (
     train_genome_objective,
 )
 from src.utils.helpers import genome_to_torch_params
-from src.utils.losses import ce_onehot_on_probs
+from src.utils.losses import LOSS_REGISTRY
 from src.quantum_datasets import (
     IrisDataset,
     WineDataset,
@@ -53,7 +54,7 @@ def eval_probs_ce_and_acc(
     dataset: Iterable[tuple[torch.Tensor, torch.Tensor, str]],
     *,
     n_classes: int,
-    loss: Optional[str],
+    loss_fn: Optional[Callable]=None,
 ) -> dict[str, float]:
     """
     Assumes genome.circuit returns qml.probs(wires=output_wires) (real-valued).
@@ -70,6 +71,12 @@ def eval_probs_ce_and_acc(
     total = 0
     per_class_pred = {}
 
+    alpha = len(dataset) / (
+        n_classes
+        * np.maximum(np.array(list(dataset.counts), dtype=np.float32), 1.0)
+    )
+    alpha = alpha / alpha.mean()
+
     for x, y, cls in dataset:
         if cls not in per_class_pred:
             per_class_pred[cls] = 0
@@ -78,7 +85,7 @@ def eval_probs_ce_and_acc(
         probs_full = torch.as_tensor(probs_full, dtype=torch.float32)
 
         pred, probs = predict_from_probs(probs_full, n_classes=n_classes)
-        L = ce_onehot_on_probs(probs, y)
+        L = loss_fn(probs, y, alpha_per_class=alpha)
 
         losses.append(L)
         true = int(torch.argmax(y).item())
@@ -155,6 +162,8 @@ class ClassificationObjective(Objective):
         batch_size = hyperparameters["batch_size"]
         log_every = hyperparameters["log_every"]
 
+        loss_fn = LOSS_REGISTRY[self.loss]
+
         # If there are trainable params, train. If not, just forward/eval.
         torch_params = genome_to_torch_params(genome)
         if len(torch_params) > 0:
@@ -172,10 +181,10 @@ class ClassificationObjective(Objective):
 
         # Compute fresh train/test metrics from probs (works for both param & no-param cases)
         train_metrics = eval_probs_ce_and_acc(
-            genome, self.train_data, n_classes=self.n_classes, loss=self.loss
+            genome, self.train_data, n_classes=self.n_classes, loss_fn=loss_fn
         )
         test_metrics = eval_probs_ce_and_acc(
-            genome, self.test_data, n_classes=self.n_classes, loss=self.loss
+            genome, self.test_data, n_classes=self.n_classes, loss_fn=loss_fn
         )
 
         genome.fitness = {

@@ -19,14 +19,6 @@ from src.utils.helpers import (
   genome_to_torch_params,
 )
 
-LOSS_REGISTRY: dict[str, Callable[..., torch.Tensor]] = {
-    "fidelity": loss_one_minus_fidelity,
-    "angle": loss_state_angle,
-    "kl": loss_kl_divergence,
-    "mse": loss_obs_mse,
-    "ce": loss_ce,
-}
-
 STATEVECTOR_LOSSES = {"fidelity", "angle", "kl", "ce"}
 
 
@@ -199,6 +191,7 @@ def _eval_supervised_split(
     n_classes,
     loss_fn: Optional[Callable] = None,
     class_counts: Optional[dict] = None,
+    alpha = None,
 ):
     """Evaluate supervised classification metrics on a dataset split.
 
@@ -223,7 +216,7 @@ def _eval_supervised_split(
         probs = torch.as_tensor(probs, dtype=torch.float32)
         probs = probs[:n_classes]
         probs = probs / (probs.sum() + 1e-12)
-        L = ce_onehot_on_probs(probs, y)
+        L = loss_fn(probs, y, alpha_per_class=alpha)
         losses.append(L)
         pred = int(torch.argmax(probs).item())
         true = int(torch.argmax(y).item())
@@ -245,6 +238,7 @@ def eval_forward_only(
     n_classes: int = 3,
     loss_fn: Optional[Callable] = None,
     class_counts: Optional[tuple] = None,
+    alpha: Optional[list] = None,
 ):
     """Evaluate a genome without gradient updates.
 
@@ -284,6 +278,7 @@ def eval_forward_only(
             n_classes,
             loss_fn=loss_fn,
             class_counts=class_counts[0],
+            alpha=alpha,
         )
         te = (
             _eval_supervised_split(
@@ -293,6 +288,7 @@ def eval_forward_only(
                 n_classes,
                 loss_fn=loss_fn,
                 class_counts=class_counts[1],
+                alpha=alpha,
             )
             if test_list is not None
             else None
@@ -396,6 +392,7 @@ def _train_with_pennylane(
             n_classes=n_classes,
             loss_fn=loss_fn,
             class_counts=(train_data.class_counts, test_data.class_counts),
+            alpha=alpha,
         )
         genome.fitness = metrics
         return
@@ -467,7 +464,7 @@ def _train_with_pennylane(
 
     # --- eval supervised metrics ---
     @torch.no_grad()
-    def eval_supervised(data_list, class_counts: Optional[dict]):
+    def eval_supervised(data_list, class_counts: Optional[dict], alpha=None,):
         """Evaluate supervised classification metrics.
 
         Args:
@@ -485,7 +482,7 @@ def _train_with_pennylane(
             # if cls not in per_class_pred:
             #     per_class_pred[cls] = 0
             p = forward_probs(x)
-            eval_loss = ce_onehot_on_probs(p, y)
+            eval_loss = loss_fn(p, y, alpha_per_class=alpha,)
             losses.append(eval_loss)
             pred = int(torch.argmax(p).item())
             true = int(torch.argmax(y).item())
@@ -550,6 +547,7 @@ def _train_with_pennylane(
                 teacher_qnode=target_qnode,
                 n_classes=n_classes,
                 loss_fn=loss_fn,
+                alpha=alpha,
             )
             genome.fitness = metrics
             return
