@@ -14,72 +14,14 @@ from src.utils.losses import (
 )
 
 from src.utils.helpers import (
-  sample_batch,
-  torch_params_to_genome,
-  genome_to_torch_params,
+    sample_batch,
+    torch_params_to_genome,
+    genome_to_torch_params,
 )
 
 STATEVECTOR_LOSSES = {"fidelity", "angle", "kl", "ce"}
 
 
-
-def genome_to_torch_params(genome: CircuitGenome) -> dict[str, torch.nn.Parameter]:
-    """Extract trainable genome parameters into torch Parameters.
-
-    Iterates over enabled gates in the genome and converts each gate parameter
-    into a `torch.nn.Parameter`. Parameters are keyed using the stable identifier
-    `<innovation_number>:<parameter_name>`.
-
-    Args:
-        genome (CircuitGenome): Quantum circuit genome with parametric gates.
-
-    Returns:
-        dict[str, torch.nn.Parameter]: Mapping from parameter keys to torch Parameters.
-    """
-    params: dict[str, torch.nn.Parameter] = {}
-    for gate in genome.gates:
-        if gate.enabled:
-            for name, value in gate.parameters.items():
-                key = f"{gate.innovation_number}:{name}"
-                params[key] = torch.nn.Parameter(
-                    torch.tensor(float(value), dtype=torch.float64)
-                )
-    return params
-
-
-def _extract_param_value(v: torch.Tensor | float) -> float:
-    """Convert a tensor or scalar parameter to a Python float.
-
-    Args:
-        v (torch.Tensor | float): Parameter value.
-
-    Returns:
-        float: Extracted scalar value.
-    """
-    if isinstance(v, torch.Tensor):
-        return float(v.detach().cpu().item())
-    return float(v)
-
-
-def torch_params_to_genome(
-    genome: CircuitGenome, trained_params: dict[str, torch.Tensor] | dict[str, float]
-):
-    """Write trained torch parameters back into a genome.
-
-    Parameters are matched using `<innovation_number>:<parameter_name>` keys.
-
-    Args:
-        genome (CircuitGenome): Genome to update.
-        trained_params (dict[str, torch.Tensor | float]): Trained parameters.
-    """
-    for gate in genome.gates:
-        if gate.enabled:
-            for name in gate.parameters.keys():
-                key = f"{gate.innovation_number}:{name}"
-                if key in trained_params:
-                    gate.parameters[name] = _extract_param_value(trained_params[key])
-
-                    
 def _ensure_complex(x: torch.Tensor) -> torch.Tensor:
     """Ensure tensor is represented as a complex-valued tensor.
 
@@ -191,7 +133,7 @@ def _eval_supervised_split(
     n_classes,
     loss_fn: Optional[Callable] = None,
     class_counts: Optional[dict] = None,
-    alpha = None,
+    alpha=None,
 ):
     """Evaluate supervised classification metrics on a dataset split.
 
@@ -466,7 +408,11 @@ def _train_with_pennylane(
 
     # --- eval supervised metrics ---
     @torch.no_grad()
-    def eval_supervised(data_list, class_counts: Optional[dict], alpha=None,):
+    def eval_supervised(
+        data_list,
+        class_counts: Optional[dict],
+        alpha=None,
+    ):
         """Evaluate supervised classification metrics.
 
         Args:
@@ -485,7 +431,11 @@ def _train_with_pennylane(
             # if cls not in per_class_pred:
             #     per_class_pred[cls] = 0
             p = forward_probs(x)
-            eval_loss = loss_fn(p, y, alpha_per_class=alpha,)
+            eval_loss = loss_fn(
+                p,
+                y,
+                alpha_per_class=alpha,
+            )
             losses.append(eval_loss)
             pred = int(torch.argmax(p).item())
             true = int(torch.argmax(y).item())

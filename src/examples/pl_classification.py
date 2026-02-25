@@ -54,7 +54,7 @@ def eval_probs_ce_and_acc(
     dataset: Iterable[tuple[torch.Tensor, torch.Tensor, str]],
     *,
     n_classes: int,
-    loss_fn: Optional[Callable]=None,
+    loss_fn: Optional[Callable] = None,
 ) -> dict[str, float]:
     """
     Assumes genome.circuit returns qml.probs(wires=output_wires) (real-valued).
@@ -72,8 +72,7 @@ def eval_probs_ce_and_acc(
     per_class_pred = {}
 
     alpha = len(dataset) / (
-        n_classes
-        * np.maximum(np.array(list(dataset.counts), dtype=np.float32), 1.0)
+        n_classes * np.maximum(np.array(list(dataset.counts), dtype=np.float32), 1.0)
     )
     alpha = alpha / alpha.mean()
 
