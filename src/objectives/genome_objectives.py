@@ -6,6 +6,8 @@ from loguru import logger
 import numpy as np
 from src.circuits.circuit import CircuitGenome
 from src.utils.losses import (
+    loss_ce,
+    loss_kl_divergence,
     loss_one_minus_fidelity,
     loss_state_angle,
     loss_obs_mse,
