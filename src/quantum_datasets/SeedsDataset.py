@@ -6,17 +6,22 @@ from .base import QuantumDataset
 
 
 class SeedsDataset(QuantumDataset):
-    """
-    UCI Seeds dataset (Wheat kernels)
+    """Quantum-compatible UCI Seeds (Wheat Kernels) dataset.
 
-    Returns:
-      x: torch.float32 shape [7]
-      y: torch.float32 shape [3] (one-hot)
+    This dataset adapts the UCI Seeds dataset for quantum machine learning
+    workflows. Each data point describes geometric properties of wheat
+    kernels and is scaled to the range [0, 1], making it suitable for
+    angle-based quantum feature encodings (e.g., RY(pi * x)).
 
-    Classes:
-      0 -> Kama
-      1 -> Rosa
-      2 -> Canadian
+    Each sample consists of:
+      - a 7-dimensional real-valued feature vector
+      - a 3-dimensional one-hot encoded label
+      - a human-readable class name
+
+    Class mapping:
+      - 0 → Kama
+      - 1 → Rosa
+      - 2 → Canadian
     """
 
     def __init__(
@@ -26,25 +31,40 @@ class SeedsDataset(QuantumDataset):
         train_frac: float = 0.8,
         seed: int = 0,
     ):
+        """Initialize the Seeds dataset.
+
+        Loads the UCI Seeds dataset from a local text file, rescales features
+        to [0, 1], performs a stratified train/test split, and converts
+        the data into PyTorch tensors compatible with quantum learning
+        pipelines.
+
+        Args:
+            split (str): Dataset split to use. Must be `"train"` or `"test"`.
+            train_frac (float): Fraction of samples used for training.
+            seed (int): Random seed for reproducible splitting.
+
+        Raises:
+            ValueError: If `split` is not `"train"` or `"test"`.
+        """
         import numpy as np
         from sklearn.preprocessing import MinMaxScaler
         from sklearn.model_selection import train_test_split
 
         # ---- Load raw data ----
-        # Format: 7 features + 1 class label (1,2,3)
+        # Format: 7 features + 1 class label (1, 2, 3)
         data = np.loadtxt("src/quantum_datasets/data/seeds_dataset.txt")
         target_names = ["Kama", "Rosa", "Canadian"]
 
         X = data[:, :7]  # (210, 7)
-        y = data[:, 7].astype(int)  # {1,2,3}
+        y = data[:, 7].astype(int)  # {1, 2, 3}
         self.labels = target_names
 
-        # Convert labels -> {0,1,2}
+        # Convert labels -> {0, 1, 2}
         y = y - 1
 
         self.num_classes = 3
 
-        # ---- Scale features to [0,1] ----
+        # ---- Scale features to [0, 1] ----
         scaler = MinMaxScaler()
         X = scaler.fit_transform(X)
 
@@ -67,12 +87,28 @@ class SeedsDataset(QuantumDataset):
             raise ValueError("split must be 'train' or 'test'")
 
         _, self.counts = np.unique(self.y.cpu().numpy(), return_counts=True)
-        self.class_counts = dict(zip(data.target_names, self.counts))
+        self.class_counts = dict(zip(target_names, self.counts))
 
     def __len__(self) -> int:
+        """Return the number of samples in the dataset.
+
+        Returns:
+            int: Number of samples in the selected split.
+        """
         return self.X.shape[0]
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, str]:
+        """Retrieve a single dataset sample.
+
+        Args:
+            idx (int): Index of the sample.
+
+        Returns:
+            tuple:
+                - x (torch.Tensor): Feature vector of shape `[7]`.
+                - y_onehot (torch.Tensor): One-hot encoded label of shape `[3]`.
+                - cls_name (str): Human-readable class label.
+        """
         x = self.X[idx]  # [7]
         cls = int(self.y[idx].item())
 

@@ -18,6 +18,18 @@ STATEVECTOR_LOSSES = {"fidelity", "angle", "kl", "ce"}
 
 
 def genome_to_torch_params(genome: CircuitGenome) -> dict[str, torch.nn.Parameter]:
+    """Extract trainable genome parameters into torch Parameters.
+
+    Iterates over enabled gates in the genome and converts each gate parameter
+    into a `torch.nn.Parameter`. Parameters are keyed using the stable identifier
+    `<innovation_number>:<parameter_name>`.
+
+    Args:
+        genome (CircuitGenome): Quantum circuit genome with parametric gates.
+
+    Returns:
+        dict[str, torch.nn.Parameter]: Mapping from parameter keys to torch Parameters.
+    """
     params: dict[str, torch.nn.Parameter] = {}
     for gate in genome.gates:
         if gate.enabled:
@@ -26,12 +38,18 @@ def genome_to_torch_params(genome: CircuitGenome) -> dict[str, torch.nn.Paramete
                 params[key] = torch.nn.Parameter(
                     torch.tensor(float(value), dtype=torch.float64)
                 )
-    # logger.info(f"GENOME TO TORCH PARAMS: {params}")
     return params
 
 
 def _extract_param_value(v: torch.Tensor | float) -> float:
-    """Convert a parameter value (Tensor or float) to float."""
+    """Convert a tensor or scalar parameter to a Python float.
+
+    Args:
+        v (torch.Tensor | float): Parameter value.
+
+    Returns:
+        float: Extracted scalar value.
+    """
     if isinstance(v, torch.Tensor):
         return float(v.detach().cpu().item())
     return float(v)
@@ -40,7 +58,14 @@ def _extract_param_value(v: torch.Tensor | float) -> float:
 def torch_params_to_genome(
     genome: CircuitGenome, trained_params: dict[str, torch.Tensor] | dict[str, float]
 ):
-    # logger.info(f"TORCH TO GENOME TRAINED PARAMS: {trained_params}")
+    """Write trained torch parameters back into a genome.
+
+    Parameters are matched using `<innovation_number>:<parameter_name>` keys.
+
+    Args:
+        genome (CircuitGenome): Genome to update.
+        trained_params (dict[str, torch.Tensor | float]): Trained parameters.
+    """
     for gate in genome.gates:
         if gate.enabled:
             for name in gate.parameters.keys():
@@ -50,24 +75,54 @@ def torch_params_to_genome(
 
 
 def _ensure_complex(x: torch.Tensor) -> torch.Tensor:
+    """Ensure tensor is represented as a complex-valued tensor.
+
+    Args:
+        x (torch.Tensor): Input tensor.
+
+    Returns:
+        torch.Tensor: Complex tensor.
+    """
     x = torch.as_tensor(x)
     if not torch.is_complex(x):
-        # if PL returned real state by accident, promote
         x = x.to(torch.complex128 if x.dtype == torch.float64 else torch.complex64)
     return x
 
 
 def _normalize_state(psi: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+    """Normalize a quantum state vector.
+
+    Args:
+        psi (torch.Tensor): State vector.
+        eps (float, optional): Numerical stability constant.
+
+    Returns:
+        torch.Tensor: Normalized state vector.
+    """
     return psi / (torch.linalg.norm(psi) + eps)
 
 
 @torch.no_grad()
 def compute_teacher_metrics(
     *,
-    phi: torch.Tensor,  # target state
-    psi: torch.Tensor,  # predicted state
+    phi: torch.Tensor,
+    psi: torch.Tensor,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, float]:
+    """Compute fidelity-based teacher metrics.
+
+    Computes fidelity loss, angle loss, and optionally readout cross-entropy
+    between a target state and predicted state.
+
+    Args:
+        phi (torch.Tensor): Target quantum state.
+        psi (torch.Tensor): Predicted quantum state.
+        extra (dict[str, Any], optional): Optional dictionary containing readout
+            information for additional metrics.
+
+    Returns:
+        dict[str, float]: Dictionary of computed metrics.
+    """
     phi = _normalize_state(_ensure_complex(phi))
     psi = _normalize_state(_ensure_complex(psi))
 
@@ -76,12 +131,9 @@ def compute_teacher_metrics(
     out["fidelity_loss"] = float(loss_one_minus_fidelity(phi, psi).cpu().item())
     out["angle_loss"] = float(loss_state_angle(phi, psi).cpu().item())
 
-    # Optional extras if you want them:
-    # - readout CE if you have onehot label in extra["y"]
     if extra is not None and "readout_ce" in extra and extra["readout_ce"]:
-        # expects extra contains: n_qubits, readout_wires, n_classes, y_onehot
         y = extra["y_onehot"]
-        p = extra["readout_probs_fn"](psi)  # returns [n_classes] probs
+        p = extra["readout_probs_fn"](psi)
         out["ce"] = float(ce_onehot_on_probs(p, y).cpu().item())
 
     return out
@@ -91,7 +143,18 @@ def compute_teacher_metrics(
 def _eval_teacher_split(
     data, genome, params, teacher_qnode, loss_fn: Optional[Callable] = None
 ):
-    """Evaluate teacher mode metrics on a data split."""
+    """Evaluate teacher-style losses on a dataset split.
+
+    Args:
+        data (Iterable): Input samples.
+        genome (CircuitGenome): Circuit genome.
+        params (dict): Torch parameters.
+        teacher_qnode (Callable): Target QNode producing reference states.
+        loss_fn (Callable, optional): Custom loss function.
+
+    Returns:
+        dict[str, float] | None: Aggregated evaluation metrics.
+    """
     if data is None:
         return None
     losses = []
@@ -123,16 +186,25 @@ def _eval_supervised_split(
     loss_fn: Optional[Callable] = None,
     class_counts: Optional[dict] = None,
 ):
-    """Evaluate supervised mode metrics on a data split."""
+    """Evaluate supervised classification metrics on a dataset split.
+
+    Args:
+        data (Iterable): Dataset samples `(x, y, class)`.
+        genome (CircuitGenome): Circuit genome.
+        params (dict): Torch parameters.
+        n_classes (int): Number of output classes.
+        loss_fn (Callable, optional): Custom loss function.
+        class_counts (dict, optional): Per-class counts.
+
+    Returns:
+        dict[str, float] | None: Loss and accuracy metrics.
+    """
     if data is None:
         return None
     losses = []
     correct = 0
-    # per_class_pred = {}
     total = 0
     for x, y, cls in data:
-        # if cls not in per_class_pred:
-        #     per_class_pred[cls] = 0
         probs = genome.circuit(x, params)
         probs = torch.as_tensor(probs, dtype=torch.float32)
         probs = probs[:n_classes]
@@ -142,14 +214,8 @@ def _eval_supervised_split(
         pred = int(torch.argmax(probs).item())
         true = int(torch.argmax(y).item())
         correct += int(pred == true)
-        # if pred == true:
-        #     per_class_pred[cls] += 1
         total += 1
 
-    # log = ""
-    # for k, v in class_counts.items():
-    #     log += f"[{k}] Accuracy: {per_class_pred[k]/v} | "
-    # logger.info(f"{log}")
     return {
         "loss": float(torch.stack(losses).mean().item()) if losses else 0.0,
         "acc": float(correct / max(total, 1)),
@@ -166,6 +232,22 @@ def eval_forward_only(
     loss_fn: Optional[Callable] = None,
     class_counts: Optional[tuple] = None,
 ):
+    """Evaluate a genome without gradient updates.
+
+    Supports both teacher (statevector) and supervised classification modes.
+
+    Args:
+        genome (CircuitGenome): Circuit genome.
+        train_list (list): Training dataset.
+        test_list (list, optional): Test dataset.
+        teacher_qnode (Callable, optional): Teacher QNode.
+        n_classes (int): Number of classes.
+        loss_fn (Callable, optional): Loss function.
+        class_counts (tuple, optional): Per-class counts.
+
+    Returns:
+        dict[str, float]: Evaluation metrics.
+    """
     mode = "teacher" if teacher_qnode is not None else "supervised"
     params = genome_to_torch_params(genome)
 
@@ -223,6 +305,42 @@ def _train_with_pennylane(
     # NEW:
     target_qnode: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
 ):
+    """Train a CircuitGenome using PennyLane-based differentiable execution.
+
+    This routine supports two training modes:
+
+    **1) Teacher / Statevector mode**
+        - Uses a reference `target_qnode` producing a target quantum state
+        - Optimizes state-based losses such as fidelity, angle, or KL divergence
+
+    **2) Supervised classification mode**
+        - Uses probabilistic readout from the circuit
+        - Optimizes cross-entropy or related classification losses
+
+    The function automatically configures the genome's PennyLane circuit
+    (statevector vs probability output), performs mini-batch training using
+    Adam, logs intermediate metrics, and writes trained parameters back
+    into the genome.
+
+    Args:
+        genome (CircuitGenome): Quantum circuit genome to be trained.
+        train_data (Iterable): Training dataset.
+            - Teacher mode: iterable of inputs `x`
+            - Supervised mode: iterable of `(x, y, class_id)`
+        test_data (Iterable, optional): Optional test dataset.
+        steps (int): Number of optimization steps.
+        lr (float): Learning rate for Adam optimizer.
+        log_every (int): Logging frequency (in steps).
+        n_classes (int): Number of output classes for supervised learning.
+        batch_size (int, optional): Mini-batch size. If None, uses full dataset.
+        loss_name (str): Name of loss function from `LOSS_REGISTRY`.
+        shuffle_each_step (bool): Whether to reshuffle data each step.
+        target_qnode (Callable, optional): Reference QNode producing target
+            quantum states (required for teacher mode).
+
+    Returns:
+        None. The genome is updated in-place, and `genome.fitness` is set.
+    """
     train_list = list(train_data)
     test_list = list(test_data) if test_data is not None else None
 
@@ -276,12 +394,28 @@ def _train_with_pennylane(
 
     # --- state forward ---
     def forward_state(x: torch.Tensor) -> torch.Tensor:
+        """Forward pass returning a normalized quantum state.
+
+        Args:
+            x (torch.Tensor): Input features.
+
+        Returns:
+            torch.Tensor: Normalized complex-valued statevector.
+        """
         psi = genome.circuit(x, torch_params)
         psi = _normalize_state(_ensure_complex(psi))
         return psi
 
     # --- probs forward (your existing CE path) ---
     def forward_probs(x: torch.Tensor) -> torch.Tensor:
+        """Forward pass returning normalized class probabilities.
+
+        Args:
+            x (torch.Tensor): Input features.
+
+        Returns:
+            torch.Tensor: Probability vector of shape `[n_classes]`.
+        """
         probs = genome.circuit(x, torch_params)
         probs = torch.as_tensor(probs, dtype=torch.float32)
         probs = probs[:n_classes]
@@ -291,6 +425,14 @@ def _train_with_pennylane(
     # --- eval teacher loss/metrics ---
     @torch.no_grad()
     def eval_teacher(data_list):
+        """Evaluate teacher-mode metrics on a dataset.
+
+        Args:
+            data_list (Iterable): Iterable of input samples.
+
+        Returns:
+            dict[str, float]: Mean loss, fidelity, and angle loss.
+        """
         losses = []
         fidelities = []
         angle_losses = []
@@ -312,6 +454,15 @@ def _train_with_pennylane(
     # --- eval supervised metrics ---
     @torch.no_grad()
     def eval_supervised(data_list, class_counts: Optional[dict]):
+        """Evaluate supervised classification metrics.
+
+        Args:
+            data_list (Iterable): Dataset samples `(x, y, class_id)`.
+            class_counts (dict, optional): Per-class sample counts.
+
+        Returns:
+            dict[str, float]: Mean loss and classification accuracy.
+        """
         losses = []
         # per_class_pred = {}
         correct = 0
