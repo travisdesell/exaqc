@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from src.circuits.circuit import CircuitGenome
 from src.circuits.registers import expand_registers
-from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
 from src.objectives.policy_objectives import (
     cartpole_spec,
     train_rl,
@@ -13,6 +12,7 @@ import random
 import pytest
 
 target_backend = "pennylane"
+
 
 def _make_genome(genome_number: int):
     """
