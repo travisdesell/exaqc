@@ -16,7 +16,7 @@ class CircuitGenome:
     def __init__(
         self,
         genome_number: int,
-        target: int,
+        target: str,
         input_qubits: list[tuple[str, int]],
         output_qubits: list[tuple[str, int]] = None,
     ):
@@ -436,13 +436,22 @@ class CircuitGenome:
             # --- Input preparation ---
             if input_mode == "basis":
                 # expects int tensor length == total_qubits
-                qml.BasisState(input_bits, wires=range(self.total_qubits))
+                qml.BasisState(input_bits, wires=self.input_indexes)
+
             elif input_mode == "angle":
                 # expects float tensor on "input" register wires
                 # encode x_i in [0,1] -> RY(pi*x_i) (common, stable)
-
                 for i, w in enumerate(self.input_indexes):
                     qml.RY(torch.pi * input_bits[i], wires=w)
+
+            elif input_mode == "amplitude":
+                # expects float tensor of length 2**len(in_wires)
+                qml.AmplitudeEmbedding(
+                    features=input_bits,
+                    wires=self.input_indexes,
+                    normalize=True,
+                    pad_with=0.0,
+                )
             else:
                 raise ValueError(f"Unknown input_mode={input_mode}")
 
@@ -453,17 +462,14 @@ class CircuitGenome:
 
             # 4️⃣ Measurement
             if return_probs:
-                return qml.probs(
-                    # wires=self.register_map["output"]
-                    wires=self.output_indexes
-                )  # shape = [2**len(out_wires)] (real)
+                return qml.probs(wires=self.output_indexes)
             elif measure_registers:
                 # fallback if you want expvals
                 expvals = [
                     qml.expval(qml.PauliZ(w))
                     for w in self.output_indexes  # self.register_map["output"]
                 ]
-                return torch.stack(expvals)
+                return expvals
 
             return qml.state()
 
