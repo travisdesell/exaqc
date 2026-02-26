@@ -307,10 +307,10 @@ def _train_with_pennylane(
             * np.maximum(np.array(list(train_data.counts), dtype=np.float32), 1.0)
         )
     else:
-        alpha = 1.0 / np.maximum(
-            np.array(list(train_data.counts), dtype=np.float32), 1.0
-        )
-    alpha = alpha / alpha.sum()
+        beta = (n_classes - 1) / n_classes
+        alpha = (1.0 - beta) / (1.0 - torch.pow(beta, torch.as_tensor(train_data.counts, dtype=torch.float32)))
+
+    alpha = alpha / alpha.mean()
     alpha = torch.as_tensor(alpha, dtype=torch.float32)
     logger.info(f"Selected alphas: {alpha}")
 

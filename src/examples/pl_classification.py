@@ -79,9 +79,10 @@ def eval_probs_ce_and_acc(
             * np.maximum(np.array(list(dataset.counts), dtype=np.float32), 1.0)
         )
     else:
-        alpha = 1.0 / np.maximum(np.array(list(dataset.counts), dtype=np.float32), 1.0)
-
-    alpha = alpha / alpha.sum()
+        beta = (n_classes - 1) / n_classes
+        alpha = (1.0 - beta) / (1.0 - torch.pow(beta, torch.as_tensor(dataset.counts, dtype=torch.float32)))
+    
+    alpha = alpha / alpha.mean()
     alpha = torch.as_tensor(alpha, dtype=torch.float32)
 
     for x, y, cls in dataset:
