@@ -11,6 +11,7 @@ from src.quantum_datasets import (
     IrisDataset,
     WineDataset,
     SeedsDataset,
+    BreastCancerDataset,
 )
 
 target_backend = "pennylane"
@@ -51,7 +52,7 @@ DATASETS = [
     ("iris", IrisDataset, 4, 3),
     ("wine", WineDataset, 13, 3),
     ("seeds", SeedsDataset, 7, 3),
-    # ("breast_cancer", BreastCancerDataset, 30, 2),
+    ("breast_cancer", BreastCancerDataset, 30, 2),
 ]
 
 LOSSES = ["ce", "bce", "focal"]
@@ -80,7 +81,7 @@ def test_classification_train_one_epoch(
 
     genome = make_dummy_genome(
         genome_number=0,
-        input_qubits=input_size,
+        input_qubits=min(input_size, 15),
         out_qubits=out_qubits,
     )
 
@@ -95,6 +96,7 @@ def test_classification_train_one_epoch(
         lr=1e-3,
         n_classes=n_classes,
         log_every=1,
+        batch_size=2,
     )
 
     assert hasattr(genome, "fitness"), "Genome must have fitness after training."
