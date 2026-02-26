@@ -181,7 +181,7 @@ def eval_forward_only(
     n_classes: int = 3,
     loss_fn: Optional[Callable] = None,
     class_counts: Optional[tuple] = None,
-    alpha: Optional[list] = None,
+    alpha: Optional[torch.Tensor] = None,
 ):
     """Evaluate a genome without gradient updates.
 
@@ -306,6 +306,7 @@ def _train_with_pennylane(
         * np.maximum(np.array(list(train_data.counts), dtype=np.float32), 1.0)
     )
     alpha = alpha / alpha.mean()
+    alpha = torch.as_tensor(alpha, dtype=torch.float32)
     logger.info(f"Selected alphas: {alpha}")
 
     # ----- choose output type -----

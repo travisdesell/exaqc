@@ -75,6 +75,7 @@ def eval_probs_ce_and_acc(
         n_classes * np.maximum(np.array(list(dataset.counts), dtype=np.float32), 1.0)
     )
     alpha = alpha / alpha.mean()
+    alpha = torch.as_tensor(alpha, dtype=torch.float32)
 
     for x, y, cls in dataset:
         if cls not in per_class_pred:
