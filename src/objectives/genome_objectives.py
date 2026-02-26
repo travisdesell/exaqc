@@ -300,18 +300,11 @@ def _train_with_pennylane(
 
     loss_fn = LOSS_REGISTRY[loss_name]
 
-    # For balanced loss
-    if loss_name == "bce":
-        alpha = len(train_data) / (
-            train_data.num_classes
-            * np.maximum(np.array(list(train_data.counts), dtype=np.float32), 1.0)
-        )
-    else:
-        beta = (n_classes - 1) / n_classes
-        alpha = (1.0 - beta) / (
-            1.0
-            - torch.pow(beta, torch.as_tensor(train_data.counts, dtype=torch.float32))
-        )
+    # For balanced loss setting Alpha from https://arxiv.org/pdf/1901.05555
+    beta = (len(train_data)  - 1) / len(train_data) 
+    alpha = (1.0 - beta) / (
+        1.0 - np.power(beta, np.array(train_data.counts, dtype=np.float32))
+    )
 
     alpha = alpha / alpha.mean()
     alpha = torch.as_tensor(alpha, dtype=torch.float32)
@@ -554,6 +547,7 @@ def _train_with_pennylane(
         n_classes=n_classes,
         loss_fn=loss_fn,
         class_counts=(train_data.class_counts, test_data.class_counts),
+        alpha=alpha,
     )
     genome.fitness = metrics
 

@@ -73,16 +73,11 @@ def eval_probs_ce_and_acc(
     total = 0
     per_class_pred = {}
 
-    if loss == "bce":
-        alpha = len(dataset) / (
-            n_classes
-            * np.maximum(np.array(list(dataset.counts), dtype=np.float32), 1.0)
-        )
-    else:
-        beta = (n_classes - 1) / n_classes
-        alpha = (1.0 - beta) / (
-            1.0 - torch.pow(beta, torch.as_tensor(dataset.counts, dtype=torch.float32))
-        )
+    # setting Alpha from https://arxiv.org/pdf/1901.05555
+    beta = (len(dataset) - 1) / len(dataset)
+    alpha = (1.0 - beta) / (
+        1.0 - np.power(beta, np.array(dataset.counts, dtype=np.float32))
+    )
 
     alpha = alpha / alpha.mean()
     alpha = torch.as_tensor(alpha, dtype=torch.float32)
@@ -271,6 +266,7 @@ if __name__ == "__main__":
         objective = ClassificationObjective(
             train_data=IrisDataset(split="train"),
             test_data=IrisDataset(split="test"),
+            loss=args.loss,
             input_size=4,
             n_classes=3,
         )
@@ -279,6 +275,7 @@ if __name__ == "__main__":
         objective = ClassificationObjective(
             train_data=WineDataset(split="train"),
             test_data=WineDataset(split="test"),
+            loss=args.loss,
             input_size=13,
             n_classes=3,
         )
@@ -287,6 +284,7 @@ if __name__ == "__main__":
         objective = ClassificationObjective(
             train_data=SeedsDataset(split="train"),
             test_data=SeedsDataset(split="test"),
+            loss=args.loss,
             input_size=7,
             n_classes=3,
         )
@@ -295,6 +293,7 @@ if __name__ == "__main__":
         objective = ClassificationObjective(
             train_data=BreastCancerDataset(split="train"),
             test_data=BreastCancerDataset(split="test"),
+            loss=args.loss,
             input_size=30,
             n_classes=2,
         )
