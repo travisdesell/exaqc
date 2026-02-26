@@ -301,11 +301,16 @@ def _train_with_pennylane(
     loss_fn = LOSS_REGISTRY[loss_name]
 
     # For balanced loss
-    alpha = len(train_data) / (
-        train_data.num_classes
-        * np.maximum(np.array(list(train_data.counts), dtype=np.float32), 1.0)
-    )
-    alpha = alpha / alpha.mean()
+    if loss_name == "bce":
+        alpha = len(train_data) / (
+            train_data.num_classes
+            * np.maximum(np.array(list(train_data.counts), dtype=np.float32), 1.0)
+        )
+    else:
+        alpha = 1.0 / np.maximum(
+            np.array(list(train_data.counts), dtype=np.float32), 1.0
+        )
+    alpha = alpha / alpha.sum()
     alpha = torch.as_tensor(alpha, dtype=torch.float32)
     logger.info(f"Selected alphas: {alpha}")
 
