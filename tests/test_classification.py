@@ -11,10 +11,10 @@ from src.quantum_datasets import (
     IrisDataset,
     WineDataset,
     SeedsDataset,
-    BreastCancerDataset,
 )
 
-target_backend="pennylane"
+target_backend = "pennylane"
+
 
 def make_dummy_genome(genome_number: int, input_qubits: int, out_qubits: int):
     input_qubits = expand_registers({"input": input_qubits})
@@ -27,22 +27,6 @@ def make_dummy_genome(genome_number: int, input_qubits: int, out_qubits: int):
             input_qubits=input_qubits.copy(),
             output_qubits=output_qubits.copy(),
         ),
-        lambda: CircuitGenome(
-            genome_number=genome_number,
-            target=target_backend,
-            input_qubits=input_qubits.copy(),
-            output_qubits=output_qubits.copy(),
-        ),
-        lambda: CircuitGenome(genome_number=genome_number, 
-                              target=target_backend,
-                              input_qubits=input_qubits.copy(),
-                              output_qubits=output_qubits.copy(),
-                              ),
-        lambda: CircuitGenome(genome_number=genome_number, 
-                              target=target_backend,
-                              input_qubits=input_qubits.copy(),
-                              output_qubits=output_qubits.copy(),
-                              ),
     ]
 
     last_err = None
@@ -60,16 +44,7 @@ def make_dummy_genome(genome_number: int, input_qubits: int, out_qubits: int):
             f"Update make_dummy_genome(). Last error: {last_err}"
         )
 
-    for name in ("initialize", "init_random", "random_init", "seed_minimal"):
-        fn = getattr(g, name, None)
-        if callable(fn):
-            try:
-                fn()
-            except Exception:
-                pass
-
     return g
-
 
 
 DATASETS = [
@@ -79,7 +54,7 @@ DATASETS = [
     # ("breast_cancer", BreastCancerDataset, 30, 2),
 ]
 
-LOSSES = ["ce", "bce", "focal"] 
+LOSSES = ["ce", "bce", "focal"]
 
 
 # -------------------------------------------------
@@ -87,7 +62,9 @@ LOSSES = ["ce", "bce", "focal"]
 # -------------------------------------------------
 @pytest.mark.parametrize("ds_name, ds_cls, input_size, n_classes", DATASETS)
 @pytest.mark.parametrize("loss_name", LOSSES)
-def test_classification_train_one_epoch(ds_name, ds_cls, input_size, n_classes, loss_name):
+def test_classification_train_one_epoch(
+    ds_name, ds_cls, input_size, n_classes, loss_name
+):
     """
     Runs 1 optimization step using train_genome_objective
     and checks that:
@@ -114,11 +91,10 @@ def test_classification_train_one_epoch(ds_name, ds_cls, input_size, n_classes, 
         dataset=[train_ds, test_ds],
         backend="pennylane",
         loss=loss_name,
-        steps=1,              
+        steps=1,
         lr=1e-3,
         n_classes=n_classes,
         log_every=1,
-        batch_size=None,
     )
 
     assert hasattr(genome, "fitness"), "Genome must have fitness after training."
