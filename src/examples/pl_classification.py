@@ -80,8 +80,10 @@ def eval_probs_ce_and_acc(
         )
     else:
         beta = (n_classes - 1) / n_classes
-        alpha = (1.0 - beta) / (1.0 - torch.pow(beta, torch.as_tensor(dataset.counts, dtype=torch.float32)))
-    
+        alpha = (1.0 - beta) / (
+            1.0 - torch.pow(beta, torch.as_tensor(dataset.counts, dtype=torch.float32))
+        )
+
     alpha = alpha / alpha.mean()
     alpha = torch.as_tensor(alpha, dtype=torch.float32)
 
