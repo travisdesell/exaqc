@@ -301,7 +301,7 @@ def _train_with_pennylane(
     loss_fn = LOSS_REGISTRY[loss_name]
 
     # For balanced loss setting Alpha from https://arxiv.org/pdf/1901.05555
-    beta = (len(train_data)  - 1) / len(train_data) 
+    beta = (len(train_data) - 1) / len(train_data)
     alpha = (1.0 - beta) / (
         1.0 - np.power(beta, np.array(train_data.counts, dtype=np.float32))
     )
