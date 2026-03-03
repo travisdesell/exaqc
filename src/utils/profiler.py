@@ -397,35 +397,42 @@ class EXAQCProfiler:
                 "No common steps across runs. (Try using same run length.)"
             )
 
-        # matrix: [n_runs, n_steps]
-        Y = []
-        for run in runs:
-            m = {int(rw["step"]): rw.get(metric, np.nan) for rw in run}
-            Y.append([m[s] for s in common_steps])
-
-        Y = np.array(Y, dtype=np.float32)
-        mu = np.nanmean(Y, axis=0)
-        sd = np.nanstd(Y, axis=0)
-        n = Y.shape[0]
-
-        if conf.lower() == "std":
-            lo = mu - sd
-            hi = mu + sd
-            label = "±1 std"
-        else:
-            sem = sd / max(math.sqrt(n), 1.0)
-            lo = mu - 1.96 * sem
-            hi = mu + 1.96 * sem
-            label = "±95% CI"
-
         fig = plt.figure()
-        plt.plot(common_steps, mu, label=f"mean({metric})")
-        plt.plot(common_steps, lo, linestyle="--", label=f"lower {label}")
-        plt.plot(common_steps, hi, linestyle="--", label=f"upper {label}")
-        plt.fill_between(common_steps, lo, hi, alpha=0.15)
+
+        if metric is None:
+            metrics = ["top5_mean", "best", "pop_mean"]
+        else:
+            metrics = [metric]
+
+        for metric in metrics:
+            # matrix: [n_runs, n_steps]
+            Y = []
+            for run in runs:
+                m = {int(rw["step"]): rw.get(metric, np.nan) for rw in run}
+                Y.append([m[s] for s in common_steps])
+
+            Y = np.array(Y, dtype=np.float32)
+            mu = np.nanmean(Y, axis=0)
+            sd = np.nanstd(Y, axis=0)
+            n = Y.shape[0]
+
+            if conf.lower() == "std":
+                lo = mu - sd
+                hi = mu + sd
+                # label = "±1 std"
+            else:
+                sem = sd / max(math.sqrt(n), 1.0)
+                lo = mu - 1.96 * sem
+                hi = mu + 1.96 * sem
+                # label = "±95% CI"
+
+            plt.plot(common_steps, mu, label=f"mean({metric})")
+            # plt.plot(common_steps, lo, linestyle="--", label=f"lower {label}")
+            # plt.plot(common_steps, hi, linestyle="--", label=f"upper {label}")
+            plt.fill_between(common_steps, lo, hi, alpha=0.15)
 
         plt.xlabel("Insertion / step")
-        plt.ylabel(metric)
+        plt.ylabel("Loss")
         plt.title(title + f"  (n_runs={n})")
         plt.legend()
         plt.grid(True, alpha=0.25)
