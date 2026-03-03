@@ -136,7 +136,7 @@ pennylane_gate_specifications["rcccx"] = GateSpecification(
 pennylane_gate_specifications["mcx"] = GateSpecification(
     name="Multi-Controlled X",
     qubits=["control_qubits...", "target_qubit"],
-    needs_validation=True,
+    pennylane_op="MultiControlledX",
 )
 
 pennylane_gate_specifications["mcp"] = GateSpecification(
@@ -228,7 +228,7 @@ pennylane_gate_specifications["tdg"] = GateSpecification(
 pennylane_gate_specifications["sx"] = GateSpecification(
     name="sqrt X",
     qubits=["qubit"],
-    needs_validation=True,
+    pennylane_op="SX",
 )
 
 pennylane_gate_specifications["sxdg"] = GateSpecification(
@@ -281,22 +281,22 @@ pennylane_gate_specifications["rv"] = GateSpecification(
 pennylane_gate_specifications["rxx"] = GateSpecification(
     name="RXX",
     qubits=["qubit1", "qubit2"],
-    parameters=["theta"],
-    needs_validation=True,
+    parameters=["phi"],
+    pennylane_op="IsingXX",
 )
 
 pennylane_gate_specifications["ryy"] = GateSpecification(
     name="RYY",
     qubits=["qubit1", "qubit2"],
-    parameters=["theta"],
-    needs_validation=True,
+    parameters=["phi"],
+    pennylane_op="IsingYY",
 )
 
 pennylane_gate_specifications["rzz"] = GateSpecification(
     name="RZZ",
     qubits=["qubit1", "qubit2"],
-    parameters=["theta"],
-    pennylane_op="MultiRZ",
+    parameters=["phi"],
+    pennylane_op="IsingZZ",
 )
 
 pennylane_gate_specifications["rzx"] = GateSpecification(
@@ -337,31 +337,3 @@ pennylane_gate_specifications["u"] = GateSpecification(
     parameters=["theta", "phi", "delta"],
     pennylane_op="U3",
 )
-
-
-"""
-print("\\begin{table}[h!]")
-print("\\begin{tabular}{llll}")
-print("\\hline")
-print("\\textbf{Gate} & \\textbf{Method} & \\textbf{Qubits} & \\textbf{Parameters} \\\\")
-print("\\hline")
-
-for method_name, gate in sorted(pennylane_gate_specifications.items()):
-    if not gate.needs_validation:
-        name = gate.name.replace('^dagger', '\\textsuperscript{\\textdagger}')
-        params = ''
-        if gate.parameters is not None:
-            params = ', '.join(gate.parameters)
-
-        qubits = ', '.join(gate.qubits)
-        qubits = qubits.replace('_', '\\_')
-
-        print(f"{name} & {method_name} & {qubits} & {params} \\\\")
-        print("\\hline")
-
-print("\\hline")
-print("\\end{tabular}")
-print("\\caption{Available Pennylane gates, their qubits and parameters (if parameterized).}")
-print("\\label{tab:pennylane_gates}")
-print("\\end{table}")
-"""

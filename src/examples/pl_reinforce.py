@@ -164,7 +164,7 @@ if __name__ == "__main__":
     p.add_argument("--eval_episodes", type=int, default=10)
     p.add_argument("--max_steps", type=int, default=500)
     p.add_argument("--gamma", type=float, default=0.99)
-    p.add_argument("--learning_rate", "-lr", type=float, default=1e-2)
+    p.add_argument("--learning_rate", "--lr", type=float, default=1e-2)
     p.add_argument("--entropy_coef", type=float, default=0.00)
     p.add_argument("--baseline", choices=["mean", "none"], default="mean")
     p.add_argument("--seed", type=int, default=0)

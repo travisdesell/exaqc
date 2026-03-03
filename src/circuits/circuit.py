@@ -16,7 +16,7 @@ class CircuitGenome:
     def __init__(
         self,
         genome_number: int,
-        target: int,
+        target: str,
         input_qubits: list[tuple[str, int]],
         output_qubits: list[tuple[str, int]] = None,
     ):
