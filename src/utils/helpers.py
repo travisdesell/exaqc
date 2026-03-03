@@ -33,7 +33,7 @@ def sample_batch(
     if batch_size is None:
         return data
     if shuffle_each_step:
-        idx = np.randint(low=0, high=n, size=(batch_size,))
+        idx = np.random.randint(low=0, high=n, size=(batch_size,))
         return [data[i] for i in idx.tolist()]
     start = (step * batch_size) % n
     return [data[(start + i) % n] for i in range(batch_size)]
