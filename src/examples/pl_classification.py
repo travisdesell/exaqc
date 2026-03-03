@@ -12,7 +12,6 @@ import numpy as np
 
 from src.evolution.master_worker import master_worker
 
-# from src.evolution.exaqc import EXAQC
 from src.evolution.steady_state_population import SteadyStatePopulation
 from src.evolution.objective import Objective
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications

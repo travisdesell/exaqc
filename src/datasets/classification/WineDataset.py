@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import torch
 from src.datasets.base import QuantumDataset
-from .base import QuantumDataset
 import numpy as np
 
 
