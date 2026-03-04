@@ -5,7 +5,7 @@ import math
 import os
 import torch
 import sys
-from typing import Iterable, Optional, Callable
+from typing import Iterable, Optional
 
 from loguru import logger
 import numpy as np
@@ -53,7 +53,7 @@ def eval_probs_ce_and_acc(
     dataset: Iterable[tuple[torch.Tensor, torch.Tensor, str]],
     *,
     n_classes: int,
-    loss_fn: Optional[Callable] = None,
+    loss: Optional[str] = None,
 ) -> dict[str, float]:
     """
     Assumes genome.circuit returns qml.probs(wires=output_wires) (real-valued).
@@ -64,16 +64,22 @@ def eval_probs_ce_and_acc(
         # IMPORTANT: we want probs readout for classification
         genome.generate_pennylane_circuit(return_probs=True, input_mode="angle")
 
+    loss_fn = LOSS_REGISTRY[loss]
+
     params = genome_to_torch_params(genome)  # empty dict if no params
     losses = []
     correct = 0
     total = 0
     per_class_pred = {}
 
-    alpha = len(dataset) / (
-        n_classes * np.maximum(np.array(list(dataset.counts), dtype=np.float32), 1.0)
+    # setting Alpha from https://arxiv.org/pdf/1901.05555
+    beta = (len(dataset) - 1) / len(dataset)
+    alpha = (1.0 - beta) / (
+        1.0 - np.power(beta, np.array(dataset.counts, dtype=np.float32))
     )
+
     alpha = alpha / alpha.mean()
+    alpha = torch.as_tensor(alpha, dtype=torch.float32)
 
     for x, y, cls in dataset:
         if cls not in per_class_pred:
@@ -160,8 +166,6 @@ class ClassificationObjective(Objective):
         batch_size = hyperparameters["batch_size"]
         log_every = hyperparameters["log_every"]
 
-        loss_fn = LOSS_REGISTRY[self.loss]
-
         # If there are trainable params, train. If not, just forward/eval.
         torch_params = genome_to_torch_params(genome)
         if len(torch_params) > 0:
@@ -179,10 +183,10 @@ class ClassificationObjective(Objective):
 
         # Compute fresh train/test metrics from probs (works for both param & no-param cases)
         train_metrics = eval_probs_ce_and_acc(
-            genome, self.train_data, n_classes=self.n_classes, loss_fn=loss_fn
+            genome, self.train_data, n_classes=self.n_classes, loss=self.loss
         )
         test_metrics = eval_probs_ce_and_acc(
-            genome, self.test_data, n_classes=self.n_classes, loss_fn=loss_fn
+            genome, self.test_data, n_classes=self.n_classes, loss=self.loss
         )
 
         genome.fitness = {
@@ -261,6 +265,7 @@ if __name__ == "__main__":
         objective = ClassificationObjective(
             train_data=IrisDataset(split="train"),
             test_data=IrisDataset(split="test"),
+            loss=args.loss,
             input_size=4,
             n_classes=3,
         )
@@ -269,6 +274,7 @@ if __name__ == "__main__":
         objective = ClassificationObjective(
             train_data=WineDataset(split="train"),
             test_data=WineDataset(split="test"),
+            loss=args.loss,
             input_size=13,
             n_classes=3,
         )
@@ -277,6 +283,7 @@ if __name__ == "__main__":
         objective = ClassificationObjective(
             train_data=SeedsDataset(split="train"),
             test_data=SeedsDataset(split="test"),
+            loss=args.loss,
             input_size=7,
             n_classes=3,
         )
@@ -285,6 +292,7 @@ if __name__ == "__main__":
         objective = ClassificationObjective(
             train_data=BreastCancerDataset(split="train"),
             test_data=BreastCancerDataset(split="test"),
+            loss=args.loss,
             input_size=30,
             n_classes=2,
         )

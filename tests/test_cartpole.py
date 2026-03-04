@@ -68,14 +68,11 @@ def _make_genome(genome_number: int):
             f"Last error: {last_err}"
         )
 
-    # Some codebases require an explicit init method to seed a starting circuit
-    # (e.g., adding a couple random gates). If you have one, enable it here.
     for maybe_init in ["initialize", "init_random", "random_init", "seed_minimal"]:
         if hasattr(genome, maybe_init) and callable(getattr(genome, maybe_init)):
             try:
                 getattr(genome, maybe_init)()
             except Exception:
-                # if your init requires args, ignore and keep going
                 pass
 
     return genome
@@ -116,7 +113,6 @@ def test_cartpole_algos_smoke(algo: str, n_genomes: int):
         spec.ppo_clip = 0.2
         spec.target_kl = None
 
-        # (Value-based settings irrelevant here but harmless.)
         random.seed(0)
 
         genomes = [_make_genome(i) for i in range(n_genomes)]
