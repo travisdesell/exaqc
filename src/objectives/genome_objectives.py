@@ -14,7 +14,6 @@ from src.utils.losses import (
 )
 
 from src.utils.helpers import (
-    sample_batch,
     sample_batch_balanced,
     torch_params_to_genome,
     genome_to_torch_params,

@@ -166,6 +166,7 @@ class ClassificationObjective(Objective):
         steps = hyperparameters["steps"]
         batch_size = hyperparameters["batch_size"]
         log_every = hyperparameters["log_every"]
+        encoding = hyperparameters["encoding"]
 
         # If there are trainable params, train. If not, just forward/eval.
         torch_params = genome_to_torch_params(genome)
@@ -174,6 +175,7 @@ class ClassificationObjective(Objective):
                 genome,
                 dataset=[self.train_data, self.test_data],  # train split only
                 backend=self.target,
+                encoding=encoding,
                 loss=self.loss,  # e.g., "ce"
                 steps=steps,
                 lr=learning_rate,
@@ -229,10 +231,13 @@ if __name__ == "__main__":
     p.add_argument("--max_population_size", type=int, default=30)
     p.add_argument("--number_genomes", type=int, default=2000)
     p.add_argument("--input_qubits", type=int, default=6)
-    p.add_argument("--encoding", 
-                   choices=['basis', 'angle', 'amplitude'], 
-                   type=str, default='angle',
-                   help="Choose the kind of encoding")
+    p.add_argument(
+        "--encoding",
+        choices=["basis", "angle", "amplitude"],
+        type=str,
+        default="angle",
+        help="Choose the kind of encoding",
+    )
     p.add_argument(
         "--batch_size",
         type=int,

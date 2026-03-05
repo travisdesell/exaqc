@@ -5,17 +5,22 @@ from collections import Counter
 import pytest
 
 from src.utils.helpers import sample_batch_balanced
-from src.quantum_datasets import IrisDataset, WineDataset, SeedsDataset, BreastCancerDataset
+from src.quantum_datasets import (
+    IrisDataset,
+    WineDataset,
+    SeedsDataset,
+    BreastCancerDataset,
+)
 
 
 DATASETS = [
-    ("iris",          IrisDataset,         4,  3),
-    ("wine",          WineDataset,         13, 3),
-    ("seeds",         SeedsDataset,        7,  3),
+    ("iris", IrisDataset, 4, 3),
+    ("wine", WineDataset, 13, 3),
+    ("seeds", SeedsDataset, 7, 3),
     ("breast_cancer", BreastCancerDataset, 30, 2),
 ]
 
-BATCH_SIZES = [None, 8, 12]   # None → oversample; int → fixed mini-batch
+BATCH_SIZES = [None, 8, 12]  # None → oversample; int → fixed mini-batch
 
 
 def is_evenly_distributed(batch: list, n_classes: int) -> bool:
@@ -25,7 +30,6 @@ def is_evenly_distributed(batch: list, n_classes: int) -> bool:
     return len(counts) == n_classes and all(v == expected for v in counts.values())
 
 
-
 @pytest.mark.parametrize("ds_name, ds_cls, input_size, n_classes", DATASETS)
 @pytest.mark.parametrize("shuffle", [False, True])
 @pytest.mark.parametrize("batch_size", BATCH_SIZES)
@@ -33,7 +37,9 @@ def test_even_batching(ds_name, ds_cls, input_size, n_classes, shuffle, batch_si
     dataset = ds_cls(split="train")
     data = [dataset[i] for i in range(len(dataset))]
 
-    effective_batch_size = batch_size if batch_size is None else (batch_size // n_classes) * n_classes
+    effective_batch_size = (
+        batch_size if batch_size is None else (batch_size // n_classes) * n_classes
+    )
 
     batch = sample_batch_balanced(data, effective_batch_size, shuffle, step=0)
 

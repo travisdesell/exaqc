@@ -72,7 +72,7 @@ def sample_batch_balanced(
             n = len(bucket)
             batch.extend(data[bucket[i]] for i in range(n))
             remainder = max_count - n
-            batch.extend(data[bucket[i % n]] for i in range(remainder)) # Oversample
+            batch.extend(data[bucket[i % n]] for i in range(remainder))  # Oversample
         return batch
 
     samples_per_class = batch_size // num_classes
@@ -88,7 +88,9 @@ def sample_batch_balanced(
             batch.extend(data[bucket[i]] for i in chosen)
         else:
             start = (step * samples_per_class) % n
-            batch.extend(data[bucket[(start + i) % n]] for i in range(samples_per_class))
+            batch.extend(
+                data[bucket[(start + i) % n]] for i in range(samples_per_class)
+            )
 
     return batch
 
