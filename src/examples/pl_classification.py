@@ -229,6 +229,10 @@ if __name__ == "__main__":
     p.add_argument("--max_population_size", type=int, default=30)
     p.add_argument("--number_genomes", type=int, default=2000)
     p.add_argument("--input_qubits", type=int, default=6)
+    p.add_argument("--encoding", 
+                   choices=['basis', 'angle', 'amplitude'], 
+                   type=str, default='angle',
+                   help="Choose the kind of encoding")
     p.add_argument(
         "--batch_size",
         type=int,
@@ -258,6 +262,7 @@ if __name__ == "__main__":
         "learning_rate": args.learning_rate,
         "log_every": 15,
         "batch_size": args.batch_size,
+        "encoding": args.encoding,
     }
 
     # set up the objective function

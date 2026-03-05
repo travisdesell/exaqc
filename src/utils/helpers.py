@@ -1,7 +1,6 @@
 import numpy as np
 import torch
 
-from collections import defaultdict
 from src.circuits.circuit import CircuitGenome
 
 
@@ -33,78 +32,65 @@ def sample_batch(
     if batch_size is None:
         return data
     if shuffle_each_step:
-        idx = np.random.randint(low=0, high=n, size=(batch_size,))
+        rng = np.random.default_rng(seed=42)
+        idx = rng.integers(low=0, high=n, size=(batch_size,))
         return [data[i] for i in idx.tolist()]
     start = (step * batch_size) % n
     return [data[(start + i) % n] for i in range(batch_size)]
 
 
-def sample_even_batch(
-    data, batch_size: int | None, shuffle_each_step: bool, seed: int = 42, **kwargs
-):
-    """Creates a mini-batch from provided classification data list of given size
-        Maintains equal class distrubution in batch
+def sample_batch_balanced(
+    data: list, batch_size: int, shuffle_each_step: bool, step: int
+) -> list | None:
+    """Creates a mini-batch with equal class distribution from provided data list.
 
     Args:
-        data (list): The dataset list where each element is a tuple (x, y, cls)
-        batch_size (int): Size of the batch
-        shuffle_each_step (bool): If you want random shuffling or sequential
-        seed (int): The seed for shuffling
+        data (list): The dataset list where each element is a tuple (x, y_onehot, cls)
+        batch_size (int): Size of the batch (will be rounded down to nearest multiple of num_classes)
+        shuffle_each_step (bool): If True, randomly sample from each class; if False, sequential
+        step (int): The current step in training
 
     Returns:
-        list: The mini-batch of data
+        list: The mini-batch of data with equal representation from each class
     """
-    if batch_size is None:
-        return data
 
-    rng = np.random.default_rng(seed)
+    if data is None:
+        return None
 
-    idx_by_class = defaultdict(list)
-    for i, (_, y_onehot, _) in enumerate(data):
-        k = int(np.array(y_onehot.cpu()).argmax().item())
-        idx_by_class[k].append(i)
+    class_buckets: dict[str, list[int]] = {}
+    for i, (_, _, cls) in enumerate(data):
+        class_buckets.setdefault(cls, []).append(i)
 
-    classes = sorted(idx_by_class.keys())
-    K = len(classes)
-    if batch_size < K:
-        raise ValueError("batch_size must be >= number of classes.")
+    classes = sorted(class_buckets.keys())
+    num_classes = len(classes)
 
-    per_class = batch_size // K
-    remainder = batch_size - per_class * K
+    if batch_size is None or batch_size > len(data):
+        max_count = max(len(bucket) for bucket in class_buckets.values())
+        batch = []
+        for cls in classes:
+            bucket = class_buckets[cls]
+            n = len(bucket)
+            batch.extend(data[bucket[i]] for i in range(n))
+            remainder = max_count - n
+            batch.extend(data[bucket[i % n]] for i in range(remainder)) # Oversample
+        return batch
 
-    # shuffle each pool initially
-    for c in classes:
-        rng.shuffle(idx_by_class[c])
+    samples_per_class = batch_size // num_classes
 
-    ptr = {c: 0 for c in classes}  # <-- persists!
+    rng = np.random.default_rng(seed=42)
+    batch = []
+    for cls in classes:
+        bucket = class_buckets[cls]
+        n = len(bucket)
 
-    batch_idx = []
+        if shuffle_each_step:
+            chosen = rng.integers(low=0, high=n, size=(samples_per_class,))
+            batch.extend(data[bucket[i]] for i in chosen)
+        else:
+            start = (step * samples_per_class) % n
+            batch.extend(data[bucket[(start + i) % n]] for i in range(samples_per_class))
 
-    for c in classes:
-        pool = idx_by_class[c]
-        start = ptr[c]
-        end = start + per_class
-
-        if end > len(pool):
-            # wrap-around oversampling for minority classes
-            if shuffle_each_step:
-                rng.shuffle(pool)
-            start, end = 0, per_class
-
-        batch_idx.extend(pool[start:end])
-        ptr[c] = end
-
-    if remainder > 0:
-        extra_classes = rng.choice(classes, size=remainder, replace=True)
-        for c in extra_classes:
-            pool = idx_by_class[c]
-            j = rng.integers(0, len(pool))
-            batch_idx.append(int(pool[j]))
-
-    if shuffle_each_step:
-        rng.shuffle(batch_idx)
-
-    return [data[i] for i in batch_idx]
+    return batch
 
 
 def genome_to_torch_params(genome: CircuitGenome) -> dict[str, torch.nn.Parameter]:
