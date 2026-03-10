@@ -5,6 +5,12 @@ version which will have the appropriate torch, qiskit and pennylane dependencies
 python3.12 -m venv </path/to/exaqc/environment/>
 ```
 
+Then load that environment:
+
+```
+source </path/to/exaqc/environment/bin/activate/>
+```
+
 Then dependencies can be installed with (from the EXAQC project root directory):
 
 ```

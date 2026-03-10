@@ -74,7 +74,7 @@ def eval_probs_ce_and_acc(
     alpha = len(dataset) / (
         n_classes * np.maximum(np.array(list(dataset.counts), dtype=np.float32), 1.0)
     )
-    alpha = alpha / alpha.mean()
+    alpha = torch.as_tensor(alpha / alpha.mean(), dtype=torch.float32)
 
     for x, y, cls in dataset:
         if cls not in per_class_pred:
@@ -264,6 +264,7 @@ if __name__ == "__main__":
             test_data=IrisDataset(split="test"),
             input_size=4,
             n_classes=3,
+            loss=args.loss,
         )
 
     elif args.dataset == "wine":
@@ -272,6 +273,7 @@ if __name__ == "__main__":
             test_data=WineDataset(split="test"),
             input_size=13,
             n_classes=3,
+            loss=args.loss,
         )
 
     elif args.dataset == "seeds":
@@ -280,6 +282,7 @@ if __name__ == "__main__":
             test_data=SeedsDataset(split="test"),
             input_size=7,
             n_classes=3,
+            loss=args.loss,
         )
 
     elif args.dataset == "breast_cancer":
@@ -288,6 +291,7 @@ if __name__ == "__main__":
             test_data=BreastCancerDataset(split="test"),
             input_size=30,
             n_classes=2,
+            loss=args.loss,
         )
 
     else:
