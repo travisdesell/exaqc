@@ -3,11 +3,11 @@ name = "exaqc"
 dynamic = ["version"]
 description = ''
 readme = "README.md"
-requires-python = ">=3.12, <3.13"
+requires-python = ">=3.11, <3.13"
 keywords = []
 classifiers = [
     "Programming Language :: Python",
-    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.11",
 ]
 dependencies = [
     "black",
@@ -25,4 +25,6 @@ dependencies = [
     "scikit-learn",
     "mpi4py",
     "gymnasium",
+    "gymnasium[mujoco]",
+    "minigrid",
 ]

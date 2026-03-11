@@ -9,6 +9,7 @@ import torch.nn as nn
 from loguru import logger
 from torch.distributions import Categorical
 import gymnasium as gym
+from gymnasium import spaces
 
 from src.circuits.circuit import CircuitGenome
 from src.utils.helpers import torch_params_to_genome, genome_to_torch_params
@@ -199,6 +200,50 @@ def encode_discrete_to_onehot_unit(s: int, n_states: int) -> torch.Tensor:
     x[s] = 1.0
     return x
 
+def encode_minigrid_flat(obs: np.ndarray) -> torch.Tensor:
+    """Encode a flat MiniGrid observation into [0, 1].
+
+    Args:
+        obs: Flat observation vector, usually from FlatObsWrapper.
+
+    Returns:
+        Float tensor in [0, 1].
+    """
+    obs = np.asarray(obs, dtype=np.float32)
+
+    # robust scaling for mixed-value integer vectors
+    if obs.size == 0:
+        return torch.tensor([], dtype=torch.float32)
+
+    max_abs = np.max(np.abs(obs))
+    if max_abs < 1e-12:
+        z = np.zeros_like(obs, dtype=np.float32)
+    else:
+        z = np.clip(obs / max_abs, -1.0, 1.0)
+
+    z = (z + 1.0) / 2.0
+    return torch.tensor(z, dtype=torch.float32)
+
+
+def encode_minigrid_image(obs: np.ndarray) -> torch.Tensor:
+    """Encode an image-like MiniGrid observation into [0, 1].
+
+    Args:
+        obs: Observation array, typically HxWxC or flattened image.
+
+    Returns:
+        Flattened float tensor in [0, 1].
+    """
+    obs = np.asarray(obs, dtype=np.float32)
+    if obs.size == 0:
+        return torch.tensor([], dtype=torch.float32)
+
+    # MiniGrid symbolic/image wrappers produce bounded integer arrays.
+    if obs.max() > 1.0:
+        obs = obs / 255.0
+
+    return torch.tensor(obs.reshape(-1), dtype=torch.float32)
+
 
 # ============================
 # Policy head (logits helpers)
@@ -343,6 +388,12 @@ class RLSpec:
 
     input_mode: str = "angle"  # "angle" or "basis"
     return_expvals: bool = True
+
+    # optional explicit observation dimension after wrapping/encoding
+    obs_dim: Optional[int] = None
+
+    # optional wrapper selection for envs like MiniGrid
+    obs_wrapper: Optional[str] = None  # e.g. None | "flat" | "image"
 
     # observation encoder
     obs_encoder: Optional[Callable[[Any], torch.Tensor]] = None
@@ -558,6 +609,10 @@ class QHead(nn.Module):
 def _make_env(env_id: str, **kwargs):
     """Instantiate a Gymnasium environment.
 
+    Supports optional MiniGrid wrappers through kwargs:
+        - obs_wrapper="flat"  -> FlatObsWrapper
+        - obs_wrapper="image" -> ImgObsWrapper
+
     Args:
         env_id: Gymnasium environment id.
         **kwargs: Passed to `gym.make`.
@@ -565,7 +620,23 @@ def _make_env(env_id: str, **kwargs):
     Returns:
         A Gymnasium environment instance.
     """
-    return gym.make(env_id, **kwargs)
+    obs_wrapper = kwargs.pop("obs_wrapper", None)
+    env = gym.make(env_id, **kwargs)
+
+    if env_id.startswith("MiniGrid-"):
+        try:
+            from minigrid.wrappers import FlatObsWrapper, ImgObsWrapper
+        except Exception as e:
+            raise RuntimeError(
+                "MiniGrid support requires the `minigrid` package to be installed."
+            ) from e
+
+        if obs_wrapper == "flat":
+            env = FlatObsWrapper(env)
+        elif obs_wrapper == "image":
+            env = ImgObsWrapper(env)
+
+    return env
 
 
 def rollout_reinforce(
@@ -753,7 +824,6 @@ def rollout_actor_critic(
 @torch.no_grad()
 def eval_policy(
     genome: CircuitGenome,
-    *,
     spec: RLSpec,
     deterministic: bool = True,
     seed: int = 1234,
@@ -773,37 +843,83 @@ def eval_policy(
     """
     if getattr(genome, "circuit", None) is None or not callable(genome.circuit):
         genome.generate_pennylane_circuit(
-            input_mode=spec.input_mode, measure_registers=spec.return_expvals
+            input_mode=spec.input_mode,
+            measure_registers=spec.return_expvals,
         )
 
     params = genome_to_torch_params(genome)
 
+    # infer feature dim if continuous
+    head = None
+    if spec.action_space == "continuous":
+        env0 = _make_env(spec.env_id, **(spec.env_kwargs or {}))
+        o0, _ = env0.reset(seed=seed)
+        env0.close()
+
+        x0 = spec.obs_encoder(o0)
+        out0 = genome.circuit(x0, params)
+        in_dim = int(torch.as_tensor(out0).numel())
+
+        # if spec.action_dim is None:
+        #     raise ValueError("spec.action_dim must be set for continuous environments")
+
+        head = GaussianPolicyValueHead(
+            action_dim=spec.n_actions,
+            in_dim=in_dim,
+            init_log_std=getattr(spec, "init_log_std", -0.5),
+            learn_std=getattr(spec, "learn_std", True),
+            shared_std=getattr(spec, "shared_std", True),
+            min_log_std=getattr(spec, "min_log_std", -5.0),
+            max_log_std=getattr(spec, "max_log_std", 2.0),
+        )
+
     returns: list[float] = []
+
     for ep in range(spec.eval_episodes):
         env = _make_env(spec.env_id, **(spec.env_kwargs or {}))
         obs, _ = env.reset(seed=seed + ep)
 
         ep_ret = 0.0
+
         for _ in range(spec.max_steps):
             x = spec.obs_encoder(obs)
             out = genome.circuit(x, params)
 
-            if spec.return_expvals:
-                out = torch.stack(list(out))
-                logits = logits_from_kexpvals(out, spec.n_actions)
-            else:
-                probs = torch.as_tensor(out, dtype=torch.float32).flatten()
-                probs = probs[: spec.n_actions]
-                probs = probs / (probs.sum() + 1e-12)
-                logits = torch.log(probs.clamp_min(1e-12))
+            if spec.action_space == "discrete":
+                if spec.return_expvals:
+                    out = torch.stack(list(out))
+                    logits = logits_from_kexpvals(out, spec.n_actions)
+                else:
+                    probs = torch.as_tensor(out, dtype=torch.float32).flatten()
+                    probs = probs[: spec.n_actions]
+                    probs = probs / (probs.sum() + 1e-12)
+                    logits = torch.log(probs.clamp_min(1e-12))
 
-            if deterministic:
-                a = int(torch.argmax(logits).item())
-            else:
-                a = int(Categorical(logits=logits).sample().item())
+                if deterministic:
+                    a = int(torch.argmax(logits).item())
+                else:
+                    a = int(Categorical(logits=logits).sample().item())
 
-            obs, r, terminated, truncated, _ = env.step(a)
+                obs, r, terminated, truncated, _ = env.step(a)
+
+            else:
+                feats = torch.as_tensor(out, dtype=torch.float32).flatten()
+                mu, log_std, _ = head(feats)
+
+                if deterministic:
+                    a = mu
+                else:
+                    std = torch.exp(log_std)
+                    dist = torch.distributions.Normal(mu, std)
+                    a = dist.sample()
+
+                a_np = a.detach().cpu().numpy()
+                a_np = _clip_action(a_np, spec)
+
+                obs, r, terminated, truncated, _ = env.step(a_np)
+
             ep_ret += float(r)
+
             if terminated or truncated:
                 break
 
@@ -956,7 +1072,12 @@ def train_actor_critic(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
 
     if len(params) == 0:
         ev = eval_policy(genome, spec=spec, deterministic=True, seed=spec.seed + 999)
-        genome.fitness = {"note": "no trainable params", **ev, "env_id": spec.env_id}
+        genome.fitness = {
+            "note": "no trainable params", 
+            "best_episode_return": ev["eval_return_mean"], 
+            **ev, 
+            "env_id": spec.env_id
+        }
         return genome
 
     # ---- infer circuit feature dim ----
@@ -972,8 +1093,8 @@ def train_actor_critic(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
     if spec.action_space == "discrete":
         head: nn.Module = PolicyValueHead(n_actions=spec.n_actions, in_dim=in_dim)
     else:
-        if spec.action_dim is None:
-            raise ValueError("spec.action_dim must be set for continuous action envs")
+        # if spec.action_dim is None:
+        #     raise ValueError("spec.action_dim must be set for continuous action envs")
 
         head = GaussianPolicyValueHead(
             action_dim=spec.n_actions,
@@ -1152,7 +1273,12 @@ def train_ppo(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
 
     if len(params) == 0:
         ev = eval_policy(genome, spec=spec, deterministic=True, seed=spec.seed + 999)
-        genome.fitness = {"note": "no trainable params", **ev, "env_id": spec.env_id}
+        genome.fitness = {
+            "note": "no trainable params",
+            "best_episode_return": ev["eval_return_mean"],
+            **ev, 
+            "env_id": spec.env_id
+        }
         return genome
 
     # ---- infer feature dim ----
@@ -1168,8 +1294,8 @@ def train_ppo(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
     if spec.action_space == "discrete":
         head: nn.Module = PolicyValueHead(n_actions=spec.n_actions, in_dim=in_dim)
     else:
-        if spec.action_dim is None:
-            raise ValueError("spec.action_dim must be set for continuous action envs")
+        # if spec.action_dim is None:
+        #     raise ValueError("spec.action_dim must be set for continuous action envs")
 
         head = GaussianPolicyValueHead(
             action_dim=spec.n_actions,
@@ -1319,6 +1445,7 @@ def train_ppo(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
         "env_id": spec.env_id,
         "algo": "ppo",
     }
+
     return genome
 
 
@@ -1735,4 +1862,82 @@ def mountaincar_continuous_spec(
         ppo_minibatch=256,
         entropy_coef=0.0,
         value_coef=0.5,
+    )
+
+
+def minigrid_spec(
+    *,
+    env_id: str = "MiniGrid-Empty-8x8-v0",
+    obs_wrapper: str = "flat",   # "flat" or "image"
+    episodes: int = 200,
+    lr: float = 1e-3,
+    seed: int = 0,
+    algo: str = "ppo",
+    env_kwargs: Optional[dict[str, Any]] = None,
+) -> RLSpec:
+    """Returns specification template for MiniGrid environments.
+
+    Args:
+        env_id: MiniGrid environment id.
+        obs_wrapper: Observation wrapper type, one of {"flat", "image"}.
+        episodes: Number of training episodes/updates.
+        lr: Learning rate.
+        seed: Random seed.
+        algo: Algorithm name.
+        env_kwargs: Additional kwargs passed to gym.make.
+
+    Returns:
+        RLSpec configured for the chosen MiniGrid environment.
+    """
+    env_kwargs = dict(env_kwargs or {})
+    env_kwargs["obs_wrapper"] = obs_wrapper
+
+    # Probe wrapped env once to infer action count and observation dimension
+    env = _make_env(env_id, **env_kwargs)
+    obs, _ = env.reset(seed=seed)
+
+    if not isinstance(env.action_space, spaces.Discrete):
+        env.close()
+        raise ValueError(
+            f"MiniGrid spec expects a discrete action space, got {env.action_space}."
+        )
+
+    n_actions = int(env.action_space.n)
+
+    if obs_wrapper == "flat":
+        obs_encoder = encode_minigrid_flat
+        obs_dim = int(np.asarray(obs).reshape(-1).shape[0])
+    elif obs_wrapper == "image":
+        obs_encoder = encode_minigrid_image
+        obs_dim = int(np.asarray(obs).reshape(-1).shape[0])
+    else:
+        env.close()
+        raise ValueError(f"Unknown MiniGrid obs_wrapper={obs_wrapper}")
+
+    env.close()
+
+    return RLSpec(
+        env_id=env_id,
+        n_actions=n_actions,
+        action_space="discrete",
+        algo=algo,
+        input_mode="angle",
+        return_expvals=True,
+        obs_encoder=obs_encoder,
+        obs_dim=obs_dim,
+        obs_wrapper=obs_wrapper,
+        episodes=episodes,
+        lr=lr,
+        seed=seed,
+        max_steps=200,
+        eval_episodes=10,
+        rollout_steps=1024,
+        ppo_epochs=4,
+        ppo_minibatch=128,
+        entropy_coef=0.01,
+        value_coef=0.5,
+        gae_lambda=0.95,
+        ppo_clip=0.2,
+        target_kl=0.02,
+        env_kwargs=env_kwargs,
     )
