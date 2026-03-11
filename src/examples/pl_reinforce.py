@@ -23,6 +23,7 @@ from src.objectives.policy_objectives import (
     minigrid_spec,
 )
 
+
 def compare(genome1: CircuitGenome, genome2: CircuitGenome) -> int:
     """
     Sort genomes by evaluation return descending (higher is better).
@@ -88,7 +89,7 @@ class RLObjective(Objective):
                     self.input_size = 17
                 elif spec.env_id == "Walker2d-v5":
                     self.input_size = 17
-                
+
                 else:
                     raise ValueError(
                         f"Could not infer input size for env_id={spec.env_id}. "

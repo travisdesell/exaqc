@@ -17,7 +17,7 @@ source .venv/bin/activate
 
 for i in $(seq 1 1); do
     echo "Starting run ${i}"
-    srun python -m src.examples.pl_reinforce \
+    srun python3 -m src.examples.pl_reinforce \
     --env minigrid \
     --minigrid_env_id MiniGrid-Empty-8x8-v0 \
     --minigrid_obs_wrapper flat \
