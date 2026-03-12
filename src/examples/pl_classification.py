@@ -13,6 +13,7 @@ import numpy as np
 from src.evolution.master_worker import master_worker
 
 # from src.evolution.exaqc import EXAQC
+from src.evolution.steady_state_islands import SteadyStateIslands
 from src.evolution.steady_state_population import SteadyStatePopulation
 from src.evolution.objective import Objective
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
@@ -213,20 +214,34 @@ if __name__ == "__main__":
     p.add_argument(
         "--dataset", choices=["iris", "wine", "seeds", "breast_cancer"], required=True
     )
+
     p.add_argument(
         "--out_dir",
         type=str,
         default="artifacts",
         help="Output directory to store results from runs",
     )
+
     p.add_argument(
         "--loss", default="ce", choices=["bce", "focal", "ce", "mse", "kl", "fidelity"]
     )
+
+    subparsers = p.add_subparsers(dest='population_strategy', help='Specify how genomes will be handled.', required=True)
+
+    steady_state_parser = subparsers.add_parser('steady_state', help='Use a single steady state population.')
+    steady_state_parser.add_argument("--max_population_size", type=int, default=30)
+
+    islands_parser = subparsers.add_parser('islands', help='Use multiple islands of steady state opulations.')
+    islands_parser.add_argument("--n_islands", type=int, default=10)
+    islands_parser.add_argument("--max_island_size", type=int, default=10)
+    islands_parser.add_argument("--genomes_before_extinction", type=int, default=200)
+    islands_parser.add_argument("--islands_to_extinct", type=int, default=1)
+
     p.add_argument("--steps", type=int, default=30)
     p.add_argument("--learning_rate", "-lr", type=float, default=5e-4)
-    p.add_argument("--max_population_size", type=int, default=30)
     p.add_argument("--number_genomes", type=int, default=2000)
     p.add_argument("--input_qubits", type=int, default=6)
+
     p.add_argument(
         "--batch_size",
         type=int,
@@ -267,7 +282,6 @@ if __name__ == "__main__":
             loss=args.loss,
             input_size=4,
             n_classes=3,
-            loss=args.loss,
         )
 
     elif args.dataset == "wine":
@@ -277,7 +291,6 @@ if __name__ == "__main__":
             loss=args.loss,
             input_size=13,
             n_classes=3,
-            loss=args.loss,
         )
 
     elif args.dataset == "seeds":
@@ -287,7 +300,6 @@ if __name__ == "__main__":
             loss=args.loss,
             input_size=7,
             n_classes=3,
-            loss=args.loss,
         )
 
     elif args.dataset == "breast_cancer":
@@ -297,19 +309,33 @@ if __name__ == "__main__":
             loss=args.loss,
             input_size=30,
             n_classes=2,
-            loss=args.loss,
         )
 
     else:
         raise ValueError(args.dataset)
 
-    master_worker(
-        gate_specifications=pennylane_gate_specifications,
+    population = None
+    print(f"args.population_strategy: {args.population_strategy}")
+
+    if args.population_strategy == "steady_state":
         population=SteadyStatePopulation(
             max_population_size=args.max_population_size,
             compare=compare,
             out_dir=args.out_dir,
-        ),
+        )
+    elif args.population_strategy == "islands":
+        population=SteadyStateIslands(
+            n_islands=args.n_islands,
+            max_island_size=args.max_island_size,
+            genomes_before_extinction=args.genomes_before_extinction,
+            islands_to_extinct=args.islands_to_extinct,
+            compare=compare,
+            out_dir=args.out_dir,
+        )
+
+    master_worker(
+        gate_specifications=pennylane_gate_specifications,
+        population=population,
         objective=objective,
         hyperparameters=hyperparameters,
         run_for=args.number_genomes,

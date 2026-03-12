@@ -49,7 +49,16 @@ class SteadyStatePopulation(PopulationStrategy):
         # used to store the population, should be kept in sorted order.
         self.population: list[CircuitGenome] = []
 
-    def get_parent(self, **kwargs) -> CircuitGenome:
+    def is_initializing(self) -> bool:
+        """
+        Returns:
+            True if the population is at max size
+        """
+
+        return len(self.population) >= self.max_population_size
+
+
+    def get_parent(self, **kwargs) -> (CircuitGenome, dict[str, any]):
         """
         Used to get two or more parents to be used in mutation or
         other operations to generate children.
@@ -61,15 +70,18 @@ class SteadyStatePopulation(PopulationStrategy):
 
         Returns:
             A single CircuitGenome from the population. If the population is empty
-            it will return None.
+            it will return None. The second return value (if a genome is returned)
+            is the metadata for the generated child, which for this strategy is 
+            just empty.
         """
 
         if len(self.population) > 0:
-            return random.choice(self.population)
+            metadata = {}
+            return random.choice(self.population), metadata
         else:
             return None
 
-    def get_parents(self, n_parents: int = 2, **kwargs) -> list[CircuitGenome]:
+    def get_parents(self, n_parents: int = 2, **kwargs) -> (list[CircuitGenome], dict[str, any]):
         """
         Used to get two or more parents to be used in crossover or
         other operations to generate children.
@@ -82,13 +94,16 @@ class SteadyStatePopulation(PopulationStrategy):
 
         Returns:
             A list of unique (non-duplicate) CircuitGenomes. If the size of the population
-            is less than n_parents, it will return None.
+            is less than n_parents, it will return None. The second return value (if a
+            genome is returned) is the metadata for the generated child, which for this
+            strategy is just empy.
         """
         if len(self.population) >= n_parents:
             # sort the parents so the most fit is the first parent
             parents = random.sample(self.population, n_parents)
             parents.sort(key=cmp_to_key(self.compare))
-            return parents
+            metadata = {}
+            return parents, metadata
         else:
             return None
 
