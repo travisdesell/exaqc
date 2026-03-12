@@ -449,7 +449,7 @@ class CircuitGenome:
                 qml.AmplitudeEmbedding(
                     features=input_bits,
                     wires=self.input_indexes,
-                    normalize=True,
+                    normalize=False,
                     pad_with=0.0,
                 )
             else:
