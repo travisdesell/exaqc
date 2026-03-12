@@ -85,13 +85,34 @@ class BalancedBatchSampler:
         }
 
     def _make_queue(self, cls: str) -> deque[int]:
+        """Build a fresh index queue for one class, shuffling if enabled.
+
+        Args:
+            cls: The class name whose index queue should be (re)built.
+
+        Returns:
+            A deque of indices into ``self.data`` for the given class,
+            optionally shuffled.
+        """
         indices = list(self.class_indices[cls])
         if self.shuffle:
             np.random.shuffle(indices)
         return deque(indices)
 
     def _draw(self, cls: str, n: int) -> list[int]:
-        """Pull n indices from the class queue, refilling when exhausted."""
+        """Pull n indices from a class queue, refilling eagerly on exhaustion.
+
+        When the last index is consumed the queue is immediately refilled so
+        that ``len(self._queues[cls])`` always reflects items remaining in the
+        current cycle rather than an ambiguous empty state.
+
+        Args:
+            cls: The class name to draw from.
+            n: Number of indices to draw.
+
+        Returns:
+            List of n indices into ``self.data``.
+        """
         out: list[int] = []
         queue = self._queues[cls]
         while len(out) < n:
@@ -103,7 +124,12 @@ class BalancedBatchSampler:
         return out
 
     def sample(self) -> list:
-        """Return one balanced batch, advancing each class queue."""
+        """Return one balanced batch, advancing each class queue independently.
+
+        Returns:
+            List of ``self.batch_size`` (features, y_onehot, cls_name) tuples
+            with exactly ``self.samples_per_class`` entries per class.
+        """
         batch = []
         for cls in self.classes:
             indices = self._draw(cls, self.samples_per_class)
@@ -111,7 +137,11 @@ class BalancedBatchSampler:
         return batch
 
     def reset(self) -> None:
-        """Rebuild all queues from scratch (useful between epochs)."""
+        """Rebuild all class queues from scratch.
+
+        Resets the sampler to its initial state, as if no samples had been
+        drawn. Useful when starting a new epoch with a fresh ordering.
+        """
         self._queues = {cls: self._make_queue(cls) for cls in self.classes}
 
 
