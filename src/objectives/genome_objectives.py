@@ -16,7 +16,7 @@ from src.utils.losses import (
 )
 
 from src.utils.helpers import (
-    sample_batch,
+    BalancedBatchSampler,
     torch_params_to_genome,
     genome_to_torch_params,
 )
@@ -260,6 +260,7 @@ def _train_with_pennylane(
     shuffle_each_step: bool = True,
     # NEW:
     target_qnode: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
+    encoding: str = "angle",
 ):
     """Train a CircuitGenome using PennyLane-based differentiable execution.
 
@@ -312,6 +313,14 @@ def _train_with_pennylane(
     alpha = torch.as_tensor(alpha / alpha.mean(), dtype=torch.float32)
     logger.info(f"Selected alphas: {alpha}")
 
+    n = len(train_list)
+    if batch_size is not None:
+        batch_size = max(1, min(batch_size, n))
+
+    sampler = BalancedBatchSampler(
+        data=train_list, batch_size=batch_size, shuffle=shuffle_each_step
+    )
+
     # ----- choose output type -----
     use_state = (
         loss_name in {"fidelity", "angle", "kl"} and target_qnode
@@ -319,14 +328,14 @@ def _train_with_pennylane(
 
     if use_state:
         genome.generate_pennylane_circuit(
-            input_mode="angle", return_probs=False, measure_registers=False
+            input_mode=encoding, return_probs=False, measure_registers=False
         )
         if target_qnode is None:
             raise ValueError(
                 "target_qnode is required for teacher training with statevector losses."
             )
     else:
-        genome.generate_pennylane_circuit(input_mode="angle", return_probs=True)
+        genome.generate_pennylane_circuit(input_mode=encoding, return_probs=True)
 
     torch_params = genome_to_torch_params(genome)
 
@@ -346,10 +355,6 @@ def _train_with_pennylane(
         return
 
     opt = torch.optim.Adam(torch_params.values(), lr=lr, weight_decay=0.00000)
-
-    n = len(train_list)
-    if batch_size is not None:
-        batch_size = max(1, min(batch_size, n))
 
     # --- state forward ---
     def forward_state(x: torch.Tensor) -> torch.Tensor:
@@ -450,7 +455,7 @@ def _train_with_pennylane(
 
         # log = ""
         # for k, v in class_counts.items():
-        #     log += f"[{k}] Accuracy: {per_class_pred[k]/v} | "
+        #     log += f"[{k}] Accuracy: {per_class_pred[k]/v:.4f} ({per_class_pred[k]}/{v}) | "
         # logger.info(f"{log}")
         return {
             "loss": float(torch.stack(losses).mean().item()),
@@ -461,12 +466,7 @@ def _train_with_pennylane(
     for step in range(steps):
         opt.zero_grad()
 
-        batch = sample_batch(
-            data=train_list,
-            batch_size=batch_size,
-            shuffle_each_step=shuffle_each_step,
-            step=step,
-        )
+        batch = sampler.sample()
 
         losses = []
         if use_state:
@@ -730,6 +730,7 @@ def train_genome_objective(
     teacher_qnode: Optional[Callable] = None,
     backend: str = "pennylane",
     loss: str = "fidelity",
+    encoding: str = "angle",
     steps: int = 200,
     lr: float = 0.05,
     n_classes: int = 3,
@@ -757,6 +758,7 @@ def train_genome_objective(
             log_every=log_every,
             batch_size=batch_size,
             target_qnode=teacher_qnode,
+            encoding=encoding,
         )
         return
 
