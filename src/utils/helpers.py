@@ -73,11 +73,12 @@ class BalancedBatchSampler:
         self.class_indices = class_indices
 
         if batch_size is None:
-            self.samples_per_class: int = max(len(v) for v in class_indices.values())
-            self.batch_size: int = self.samples_per_class * self.num_classes
+            self.samples_per_class = max(len(v) for v in class_indices.values())
+
         else:
             self.samples_per_class = batch_size // self.num_classes
-            self.batch_size = self.samples_per_class * self.num_classes
+
+        self.batch_size = self.samples_per_class * self.num_classes
 
         # One deque per class — these persist across sample() calls
         self._queues: dict[str, deque[int]] = {
