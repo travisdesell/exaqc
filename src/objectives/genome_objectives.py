@@ -14,7 +14,7 @@ from src.utils.losses import (
 )
 
 from src.utils.helpers import (
-    sample_batch_balanced,
+    BalancedBatchSampler,
     torch_params_to_genome,
     genome_to_torch_params,
 )
@@ -315,6 +315,10 @@ def _train_with_pennylane(
     if batch_size is not None:
         batch_size = max(1, min(batch_size, n))
 
+    sampler = BalancedBatchSampler(
+        data=train_list, batch_size=batch_size, shuffle=shuffle_each_step
+    )
+
     # ----- choose output type -----
     use_state = (
         loss_name in {"fidelity", "angle", "kl"} and target_qnode
@@ -460,12 +464,7 @@ def _train_with_pennylane(
     for step in range(steps):
         opt.zero_grad()
 
-        batch = sample_batch_balanced(
-            data=train_list,
-            batch_size=batch_size,
-            shuffle_each_step=shuffle_each_step,
-            step=step,
-        )
+        batch = sampler.sample()
 
         losses = []
         if use_state:

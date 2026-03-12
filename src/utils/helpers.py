@@ -1,5 +1,7 @@
 import numpy as np
 import torch
+from collections import deque
+from typing import Optional
 
 from src.circuits.circuit import CircuitGenome
 
@@ -39,60 +41,78 @@ def sample_batch(
     return [data[(start + i) % n] for i in range(batch_size)]
 
 
-def sample_batch_balanced(
-    data: list, batch_size: int, shuffle_each_step: bool, step: int
-) -> list | None:
-    """Creates a mini-batch with equal class distribution from provided data list.
+class BalancedBatchSampler:
+    """Draws mini-batches with equal class representation.
+
+    Each class maintains its own independent queue of indices.  When a
+    class queue is exhausted it is refilled (and optionally shuffled)
+    before sampling continues.  Because class sizes differ, queues empty
+    at different rates, so shuffles are triggered independently per class.
 
     Args:
-        data (list): The dataset list where each element is a tuple (x, y_onehot, cls)
-        batch_size (int): Size of the batch (will be rounded down to nearest multiple of num_classes)
-        shuffle_each_step (bool): If True, randomly sample from each class; if False, sequential
-        step (int): The current step in training
-
-    Returns:
-        list: The mini-batch of data with equal representation from each class
+        data:             List of (features, y_onehot, cls_name) tuples.
+        batch_size:       Total samples per batch.  Rounded down to the
+                          nearest multiple of the number of classes.
+                          Pass ``None`` to return one full epoch worth of
+                          data with minority classes oversampled to match
+                          the majority class size.
+        shuffle:          Whether to shuffle a class bucket when it is
+                          exhausted and refilled.
     """
 
-    if data is None:
-        return None
+    def __init__(self, data: list, batch_size: Optional[int], shuffle: bool) -> None:
+        self.data = data
+        self.shuffle = shuffle
 
-    class_buckets: dict[str, list[int]] = {}
-    for i, (_, _, cls) in enumerate(data):
-        class_buckets.setdefault(cls, []).append(i)
+        class_indices: dict[str, list[int]] = {}
+        for i, (_, _, cls) in enumerate(data):
+            class_indices.setdefault(cls, []).append(i)
 
-    classes = sorted(class_buckets.keys())
-    num_classes = len(classes)
+        self.classes: list[str] = sorted(class_indices.keys())
+        self.num_classes: int = len(self.classes)
+        self.class_indices = class_indices
 
-    if batch_size is None or batch_size > len(data):
-        max_count = max(len(bucket) for bucket in class_buckets.values())
+        if batch_size is None:
+            self.samples_per_class: int = max(len(v) for v in class_indices.values())
+            self.batch_size: int = self.samples_per_class * self.num_classes
+        else:
+            self.samples_per_class = batch_size // self.num_classes
+            self.batch_size = self.samples_per_class * self.num_classes
+
+        # One deque per class — these persist across sample() calls
+        self._queues: dict[str, deque[int]] = {
+            cls: self._make_queue(cls) for cls in self.classes
+        }
+
+    def _make_queue(self, cls: str) -> deque[int]:
+        indices = list(self.class_indices[cls])
+        if self.shuffle:
+            np.random.shuffle(indices)
+        return deque(indices)
+
+    def _draw(self, cls: str, n: int) -> list[int]:
+        """Pull n indices from the class queue, refilling when exhausted."""
+        out: list[int] = []
+        queue = self._queues[cls]
+        while len(out) < n:
+            if not queue:
+                queue.extend(self._make_queue(cls))
+            out.append(queue.popleft())
+        if not queue:
+            queue.extend(self._make_queue(cls))
+        return out
+
+    def sample(self) -> list:
+        """Return one balanced batch, advancing each class queue."""
         batch = []
-        for cls in classes:
-            bucket = class_buckets[cls]
-            n = len(bucket)
-            batch.extend(data[bucket[i]] for i in range(n))
-            remainder = max_count - n
-            batch.extend(data[bucket[i % n]] for i in range(remainder))  # Oversample
+        for cls in self.classes:
+            indices = self._draw(cls, self.samples_per_class)
+            batch.extend(self.data[i] for i in indices)
         return batch
 
-    samples_per_class = batch_size // num_classes
-
-    rng = np.random.default_rng(seed=42)
-    batch = []
-    for cls in classes:
-        bucket = class_buckets[cls]
-        n = len(bucket)
-
-        if shuffle_each_step:
-            chosen = rng.integers(low=0, high=n, size=(samples_per_class,))
-            batch.extend(data[bucket[i]] for i in chosen)
-        else:
-            start = (step * samples_per_class) % n
-            batch.extend(
-                data[bucket[(start + i) % n]] for i in range(samples_per_class)
-            )
-
-    return batch
+    def reset(self) -> None:
+        """Rebuild all queues from scratch (useful between epochs)."""
+        self._queues = {cls: self._make_queue(cls) for cls in self.classes}
 
 
 def genome_to_torch_params(genome: CircuitGenome) -> dict[str, torch.nn.Parameter]:
