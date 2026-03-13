@@ -265,7 +265,7 @@ if __name__ == "__main__":
     p.add_argument(
         "--batch_size",
         type=int,
-        default=None,
+        required=True,
         help="Use mini-batch training with the given batch size, if provided",
     )
 
