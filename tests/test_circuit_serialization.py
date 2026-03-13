@@ -16,10 +16,7 @@ def test_all_disabled_pennylane(target: str):
     """
     metadata = {
         "a": 30,
-        "b": {
-            "C": 10,
-            "d": [1, 2, 3]
-        },
+        "b": {"C": 10, "d": [1, 2, 3]},
     }
 
     qc = CircuitGenome(

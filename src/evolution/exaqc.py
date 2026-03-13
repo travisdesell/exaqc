@@ -125,14 +125,14 @@ class EXAQC:
         # TODO: make an evolutionary strategy for handling hyperparameter options
         hyperparameters = self.hyperparameters.copy()
 
-        '''
+        """
         hyperparameters["learning_rate"] = random.choice(
             [0.001, 0.0005, 0.0001, 0.00005]
         )
-        hyperparameters["steps"] = random.choice([5, 10, 15, 20, 25, 30, 35, 40])
-        '''
+        hyperparameters["epochs"] = random.choice([5, 10, 15, 20, 25, 30, 35, 40])
+        """
         hyperparameters["learning_rate"] = 0.0005
-        hyperparameters["steps"] = 25
+        hyperparameters["epochs"] = 5
 
         return hyperparameters
 
@@ -222,7 +222,7 @@ class EXAQC:
         binary_crossover_rate: float = 0.10,
         n_ary_crossover_rate: float = 0.10,
         exponential_crossover_rate: float = 0.10,
-        n_ary_parents: int = 4,
+        n_ary_parents: int = 3,
     ) -> CircuitGenome:
         """
         Generates a single genome for EXAQC.
@@ -259,6 +259,8 @@ class EXAQC:
 
             child.genome_number = self.next_genome_number()
             child.hyperparameters = self.get_hyperparameters()
+            child.metadata = {}
+
             return child
 
         else:
@@ -273,10 +275,7 @@ class EXAQC:
             while child is None:
                 r = random.uniform(0, 1.0)
 
-                if (
-                    self.genome_number > self.population.max_population_size
-                    and r < binary_crossover_rate
-                ):
+                if r < binary_crossover_rate:
                     parents, metadata = self.population.get_parents(2)
                     child = CircuitGenome(
                         genome_number=None,
@@ -291,10 +290,7 @@ class EXAQC:
                         # to generate a new child
                         continue
 
-                elif (
-                    self.genome_number > self.population.max_population_size
-                    and r < n_ary_cutoff
-                ):
+                elif r < n_ary_cutoff:
                     parents, metadata = self.population.get_parents(n_ary_parents)
                     child = CircuitGenome(
                         genome_number=None,
@@ -306,10 +302,7 @@ class EXAQC:
 
                     n_ary_crossover(child, parents)
 
-                elif (
-                    self.genome_number > self.population.max_population_size
-                    and r < exponential_cutoff
-                ):
+                elif r < exponential_cutoff:
                     parents, metadata = self.population.get_parents(2)
                     child = CircuitGenome(
                         genome_number=None,
@@ -328,7 +321,9 @@ class EXAQC:
                     mutation_count = random.choice([1, 2])
                     valid = False
 
-                    logger.info(f"generating a child via {mutation_count + 1} mutations.")
+                    logger.info(
+                        f"generating a child via {mutation_count + 1} mutations."
+                    )
                     while not valid:
                         # keep trying to create a child from the initial
                         # genome until we get a valid one, then send it out
@@ -337,7 +332,6 @@ class EXAQC:
                         for i in range(mutation_count):
                             child = self.mutate(child, metadata)
                         valid = child.is_valid()
-
 
                 if not child.is_valid():
                     logger.warning(

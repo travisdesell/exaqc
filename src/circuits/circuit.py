@@ -155,7 +155,6 @@ class CircuitGenome:
             genome_number = self.genome_number
             fitness = None
 
-
         new_genome = CircuitGenome(
             genome_number=genome_number,
             target=self.target,

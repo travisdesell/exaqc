@@ -57,7 +57,6 @@ class SteadyStatePopulation(PopulationStrategy):
 
         return len(self.population) >= self.max_population_size
 
-
     def get_parent(self, **kwargs) -> (CircuitGenome, dict[str, any]):
         """
         Used to get two or more parents to be used in mutation or
@@ -71,7 +70,7 @@ class SteadyStatePopulation(PopulationStrategy):
         Returns:
             A single CircuitGenome from the population. If the population is empty
             it will return None. The second return value (if a genome is returned)
-            is the metadata for the generated child, which for this strategy is 
+            is the metadata for the generated child, which for this strategy is
             just empty.
         """
 
@@ -79,9 +78,11 @@ class SteadyStatePopulation(PopulationStrategy):
             metadata = {}
             return random.choice(self.population), metadata
         else:
-            return None
+            return None, None
 
-    def get_parents(self, n_parents: int = 2, **kwargs) -> (list[CircuitGenome], dict[str, any]):
+    def get_parents(
+        self, n_parents: int = 2, **kwargs
+    ) -> (list[CircuitGenome], dict[str, any]):
         """
         Used to get two or more parents to be used in crossover or
         other operations to generate children.
@@ -105,7 +106,7 @@ class SteadyStatePopulation(PopulationStrategy):
             metadata = {}
             return parents, metadata
         else:
-            return None
+            return None, None
 
     def insert_genome(self, genome: CircuitGenome, **kwargs) -> bool:
         """
@@ -174,7 +175,7 @@ class SteadyStatePopulation(PopulationStrategy):
 
         json_path = os.path.join(out_dir, f"genome_{genome.genome_number}.json")
         logger.info(f"writing NEW BEST gnome to {json_path}")
-        with open(json_path, 'w') as json_file:
+        with open(json_path, "w") as json_file:
             json.dump(genome.to_dict(), json_file, ensure_ascii=False, indent=4)
 
         # --- Text gate list ---

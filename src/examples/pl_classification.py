@@ -162,7 +162,7 @@ class ClassificationObjective(Objective):
 
         hyperparameters = genome.hyperparameters
         learning_rate = hyperparameters["learning_rate"]
-        steps = hyperparameters["steps"]
+        epochs = hyperparameters["epochs"]
         batch_size = hyperparameters["batch_size"]
         log_every = hyperparameters["log_every"]
         encoding = hyperparameters["encoding"]
@@ -176,7 +176,7 @@ class ClassificationObjective(Objective):
                 backend=self.target,
                 encoding=encoding,
                 loss=self.loss,  # e.g., "ce"
-                steps=steps,
+                epochs=epochs,
                 lr=learning_rate,
                 n_classes=self.n_classes,
                 log_every=log_every,
@@ -228,18 +228,29 @@ if __name__ == "__main__":
         "--loss", default="ce", choices=["bce", "focal", "ce", "mse", "kl", "fidelity"]
     )
 
-    subparsers = p.add_subparsers(dest='population_strategy', help='Specify how genomes will be handled.', required=True)
+    subparsers = p.add_subparsers(
+        dest="population_strategy",
+        help="Specify how genomes will be handled.",
+        required=True,
+    )
 
-    steady_state_parser = subparsers.add_parser('steady_state', help='Use a single steady state population.')
+    steady_state_parser = subparsers.add_parser(
+        "steady_state", help="Use a single steady state population."
+    )
     steady_state_parser.add_argument("--max_population_size", type=int, default=30)
 
-    islands_parser = subparsers.add_parser('islands', help='Use multiple islands of steady state opulations.')
+    islands_parser = subparsers.add_parser(
+        "islands", help="Use multiple islands of steady state opulations."
+    )
     islands_parser.add_argument("--n_islands", type=int, default=10)
     islands_parser.add_argument("--max_island_size", type=int, default=10)
     islands_parser.add_argument("--genomes_before_extinction", type=int, default=200)
     islands_parser.add_argument("--islands_to_extinct", type=int, default=1)
+    islands_parser.add_argument(
+        "--intra_island_crossover_rate", type=float, default=0.5
+    )
 
-    p.add_argument("--steps", type=int, default=30)
+    p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--learning_rate", "-lr", type=float, default=5e-4)
     p.add_argument("--number_genomes", type=int, default=2000)
     p.add_argument("--input_qubits", type=int, default=6)
@@ -276,7 +287,7 @@ if __name__ == "__main__":
 
     # specify hyperparameter options for genome evaluation
     hyperparameters = {
-        "steps": args.steps,
+        "epochs": args.epochs,
         "learning_rate": args.learning_rate,
         "log_every": 15,
         "batch_size": args.batch_size,
@@ -328,13 +339,13 @@ if __name__ == "__main__":
     print(f"args.population_strategy: {args.population_strategy}")
 
     if args.population_strategy == "steady_state":
-        population=SteadyStatePopulation(
+        population = SteadyStatePopulation(
             max_population_size=args.max_population_size,
             compare=compare,
             out_dir=args.out_dir,
         )
     elif args.population_strategy == "islands":
-        population=SteadyStateIslands(
+        population = SteadyStateIslands(
             n_islands=args.n_islands,
             max_island_size=args.max_island_size,
             genomes_before_extinction=args.genomes_before_extinction,

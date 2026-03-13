@@ -67,7 +67,7 @@ def test_classification_train_one_epoch(
     ds_name, ds_cls, input_size, n_classes, loss_name
 ):
     """
-    Runs 1 optimization step using train_genome_objective
+    Runs 1 optimization epoch using train_genome_objective
     and checks that:
         - no crash occurs
         - fitness dict is populated
@@ -92,11 +92,11 @@ def test_classification_train_one_epoch(
         dataset=[train_ds, test_ds],
         backend="pennylane",
         loss=loss_name,
-        steps=1,
+        epochs=1,
         lr=1e-3,
         n_classes=n_classes,
         log_every=1,
-        batch_size=2,
+        batch_size=3,
     )
 
     assert hasattr(genome, "fitness"), "Genome must have fitness after training."

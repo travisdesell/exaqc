@@ -17,7 +17,6 @@ class PopulationStrategy(ABC):
         """
         pass
 
-
     @abstractmethod
     def get_parent(self, **kwargs) -> (CircuitGenome, dict[str, any]):
         """
@@ -38,7 +37,9 @@ class PopulationStrategy(ABC):
         pass
 
     @abstractmethod
-    def get_parents(self, n_parents: int = 2, **kwargs) -> (list[CircuitGenome], dict[str, any]):
+    def get_parents(
+        self, n_parents: int = 2, **kwargs
+    ) -> (list[CircuitGenome], dict[str, any]):
         """
         Used to get two or more parents to be used in crossover or
         other operations to generate children.

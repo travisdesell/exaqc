@@ -3,7 +3,8 @@ from __future__ import annotations
 import torch
 
 from typing import Sequence, Union, Callable
-from loguru import logger
+
+# from loguru import logger
 
 InputState = Union[str, Sequence[int]]
 

@@ -1,7 +1,9 @@
 import numpy as np
 import torch
+
 from collections import deque
 from typing import Optional
+from loguru import logger
 
 from src.circuits.circuit import CircuitGenome
 
@@ -16,31 +18,6 @@ def register_wire_map(registers: dict[str, int]) -> dict:
     return wire_map
 
 
-def sample_batch(
-    data: list, batch_size: int, shuffle_each_step: bool, step: int
-) -> list:
-    """Creates a mini-batch from provided data list of given size
-
-    Args:
-        data (list): The dataset list where each element is a tuple (x, y, cls)
-        batch_size (int): Size of the batch
-        shuffle_each_step (bool): If you want random shuffling or sequential
-        step (int): The current step in training
-
-    Returns:
-        list: The mini-batch of data
-    """
-    n = len(data)
-    if batch_size is None:
-        return data
-    if shuffle_each_step:
-        rng = np.random.default_rng(seed=42)
-        idx = rng.integers(low=0, high=n, size=(batch_size,))
-        return [data[i] for i in idx.tolist()]
-    start = (step * batch_size) % n
-    return [data[(start + i) % n] for i in range(batch_size)]
-
-
 class BalancedBatchSampler:
     """Draws mini-batches with equal class representation.
 
@@ -53,9 +30,6 @@ class BalancedBatchSampler:
         data:             List of (features, y_onehot, cls_name) tuples.
         batch_size:       Total samples per batch.  Rounded down to the
                           nearest multiple of the number of classes.
-                          Pass ``None`` to return one full epoch worth of
-                          data with minority classes oversampled to match
-                          the majority class size.
         shuffle:          Whether to shuffle a class bucket when it is
                           exhausted and refilled.
     """
@@ -63,6 +37,7 @@ class BalancedBatchSampler:
     def __init__(self, data: list, batch_size: Optional[int], shuffle: bool) -> None:
         self.data = data
         self.shuffle = shuffle
+        self.n_samples = len(data)
 
         class_indices: dict[str, list[int]] = {}
         for i, (_, _, cls) in enumerate(data):
@@ -72,13 +47,26 @@ class BalancedBatchSampler:
         self.num_classes: int = len(self.classes)
         self.class_indices = class_indices
 
-        if batch_size is None:
-            self.samples_per_class = max(len(v) for v in class_indices.values())
+        logger.debug(f"created a balanced batch sampler with classes: {self.classes}")
+        logger.debug(f"data size: {len(data)}")
+        logger.debug(f"num_classes: {self.num_classes}")
+        logger.debug("class_sizes:")
+        for cls, indices in class_indices.items():
+            logger.debug(f"\t'{cls}': {len(indices)}")
 
-        else:
-            self.samples_per_class = batch_size // self.num_classes
+        if batch_size < self.num_classes:
+            logger.error(
+                f"ERROR: batch size {batch_size} must be at least the number of classes "
+                "in the dataset ({self.num_classes}) for the balanced class sampler."
+            )
+            exit(1)
+
+        self.samples_per_class = batch_size // self.num_classes
+
+        logger.debug(f"samples_per_class: {self.samples_per_class}")
 
         self.batch_size = self.samples_per_class * self.num_classes
+        logger.debug(f"batch_size: {self.batch_size}")
 
         # One deque per class — these persist across sample() calls
         self._queues: dict[str, deque[int]] = {

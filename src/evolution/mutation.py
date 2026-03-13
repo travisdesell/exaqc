@@ -77,11 +77,11 @@ def qubit_swap(circuit: CircuitGenome, favor_enabled: bool = False) -> bool:
         had no gates using more than one qubit where there were spare
         qubits to swap to.
     """
-    logger.info("qubit swap mutation")
+    logger.debug("qubit swap mutation")
 
     if len(circuit.gates) == 0:
         # there were no gates
-        logger.info("no gates available")
+        logger.debug("no gates available")
         return False
 
     possible_gates = []
@@ -94,7 +94,7 @@ def qubit_swap(circuit: CircuitGenome, favor_enabled: bool = False) -> bool:
 
     if len(possible_gates) == 0:
         # no possible gates to mutate
-        logger.info("no possible gates available")
+        logger.debug("no possible gates available")
         return False
 
     possible_enabled_gates = []
@@ -125,7 +125,7 @@ def qubit_swap(circuit: CircuitGenome, favor_enabled: bool = False) -> bool:
     new_gate = random_gate.copy(new_innovation_number=True)
     new_gate.enabled = True
 
-    logger.info(f"selected gate {new_gate.method_name} with qubits: {new_gate.qubits}")
+    logger.debug(f"selected gate {new_gate.method_name} with qubits: {new_gate.qubits}")
 
     # select a random qubit from the gate for replacement
     replace_qubit = random.choice(new_gate.qubits)
@@ -137,12 +137,12 @@ def qubit_swap(circuit: CircuitGenome, favor_enabled: bool = False) -> bool:
         selection_qubits.remove(qubit)
 
     new_qubit = random.choice(selection_qubits)
-    logger.info(f"replacing qubit {replace_qubit} with {new_qubit}")
-    logger.info(f"gate qubits before replace {new_gate.qubits}")
+    logger.debug(f"replacing qubit {replace_qubit} with {new_qubit}")
+    logger.debug(f"gate qubits before replace {new_gate.qubits}")
 
     # replace the selected qubit with the new qubit
     new_gate.qubits[new_gate.qubits.index(replace_qubit)] = new_qubit
-    logger.info(f"gate qubits after replace {new_gate.qubits}")
+    logger.debug(f"gate qubits after replace {new_gate.qubits}")
 
     # determine the new depth for the new gate, as it shouldn't be the exact same
     # as the parent gate but nearby. find the gates closest in depth on either side
@@ -160,7 +160,7 @@ def qubit_swap(circuit: CircuitGenome, favor_enabled: bool = False) -> bool:
             max_depth = gate.depth
 
     new_gate.depth = random.uniform(min_depth, max_depth)
-    logger.info(
+    logger.debug(
         f"setting new gates depth randomly between {min_depth} and {max_depth}: {new_gate.depth}"
     )
 
@@ -283,7 +283,7 @@ def add_gate(
 
         input_index = random.choice(possible_input_indexes)
         possible_input_indexes.remove(input_index)
-        logger.info(f"\tselected input index: {input_index}")
+        logger.debug(f"\tselected input index: {input_index}")
         if input_index in possible_output_indexes:
             possible_output_indexes.remove(input_index)
 
@@ -295,7 +295,7 @@ def add_gate(
 
         output_index = random.choice(possible_output_indexes)
         possible_output_indexes.remove(output_index)
-        logger.info(f"\tselected output index: {output_index}")
+        logger.debug(f"\tselected output index: {output_index}")
         if output_index in possible_input_indexes:
             possible_input_indexes.remove(output_index)
 
@@ -309,7 +309,7 @@ def add_gate(
 
         random.shuffle(indexes)
 
-        logger.info(f"\tselected the following indexes: {indexes}")
+        logger.debug(f"\tselected the following indexes: {indexes}")
 
         for i, index in enumerate(indexes):
             gate_qubits[i] = circuit.qubits[index]
@@ -321,7 +321,7 @@ def add_gate(
         first = True
 
         for i in range(n_qubits):
-            logger.info(
+            logger.debug(
                 f"\tselecting qubit {i} of {n_qubits}, inputs: {possible_input_indexes}, "
                 f"outputs: {possible_output_indexes}"
             )
@@ -329,7 +329,7 @@ def add_gate(
             if i not in gate_specification.output_qubit_indexes:
                 # this argument is a control qubit and needs to come from an input qubit
                 index = random.choice(possible_input_indexes)
-                logger.info(
+                logger.debug(
                     f"\t\tselected index {index} for an input only to be put at index {i}"
                 )
                 gate_qubits[i] = circuit.qubits[index]
@@ -363,7 +363,7 @@ def add_gate(
                     )
                     index = random.choice(list(remaining_indexes))
 
-                logger.info(
+                logger.debug(
                     f"\t\tselected index {index} for an output or input to be put at index {i} (first: {first})"
                 )
                 gate_qubits[i] = circuit.qubits[index]
@@ -389,8 +389,8 @@ def add_gate(
         # generate a random angle as all parameter values are in radians
         gate_parameters[parameter_name] = random.uniform(-math.pi, math.pi)
 
-    logger.info(f"\tqubits are: {gate_qubits}")
-    logger.info(f"\tparameters are: {gate_parameters}")
+    logger.debug(f"\tqubits are: {gate_qubits}")
+    logger.debug(f"\tparameters are: {gate_parameters}")
 
     circuit.add_gate(
         depth=depth,
@@ -433,21 +433,21 @@ def add_gate_with_selection(
     possible_input_indexes = circuit.get_possible_input_qubits(depth=depth)
     possible_output_indexes = circuit.get_possible_output_qubits(depth=depth)
 
-    logger.info(
+    logger.debug(
         f"selecting appropriate add gates at depth {depth} with input indexes {possible_input_indexes} "
         f"and output indexes {possible_output_indexes}"
     )
 
     # the two sets share some qubits
     if not set(possible_input_indexes).isdisjoint(possible_output_indexes):
-        logger.info("input and output indexes share qubits, any gate allowed")
+        logger.debug("input and output indexes share qubits, any gate allowed")
         gate_specification = random.choice(gate_specifications)
 
-        logger.info(f"\tattempting with selected {gate_specification}")
+        logger.debug(f"\tattempting with selected {gate_specification}")
         return add_gate(gate_specification, circuit)
 
     else:
-        logger.info(
+        logger.debug(
             "input and output indexes do not share qubits, use only multi-qubit gates"
         )
 
@@ -458,5 +458,5 @@ def add_gate_with_selection(
 
         gate_specification = random.choice(possible_gate_specifications)
 
-        logger.info(f"\tattempting with selected {gate_specification}")
+        logger.debug(f"\tattempting with selected {gate_specification}")
         return add_gate(gate_specification, circuit)
