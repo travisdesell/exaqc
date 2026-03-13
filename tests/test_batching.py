@@ -100,7 +100,7 @@ DATASETS = [
     ("breast_cancer", BreastCancerDataset, 30, 2),
 ]
 
-BATCH_SIZES = [None, 8, 12]  # None → oversample; int → fixed mini-batch
+BATCH_SIZES = [None, 8, 16, 128, 256]  # None → oversample; int → fixed mini-batch
 
 
 def is_evenly_distributed(batch: list, n_classes: int) -> bool:
