@@ -125,10 +125,14 @@ class EXAQC:
         # TODO: make an evolutionary strategy for handling hyperparameter options
         hyperparameters = self.hyperparameters.copy()
 
+        """
         hyperparameters["learning_rate"] = random.choice(
             [0.001, 0.0005, 0.0001, 0.00005]
         )
-        hyperparameters["steps"] = random.choice([5, 10, 15, 20, 25, 30, 35, 40])
+        hyperparameters["epochs"] = random.choice([5, 10, 15, 20, 25, 30, 35, 40])
+        """
+        hyperparameters["learning_rate"] = 0.0005
+        hyperparameters["epochs"] = 5
 
         return hyperparameters
 
@@ -143,7 +147,7 @@ class EXAQC:
         self.genome_number += 1
         return self.genome_number
 
-    def mutate(self, parent: CircuitGenome) -> CircuitGenome:
+    def mutate(self, parent: CircuitGenome, metadata: dict[str, any]) -> CircuitGenome:
         """
         Takes a given parent genome, makes a copy of it (with a new genome number) and
         then applies a random mutation to it.
@@ -155,7 +159,10 @@ class EXAQC:
             A mutated copy of the parent genome as a child.
         """
 
-        child = parent.copy(genome_number=self.next_genome_number())
+        child = parent.copy(genome_number=None)
+        # sets the childs metadata to new metadata (shouldn't directly copy from
+        # the parent).
+        child.metadata = metadata
 
         # mutation_options = ["add_gate", "disable_gate", "enable_gate", "reorder_gate"]
         mutation_options = (
@@ -215,7 +222,7 @@ class EXAQC:
         binary_crossover_rate: float = 0.10,
         n_ary_crossover_rate: float = 0.10,
         exponential_crossover_rate: float = 0.10,
-        n_ary_parents: int = 4,
+        n_ary_parents: int = 3,
     ) -> CircuitGenome:
         """
         Generates a single genome for EXAQC.
@@ -230,23 +237,30 @@ class EXAQC:
             A new child to evaluate for EXAQC.
         """
 
-        if len(self.population.population) < self.population.max_population_size:
+        if self.population.is_initializing():
             # still need to populate the initial population
+            # mutation_count = random.choice([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+            mutation_count = random.choice([0, 1, 2])
+            # mutation_count = random.choice([0, 1, 2, 3, 4])
             valid = False
-
-            mutation_count = random.choice([0, 1, 2, 3, 4])
 
             logger.info(f"generating a child via {mutation_count + 1} mutations.")
             while not valid:
                 # keep trying to create a child from the initial
                 # genome until we get a valid one, then send it out
-                child = self.mutate(self.initial_genome)
+                # in this initialization phase there is no specific
+                # metadata for children
+                metadata = {}
+                child = self.mutate(self.initial_genome, metadata)
 
                 for i in range(mutation_count):
-                    child = self.mutate(child)
+                    child = self.mutate(child, metadata)
                 valid = child.is_valid()
 
+            child.genome_number = self.next_genome_number()
             child.hyperparameters = self.get_hyperparameters()
+            child.metadata = {}
+
             return child
 
         else:
@@ -261,16 +275,14 @@ class EXAQC:
             while child is None:
                 r = random.uniform(0, 1.0)
 
-                if (
-                    self.genome_number > self.population.max_population_size
-                    and r < binary_crossover_rate
-                ):
-                    parents = self.population.get_parents(2)
+                if r < binary_crossover_rate:
+                    parents, metadata = self.population.get_parents(2)
                     child = CircuitGenome(
-                        genome_number=self.next_genome_number(),
+                        genome_number=None,
                         target=self.target,
                         input_qubits=self.input_qubits.copy(),
                         output_qubits=self.output_qubits.copy(),
+                        metadata=metadata,
                     )
 
                     if not binary_crossover(child, parents[0], parents[1]):
@@ -278,38 +290,48 @@ class EXAQC:
                         # to generate a new child
                         continue
 
-                elif (
-                    self.genome_number > self.population.max_population_size
-                    and r < n_ary_cutoff
-                ):
-                    parents = self.population.get_parents(n_ary_parents)
+                elif r < n_ary_cutoff:
+                    parents, metadata = self.population.get_parents(n_ary_parents)
                     child = CircuitGenome(
-                        genome_number=self.next_genome_number(),
+                        genome_number=None,
                         target=self.target,
                         input_qubits=self.input_qubits.copy(),
                         output_qubits=self.output_qubits.copy(),
+                        metadata=metadata,
                     )
 
                     n_ary_crossover(child, parents)
 
-                elif (
-                    self.genome_number > self.population.max_population_size
-                    and r < exponential_cutoff
-                ):
-                    parents = self.population.get_parents(2)
+                elif r < exponential_cutoff:
+                    parents, metadata = self.population.get_parents(2)
                     child = CircuitGenome(
-                        genome_number=self.next_genome_number(),
+                        genome_number=None,
                         target=self.target,
                         input_qubits=self.input_qubits.copy(),
                         output_qubits=self.output_qubits.copy(),
+                        metadata=metadata,
                     )
 
                     exponential_crossover(child, parents[0], parents[1])
 
                 else:
-                    parent = self.population.get_parent()
-                    child = self.mutate(parent)
-                    child = self.mutate(child)
+                    parent, metadata = self.population.get_parent()
+
+                    # mutation_count = random.choice([0, 1, 2, 3, 4])
+                    mutation_count = random.choice([1, 2])
+                    valid = False
+
+                    logger.info(
+                        f"generating a child via {mutation_count + 1} mutations."
+                    )
+                    while not valid:
+                        # keep trying to create a child from the initial
+                        # genome until we get a valid one, then send it out
+                        child = self.mutate(parent, metadata)
+
+                        for i in range(mutation_count):
+                            child = self.mutate(child, metadata)
+                        valid = child.is_valid()
 
                 if not child.is_valid():
                     logger.warning(
@@ -318,6 +340,7 @@ class EXAQC:
                     child = None
 
             # successfully generated a child
+            child.genome_number = self.next_genome_number()
             child.hyperparameters = self.get_hyperparameters()
             return child
 

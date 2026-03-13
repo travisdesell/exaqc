@@ -14,11 +14,17 @@ def test_all_disabled_pennylane(target: str):
     Args:
         target: is the target framework (qiskit or pennylane)
     """
+    metadata = {
+        "a": 30,
+        "b": {"C": 10, "d": [1, 2, 3]},
+    }
+
     qc = CircuitGenome(
         genome_number=1,
         input_qubits=expand_registers({"i1": 3, "i1": 3}),
         output_qubits=expand_registers({"o1": 3, "o2": 3}),
         target=target,
+        metadata=metadata,
     )
     qc.hyperparameters = {
         "steps": 30,
@@ -69,6 +75,7 @@ def test_all_disabled_pennylane(target: str):
     assert qc.input_indexes == qc2.input_indexes
     assert qc.output_indexes == qc2.output_indexes
     assert qc.hyperparameters == qc2.hyperparameters
+    assert qc.metadata == qc2.metadata
 
     assert len(qc.gates) == len(qc2.gates)
 

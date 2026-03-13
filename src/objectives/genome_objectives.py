@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from typing import Optional, Iterable, Callable, Any
-import torch
-from loguru import logger
+import math
 import numpy as np
+import torch
+
+from typing import Optional, Iterable, Callable, Any
+from loguru import logger
 from src.circuits.circuit import CircuitGenome
-from src.utils.losses import (
+from src.utils.losses import (  # noqa: F401
+    loss_ce,
+    loss_kl_divergence,
     loss_one_minus_fidelity,
     loss_state_angle,
     loss_obs_mse,
@@ -249,13 +253,13 @@ def _train_with_pennylane(
     genome: CircuitGenome,
     train_data: Iterable[tuple[torch.Tensor, torch.Tensor]] = None,
     test_data: Iterable[tuple[torch.Tensor, torch.Tensor]] = None,
-    steps: int = 200,
+    epochs: int = 200,
     lr: float = 0.05,
-    log_every: int = 25,
+    log_every: int = 1,
     n_classes: int = 3,
     batch_size: int = None,
     loss_name: str = "ce",
-    shuffle_each_step: bool = True,
+    shuffle_each_epoch: bool = True,
     # NEW:
     target_qnode: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
     encoding: str = "angle",
@@ -283,13 +287,13 @@ def _train_with_pennylane(
             - Teacher mode: iterable of inputs `x`
             - Supervised mode: iterable of `(x, y, class_id)`
         test_data (Iterable, optional): Optional test dataset.
-        steps (int): Number of optimization steps.
+        epochs (int): Number of optimization epochs.
         lr (float): Learning rate for Adam optimizer.
-        log_every (int): Logging frequency (in steps).
+        log_every (int): Logging frequency (in epochs).
         n_classes (int): Number of output classes for supervised learning.
         batch_size (int, optional): Mini-batch size. If None, uses full dataset.
         loss_name (str): Name of loss function from `LOSS_REGISTRY`.
-        shuffle_each_step (bool): Whether to reshuffle data each step.
+        shuffle_each_epoch (bool): Whether to reshuffle data each epoch.
         target_qnode (Callable, optional): Reference QNode producing target
             quantum states (required for teacher mode).
 
@@ -299,6 +303,7 @@ def _train_with_pennylane(
     train_list = list(train_data)
     test_list = list(test_data) if test_data is not None else None
 
+    logger.info(f"getting loss function for '{loss_name}'")
     loss_fn = LOSS_REGISTRY[loss_name]
 
     # For balanced loss setting Alpha from https://arxiv.org/pdf/1901.05555
@@ -307,8 +312,7 @@ def _train_with_pennylane(
         1.0 - np.power(beta, np.array(train_data.counts, dtype=np.float32))
     )
 
-    alpha = alpha / alpha.mean()
-    alpha = torch.as_tensor(alpha, dtype=torch.float32)
+    alpha = torch.as_tensor(alpha / alpha.mean(), dtype=torch.float32)
     logger.info(f"Selected alphas: {alpha}")
 
     n = len(train_list)
@@ -316,7 +320,7 @@ def _train_with_pennylane(
         batch_size = max(1, min(batch_size, n))
 
     sampler = BalancedBatchSampler(
-        data=train_list, batch_size=batch_size, shuffle=shuffle_each_step
+        data=train_list, batch_size=batch_size, shuffle=shuffle_each_epoch
     )
 
     # ----- choose output type -----
@@ -461,79 +465,88 @@ def _train_with_pennylane(
         }
 
     # ---- training loop ----
-    for step in range(steps):
+    for epoch in range(epochs):
         opt.zero_grad()
 
-        batch = sampler.sample()
+        batches_per_epoch = math.ceil(sampler.n_samples / sampler.batch_size)
+        logger.debug(
+            f"evaluating {batches_per_epoch} batches per epoch. n_samples: {sampler.n_samples}, "
+            f"batch_size: {sampler.batch_size}"
+        )
 
-        losses = []
-        if use_state:
-            for x in batch:
-                # teacher state: NO grad
-                with torch.no_grad():
-                    phi = _normalize_state(_ensure_complex(target_qnode(x)))
-                psi = forward_state(x)
-                L = (
-                    loss_one_minus_fidelity(phi, psi)
-                    if loss_fn is None
-                    else loss_fn(phi, psi)
+        for i in range(batches_per_epoch):
+            # make sure we evaluate the entire dataset every epoch
+
+            batch = sampler.sample()
+
+            losses = []
+            if use_state:
+                for x in batch:
+                    # teacher state: NO grad
+                    with torch.no_grad():
+                        phi = _normalize_state(_ensure_complex(target_qnode(x)))
+                    psi = forward_state(x)
+                    L = (
+                        loss_one_minus_fidelity(phi, psi)
+                        if loss_fn is None
+                        else loss_fn(phi, psi)
+                    )
+                    losses.append(L)
+            else:
+                for x, y, _ in batch:
+                    p = forward_probs(x)
+                    L = (
+                        ce_onehot_on_probs(p, y, alpha_per_class=alpha)
+                        if loss_fn is None
+                        else loss_fn(p, y, alpha_per_class=alpha)
+                    )
+                    losses.append(L)
+
+            loss = torch.stack(losses).mean()
+
+            if not loss.requires_grad:
+                logger.warning(
+                    "Loss has no grad path. Are parameters actually used inside the QNode?"
                 )
-                losses.append(L)
-        else:
-            for x, y, _ in batch:
-                p = forward_probs(x)
-                L = (
-                    ce_onehot_on_probs(p, y, alpha_per_class=alpha)
-                    if loss_fn is None
-                    else loss_fn(p, y, alpha_per_class=alpha)
+                metrics = eval_forward_only(
+                    genome,
+                    train_list,
+                    test_list,
+                    teacher_qnode=target_qnode,
+                    n_classes=n_classes,
+                    loss_fn=loss_fn,
+                    alpha=alpha,
                 )
-                losses.append(L)
+                genome.fitness = metrics
+                return
 
-        loss = torch.stack(losses).mean()
+            loss.backward()
+            opt.step()
 
-        if not loss.requires_grad:
-            logger.warning(
-                "Loss has no grad path. Are parameters actually used inside the QNode?"
-            )
-            metrics = eval_forward_only(
-                genome,
-                train_list,
-                test_list,
-                teacher_qnode=target_qnode,
-                n_classes=n_classes,
-                loss_fn=loss_fn,
-                alpha=alpha,
-            )
-            genome.fitness = metrics
-            return
-
-        loss.backward()
-        opt.step()
-
-        if step % log_every == 0 or step == steps - 1:
+        if epoch % log_every == 0 or epoch == epochs - 1:
             if use_state:
                 tr = eval_teacher(train_list)
                 if test_list is not None:
                     te = eval_teacher(test_list)
                     logger.info(
-                        f"[{step:04d}] fid_loss={tr['fidelity_loss']:.6f} angle_loss={tr['angle_loss']:.6f} "
+                        f"[{epoch:04d}] fid_loss={tr['fidelity_loss']:.6f} angle_loss={tr['angle_loss']:.6f} "
                         f"| test_fid_loss={te['fidelity_loss']:.6f}"
                     )
                 else:
                     logger.info(
-                        f"[{step:04d}] fid_loss={tr['fidelity_loss']:.6f} angle_loss={tr['angle_loss']:.6f}"
+                        f"[{epoch:04d}] fid_loss={tr['fidelity_loss']:.6f} angle_loss={tr['angle_loss']:.6f}"
                     )
             else:
                 tr = eval_supervised(train_list, train_data.class_counts, alpha=alpha)
                 if test_list is not None:
                     te = eval_supervised(test_list, test_data.class_counts, alpha=alpha)
                     logger.info(
-                        f"[{step:04d}] loss={tr['loss']:.6f} acc={tr['acc']:.3f} | "
+                        f"[{epoch:04d}] loss={tr['loss']:.6f} acc={tr['acc']:.3f} | "
                         f"test_loss={te['loss']:.3f} test_acc={te['acc']:.3f}"
                     )
                 else:
                     logger.info(
-                        f"[{step:04d}] loss={tr['loss']:.6f} acc={tr['acc']:.3f}"
+                        f"[{epoch:04d}] loss={tr['loss']:.6f} acc={tr['acc']:.3f}"
                     )
 
     torch_params_to_genome(genome, torch_params)
@@ -564,7 +577,7 @@ def _train_with_qiskit_ml_outputs(
     output_qubits: list[int],
     x_extractor: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
     y_extractor: Optional[Callable[[Any], torch.Tensor]] = None,
-    steps: int = 300,
+    epochs: int = 300,
     lr: float = 0.05,
     loss_fn: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
 ) -> dict[str, float]:
@@ -677,7 +690,7 @@ def _train_with_qiskit_ml_outputs(
     opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0.0001)
 
     # ----- Train -----
-    for _ in range(steps):
+    for _ in range(epochs):
         opt.zero_grad()
         losses = []
         for input_bits, target_obj in dataset:
@@ -729,7 +742,7 @@ def train_genome_objective(
     backend: str = "pennylane",
     loss: str = "fidelity",
     encoding: str = "angle",
-    steps: int = 200,
+    epochs: int = 200,
     lr: float = 0.05,
     n_classes: int = 3,
     log_every: int = 50,
@@ -749,7 +762,7 @@ def train_genome_objective(
             genome,
             train_data=train_data,
             test_data=test_data,
-            steps=steps,
+            epochs=epochs,
             lr=lr,
             loss_name=loss,
             n_classes=n_classes,
@@ -784,7 +797,7 @@ def train_genome_objective(
             output_qubits=output_qubits,
             x_extractor=x_extractor,
             y_extractor=y_extractor,
-            steps=steps,
+            epochs=epochs,
             lr=lr,
             loss_fn=loss_fn,
         )

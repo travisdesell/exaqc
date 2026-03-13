@@ -100,7 +100,7 @@ DATASETS = [
     ("breast_cancer", BreastCancerDataset, 30, 2),
 ]
 
-BATCH_SIZES = [None, 8, 12]  # None → oversample; int → fixed mini-batch
+BATCH_SIZES = [4, 8, 12]  # int → fixed mini-batch
 
 
 def is_evenly_distributed(batch: list, n_classes: int) -> bool:
@@ -127,11 +127,7 @@ def test_even_batching(
 ):
     data = loaded_datasets[ds_name]
 
-    effective_batch_size = (
-        batch_size if batch_size is None else (batch_size // n_classes) * n_classes
-    )
-
-    sampler = BalancedBatchSampler(data, effective_batch_size, shuffle)
+    sampler = BalancedBatchSampler(data, batch_size, shuffle)
 
     for _ in range(max(1, len(data) // sampler.samples_per_class)):
         batch = sampler.sample()
