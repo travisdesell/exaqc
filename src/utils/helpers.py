@@ -72,7 +72,7 @@ class BalancedBatchSampler:
         self.num_classes: int = len(self.classes)
         self.class_indices = class_indices
 
-        if batch_size is None:
+        if batch_size is None or batch_size >= len(data):
             self.samples_per_class = max(len(v) for v in class_indices.values())
 
         else:
