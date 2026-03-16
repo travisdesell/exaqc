@@ -132,7 +132,7 @@ class EXAQC:
         hyperparameters["epochs"] = random.choice([5, 10, 15, 20, 25, 30, 35, 40])
         """
         hyperparameters["learning_rate"] = 0.0005
-        hyperparameters["epochs"] = 5
+        hyperparameters["epochs"] = random.choice([1,3,5])
 
         return hyperparameters
 
