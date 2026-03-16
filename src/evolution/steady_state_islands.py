@@ -360,6 +360,10 @@ class SteadyStateIslands(PopulationStrategy):
         target_island.insert_genome(genome)
         self.insertions += 1
 
+        if self.insertions > 0 and (self.insertions % self.genomes_before_extinction) == 0:
+            # perform island repopulation
+            c = 10
+
         if (
             self.global_best_genome is None
             or self.compare(self.global_best_genome, genome) > 0
