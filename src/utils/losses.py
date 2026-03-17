@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import torch
+
 from typing import Sequence, Union, Callable
 
-import torch
+# from loguru import logger
 
 InputState = Union[str, Sequence[int]]
 
@@ -256,7 +258,9 @@ def balanced_ce_onehot_on_probs(
     probs = probs / probs.sum()
 
     y_onehot = y_onehot.to(dtype=probs.dtype, device=probs.device)
-    alpha_per_class = alpha_per_class.to(dtype=probs.dtype, device=probs.device)
+    # alpha_per_class = alpha_per_class.to(dtype=probs.dtype, device=probs.device)
+
+    # logger.info(f"CALCULATING LOSS: y_onehot: {y_onehot}, probs: {probs}, alpha_per_class: {alpha_per_class}")
 
     return -(alpha_per_class * y_onehot * torch.log(probs)).sum()
 

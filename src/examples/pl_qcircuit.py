@@ -172,7 +172,7 @@ class TeacherObjective(Objective):
 
         hyperparameters = genome.hyperparameters
         learning_rate = hyperparameters["learning_rate"]
-        steps = hyperparameters["steps"]
+        epochs = hyperparameters["epochs"]
         batch_size = hyperparameters["batch_size"]
         log_every = hyperparameters["log_every"]
 
@@ -182,7 +182,7 @@ class TeacherObjective(Objective):
             dataset=[self.X_train, self.X_test],  # your API expects [train, test]
             backend="pennylane",
             loss="fidelity",  # teacher imitation uses fidelity
-            steps=steps,
+            epochs=epochs,
             lr=learning_rate,
             log_every=log_every,
             batch_size=batch_size,
@@ -238,7 +238,7 @@ if __name__ == "__main__":
         help="Output directory to store results from runs",
     )
     p.add_argument("--input_mode", default="angle", choices=["angle", "basis"])
-    p.add_argument("--steps", type=int, default=30)
+    p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--learning_rate", "-lr", type=float, default=0.02)
     p.add_argument("--log_every", type=int, default=50)
     p.add_argument(
@@ -299,7 +299,7 @@ if __name__ == "__main__":
 
     # specify hyperparameter options for genome evaluation
     hyperparameters = {
-        "steps": args.steps,
+        "epochs": args.epochs,
         "learning_rate": args.learning_rate,
         "log_every": 15,
         "batch_size": args.batch_size,
