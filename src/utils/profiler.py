@@ -80,6 +80,7 @@ def default_fitness_extractor(genome: CircuitGenome) -> tuple:
 
     Preference order when ``genome.fitness`` is a dict:
       1) RL-style metrics: ``eval_return_mean``, ``train_return_mean``, ``best_episode_return``
+        multiplies -1 to get max
       2) Classification-style metrics: ``test_loss``, ``loss``
 
     If no known keys exist (or fitness is not a dict), it falls back to attempting to
@@ -125,7 +126,6 @@ def _sort_population(
     Args:
         pop: List of genomes to sort.
         fitness_fn: Function mapping a genome to a scalar fitness value.
-        minimize: If True, lower fitness values are considered better; if False, higher is better.
 
     Returns:
         A new list of genomes sorted from best to worst according to the chosen direction.
@@ -188,14 +188,11 @@ class EXAQCProfiler:
         out_dir: Output directory where CSV and plots are written.
         fitness_fn: Function mapping a genome to a scalar fitness value. Defaults to
             ``default_fitness_extractor``.
-        fitness_mode: ``"max"`` for higher-is-better metrics (e.g., returns) or ``"min"``
-            for lower-is-better metrics (e.g., losses). Defaults to ``"max"``.
         topk: The k used for the "top-k mean" curve. Defaults to 5.
 
     Attributes:
         out_dir: Output directory where artifacts are saved.
         fitness_fn: Fitness extraction callable.
-        minimize: Whether the objective is minimization (derived from ``fitness_mode``).
         topk: Integer k used for the top-k mean.
         csv_path: Full path to the per-run CSV file.
         history: In-memory list of recorded ``EXAQCPoint`` values.
@@ -206,12 +203,10 @@ class EXAQCProfiler:
         *,
         out_dir: str,
         fitness_fn: Callable[[CircuitGenome], float] = default_fitness_extractor,
-        fitness_mode: str = "min",  # "max" for returns, "min" for losses
         topk: int = 5,
     ):
         self.out_dir = out_dir
         self.fitness_fn = fitness_fn
-        self.minimize = fitness_mode.lower() == "min"
         self.topk = int(topk)
 
         os.makedirs(self.out_dir, exist_ok=True)
