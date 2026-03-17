@@ -110,7 +110,7 @@ def default_fitness_extractor(genome: CircuitGenome) -> tuple:
         if "test_loss" in fit:
             return _safe_float(fit["test_loss"]), "class"
         if "loss" in fit:
-            return _safe_float(fit["loss"]),  "class"
+            return _safe_float(fit["loss"]), "class"
 
     # fallback: try genome.fitness scalar
     return _safe_float(getattr(genome, "fitness", np.nan)), "default"
@@ -249,7 +249,7 @@ class EXAQCProfiler:
             return
 
         ordered, mode = _sort_population(population, self.fitness_fn)
-        vals = [v for v,_ in ordered]
+        vals = [v for v, _ in ordered]
 
         self.mode = mode
 
