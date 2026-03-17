@@ -66,7 +66,7 @@ class SteadyStatePopulation(PopulationStrategy):
 
         return len(self.population) >= self.max_population_size
 
-    def get_parent(self, **kwargs) -> (CircuitGenome, dict[str, any]):
+    def get_parent(self, **kwargs) -> tuple[CircuitGenome, dict[str, any]]:
         """
         Used to get two or more parents to be used in mutation or
         other operations to generate children.
@@ -91,7 +91,7 @@ class SteadyStatePopulation(PopulationStrategy):
 
     def get_parents(
         self, n_parents: int = 2, **kwargs
-    ) -> (list[CircuitGenome], dict[str, any]):
+    ) -> tuple[list[CircuitGenome], dict[str, any]]:
         """
         Used to get two or more parents to be used in crossover or
         other operations to generate children.

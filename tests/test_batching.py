@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from src.utils.helpers import BalancedBatchSampler
-from src.quantum_datasets import (
+from src.datasets.classification import (
     IrisDataset,
     WineDataset,
     SeedsDataset,
