@@ -316,6 +316,9 @@ class EXAQC:
 
                 else:
                     parent, metadata = self.population.get_parent()
+                    logger.debug(
+                        f"Is parent null?: {parent}"
+                    )
 
                     # mutation_count = random.choice([0, 1, 2, 3, 4])
                     mutation_count = random.choice([1, 2])
