@@ -315,13 +315,9 @@ class EXAQC:
                     exponential_crossover(child, parents[0], parents[1])
 
                 else:
-                    logger.debug(
-                        f"Population size: {self.population}"
-                    )
+                    logger.debug(f"Population size: {self.population}")
                     parent, metadata = self.population.get_parent()
-                    logger.debug(
-                        f"Is parent null?: {parent}"
-                    )
+                    logger.debug(f"Is parent null?: {parent}")
 
                     # mutation_count = random.choice([0, 1, 2, 3, 4])
                     mutation_count = random.choice([1, 2])
