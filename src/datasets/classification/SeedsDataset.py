@@ -53,7 +53,6 @@ class SeedsDataset(QuantumDataset):
         # ---- Load raw data ----
         # Format: 7 features + 1 class label (1,2,3)
         data = np.loadtxt("src/datasets/classification/data/seeds_dataset.txt")
-        # Format: 7 features + 1 class label (1, 2, 3)
         target_names = ["Kama", "Rosa", "Canadian"]
 
         X = data[:, :7]  # (210, 7)

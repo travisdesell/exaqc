@@ -73,7 +73,7 @@ def _gate_counts(genome: CircuitGenome) -> dict[str, float]:
     }
 
 
-def default_fitness_extractor(genome: CircuitGenome) -> float:
+def default_fitness_extractor(genome: CircuitGenome) -> tuple:
     """Extract a scalar fitness value from a ``CircuitGenome``.
 
     This provides a generic "metric to plot" across different experiment styles.
@@ -100,27 +100,26 @@ def default_fitness_extractor(genome: CircuitGenome) -> float:
     # RL-style
     if isinstance(fit, dict):
         if "eval_return_mean" in fit:
-            return _safe_float(fit["eval_return_mean"])
+            return -1.0 * _safe_float(fit["eval_return_mean"]), "rl"
         if "train_return_mean" in fit:
-            return _safe_float(fit["train_return_mean"])
+            return -1.0 * _safe_float(fit["train_return_mean"]), "rl"
         if "best_episode_return" in fit:
-            return _safe_float(fit["best_episode_return"])
+            return -1.0 * _safe_float(fit["best_episode_return"]), "rl"
 
         # classification-style
         if "test_loss" in fit:
-            return _safe_float(fit["test_loss"])
+            return _safe_float(fit["test_loss"]), "class"
         if "loss" in fit:
-            return _safe_float(fit["loss"])
+            return _safe_float(fit["loss"]),  "class"
 
     # fallback: try genome.fitness scalar
-    return _safe_float(getattr(genome, "fitness", np.nan))
+    return _safe_float(getattr(genome, "fitness", np.nan)), "default"
 
 
 def _sort_population(
     pop: list[CircuitGenome],
     fitness_fn: Callable[[CircuitGenome], float],
-    minimize: bool,
-) -> list[CircuitGenome]:
+) -> tuple[list[CircuitGenome], str]:
     """Sort a population by fitness according to an extractor and objective direction.
 
     Args:
@@ -131,9 +130,12 @@ def _sort_population(
     Returns:
         A new list of genomes sorted from best to worst according to the chosen direction.
     """
-    vals = [(fitness_fn(g), g) for g in pop]
-    vals.sort(key=lambda t: t[0], reverse=not minimize)
-    return [g for _, g in vals]
+    _, mode = fitness_fn(pop[0])
+    vals = [(fitness_fn(g)[0], g) for g in pop]
+    vals.sort(key=lambda t: t[0])
+    if mode == "rl":
+        vals = [(-1.0 * v, g) for v, g in vals]
+    return vals, mode
 
 
 @dataclass
@@ -177,14 +179,13 @@ class EXAQCProfiler:
       - Simple gate-count complexity metrics of the best genome
 
     It writes a per-run CSV history at:
-      ``<out_dir>/exaqc_history_<run_name>.csv``
+      ``<out_dir>/exaqc_history.csv``
 
     You can later combine multiple runs (multiple CSVs) with
     ``EXAQCProfiler.aggregate_and_plot(...)`` to produce mean curves with confidence bands.
 
     Args:
         out_dir: Output directory where CSV and plots are written.
-        run_name: Identifier appended to output filenames. Defaults to ``"run0"``.
         fitness_fn: Function mapping a genome to a scalar fitness value. Defaults to
             ``default_fitness_extractor``.
         fitness_mode: ``"max"`` for higher-is-better metrics (e.g., returns) or ``"min"``
@@ -193,7 +194,6 @@ class EXAQCProfiler:
 
     Attributes:
         out_dir: Output directory where artifacts are saved.
-        run_name: Run identifier used in filenames.
         fitness_fn: Fitness extraction callable.
         minimize: Whether the objective is minimization (derived from ``fitness_mode``).
         topk: Integer k used for the top-k mean.
@@ -205,19 +205,17 @@ class EXAQCProfiler:
         self,
         *,
         out_dir: str,
-        run_name: str = "run0",
         fitness_fn: Callable[[CircuitGenome], float] = default_fitness_extractor,
-        fitness_mode: str = "max",  # "max" for returns, "min" for losses
+        fitness_mode: str = "min",  # "max" for returns, "min" for losses
         topk: int = 5,
     ):
         self.out_dir = out_dir
-        self.run_name = run_name
         self.fitness_fn = fitness_fn
         self.minimize = fitness_mode.lower() == "min"
         self.topk = int(topk)
 
         os.makedirs(self.out_dir, exist_ok=True)
-        self.csv_path = os.path.join(self.out_dir, f"exaqc_history_{self.run_name}.csv")
+        self.csv_path = os.path.join(self.out_dir, "exaqc_history.csv")
 
         self.history: list[EXAQCPoint] = []
 
@@ -250,8 +248,10 @@ class EXAQCProfiler:
         if not population:
             return
 
-        ordered = _sort_population(population, self.fitness_fn, self.minimize)
-        vals = [self.fitness_fn(g) for g in ordered]
+        ordered, mode = _sort_population(population, self.fitness_fn)
+        vals = [v for v,_ in ordered]
+
+        self.mode = mode
 
         best = vals[0]
         topk = vals[: min(self.topk, len(vals))]
@@ -290,8 +290,8 @@ class EXAQCProfiler:
 
         Args:
             out_path: Output file path for the figure. If None, defaults to
-                ``<out_dir>/exaqc_curves_<run_name>.png``.
-            title: Optional title override. If None, uses ``"EXAQC run: <run_name>"``.
+                ``<out_dir>/exaqc_curves.png``.
+            title: Optional title override. If None, uses ``"EXAQC Run"``.
 
         Returns:
             None. If no history has been recorded, the method returns early.
@@ -309,13 +309,13 @@ class EXAQCProfiler:
         plt.plot(steps, best, label="Best")
         plt.plot(steps, popm, label="Population mean")
         plt.xlabel("Insertion / step")
-        plt.ylabel("Fitness" if not self.minimize else "Loss")
-        plt.title(title or f"EXAQC run: {self.run_name}")
+        plt.ylabel("Reward" if self.mode == "rl" else "Loss")
+        plt.title(title or "EXAQC Run")
         plt.legend()
         plt.grid(True, alpha=0.25)
 
         if out_path is None:
-            out_path = os.path.join(self.out_dir, f"exaqc_curves_{self.run_name}.png")
+            out_path = os.path.join(self.out_dir, "exaqc_curves.png")
         fig.savefig(out_path, dpi=200, bbox_inches="tight")
         plt.close(fig)
 

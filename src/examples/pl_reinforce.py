@@ -255,7 +255,6 @@ if __name__ == "__main__":
             max_population_size=args.max_population_size,
             compare=compare,
             out_dir=args.out_dir,
-            fitness_mode="max",
         ),
         objective=objective,
         hyperparameters=hyperparameters,
