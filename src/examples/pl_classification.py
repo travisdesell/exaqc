@@ -5,13 +5,14 @@ import math
 import os
 import torch
 import sys
-from typing import Iterable
+from typing import Iterable, Optional
 
 from loguru import logger
+import numpy as np
 
 from src.evolution.master_worker import master_worker
 
-# from src.evolution.exaqc import EXAQC
+from src.evolution.steady_state_islands import SteadyStateIslands
 from src.evolution.steady_state_population import SteadyStatePopulation
 from src.evolution.objective import Objective
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
@@ -20,14 +21,14 @@ from src.objectives.genome_objectives import (
     train_genome_objective,
 )
 from src.utils.helpers import genome_to_torch_params
-from src.utils.losses import ce_onehot_on_probs
-from src.quantum_datasets import (
+from src.utils.losses import LOSS_REGISTRY
+from src.datasets.classification import (
     IrisDataset,
     WineDataset,
     SeedsDataset,
     BreastCancerDataset,
-    QuantumDataset,
 )
+from src.datasets import QuantumDataset
 
 # ---------------------------------------------------------------------
 # Prediction + evaluation helpers
@@ -50,9 +51,10 @@ def predict_from_probs(
 @torch.no_grad()
 def eval_probs_ce_and_acc(
     genome: CircuitGenome,
-    dataset: Iterable[tuple[torch.Tensor, torch.Tensor]],
+    dataset: Iterable[tuple[torch.Tensor, torch.Tensor, str]],
     *,
     n_classes: int,
+    loss: Optional[str] = None,
 ) -> dict[str, float]:
     """
     Assumes genome.circuit returns qml.probs(wires=output_wires) (real-valued).
@@ -63,24 +65,49 @@ def eval_probs_ce_and_acc(
         # IMPORTANT: we want probs readout for classification
         genome.generate_pennylane_circuit(return_probs=True, input_mode="angle")
 
+    loss_fn = LOSS_REGISTRY[loss]
+
     params = genome_to_torch_params(genome)  # empty dict if no params
     losses = []
     correct = 0
     total = 0
+    per_class_pred = {}
 
-    for x, y in dataset:
+    # setting Alpha from https://arxiv.org/pdf/1901.05555
+    beta = (len(dataset) - 1) / len(dataset)
+    alpha = (1.0 - beta) / (
+        1.0 - np.power(beta, np.array(dataset.counts, dtype=np.float32))
+    )
+    alpha = torch.as_tensor(alpha / alpha.mean(), dtype=torch.float32)
+
+    for x, y, cls in dataset:
+        if cls not in per_class_pred:
+            per_class_pred[cls] = 0
+
         probs_full = genome.circuit(x, params)
         probs_full = torch.as_tensor(probs_full, dtype=torch.float32)
 
         pred, probs = predict_from_probs(probs_full, n_classes=n_classes)
-        L = ce_onehot_on_probs(probs, y)
+        L = loss_fn(probs, y, alpha_per_class=alpha)
 
         losses.append(L)
-        correct += int(pred == int(torch.argmax(y).item()))
+        true = int(torch.argmax(y).item())
+        correct += int(pred == true)
         total += 1
+
+        if pred == true:
+            per_class_pred[cls] += 1
 
     avg_loss = float(torch.stack(losses).mean().item()) if losses else 0.0
     acc = float(correct / max(total, 1))
+
+    log = ""
+    for k, v in dataset.class_counts.items():
+        log += (
+            f"[{k}] Accuracy: {per_class_pred[k] / v:.4f} ({per_class_pred[k]}/{v}) | "
+        )
+    logger.info(f"{log}")
+
     return {"loss": avg_loss, "acc": acc}
 
 
@@ -134,9 +161,10 @@ class ClassificationObjective(Objective):
 
         hyperparameters = genome.hyperparameters
         learning_rate = hyperparameters["learning_rate"]
-        steps = hyperparameters["steps"]
+        epochs = hyperparameters["epochs"]
         batch_size = hyperparameters["batch_size"]
         log_every = hyperparameters["log_every"]
+        encoding = hyperparameters["encoding"]
 
         # If there are trainable params, train. If not, just forward/eval.
         torch_params = genome_to_torch_params(genome)
@@ -145,8 +173,9 @@ class ClassificationObjective(Objective):
                 genome,
                 dataset=[self.train_data, self.test_data],  # train split only
                 backend=self.target,
+                encoding=encoding,
                 loss=self.loss,  # e.g., "ce"
-                steps=steps,
+                epochs=epochs,
                 lr=learning_rate,
                 n_classes=self.n_classes,
                 log_every=log_every,
@@ -155,10 +184,10 @@ class ClassificationObjective(Objective):
 
         # Compute fresh train/test metrics from probs (works for both param & no-param cases)
         train_metrics = eval_probs_ce_and_acc(
-            genome, self.train_data, n_classes=self.n_classes
+            genome, self.train_data, n_classes=self.n_classes, loss=self.loss
         )
         test_metrics = eval_probs_ce_and_acc(
-            genome, self.test_data, n_classes=self.n_classes
+            genome, self.test_data, n_classes=self.n_classes, loss=self.loss
         )
 
         genome.fitness = {
@@ -186,22 +215,56 @@ if __name__ == "__main__":
     p.add_argument(
         "--dataset", choices=["iris", "wine", "seeds", "breast_cancer"], required=True
     )
+
     p.add_argument(
         "--out_dir",
         type=str,
         default="artifacts",
         help="Output directory to store results from runs",
     )
-    p.add_argument("--loss", default="ce", choices=["ce", "mse", "kl", "fidelity"])
-    p.add_argument("--steps", type=int, default=30)
+
+    p.add_argument(
+        "--loss", default="ce", choices=["bce", "focal", "ce", "mse", "kl", "fidelity"]
+    )
+
+    subparsers = p.add_subparsers(
+        dest="population_strategy",
+        help="Specify how genomes will be handled.",
+        required=True,
+    )
+
+    steady_state_parser = subparsers.add_parser(
+        "steady_state", help="Use a single steady state population."
+    )
+    steady_state_parser.add_argument("--max_population_size", type=int, default=30)
+
+    islands_parser = subparsers.add_parser(
+        "islands", help="Use multiple islands of steady state opulations."
+    )
+    islands_parser.add_argument("--n_islands", type=int, default=10)
+    islands_parser.add_argument("--max_island_size", type=int, default=10)
+    islands_parser.add_argument("--genomes_before_extinction", type=int, default=200)
+    islands_parser.add_argument("--islands_to_extinct", type=int, default=1)
+    islands_parser.add_argument(
+        "--intra_island_crossover_rate", type=float, default=0.5
+    )
+
+    p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--learning_rate", "-lr", type=float, default=5e-4)
-    p.add_argument("--max_population_size", type=int, default=30)
     p.add_argument("--number_genomes", type=int, default=2000)
     p.add_argument("--input_qubits", type=int, default=6)
+
+    p.add_argument(
+        "--encoding",
+        choices=["basis", "angle", "amplitude"],
+        type=str,
+        default="angle",
+        help="Choose the kind of encoding",
+    )
     p.add_argument(
         "--batch_size",
         type=int,
-        default=None,
+        required=True,
         help="Use mini-batch training with the given batch size, if provided",
     )
 
@@ -223,10 +286,11 @@ if __name__ == "__main__":
 
     # specify hyperparameter options for genome evaluation
     hyperparameters = {
-        "steps": args.steps,
+        "epochs": args.epochs,
         "learning_rate": args.learning_rate,
         "log_every": 15,
         "batch_size": args.batch_size,
+        "encoding": args.encoding,
     }
 
     # set up the objective function
@@ -235,6 +299,7 @@ if __name__ == "__main__":
         objective = ClassificationObjective(
             train_data=IrisDataset(split="train"),
             test_data=IrisDataset(split="test"),
+            loss=args.loss,
             input_size=4,
             n_classes=3,
         )
@@ -243,6 +308,7 @@ if __name__ == "__main__":
         objective = ClassificationObjective(
             train_data=WineDataset(split="train"),
             test_data=WineDataset(split="test"),
+            loss=args.loss,
             input_size=13,
             n_classes=3,
         )
@@ -251,6 +317,7 @@ if __name__ == "__main__":
         objective = ClassificationObjective(
             train_data=SeedsDataset(split="train"),
             test_data=SeedsDataset(split="test"),
+            loss=args.loss,
             input_size=7,
             n_classes=3,
         )
@@ -259,6 +326,7 @@ if __name__ == "__main__":
         objective = ClassificationObjective(
             train_data=BreastCancerDataset(split="train"),
             test_data=BreastCancerDataset(split="test"),
+            loss=args.loss,
             input_size=30,
             n_classes=2,
         )
@@ -266,13 +334,28 @@ if __name__ == "__main__":
     else:
         raise ValueError(args.dataset)
 
-    master_worker(
-        gate_specifications=pennylane_gate_specifications,
-        population=SteadyStatePopulation(
+    population = None
+    print(f"args.population_strategy: {args.population_strategy}")
+
+    if args.population_strategy == "steady_state":
+        population = SteadyStatePopulation(
             max_population_size=args.max_population_size,
             compare=compare,
             out_dir=args.out_dir,
-        ),
+        )
+    elif args.population_strategy == "islands":
+        population = SteadyStateIslands(
+            n_islands=args.n_islands,
+            max_island_size=args.max_island_size,
+            genomes_before_extinction=args.genomes_before_extinction,
+            islands_to_extinct=args.islands_to_extinct,
+            compare=compare,
+            out_dir=args.out_dir,
+        )
+
+    master_worker(
+        gate_specifications=pennylane_gate_specifications,
+        population=population,
         objective=objective,
         hyperparameters=hyperparameters,
         run_for=args.number_genomes,
