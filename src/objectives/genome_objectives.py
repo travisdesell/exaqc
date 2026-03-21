@@ -466,8 +466,8 @@ def _train_with_pennylane(
             "loss": float(torch.stack(losses).mean().item()),
             "acc": float(correct / max(total, 1)),
         }
-    
-    loss_global = float('inf')
+
+    loss_global = float("inf")
 
     # ---- training loop ----
     for epoch in range(epochs):
@@ -572,9 +572,7 @@ def _train_with_pennylane(
             loss_global = metrics["test_loss"]
             best_params = copy.deepcopy(torch_params)
             best_metrics = copy.deepcopy(metrics)
-            logger.info(
-                f"Saved best model to genome:{genome.genome_number}"
-            )
+            logger.info(f"Saved best model to genome:{genome.genome_number}")
 
     # Save best loss genome params and metrics
     torch_params_to_genome(genome, best_params)
