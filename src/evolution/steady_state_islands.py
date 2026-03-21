@@ -194,7 +194,7 @@ class SteadyStateIslands(PopulationStrategy):
         self.global_best_genome = None
 
         self.profiler = profiler
-        if self.profiler is None:
+        if self.profiler is None and out_dir:
             self.profiler = EXAQCProfiler(
                 out_dir=self.out_dir,
                 topk=5,
