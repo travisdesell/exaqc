@@ -35,9 +35,7 @@ def csdg(control_qubit, target_qubit):
 
 
 def csx(control_qubit, target_qubit):
-    qml.Hadamard(wires=target_qubit)
-    qml.CRX(np.pi / 2, wires=[control_qubit, target_qubit])
-    qml.Hadamard(wires=target_qubit)
+    qml.ctrl(qml.SX(wires=target_qubit), control=control_qubit)
 
 
 # ============================================================
@@ -51,7 +49,15 @@ def dcx(qubit1, qubit2):
 def ecr(qubit1, qubit2):
     qml.Hadamard(wires=qubit2)
     qml.CNOT(wires=[qubit1, qubit2])
-    qml.RZ(np.pi / 2, wires=qubit2)
+    qml.RZ(np.pi / 4, wires=qubit2)
+    qml.CNOT(wires=[qubit1, qubit2])
+    qml.Hadamard(wires=qubit2)
+
+    qml.PauliX(wires=qubit1)
+
+    qml.Hadamard(wires=qubit2)
+    qml.CNOT(wires=[qubit1, qubit2])
+    qml.RZ(-np.pi / 4, wires=qubit2)
     qml.CNOT(wires=[qubit1, qubit2])
     qml.Hadamard(wires=qubit2)
 
@@ -73,9 +79,21 @@ def rccx(control_qubit1, control_qubit2, target_qubit):
 
 def rcccx(control_qubit1, control_qubit2, control_qubit3, target_qubit):
     qml.Hadamard(wires=target_qubit)
+    qml.CNOT(wires=[control_qubit3, target_qubit])
+    qml.adjoint(qml.T)(wires=target_qubit)
+    qml.CNOT(wires=[control_qubit1, target_qubit])
     qml.T(wires=target_qubit)
-    mcx([control_qubit1, control_qubit2, control_qubit3, target_qubit])
-    qml.T(wires=target_qubit).adjoint()
+    qml.CNOT(wires=[control_qubit2, target_qubit])
+    qml.adjoint(qml.T)(wires=target_qubit)
+    qml.CNOT(wires=[control_qubit1, target_qubit])
+    qml.T(wires=target_qubit)
+    qml.CNOT(wires=[control_qubit2, target_qubit])
+    qml.adjoint(qml.T)(wires=target_qubit)
+    qml.CNOT(wires=[control_qubit3, target_qubit])
+    qml.T(wires=target_qubit)
+    qml.CNOT(wires=[control_qubit2, target_qubit])
+    qml.adjoint(qml.T)(wires=target_qubit)
+    qml.CNOT(wires=[control_qubit2, target_qubit])
     qml.Hadamard(wires=target_qubit)
 
 
@@ -83,49 +101,36 @@ def rcccx(control_qubit1, control_qubit2, control_qubit3, target_qubit):
 # Multi-controlled phase / rotations
 # ============================================================
 def mcp(phi, control_qubits, target_qubit):
-    for c in control_qubits:
-        qml.CNOT(wires=[c, target_qubit])
-    qml.RZ(phi, wires=target_qubit)
-    for c in reversed(control_qubits):
-        qml.CNOT(wires=[c, target_qubit])
+    qml.ctrl(qml.PhaseShift(phi, wires=target_qubit), control=control_qubits)
 
 
 def mcrx(theta, control_qubits, target_qubit):
-    for c in control_qubits:
-        qml.CNOT(wires=[c, target_qubit])
-    qml.RX(theta, wires=target_qubit)
-    for c in reversed(control_qubits):
-        qml.CNOT(wires=[c, target_qubit])
+    qml.ctrl(qml.RX(theta, wires=target_qubit), control=control_qubits)
 
 
 def mcry(theta, control_qubits, target_qubit):
-    for c in control_qubits:
-        qml.CNOT(wires=[c, target_qubit])
-    qml.RY(theta, wires=target_qubit)
-    for c in reversed(control_qubits):
-        qml.CNOT(wires=[c, target_qubit])
+    qml.ctrl(qml.RY(theta, wires=target_qubit), control=control_qubits)
 
 
 def mcrz(theta, control_qubits, target_qubit):
-    for c in control_qubits:
-        qml.CNOT(wires=[c, target_qubit])
-    qml.RZ(theta, wires=target_qubit)
-    for c in reversed(control_qubits):
-        qml.CNOT(wires=[c, target_qubit])
+    qml.ctrl(qml.RZ(theta, wires=target_qubit), control=control_qubits)
 
 
 # ============================================================
 # CU (general controlled-U)
 # ============================================================
 def cu(theta, phi, lam, gamma, control_qubit, target_qubit):
-    qml.RZ((phi + lam) / 2, wires=target_qubit)
-    qml.RY(theta / 2, wires=target_qubit)
-    qml.CNOT(wires=[control_qubit, target_qubit])
-    qml.RY(-theta / 2, wires=target_qubit)
-    qml.RZ(-(phi + lam) / 2, wires=target_qubit)
-    qml.CNOT(wires=[control_qubit, target_qubit])
-    qml.RZ(lam, wires=target_qubit)
-    qml.RZ(gamma, wires=control_qubit)
+    # qml.RZ((phi + lam) / 2, wires=target_qubit)
+    # qml.RY(theta / 2, wires=target_qubit)
+    # qml.CNOT(wires=[control_qubit, target_qubit])
+    # qml.RY(-theta / 2, wires=target_qubit)
+    # qml.RZ(-(phi + lam) / 2, wires=target_qubit)
+    # qml.CNOT(wires=[control_qubit, target_qubit])
+    # qml.RZ(lam, wires=target_qubit)
+    # qml.RZ(gamma, wires=control_qubit)
+
+    qml.ControlledPhaseShift(gamma, wires=[control_qubit, target_qubit])
+    qml.ctrl(qml.U3(theta, phi, lam, wires=target_qubit), control=control_qubit)
 
 
 # ============================================================
@@ -161,7 +166,7 @@ def sx(qubit):
 
 
 def sxdg(qubit):
-    qml.RX(-np.pi / 2, wires=qubit)
+    qml.SX(wires=qubit).adjoint()
 
 
 # ============================================================
@@ -179,7 +184,7 @@ def tdg(qubit):
 # R / RV (parameterized single-qubit rotations)
 # ============================================================
 def r(theta, phi, qubit):
-    qml.Rot(theta, phi, 0.0, wires=qubit)  # approximate single-qubit R gate
+    qml.Rot(phi, theta, -phi, wires=qubit)  # approximate single-qubit R gate
 
 
 def rv(vx, vy, vz, qubit):

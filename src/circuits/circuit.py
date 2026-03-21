@@ -16,9 +16,10 @@ class CircuitGenome:
     def __init__(
         self,
         genome_number: int,
-        target: int,
+        target: str,
         input_qubits: list[tuple[str, int]],
         output_qubits: list[tuple[str, int]] = None,
+        metadata: dict[str, any] = {},
     ):
         """
         Initializes an empty quantum circuit.
@@ -30,8 +31,11 @@ class CircuitGenome:
             input_qubits: a list of qubit names and indexes (e.g., (a, 0)).
             output_qubits: a list of qubit names and indexes (e.g., (a, 0)), if None then output_qubits are
                 the same as the input qubits.
+            metadata: is metadata about the genome used by things like the population strategy, etc. or to
+                track other information about the genome.
         """
         self.genome_number = genome_number
+        self.metadata = metadata
 
         # these should be specified by EXAQC
 
@@ -88,7 +92,7 @@ class CircuitGenome:
         self.sort_gates()
 
         reached_indexes = set(self.input_indexes)
-        logger.info(f"inital reached indexes now: {reached_indexes}")
+        logger.debug(f"inital reached indexes now: {reached_indexes}")
 
         for gate in self.gates:
             if not gate.enabled:
@@ -104,10 +108,10 @@ class CircuitGenome:
             if not set(input_circuit_indexes).isdisjoint(reached_indexes):
                 reached_indexes.update(output_circuit_indexes)
 
-            logger.info(f"\treached indexes now: {reached_indexes}")
+            logger.debug(f"\treached indexes now: {reached_indexes}")
 
         valid = not reached_indexes.isdisjoint(self.output_indexes)
-        logger.info(
+        logger.debug(
             f"output indexes are: {self.output_indexes}, circuit valid? {valid}"
         )
 
@@ -157,6 +161,7 @@ class CircuitGenome:
             input_qubits=self.input_qubits.copy(),
             output_qubits=self.output_qubits.copy(),
         )
+        new_genome.metadata = self.metadata.copy()
         new_genome.fitness = fitness
         new_genome.hyperparameters = self.hyperparameters.copy()
 
@@ -179,6 +184,7 @@ class CircuitGenome:
         serialized = {}
         serialized["fitness"] = self.fitness
         serialized["genome_number"] = self.genome_number
+        serialized["metadata"] = self.metadata
         serialized["target"] = self.target
         serialized["input_qubits"] = self.input_qubits.copy()
         serialized["output_qubits"] = self.output_qubits.copy()
@@ -205,6 +211,7 @@ class CircuitGenome:
             target=serialized["target"],
             input_qubits=serialized["input_qubits"],
             output_qubits=serialized["output_qubits"],
+            metadata=serialized["metadata"],
         )
         new_genome.fitness = serialized["fitness"]
         new_genome.hyperparameters = serialized["hyperparameters"]
@@ -436,13 +443,22 @@ class CircuitGenome:
             # --- Input preparation ---
             if input_mode == "basis":
                 # expects int tensor length == total_qubits
-                qml.BasisState(input_bits, wires=range(self.total_qubits))
+                qml.BasisState(input_bits, wires=self.input_indexes)
+
             elif input_mode == "angle":
                 # expects float tensor on "input" register wires
                 # encode x_i in [0,1] -> RY(pi*x_i) (common, stable)
-
                 for i, w in enumerate(self.input_indexes):
                     qml.RY(torch.pi * input_bits[i], wires=w)
+
+            elif input_mode == "amplitude":
+                # expects float tensor of length 2**len(in_wires)
+                qml.AmplitudeEmbedding(
+                    features=input_bits,
+                    wires=self.input_indexes,
+                    normalize=False,
+                    pad_with=0.0,
+                )
             else:
                 raise ValueError(f"Unknown input_mode={input_mode}")
 
@@ -453,17 +469,14 @@ class CircuitGenome:
 
             # 4️⃣ Measurement
             if return_probs:
-                return qml.probs(
-                    # wires=self.register_map["output"]
-                    wires=self.output_indexes
-                )  # shape = [2**len(out_wires)] (real)
+                return qml.probs(wires=self.output_indexes)
             elif measure_registers:
                 # fallback if you want expvals
                 expvals = [
                     qml.expval(qml.PauliZ(w))
                     for w in self.output_indexes  # self.register_map["output"]
                 ]
-                return torch.stack(expvals)
+                return expvals
 
             return qml.state()
 

@@ -1,5 +1,6 @@
 import bisect
 import random
+import json
 
 from functools import cmp_to_key
 from typing import Callable
@@ -12,9 +13,7 @@ import matplotlib.pyplot as plt
 
 from src.circuits.circuit import CircuitGenome
 from src.evolution.population_strategy import PopulationStrategy
-from src.objectives.genome_objectives import (
-    genome_to_torch_params,
-)
+from src.utils.helpers import genome_to_torch_params
 
 
 class SteadyStatePopulation(PopulationStrategy):
@@ -38,6 +37,7 @@ class SteadyStatePopulation(PopulationStrategy):
             compare: a compare function used for sorting genomes. this should return 0 if both
                 genomes should be ranked the same, a negative value if the first genome should
                 come before the second genome, and a positive number otherwise
+            out_dir: is the directory to write out the logs and best found genomes
         """
 
         self.max_population_size = max_population_size
@@ -49,7 +49,15 @@ class SteadyStatePopulation(PopulationStrategy):
         # used to store the population, should be kept in sorted order.
         self.population: list[CircuitGenome] = []
 
-    def get_parent(self, **kwargs) -> CircuitGenome:
+    def is_initializing(self) -> bool:
+        """
+        Returns:
+            True if the population is at max size
+        """
+
+        return len(self.population) >= self.max_population_size
+
+    def get_parent(self, **kwargs) -> (CircuitGenome, dict[str, any]):
         """
         Used to get two or more parents to be used in mutation or
         other operations to generate children.
@@ -61,15 +69,20 @@ class SteadyStatePopulation(PopulationStrategy):
 
         Returns:
             A single CircuitGenome from the population. If the population is empty
-            it will return None.
+            it will return None. The second return value (if a genome is returned)
+            is the metadata for the generated child, which for this strategy is
+            just empty.
         """
 
         if len(self.population) > 0:
-            return random.choice(self.population)
+            metadata = {}
+            return random.choice(self.population), metadata
         else:
-            return None
+            return None, None
 
-    def get_parents(self, n_parents: int = 2, **kwargs) -> list[CircuitGenome]:
+    def get_parents(
+        self, n_parents: int = 2, **kwargs
+    ) -> (list[CircuitGenome], dict[str, any]):
         """
         Used to get two or more parents to be used in crossover or
         other operations to generate children.
@@ -82,15 +95,18 @@ class SteadyStatePopulation(PopulationStrategy):
 
         Returns:
             A list of unique (non-duplicate) CircuitGenomes. If the size of the population
-            is less than n_parents, it will return None.
+            is less than n_parents, it will return None. The second return value (if a
+            genome is returned) is the metadata for the generated child, which for this
+            strategy is just empy.
         """
         if len(self.population) >= n_parents:
             # sort the parents so the most fit is the first parent
             parents = random.sample(self.population, n_parents)
             parents.sort(key=cmp_to_key(self.compare))
-            return parents
+            metadata = {}
+            return parents, metadata
         else:
-            return None
+            return None, None
 
     def insert_genome(self, genome: CircuitGenome, **kwargs) -> bool:
         """
@@ -128,10 +144,16 @@ class SteadyStatePopulation(PopulationStrategy):
             if test_metric is None:
                 test_metric = genome.fitness.get("test_fidelity")
 
-            tag = (
-                f"trainloss_{genome.fitness['train_loss']:.4f}_testloss_"
-                f"{genome.fitness['test_loss']:.4f}_testacc_{test_metric:.3f}"
-            )
+            try:
+                tag = (
+                    f"trainloss_{genome.fitness['train_loss']:.4f}_testloss_"
+                    f"{genome.fitness['test_loss']:.4f}_testacc_{test_metric:.3f}"
+                )
+            except Exception:
+                tag = (
+                    f"best_ep_return_{genome.fitness['best_episode_return']:.4f}_"
+                    f"eval_return_mean_{genome.fitness['eval_return_mean']:.4f}"
+                )
 
             self._save_best_circuit(genome, out_dir=self.out_dir, tag=tag)
 
@@ -150,6 +172,11 @@ class SteadyStatePopulation(PopulationStrategy):
 
         genome.generate_pennylane_circuit(return_probs=True, input_mode="angle")
         # logger.info(f"genome circuit: {genome.circuit}")
+
+        json_path = os.path.join(out_dir, f"genome_{genome.genome_number}.json")
+        logger.info(f"writing NEW BEST gnome to {json_path}")
+        with open(json_path, "w") as json_file:
+            json.dump(genome.to_dict(), json_file, ensure_ascii=False, indent=4)
 
         # --- Text gate list ---
         txt_path = os.path.join(out_dir, f"genome_{genome.genome_number}.txt")

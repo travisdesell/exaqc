@@ -24,24 +24,24 @@ def exponential_crossover(
 
     crossover_depth = random.uniform(0, 1.0)
 
-    logger.info(f"exponential crossover at depth: {crossover_depth}")
+    logger.debug(f"exponential crossover at depth: {crossover_depth}")
 
     # add all gates in p1 with less depth than the crossover gate
     for gate in p1.gates:
-        logger.info(f"p1 gate {gate.innovation_number} at depth: {gate.depth}")
+        logger.debug(f"p1 gate {gate.innovation_number} at depth: {gate.depth}")
         if gate.depth < crossover_depth:
-            logger.info("\tadding!")
+            logger.debug("\tadding!")
             child.add_existing_gate(gate)
         else:
-            logger.info("\tnot adding.")
+            logger.debug("\tnot adding.")
 
     for gate in p2.gates:
-        logger.info(f"p2 gate {gate.innovation_number} at depth: {gate.depth}")
+        logger.debug(f"p2 gate {gate.innovation_number} at depth: {gate.depth}")
         if gate.depth >= crossover_depth:
-            logger.info("\tadding!")
+            logger.debug("\tadding!")
             child.add_existing_gate(gate)
         else:
-            logger.info("\tnot adding.")
+            logger.debug("\tnot adding.")
 
     return child
 
@@ -75,9 +75,9 @@ def binary_crossover(
             randomized line search can potentially go
     """
 
-    logger.info("binary crossover with parents:")
-    logger.info(f"\tp1 fitness: {p1.fitness}")
-    logger.info(f"\tp2 fitness: {p2.fitness}")
+    logger.debug("binary crossover with parents:")
+    logger.debug(f"\tp1 fitness: {p1.fitness}")
+    logger.debug(f"\tp2 fitness: {p2.fitness}")
 
     # get the random value for the randomized simplex line search
     r = (random.uniform(0.0, 1.0) * (c2 - c1)) + c1
@@ -86,17 +86,19 @@ def binary_crossover(
     for gate in p1.gates:
         best_gates_by_innovation[gate.innovation_number] = gate
 
-    logger.info(f"best parent has {len(p1.gates)}: {best_gates_by_innovation.keys()}")
+    logger.debug(f"best parent has {len(p1.gates)}: {best_gates_by_innovation.keys()}")
 
     other_gates_by_innovation = {}
     for gate in p2.gates:
         other_gates_by_innovation[gate.innovation_number] = gate
-    logger.info(f"other parent has {len(p2.gates)}: {other_gates_by_innovation.keys()}")
+    logger.debug(
+        f"other parent has {len(p2.gates)}: {other_gates_by_innovation.keys()}"
+    )
 
     # add gates from the best fit parent to the child
     for i, gate in best_gates_by_innovation.items():
         if i in other_gates_by_innovation.keys():
-            logger.info(f"adding gate innovation {i} because it is in both parents")
+            logger.debug(f"adding gate innovation {i} because it is in both parents")
             # this gate is in the other circuit, always add it
             child_gate = gate.copy()
 
@@ -115,7 +117,7 @@ def binary_crossover(
 
                     child_gate.parameters[p] = line_search_value
 
-                    logger.info(
+                    logger.debug(
                         f"setting parameter {p} to {line_search_value}, p1 value: {v}, "
                         f"p2 value: {other_gate.parameters[p]}, r was: {r}"
                     )
@@ -130,7 +132,7 @@ def binary_crossover(
             # this gate isn't in the other parent but we're randomly
             # selecting to keep it based on the rate. parameters
             # will just be inherited from the parent
-            logger.info(
+            logger.debug(
                 f"adding gate innovation {i} because it is only in best parent but randomly selected"
             )
             child_gate = gate.copy()
@@ -143,7 +145,7 @@ def binary_crossover(
             # this gate isn't in the best fit parent but we're randomly
             # selecting to keep it based on the rate. parameters
             # will just be inherited from the parent
-            logger.info(
+            logger.debug(
                 f"adding gate innovation {i} because it is only in other parent but randomly selected"
             )
             child_gate = gate.copy()
@@ -151,7 +153,7 @@ def binary_crossover(
 
     child_gate_innovations = [gate.innovation_number for gate in child.gates]
 
-    logger.info(f"child genome has {len(child.gates)} gates: {child_gate_innovations}")
+    logger.debug(f"child genome has {len(child.gates)} gates: {child_gate_innovations}")
 
     return child
 
@@ -185,27 +187,27 @@ def n_ary_crossover(
             the  randomized line search can potentially go.
     """
 
-    logger.info("doing n-ary crossover")
-    logger.info("parent fitnesses now:")
+    logger.debug("doing n-ary crossover")
+    logger.debug("parent fitnesses now:")
     for parent in parents:
-        logger.info(f"\t{parent.fitness}")
+        logger.debug(f"\t{parent.fitness}")
 
     primary = parents[0]
     others = parents[1:]
-    logger.info(f"primary fitnesses: {primary.fitness}")
+    logger.debug(f"primary fitnesses: {primary.fitness}")
     for other in others:
-        logger.info(f"other fitness: {parent.fitness}")
+        logger.debug(f"other fitness: {parent.fitness}")
 
     # get the random value for the randomized simplex line search
     r = (random.uniform(0.0, 1.0) * (c2 - c1)) + c1
 
-    logger.info(f"r for randomized line search: {r}")
+    logger.debug(f"r for randomized line search: {r}")
 
     primary_gates_by_innovation: dict[int, Gate] = {}
     for gate in primary.gates:
         primary_gates_by_innovation[gate.innovation_number] = gate
 
-    logger.info(
+    logger.debug(
         f"primary parent has {len(primary.gates)}: {primary_gates_by_innovation.keys()}"
     )
 
@@ -218,17 +220,17 @@ def n_ary_crossover(
                 other_gates_by_innovation[gate.innovation_number] = []
             other_gates_by_innovation[gate.innovation_number].append(gate)
 
-    logger.info(
+    logger.debug(
         f"other parents have {len(other_gates_by_innovation)} gates: {other_gates_by_innovation.keys()}"
     )
-    logger.info("other gate counts by innovation number:")
+    logger.debug("other gate counts by innovation number:")
     for i, gate_list in other_gates_by_innovation.items():
-        logger.info(f"\t{i} - {len(gate_list)}")
+        logger.debug(f"\t{i} - {len(gate_list)}")
 
     # add gates from the best fit parent to the child
     for i, gate in primary_gates_by_innovation.items():
         if i in other_gates_by_innovation.keys():
-            logger.info(f"adding gate innovation {i} because it is in both parents")
+            logger.debug(f"adding gate innovation {i} because it is in both parents")
             # this gate is in the other circuit, always add it
             child_gate = gate.copy()
 
@@ -252,7 +254,7 @@ def n_ary_crossover(
 
                     child_gate.parameters[p] = line_search_value
 
-                    logger.info(
+                    logger.debug(
                         f"setting parameter {p} to {line_search_value}, p1 value: {v}, "
                         f"other gates avg value: {avg_value}, r was: {r}"
                     )
@@ -267,7 +269,7 @@ def n_ary_crossover(
             # this gate isn't in the other parent but we're randomly
             # selecting to keep it based on the rate. parameters
             # will just be inherited from the parent
-            logger.info(
+            logger.debug(
                 f"adding gate innovation {i} because it is only in best parent but randomly selected"
             )
             child_gate = gate.copy()
@@ -279,7 +281,7 @@ def n_ary_crossover(
         if random.uniform(0.0, 1.0) < other_keep_rate:
             # this gate isn't in the primary primary but we're randomly
             # selecting to keep it based on the rate.
-            logger.info(
+            logger.debug(
                 f"adding gate innovation {i} because it is only in other parent but randomly selected"
             )
             child_gate = gate_list[0].copy()
@@ -310,7 +312,7 @@ def n_ary_crossover(
 
                     child_gate.parameters[p] = avg_value
 
-                    logger.info(
+                    logger.debug(
                         f"setting parameter {p} to avg of gate values {avg_value} - other values: {other_values}"
                     )
 
@@ -318,6 +320,6 @@ def n_ary_crossover(
 
     child_gate_innovations = [gate.innovation_number for gate in child.gates]
 
-    logger.info(f"child genome has {len(child.gates)} gates: {child_gate_innovations}")
+    logger.debug(f"child genome has {len(child.gates)} gates: {child_gate_innovations}")
 
     return child
