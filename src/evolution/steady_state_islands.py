@@ -18,6 +18,7 @@ from src.objectives.genome_objectives import (
 )
 from src.utils.profiler import EXAQCProfiler
 
+
 class Island:
 
     def __init__(

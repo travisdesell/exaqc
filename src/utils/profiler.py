@@ -302,7 +302,9 @@ class EXAQCProfiler:
         self,
         *,
         out_dir: str,
-        fitness_fn: Callable[[CircuitGenome], tuple[float, str]] = default_fitness_extractor,
+        fitness_fn: Callable[
+            [CircuitGenome], tuple[float, str]
+        ] = default_fitness_extractor,
         topk: int = 5,
     ):
         """Initialize the profiler.
@@ -566,7 +568,9 @@ class EXAQCProfiler:
         if not paths:
             raise FileNotFoundError(f"No CSVs matched: {csv_glob}")
 
-        runs = [EXAQCProfiler._load_csv(path) for path in paths if path.endswith(".csv")]
+        runs = [
+            EXAQCProfiler._load_csv(path) for path in paths if path.endswith(".csv")
+        ]
 
         step_sets = [{int(row["step"]) for row in run} for run in runs]
         common_steps = sorted(set.intersection(*step_sets))
