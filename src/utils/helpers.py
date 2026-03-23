@@ -7,7 +7,6 @@ from loguru import logger
 
 from src.circuits.circuit import CircuitGenome
 
-
 GATE_COMPLEXITY = {
     "id": {"gate_count": 1, "cnot_count": 0, "rot_count": 0},
     "h": {"gate_count": 1, "cnot_count": 0, "rot_count": 0},
