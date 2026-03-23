@@ -6,6 +6,7 @@ import sys
 from loguru import logger
 
 from src.evolution.master_worker import master_worker
+from src.evolution.steady_state_islands import SteadyStateIslands
 from src.evolution.steady_state_population import SteadyStatePopulation
 from src.evolution.objective import Objective
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
@@ -204,7 +205,8 @@ if __name__ == "__main__":
         "--out_dir",
         type=str,
         default="artifacts",
-        help="Output directory to store results from runs",
+        help="Output directory to store results from runs; "
+        "make sure to mention the run number as 'run#' at the end",
     )
 
     # Evolution
@@ -215,7 +217,30 @@ if __name__ == "__main__":
     p.add_argument("--input_qubits", type=int, default=6)
     p.add_argument("--output_qubits", type=int, default=None)
 
-    # RL hyperparameters
+    # Islands
+    subparsers = p.add_subparsers(
+        dest="population_strategy",
+        help="Specify how genomes will be handled.",
+        required=True,
+    )
+
+    steady_state_parser = subparsers.add_parser(
+        "steady_state", help="Use a single steady state population."
+    )
+    steady_state_parser.add_argument("--max_population_size", type=int, default=30)
+
+    islands_parser = subparsers.add_parser(
+        "islands", help="Use multiple islands of steady state opulations."
+    )
+    islands_parser.add_argument("--n_islands", type=int, default=10)
+    islands_parser.add_argument("--max_island_size", type=int, default=10)
+    islands_parser.add_argument("--genomes_before_extinction", type=int, default=200)
+    islands_parser.add_argument("--islands_to_extinct", type=int, default=1)
+    islands_parser.add_argument(
+        "--intra_island_crossover_rate", type=float, default=0.5
+    )
+
+    # RL hyperparams
     p.add_argument("--episodes", type=int, default=80)
     p.add_argument("--eval_episodes", type=int, default=10)
     p.add_argument("--max_steps", type=int, default=500)
@@ -370,13 +395,29 @@ if __name__ == "__main__":
         f"output_registers={output_registers}"
     )
 
-    master_worker(
-        gate_specifications=pennylane_gate_specifications,
-        population=SteadyStatePopulation(
+    population = None
+    print(f"args.population_strategy: {args.population_strategy}")
+
+    if args.population_strategy == "steady_state":
+        population = SteadyStatePopulation(
             max_population_size=args.max_population_size,
             compare=compare,
             out_dir=args.out_dir,
-        ),
+        )
+    elif args.population_strategy == "islands":
+        population = SteadyStateIslands(
+            n_islands=args.n_islands,
+            max_island_size=args.max_island_size,
+            genomes_before_extinction=args.genomes_before_extinction,
+            islands_to_extinct=args.islands_to_extinct,
+            compare=compare,
+            out_dir=args.out_dir,
+        )
+
+    # run
+    master_worker(
+        gate_specifications=pennylane_gate_specifications,
+        population=population,
         objective=objective,
         hyperparameters=hyperparameters,
         run_for=args.number_genomes,

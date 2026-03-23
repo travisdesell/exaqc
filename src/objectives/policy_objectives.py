@@ -979,8 +979,10 @@ def train_reinforce(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
         ev = eval_policy(genome, spec=spec, deterministic=True, seed=spec.seed + 999)
         genome.fitness = {
             "note": "no trainable params",
+            "train_return_mean": ev["eval_return_mean"],
             "best_episode_return": ev["eval_return_mean"],
             **ev,
+            "env_id": spec.env_id,
         }
         return genome
 
@@ -1085,6 +1087,7 @@ def train_actor_critic(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
         ev = eval_policy(genome, spec=spec, deterministic=True, seed=spec.seed + 999)
         genome.fitness = {
             "note": "no trainable params",
+            "train_return_mean": ev["eval_return_mean"],
             "best_episode_return": ev["eval_return_mean"],
             **ev,
             "env_id": spec.env_id,
@@ -1297,6 +1300,7 @@ def train_ppo(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
         ev = eval_policy(genome, spec=spec, deterministic=True, seed=spec.seed + 999)
         genome.fitness = {
             "note": "no trainable params",
+            "train_return_mean": ev["eval_return_mean"],
             "best_episode_return": ev["eval_return_mean"],
             **ev,
             "env_id": spec.env_id,

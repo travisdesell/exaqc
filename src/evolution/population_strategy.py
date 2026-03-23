@@ -6,7 +6,19 @@ from src.circuits.circuit import CircuitGenome
 class PopulationStrategy(ABC):
 
     @abstractmethod
-    def get_parent(self, **kwargs) -> CircuitGenome:
+    def is_initializing(self) -> bool:
+        """
+        Used to determine if the strategy is still initializing so EXAQC
+        can continue to generate genomes from the seed genome.
+
+        Returns:
+            True if the population strategy is still initializing (i.e., its
+            population or populations are not all full).
+        """
+        pass
+
+    @abstractmethod
+    def get_parent(self, **kwargs) -> tuple[CircuitGenome, dict[str, any]]:
         """
         Used to get a single to be used in mutation or
         other operations to generate children.
@@ -18,12 +30,16 @@ class PopulationStrategy(ABC):
 
         Returns:
             A single CircuitGenome from the population or None if the population
-            is empty or it is not possible to get a parent.
+            is empty or it is not possible to get a parent. The second return
+            value is a dictionary of metadata (which can be empty) for the child
+            to be generated from these parents.
         """
         pass
 
     @abstractmethod
-    def get_parents(self, n_parents: int = 2, **kwargs) -> list[CircuitGenome]:
+    def get_parents(
+        self, n_parents: int = 2, **kwargs
+    ) -> tuple[list[CircuitGenome], dict[str, any]]:
         """
         Used to get two or more parents to be used in crossover or
         other operations to generate children.
@@ -36,7 +52,9 @@ class PopulationStrategy(ABC):
 
         Returns:
             A list of unique (non-duplicate) CircuitGenomes. If the size of the population
-            is less than n_parents, it will return None.
+            is less than n_parents, it will return None. The second return
+            value is a dictionary of metadata (which can be empty) for the child
+            to be generated from these parents.
         """
         pass
 

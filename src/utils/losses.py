@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from typing import Sequence, Union
-
 import torch
+
+from typing import Sequence, Union, Callable
+
+# from loguru import logger
 
 InputState = Union[str, Sequence[int]]
 
@@ -48,7 +50,9 @@ def marginal_probs_from_statevector(
     return probs_marg.reshape(-1)
 
 
-def fidelity(phi: torch.Tensor, psi: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+def fidelity(
+    phi: torch.Tensor, psi: torch.Tensor, eps: float = 1e-12, **kwargs
+) -> torch.Tensor:
     """Compute the quantum state fidelity between two pure states.
 
     Fidelity is defined as:
@@ -192,9 +196,7 @@ def loss_obs_mse(phi: torch.Tensor, psi: torch.Tensor, **kwargs) -> torch.Tensor
 
 
 def loss_ce(
-    phi: torch.Tensor,
-    psi: torch.Tensor,
-    eps: float = 1e-12,
+    phi: torch.Tensor, psi: torch.Tensor, eps: float = 1e-12, **kwargs
 ) -> torch.Tensor:
     """Compute mean-squared error between observable outputs.
 
@@ -213,20 +215,85 @@ def loss_ce(
     phi = phi / (phi.sum() + eps)
     psi = psi / (psi.sum() + eps)
     phi = phi.to(dtype=psi.dtype, device=psi.device)
-    return -(phi * torch.log(psi.clamp_min(eps))).mean()
+    return -(phi * torch.log(psi.clamp_min(eps))).sum()
 
 
 def ce_onehot_on_probs(
-    probs: torch.Tensor, y_onehot: torch.Tensor, eps: float = 1e-12
+    probs: torch.Tensor, y_onehot: torch.Tensor, eps: float = 1e-12, **kwargs
 ) -> torch.Tensor:
     """
-    probs: shape [K], real, sums to 1 (we’ll enforce)
-    y_onehot: shape [K], real one-hot
+    This computes cross entropy loss on the quantum state probabilities against each class
+
+    Args:
+        probs: The state probabilities, shape [K], real, sums to 1
+        y_onehot: The encoded classes, shape [K], real one-hot
+
+    Returns:
+        A scalar tensor denoting the cross-entropy loss
     """
     probs = probs.clamp_min(eps)
     probs = probs / probs.sum()
     y_onehot = y_onehot.to(dtype=probs.dtype, device=probs.device)
-    return -(y_onehot * torch.log(probs)).mean()
+    return -(y_onehot * torch.log(probs)).sum()
+
+
+def balanced_ce_onehot_on_probs(
+    probs: torch.Tensor,
+    y_onehot: torch.Tensor,
+    alpha_per_class: torch.Tensor,
+    eps: float = 1e-12,
+    **kwargs,
+) -> torch.Tensor:
+    """
+    This computes the balance cross entropy loss
+    Args:
+        probs: shape [K], real (not necessarily normalized)
+        y_onehot: shape [K], one-hot (or soft labels)
+        alpha_per_class: shape [K], per-class weights (e.g., inverse freq)
+
+    Returns:
+        A scalar tensor denoting the balanced cross entropy loss
+    """
+    probs = probs.clamp_min(eps)
+    probs = probs / probs.sum()
+
+    y_onehot = y_onehot.to(dtype=probs.dtype, device=probs.device)
+    # alpha_per_class = alpha_per_class.to(dtype=probs.dtype, device=probs.device)
+
+    # logger.info(f"CALCULATING LOSS: y_onehot: {y_onehot}, probs: {probs}, alpha_per_class: {alpha_per_class}")
+
+    return -(alpha_per_class * y_onehot * torch.log(probs)).sum()
+
+
+def focal_onehot_on_probs(
+    probs: torch.Tensor,
+    y_onehot: torch.Tensor,
+    alpha_per_class: torch.Tensor,
+    gamma: float = 2.0,
+    eps: float = 1e-12,
+    **kwargs,
+) -> torch.Tensor:
+    """
+    This computes the alpha balanced focal loss
+
+    Args:
+        probs: shape [K], real (not necessarily normalized)
+        y_onehot: shape [K], one-hot (or soft labels)
+        alpha_per_class: shape [K], per-class alpha weights
+        gamma: focusing parameter (>= 0)
+
+    Returns:
+        A scalar tensor denoting the loss
+    """
+    probs = probs.clamp_min(eps)
+    probs = probs / probs.sum()
+
+    y_onehot = y_onehot.to(dtype=probs.dtype, device=probs.device)
+    alpha_per_class = alpha_per_class.to(dtype=probs.dtype, device=probs.device)
+
+    focal_factor = (1.0 - probs).pow(gamma)
+
+    return -(alpha_per_class * y_onehot * focal_factor * torch.log(probs)).sum()
 
 
 def loss_readout_ce_from_state(
@@ -236,6 +303,7 @@ def loss_readout_ce_from_state(
     readout_wires: list[int] = None,
     n_classes: int = 3,
     eps: float = 1e-12,
+    **kwargs,
 ) -> torch.Tensor:
     """Compute mean-squared error between observable outputs.
 
@@ -259,3 +327,14 @@ def loss_readout_ce_from_state(
     )  # [4]
     psi = psi[:n_classes]
     return loss_ce(phi, psi, eps=eps)
+
+
+LOSS_REGISTRY: dict[str, Callable[..., torch.Tensor]] = {
+    "fidelity": loss_one_minus_fidelity,
+    "angle": loss_state_angle,
+    "kl": loss_kl_divergence,
+    "mse": loss_obs_mse,
+    "ce": ce_onehot_on_probs,
+    "bce": balanced_ce_onehot_on_probs,
+    "focal": focal_onehot_on_probs,
+}
