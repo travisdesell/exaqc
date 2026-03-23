@@ -1,8 +1,8 @@
 #!/bin/bash -l
 #SBATCH -J minigrid
-#SBATCH -t 2-00:00:00
-#SBATCH -o ./outs/minigrid_empty/output.o
-#SBATCH -e ./logs/minigrid_empty/error.e
+#SBATCH -t 3-00:00:00
+#SBATCH -o ./outs/minigrid_empty_i/output.o
+#SBATCH -e ./logs/minigrid_empty_i/error.e
 #SBATCH -A cps -p tier3
 #SBATCH --nodes=1
 #SBATCH --ntasks=12
@@ -15,7 +15,7 @@ spack env activate default-ml-x86_64-25052701
 
 source .venv/bin/activate
 
-for i in $(seq 1 1); do
+for i in $(seq 1 10); do
     echo "Starting run ${i}"
     srun python3 -m src.examples.pl_reinforce \
     --env minigrid \
@@ -28,6 +28,10 @@ for i in $(seq 1 1); do
     --ppo_minibatch 64 \
     --input_qubits 6 \
     --output_qubits 3 \
-    --out_dir artifacts/minigrid_empty/runs/${i}
+    --out_dir artifacts/minigrid_empty/islands/runs/${i} \
+    islands --n_islands 10 --max_island_size 3
     echo "Completed run ${i}"
 done
+
+# steady_state \
+# --max_population_size 30

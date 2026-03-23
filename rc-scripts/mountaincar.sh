@@ -15,15 +15,19 @@ spack env activate default-ml-x86_64-25052701
 
 source .venv/bin/activate
 
-srun python -m src.examples.pl_reinforce \
-  --env mountaincar_continuous \
-  --algo ppo \
-  --episodes 100 \
-  --learning_rate 3e-4 \
-  --rollout_steps 1024 \
-  --ppo_epochs 10 \
-  --ppo_minibatch 128 \
-  --max_steps 1000 \
-  --input_qubits 2 \
-  --output_qubits 2 \
-  --out_dir artifacts/mountaincar_continuous/run/1
+for i in $(seq 1 10); do
+  srun python -m src.examples.pl_reinforce \
+    --env mountaincar_continuous \
+    --algo ppo \
+    --episodes 100 \
+    --learning_rate 3e-4 \
+    --rollout_steps 1024 \
+    --ppo_epochs 10 \
+    --ppo_minibatch 128 \
+    --max_steps 1000 \
+    --input_qubits 2 \
+    --output_qubits 2 \
+    --out_dir artifacts/mountaincar_continuous/pop/runs/${i} \
+    steady_state \
+    --max_population_size 30
+done

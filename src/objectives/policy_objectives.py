@@ -1984,3 +1984,103 @@ def minigrid_spec(
         target_kl=0.02,
         env_kwargs=env_kwargs,
     )
+
+
+def lunarlander_spec(
+    *,
+    episodes: int = 200,
+    lr: float = 3e-4,
+    seed: int = 0,
+    algo: str = "ppo",
+) -> RLSpec:
+    """
+    Ready-to-use spec for LunarLander-v3.
+
+    Observation:
+        8D Box state
+    Action space:
+        Discrete(4)
+    """
+    # Rough observation magnitudes based on documented bounds and practical clipping.
+    # State components are:
+    # x, y, vx, vy, angle, angular_velocity, left_leg_contact, right_leg_contact
+    scales = np.array([2.5, 2.5, 10.0, 10.0, np.pi, 10.0, 1.0, 1.0], dtype=np.float32)
+
+    def encoder(obs):
+        return encode_box_to_unit_interval(obs, scales=scales)
+
+    return RLSpec(
+        env_id="LunarLander-v3",
+        n_actions=4,
+        algo=algo,
+        action_space="discrete",
+        input_mode="angle",
+        return_expvals=True,
+        obs_encoder=encoder,
+        box_scales=scales,
+        episodes=episodes,
+        lr=lr,
+        seed=seed,
+        max_steps=1000,
+        eval_episodes=10,
+        rollout_steps=2048,
+        ppo_epochs=10,
+        ppo_minibatch=256,
+        entropy_coef=0.01,
+        value_coef=0.5,
+        gae_lambda=0.95,
+        ppo_clip=0.2,
+        target_kl=0.02,
+    )
+
+
+def pendulum_spec(
+    *,
+    episodes: int = 200,
+    lr: float = 3e-4,
+    seed: int = 0,
+    algo: str = "ppo",
+) -> RLSpec:
+    """
+    Ready-to-use spec for Pendulum-v1.
+
+    Observation:
+        [cos(theta), sin(theta), theta_dot]
+    Action space:
+        Box(shape=(1,), low=-2.0, high=2.0)
+    """
+    # cos(theta), sin(theta), theta_dot
+    scales = np.array([1.0, 1.0, 8.0], dtype=np.float32)
+
+    def encoder(obs):
+        return encode_box_to_unit_interval(obs, scales=scales)
+
+    return RLSpec(
+        env_id="Pendulum-v1",
+        n_actions=1,  # continuous action dim
+        algo=algo,
+        action_space="continuous",
+        action_low=np.array([-2.0], dtype=np.float32),
+        action_high=np.array([2.0], dtype=np.float32),
+        clip_actions=True,
+        input_mode="angle",
+        return_expvals=True,
+        obs_encoder=encoder,
+        box_scales=scales,
+        episodes=episodes,
+        lr=lr,
+        seed=seed,
+        max_steps=200,
+        eval_episodes=10,
+        rollout_steps=2048,
+        ppo_epochs=10,
+        ppo_minibatch=256,
+        entropy_coef=0.0,
+        value_coef=0.5,
+        gae_lambda=0.95,
+        ppo_clip=0.2,
+        target_kl=0.02,
+        init_log_std=-0.5,
+        learn_std=True,
+        shared_std=True,
+    )

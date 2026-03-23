@@ -210,7 +210,6 @@ if __name__ == "__main__":
     )
 
     # Evolution
-    p.add_argument("--max_population_size", type=int, default=30)
     p.add_argument("--number_genomes", type=int, default=500)
 
     # Registers
