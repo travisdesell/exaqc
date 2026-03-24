@@ -22,7 +22,7 @@ from src.objectives.genome_objectives import (
 )
 from src.utils.helpers import genome_to_torch_params
 from src.utils.helpers import register_wire_map
-from src.quantum_datasets import QuantumTeacherDataset
+from src.datasets.quantum import QuantumTeacherDataset
 
 
 # ---------------------------------------------------------------------
@@ -311,6 +311,7 @@ if __name__ == "__main__":
             max_population_size=args.max_population_size,
             compare=compare,
             out_dir=args.out_dir,
+            fitness_mode="min",
         ),
         objective=objective,
         hyperparameters=hyperparameters,

@@ -12,7 +12,6 @@ import numpy as np
 
 from src.evolution.master_worker import master_worker
 
-# from src.evolution.exaqc import EXAQC
 from src.evolution.steady_state_islands import SteadyStateIslands
 from src.evolution.steady_state_population import SteadyStatePopulation
 from src.evolution.objective import Objective
@@ -23,13 +22,13 @@ from src.objectives.genome_objectives import (
 )
 from src.utils.helpers import genome_to_torch_params
 from src.utils.losses import LOSS_REGISTRY
-from src.quantum_datasets import (
+from src.datasets.classification import (
     IrisDataset,
     WineDataset,
     SeedsDataset,
     BreastCancerDataset,
-    QuantumDataset,
 )
+from src.datasets import QuantumDataset
 
 # ---------------------------------------------------------------------
 # Prediction + evaluation helpers

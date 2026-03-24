@@ -7,7 +7,7 @@ from src.circuits.registers import expand_registers
 from src.objectives.genome_objectives import (
     train_genome_objective,
 )
-from src.quantum_datasets import (
+from src.datasets.classification import (
     IrisDataset,
     WineDataset,
     SeedsDataset,

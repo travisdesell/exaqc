@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 from typing import Tuple
-from .base import QuantumDataset
+from src.datasets.base import QuantumDataset
 import numpy as np
 
 

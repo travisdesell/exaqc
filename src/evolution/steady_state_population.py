@@ -3,7 +3,7 @@ import random
 import json
 
 from functools import cmp_to_key
-from typing import Callable
+from typing import Callable, Optional
 
 from loguru import logger
 import os
@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 from src.circuits.circuit import CircuitGenome
 from src.evolution.population_strategy import PopulationStrategy
 from src.utils.helpers import genome_to_torch_params
+from src.utils.profiler import EXAQCProfiler
 
 
 class SteadyStatePopulation(PopulationStrategy):
@@ -23,6 +24,7 @@ class SteadyStatePopulation(PopulationStrategy):
         max_population_size: int,
         compare: Callable[[CircuitGenome, CircuitGenome], int],
         out_dir: str = "artifacts",
+        profiler: Optional[EXAQCProfiler] = None,
     ):
         """
         Creates a steady state population with the specified max population size.  The population
@@ -38,6 +40,7 @@ class SteadyStatePopulation(PopulationStrategy):
                 genomes should be ranked the same, a negative value if the first genome should
                 come before the second genome, and a positive number otherwise
             out_dir: is the directory to write out the logs and best found genomes
+            profiler: A profiler class for recording execution steps to plot later
         """
 
         self.max_population_size = max_population_size
@@ -49,6 +52,12 @@ class SteadyStatePopulation(PopulationStrategy):
         # used to store the population, should be kept in sorted order.
         self.population: list[CircuitGenome] = []
 
+        self.profiler = profiler
+        if self.profiler is None:
+            self.profiler = EXAQCProfiler(
+                out_dir=out_dir,
+            )
+
     def is_initializing(self) -> bool:
         """
         Returns:
@@ -57,7 +66,7 @@ class SteadyStatePopulation(PopulationStrategy):
 
         return len(self.population) < self.max_population_size
 
-    def get_parent(self, **kwargs) -> (CircuitGenome, dict[str, any]):
+    def get_parent(self, **kwargs) -> tuple[CircuitGenome, dict[str, any]]:
         """
         Used to get two or more parents to be used in mutation or
         other operations to generate children.
@@ -82,7 +91,7 @@ class SteadyStatePopulation(PopulationStrategy):
 
     def get_parents(
         self, n_parents: int = 2, **kwargs
-    ) -> (list[CircuitGenome], dict[str, any]):
+    ) -> tuple[list[CircuitGenome], dict[str, any]]:
         """
         Used to get two or more parents to be used in crossover or
         other operations to generate children.
@@ -134,6 +143,9 @@ class SteadyStatePopulation(PopulationStrategy):
 
         self.insertions += 1
 
+        if self.profiler is not None:
+            self.profiler.record(step=self.insertions, population=self.population)
+
         if genome.genome_number == self.population[0].genome_number:
             # this was a new global best genome
             logger.success(
@@ -156,6 +168,7 @@ class SteadyStatePopulation(PopulationStrategy):
                 )
 
             self._save_best_circuit(genome, out_dir=self.out_dir, tag=tag)
+            self.profiler.plot_single_run()
 
         if len(self.population) > self.max_population_size:
             # remove the last genome from the population
