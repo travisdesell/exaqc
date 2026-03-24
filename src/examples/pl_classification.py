@@ -130,6 +130,7 @@ def compare(genome1: CircuitGenome, genome2: CircuitGenome) -> int:
     # genome2 (genome1's fitness would be lower), and positive if genome2 should be before
     # genome1 (genome2's fitness would be lower)
     return genome1.fitness["test_loss"] - genome2.fitness["test_loss"]
+    # return genome2.fitness["test_acc"] - genome1.fitness["test_acc"]
 
 
 class ClassificationObjective(Objective):

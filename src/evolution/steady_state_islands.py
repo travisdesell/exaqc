@@ -44,6 +44,7 @@ class Island:
 
         self.population: list[CircuitGenome] = []
         self.status = "initializing"
+        self.repopulation_genome_number = 0
 
     def is_initializing(self) -> bool:
         """
@@ -52,6 +53,18 @@ class Island:
         """
 
         return self.status == "initializing"
+
+    def repopulate(self, repopulation_genome_number: int):
+        """
+        Removes all genomes from this island and sets its status
+        to repopulating. Also sets the repopulation genome number
+        so any genomes generated from before repopoulation are discarded
+        unless they are a new global best.
+        """
+
+        self.status = "repopulating"
+        self.repopulation_genome_number = repopulation_genome_number
+        self.population = []
 
     def get_parent(self, **kwargs) -> CircuitGenome:
         """
@@ -114,6 +127,12 @@ class Island:
         # 1. if gate innovation numbers are the same, keep the genome with better fitness
         # 2. if gate innovation numbers are the same but fitness different, keep both
 
+        if genome.genome_number < self.repopulation_genome_number and not (hasattr(genome.metadata, 'global_best') and genome.metadata['global_best'] is True):
+            # discard genomes that were generated from before the island was repopulated unless they
+            # were a new global best
+            logger.info("discarding genome with number {genome.genome_number} as it was less than the repopulation genome number: {self.repopulation_genome_number} and was not global best, metadata: {genome.metadata}")
+            return
+
         bisect.insort(
             self.population,
             genome,
@@ -138,6 +157,22 @@ class Island:
         if len(self.population) > self.max_size:
             # remove the last genome from the population
             del self.population[-1]
+
+def island_compare(island1: Island, island2: Island) -> int:
+        """
+        Used to sort genomes by fitness, even if there are multiple objectives, for population
+        management and crossover methods.
+
+        Args:
+            island1: will compare the best (genome in slot 0 of the island) of this island to the other island
+            island2: the second genome to comapre to
+
+        Returns: 0 if the two best genomes in the islands have equivalent fitnesses, a negative value if 
+            island1.population[0] should be sorted before island2.population[0], and a positive value if 
+            island2.population[0] should be sorted before island1.population[0] 
+        """
+
+        return island1.compare(island1.population[0], island2.population[0])
 
 
 class SteadyStateIslands(PopulationStrategy):
@@ -233,8 +268,12 @@ class SteadyStateIslands(PopulationStrategy):
         metadata = {"target_island_id": target_island.id}
 
         if target_island.status == "repopulating":
-            # get parent from best island
-            return random.choice(self.best_island.population), metadata
+            if len(self.best_island.population) > 0:
+                # get parent from best island
+                return random.choice(self.best_island.population), metadata
+            else:
+                # use the global best genome
+                return self.global_best_genome, metadata
 
         elif len(target_island.population) > 0:
             return random.choice(target_island.population), metadata
@@ -324,6 +363,7 @@ class SteadyStateIslands(PopulationStrategy):
         """
 
         target_island = None
+        current_genome_number = kwargs['current_genome_number']
 
         if not hasattr(genome.metadata, "target_island_id"):
             # genome was generated without metadata for a target island which
@@ -356,19 +396,19 @@ class SteadyStateIslands(PopulationStrategy):
             # from the metadata
             target_island = self.islands[genome.metadata["target_island_id"]]
 
-        logger.debug(f"target island id: {target_island.id}")
-        target_island.insert_genome(genome)
-        self.insertions += 1
-
-        if self.insertions > 0 and (self.insertions % self.genomes_before_extinction) == 0:
-            # perform island repopulation
-            c = 10
-
+        # check to see if the genome was a new global best
         if (
             self.global_best_genome is None
             or self.compare(self.global_best_genome, genome) > 0
         ):
             self.global_best_genome = genome
+            # set its metadata as global best so we can use this during repopulation
+            # on the chance it would be discarded due to being generated from before
+            # the island was repopulated
+            self.global_best_genome.metadata['global_best'] = True
+
+            # update the best island to the island of this genome
+            self.best_island = target_island
 
             # this was a new global best genome
             logger.success(
@@ -387,6 +427,33 @@ class SteadyStateIslands(PopulationStrategy):
 
             if self.out_dir is not None:
                 self._save_best_circuit(genome, out_dir=self.out_dir, tag=tag)
+
+
+        logger.debug(f"target island id: {target_island.id}")
+        target_island.insert_genome(genome)
+        self.insertions += 1
+
+        if self.insertions > 0 and (self.insertions % self.genomes_before_extinction) == 0:
+            # perform island repopulation
+            full_islands = [island for island in self.islands if island.status == "full"]
+
+            logger.info(f"REPOPULATING AT ITERATION {self.insertions}")
+            logger.info(f"\tisland strategy has {len(full_islands)} full islands, repopulating {self.islands_to_extinct}")
+
+            # the worst islands should be sorted first
+            full_islands.sort(key=cmp_to_key(island_compare), reverse=True)
+            logger.info("\tsorted full islands!")
+
+            removed = 0
+            while removed < self.islands_to_extinct and len(full_islands) > 0:
+                # remove up to islands_to_extinct islands (less if we don't have enough
+                # full populations)
+                target_island = full_islands[removed]
+
+                logger.info(f"\trepopulating island {target_island.id}, with genome[0] fitness: {target_island.population[0].fitness}")
+
+                target_island.repopulate(repopulation_genome_number=current_genome_number)
+                removed += 1
 
     def _save_best_circuit(
         self, genome: CircuitGenome, out_dir: str = "artifacts/", tag: str = ""

@@ -55,7 +55,7 @@ class SteadyStatePopulation(PopulationStrategy):
             True if the population is at max size
         """
 
-        return len(self.population) >= self.max_population_size
+        return len(self.population) < self.max_population_size
 
     def get_parent(self, **kwargs) -> (CircuitGenome, dict[str, any]):
         """

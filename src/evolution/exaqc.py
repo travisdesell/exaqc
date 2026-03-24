@@ -277,6 +277,10 @@ class EXAQC:
 
                 if r < binary_crossover_rate:
                     parents, metadata = self.population.get_parents(2)
+
+                    if parents is None:
+                        continue
+
                     child = CircuitGenome(
                         genome_number=None,
                         target=self.target,
@@ -292,6 +296,10 @@ class EXAQC:
 
                 elif r < n_ary_cutoff:
                     parents, metadata = self.population.get_parents(n_ary_parents)
+
+                    if parents is None:
+                        continue
+
                     child = CircuitGenome(
                         genome_number=None,
                         target=self.target,
@@ -304,6 +312,10 @@ class EXAQC:
 
                 elif r < exponential_cutoff:
                     parents, metadata = self.population.get_parents(2)
+
+                    if parents is None:
+                        continue
+
                     child = CircuitGenome(
                         genome_number=None,
                         target=self.target,
@@ -351,7 +363,7 @@ class EXAQC:
         Args:
             genome: is the evaluated genome to insert
         """
-        self.population.insert_genome(genome)
+        self.population.insert_genome(genome, current_genome_number=self.genome_number)
 
     def run_for(
         self,
