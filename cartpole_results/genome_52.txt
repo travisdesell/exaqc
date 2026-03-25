@@ -1,0 +1,6 @@
+Genome 52
+Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
+
+0.142  ry  [('input', 2)]  {'phi': -2.8312705006893566}
+0.354  cy  [('input', 2), ('output', 1)]  {}
+0.899  cry  [('input', 3), ('output', 0)]  {'phi': -1.154172444933929}

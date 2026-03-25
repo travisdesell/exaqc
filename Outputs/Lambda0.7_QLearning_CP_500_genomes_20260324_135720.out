@@ -1,0 +1,23 @@
+/home/sr8685/miniconda3/envs/exaqc/bin/python3: Error while finding module specification for 'src.examples.pl_reinforce' (ModuleNotFoundError: No module named 'src')
+/home/sr8685/miniconda3/envs/exaqc/bin/python3: Error while finding module specification for 'src.examples.pl_reinforce' (ModuleNotFoundError: No module named 'src')
+/home/sr8685/miniconda3/envs/exaqc/bin/python3: Error while finding module specification for 'src.examples.pl_reinforce' (ModuleNotFoundError: No module named 'src')
+/home/sr8685/miniconda3/envs/exaqc/bin/python3: Error while finding module specification for 'src.examples.pl_reinforce' (ModuleNotFoundError: No module named 'src')
+/home/sr8685/miniconda3/envs/exaqc/bin/python3: Error while finding module specification for 'src.examples.pl_reinforce' (ModuleNotFoundError: No module named 'src')
+/home/sr8685/miniconda3/envs/exaqc/bin/python3: Error while finding module specification for 'src.examples.pl_reinforce' (ModuleNotFoundError: No module named 'src')
+/home/sr8685/miniconda3/envs/exaqc/bin/python3: Error while finding module specification for 'src.examples.pl_reinforce' (ModuleNotFoundError: No module named 'src')
+/home/sr8685/miniconda3/envs/exaqc/bin/python3: Error while finding module specification for 'src.examples.pl_reinforce' (ModuleNotFoundError: No module named 'src')
+/home/sr8685/miniconda3/envs/exaqc/bin/python3: Error while finding module specification for 'src.examples.pl_reinforce' (ModuleNotFoundError: No module named 'src')
+/home/sr8685/miniconda3/envs/exaqc/bin/python3: Error while finding module specification for 'src.examples.pl_reinforce' (ModuleNotFoundError: No module named 'src')
+/home/sr8685/miniconda3/envs/exaqc/bin/python3: Error while finding module specification for 'src.examples.pl_reinforce' (ModuleNotFoundError: No module named 'src')
+/home/sr8685/miniconda3/envs/exaqc/bin/python3: Error while finding module specification for 'src.examples.pl_reinforce' (ModuleNotFoundError: No module named 'src')
+--------------------------------------------------------------------------
+Primary job  terminated normally, but 1 process returned
+a non-zero exit code. Per user-direction, the job has been aborted.
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+mpiexec detected that one or more processes exited with non-zero status, thus causing
+the job to be terminated. The first process to do so was:
+
+  Process name: [[19436,1],1]
+  Exit code:    1
+--------------------------------------------------------------------------

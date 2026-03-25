@@ -1,0 +1,303 @@
+((exaqc) ) sr8685@gcis-dxkvse-rw2:~/GitHub/exaqc$ mpiexec -n 12 python3 -m src.examples.pl_reinforce --env "cartpole" --logging_level INFO --out_dir ./cartpole_results --algo "q_learning" --number_genomes 2
+/home/sr8685/miniconda3/envs/exaqc/lib/python3.12/site-packages/pennylane/__init__.py:212: PennyLaneDeprecationWarning: PennyLane v0.44 has dropped maintainence support for NumPy < 2.0.0. You have version 1.26.4 installed. Future versions of PennyLane will not work with NumPy<2.0. Please consider upgrading NumPy using `python -m pip install numpy --upgrade`. 
+  warnings.warn(
+/home/sr8685/miniconda3/envs/exaqc/lib/python3.12/site-packages/pennylane/__init__.py:212: PennyLaneDeprecationWarning: PennyLane v0.44 has dropped maintainence support for NumPy < 2.0.0. You have version 1.26.4 installed. Future versions of PennyLane will not work with NumPy<2.0. Please consider upgrading NumPy using `python -m pip install numpy --upgrade`. 
+  warnings.warn(
+/home/sr8685/miniconda3/envs/exaqc/lib/python3.12/site-packages/pennylane/__init__.py:212: PennyLaneDeprecationWarning: PennyLane v0.44 has dropped maintainence support for NumPy < 2.0.0. You have version 1.26.4 installed. Future versions of PennyLane will not work with NumPy<2.0. Please consider upgrading NumPy using `python -m pip install numpy --upgrade`. 
+  warnings.warn(
+/home/sr8685/miniconda3/envs/exaqc/lib/python3.12/site-packages/pennylane/__init__.py:212: PennyLaneDeprecationWarning: PennyLane v0.44 has dropped maintainence support for NumPy < 2.0.0. You have version 1.26.4 installed. Future versions of PennyLane will not work with NumPy<2.0. Please consider upgrading NumPy using `python -m pip install numpy --upgrade`. 
+  warnings.warn(
+/home/sr8685/miniconda3/envs/exaqc/lib/python3.12/site-packages/pennylane/__init__.py:212: PennyLaneDeprecationWarning: PennyLane v0.44 has dropped maintainence support for NumPy < 2.0.0. You have version 1.26.4 installed. Future versions of PennyLane will not work with NumPy<2.0. Please consider upgrading NumPy using `python -m pip install numpy --upgrade`. 
+  warnings.warn(
+/home/sr8685/miniconda3/envs/exaqc/lib/python3.12/site-packages/pennylane/__init__.py:212: PennyLaneDeprecationWarning: PennyLane v0.44 has dropped maintainence support for NumPy < 2.0.0. You have version 1.26.4 installed. Future versions of PennyLane will not work with NumPy<2.0. Please consider upgrading NumPy using `python -m pip install numpy --upgrade`. 
+  warnings.warn(
+/home/sr8685/miniconda3/envs/exaqc/lib/python3.12/site-packages/pennylane/__init__.py:212: PennyLaneDeprecationWarning: PennyLane v0.44 has dropped maintainence support for NumPy < 2.0.0. You have version 1.26.4 installed. Future versions of PennyLane will not work with NumPy<2.0. Please consider upgrading NumPy using `python -m pip install numpy --upgrade`. 
+  warnings.warn(
+/home/sr8685/miniconda3/envs/exaqc/lib/python3.12/site-packages/pennylane/__init__.py:212: PennyLaneDeprecationWarning: PennyLane v0.44 has dropped maintainence support for NumPy < 2.0.0. You have version 1.26.4 installed. Future versions of PennyLane will not work with NumPy<2.0. Please consider upgrading NumPy using `python -m pip install numpy --upgrade`. 
+  warnings.warn(
+/home/sr8685/miniconda3/envs/exaqc/lib/python3.12/site-packages/pennylane/__init__.py:212: PennyLaneDeprecationWarning: PennyLane v0.44 has dropped maintainence support for NumPy < 2.0.0. You have version 1.26.4 installed. Future versions of PennyLane will not work with NumPy<2.0. Please consider upgrading NumPy using `python -m pip install numpy --upgrade`. 
+  warnings.warn(
+/home/sr8685/miniconda3/envs/exaqc/lib/python3.12/site-packages/pennylane/__init__.py:212: PennyLaneDeprecationWarning: PennyLane v0.44 has dropped maintainence support for NumPy < 2.0.0. You have version 1.26.4 installed. Future versions of PennyLane will not work with NumPy<2.0. Please consider upgrading NumPy using `python -m pip install numpy --upgrade`. 
+  warnings.warn(
+/home/sr8685/miniconda3/envs/exaqc/lib/python3.12/site-packages/pennylane/__init__.py:212: PennyLaneDeprecationWarning: PennyLane v0.44 has dropped maintainence support for NumPy < 2.0.0. You have version 1.26.4 installed. Future versions of PennyLane will not work with NumPy<2.0. Please consider upgrading NumPy using `python -m pip install numpy --upgrade`. 
+  warnings.warn(
+/home/sr8685/miniconda3/envs/exaqc/lib/python3.12/site-packages/pennylane/__init__.py:212: PennyLaneDeprecationWarning: PennyLane v0.44 has dropped maintainence support for NumPy < 2.0.0. You have version 1.26.4 installed. Future versions of PennyLane will not work with NumPy<2.0. Please consider upgrading NumPy using `python -m pip install numpy --upgrade`. 
+  warnings.warn(
+2026-03-18 19:00:09.250 | INFO     | __main__:<module>:246 - env=CartPole-v1 input_registers={'input': 4} output_registers={'output': 2}
+2026-03-18 19:00:09.250 | INFO     | src.evolution.exaqc:__init__:100 - Starting EXAQC with the following allowed gates:
+2026-03-18 19:00:09.250 | INFO     | src.evolution.exaqc:__init__:104 -         'Toffoli' : ccx(qubits=['control_qubit1', 'control_qubit2', 'target_qubit'], params=[])
+2026-03-18 19:00:09.250 | INFO     | src.evolution.exaqc:__init__:104 -         'CCZ' : ccz(qubits=['control_qubit1', 'control_qubit2', 'target_qubit'], params=[])
+2026-03-18 19:00:09.250 | INFO     | src.evolution.exaqc:__init__:104 -         'Controlled Hadamard' : ch(qubits=['control_qubit', 'target_qubit'], params=[])
+2026-03-18 19:00:09.251 | INFO     | src.evolution.exaqc:__init__:104 -         'Controlled Phase' : cp(qubits=['control_qubit', 'target_qubit'], params=['phi'])
+2026-03-18 19:00:09.251 | INFO     | src.evolution.exaqc:__init__:104 -         'Controlled RX' : crx(qubits=['control_qubit', 'target_qubit'], params=['phi'])
+2026-03-18 19:00:09.251 | INFO     | src.evolution.exaqc:__init__:104 -         'Controlled RY' : cry(qubits=['control_qubit', 'target_qubit'], params=['phi'])
+2026-03-18 19:00:09.251 | INFO     | src.evolution.exaqc:__init__:104 -         'Controlled RZ' : crz(qubits=['control_qubit', 'target_qubit'], params=['phi'])
+2026-03-18 19:00:09.251 | INFO     | src.evolution.exaqc:__init__:104 -         'Controlled S' : cs(qubits=['control_qubit', 'target_qubit'], params=[])
+2026-03-18 19:00:09.251 | INFO     | src.evolution.exaqc:__init__:104 -         'Controlled S^dagger' : csdg(qubits=['control_qubit', 'target_qubit'], params=[])
+2026-03-18 19:00:09.251 | INFO     | src.evolution.exaqc:__init__:104 -         'Controlled SWAP (Fredkin)' : cswap(qubits=['control_qubit', 'target_qubit1', 'target_qubit2'], params=[])
+2026-03-18 19:00:09.251 | INFO     | src.evolution.exaqc:__init__:104 -         'Controlled sqrt X' : csx(qubits=['control_qubit', 'target_qubit'], params=[])
+2026-03-18 19:00:09.251 | INFO     | src.evolution.exaqc:__init__:104 -         'Controlled U' : cu(qubits=['control_qubit', 'target_qubit'], params=['theta', 'phi', 'lam', 'gamma'])
+2026-03-18 19:00:09.251 | INFO     | src.evolution.exaqc:__init__:104 -         'Controlled X' : cx(qubits=['control_qubit', 'target_qubit'], params=[])
+2026-03-18 19:00:09.251 | INFO     | src.evolution.exaqc:__init__:104 -         'Controlled Y' : cy(qubits=['control_qubit', 'target_qubit'], params=[])
+2026-03-18 19:00:09.251 | INFO     | src.evolution.exaqc:__init__:104 -         'Controlled Z' : cz(qubits=['control_qubit', 'target_qubit'], params=[])
+2026-03-18 19:00:09.251 | INFO     | src.evolution.exaqc:__init__:104 -         'Double CNOT' : dcx(qubits=['qubit1', 'qubit2'], params=[])
+2026-03-18 19:00:09.251 | INFO     | src.evolution.exaqc:__init__:104 -         'Echoed Cross-Resonance' : ecr(qubits=['qubit1', 'qubit2'], params=[])
+2026-03-18 19:00:09.251 | INFO     | src.evolution.exaqc:__init__:104 -         'Hadamard' : h(qubits=['qubit'], params=[])
+2026-03-18 19:00:09.251 | INFO     | src.evolution.exaqc:__init__:104 -         'Identity' : id(qubits=['qubit'], params=[])
+2026-03-18 19:00:09.251 | INFO     | src.evolution.exaqc:__init__:104 -         'iSWAP' : iswap(qubits=['qubit1', 'qubit2'], params=[])
+2026-03-18 19:00:09.251 | INFO     | src.evolution.exaqc:__init__:104 -         'Multi-Controlled Phase' : mcp(qubits=['control_qubits...', 'target_qubit'], params=['theta'])
+2026-03-18 19:00:09.251 | INFO     | src.evolution.exaqc:__init__:104 -         'Multi-Controlled X Rotation' : mcrx(qubits=['control_qubits...', 'target_qubit'], params=['theta'])
+2026-03-18 19:00:09.252 | INFO     | src.evolution.exaqc:__init__:104 -         'Multi-Controlled Y Rotation' : mcry(qubits=['control_qubits...', 'target_qubit'], params=['theta'])
+2026-03-18 19:00:09.252 | INFO     | src.evolution.exaqc:__init__:104 -         'Multi-Controlled Z Rotation' : mcrz(qubits=['control_qubits...', 'target_qubit'], params=['theta'])
+2026-03-18 19:00:09.252 | INFO     | src.evolution.exaqc:__init__:104 -         'Multi-Controlled X' : mcx(qubits=['control_qubits...', 'target_qubit'], params=[])
+2026-03-18 19:00:09.252 | INFO     | src.evolution.exaqc:__init__:104 -         'Phase' : p(qubits=['qubit'], params=['phi'])
+2026-03-18 19:00:09.252 | INFO     | src.evolution.exaqc:__init__:104 -         'R' : r(qubits=['qubit'], params=['theta', 'phi'])
+2026-03-18 19:00:09.252 | INFO     | src.evolution.exaqc:__init__:104 -         'Simplified 3-Controlled Toffoli' : rcccx(qubits=['control_qubit1', 'control_qubit2', 'control_qubit3', 'target_qubit'], params=[])
+2026-03-18 19:00:09.252 | INFO     | src.evolution.exaqc:__init__:104 -         'Simplified Toffoli (Margolus)' : rccx(qubits=['control_qubit1', 'control_qubit2', 'target_qubit'], params=[])
+2026-03-18 19:00:09.252 | INFO     | src.evolution.exaqc:__init__:104 -         'RV' : rv(qubits=['qubit'], params=['vx', 'vy', 'vz'])
+2026-03-18 19:00:09.252 | INFO     | src.evolution.exaqc:__init__:104 -         'RX' : rx(qubits=['qubit'], params=['phi'])
+2026-03-18 19:00:09.252 | INFO     | src.evolution.exaqc:__init__:104 -         'RXX' : rxx(qubits=['qubit1', 'qubit2'], params=['phi'])
+2026-03-18 19:00:09.252 | INFO     | src.evolution.exaqc:__init__:104 -         'RY' : ry(qubits=['qubit'], params=['phi'])
+2026-03-18 19:00:09.252 | INFO     | src.evolution.exaqc:__init__:104 -         'RYY' : ryy(qubits=['qubit1', 'qubit2'], params=['phi'])
+2026-03-18 19:00:09.252 | INFO     | src.evolution.exaqc:__init__:104 -         'RZ' : rz(qubits=['qubit'], params=['phi'])
+2026-03-18 19:00:09.252 | INFO     | src.evolution.exaqc:__init__:104 -         'RZX' : rzx(qubits=['qubit1', 'qubit2'], params=['theta'])
+2026-03-18 19:00:09.252 | INFO     | src.evolution.exaqc:__init__:104 -         'RZZ' : rzz(qubits=['qubit1', 'qubit2'], params=['phi'])
+2026-03-18 19:00:09.252 | INFO     | src.evolution.exaqc:__init__:104 -         'S' : s(qubits=['qubit'], params=[])
+2026-03-18 19:00:09.252 | INFO     | src.evolution.exaqc:__init__:104 -         'S-adjoint' : sdg(qubits=['qubit'], params=[])
+2026-03-18 19:00:09.253 | INFO     | src.evolution.exaqc:__init__:104 -         'SWAP' : swap(qubits=['qubit1', 'qubit2'], params=[])
+2026-03-18 19:00:09.253 | INFO     | src.evolution.exaqc:__init__:104 -         'sqrt X' : sx(qubits=['qubit'], params=[])
+2026-03-18 19:00:09.253 | INFO     | src.evolution.exaqc:__init__:104 -         'inverse sqrt X' : sxdg(qubits=['qubit'], params=[])
+2026-03-18 19:00:09.253 | INFO     | src.evolution.exaqc:__init__:104 -         'T' : t(qubits=['qubit'], params=[])
+2026-03-18 19:00:09.253 | INFO     | src.evolution.exaqc:__init__:104 -         'T-adjoint' : tdg(qubits=['qubit'], params=[])
+2026-03-18 19:00:09.253 | INFO     | src.evolution.exaqc:__init__:104 -         'U' : u(qubits=['qubit'], params=['theta', 'phi', 'delta'])
+2026-03-18 19:00:09.253 | INFO     | src.evolution.exaqc:__init__:104 -         'X' : x(qubits=['qubit'], params=[])
+2026-03-18 19:00:09.253 | INFO     | src.evolution.exaqc:__init__:104 -         'Y' : y(qubits=['qubit'], params=[])
+2026-03-18 19:00:09.253 | INFO     | src.evolution.exaqc:__init__:104 -         'Z' : z(qubits=['qubit'], params=[])
+2026-03-18 19:00:09.269 | INFO     | __main__:<module>:246 - env=CartPole-v1 input_registers={'input': 4} output_registers={'output': 2}
+2026-03-18 19:00:09.270 | INFO     | src.evolution.exaqc:generate_genome:247 - generating a child via 3 mutations.
+2026-03-18 19:00:09.270 | INFO     | src.evolution.exaqc:mutate:185 - starting mutation process
+2026-03-18 19:00:09.270 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with add_gate
+2026-03-18 19:00:09.271 | INFO     | src.evolution.exaqc:mutate:185 - starting mutation process
+2026-03-18 19:00:09.271 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with add_gate
+2026-03-18 19:00:09.271 | INFO     | src.evolution.exaqc:mutate:185 - starting mutation process
+2026-03-18 19:00:09.271 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with qubit_swap
+2026-03-18 19:00:09.272 | INFO     | src.circuits.circuit:generate_pennylane_circuit:425 - input indexes: [0, 1, 2, 3], output_indexes: [4, 5]
+2026-03-18 19:00:09.324 | INFO     | __main__:<module>:246 - env=CartPole-v1 input_registers={'input': 4} output_registers={'output': 2}
+2026-03-18 19:00:09.325 | INFO     | src.evolution.exaqc:generate_genome:247 - generating a child via 1 mutations.
+2026-03-18 19:00:09.325 | INFO     | src.evolution.exaqc:mutate:185 - starting mutation process
+2026-03-18 19:00:09.325 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with add_gate
+2026-03-18 19:00:09.326 | INFO     | src.circuits.circuit:generate_pennylane_circuit:425 - input indexes: [0, 1, 2, 3], output_indexes: [4, 5]
+2026-03-18 19:00:09.334 | INFO     | __main__:<module>:246 - env=CartPole-v1 input_registers={'input': 4} output_registers={'output': 2}
+2026-03-18 19:00:09.334 | INFO     | src.evolution.exaqc:generate_genome:247 - generating a child via 1 mutations.
+2026-03-18 19:00:09.334 | INFO     | src.evolution.exaqc:mutate:185 - starting mutation process
+2026-03-18 19:00:09.334 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with add_gate
+2026-03-18 19:00:09.335 | INFO     | src.circuits.circuit:generate_pennylane_circuit:425 - input indexes: [0, 1, 2, 3], output_indexes: [4, 5]
+2026-03-18 19:00:09.339 | INFO     | __main__:<module>:246 - env=CartPole-v1 input_registers={'input': 4} output_registers={'output': 2}
+2026-03-18 19:00:09.340 | INFO     | src.evolution.exaqc:generate_genome:247 - generating a child via 2 mutations.
+2026-03-18 19:00:09.341 | INFO     | src.evolution.exaqc:mutate:185 - starting mutation process
+2026-03-18 19:00:09.341 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with add_gate
+2026-03-18 19:00:09.342 | INFO     | src.evolution.exaqc:mutate:185 - starting mutation process
+2026-03-18 19:00:09.342 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with clone
+2026-03-18 19:00:09.344 | INFO     | src.circuits.circuit:generate_pennylane_circuit:425 - input indexes: [0, 1, 2, 3], output_indexes: [4, 5]
+2026-03-18 19:00:09.400 | INFO     | __main__:<module>:246 - env=CartPole-v1 input_registers={'input': 4} output_registers={'output': 2}
+2026-03-18 19:00:09.401 | INFO     | src.evolution.exaqc:generate_genome:247 - generating a child via 1 mutations.
+2026-03-18 19:00:09.401 | INFO     | src.evolution.exaqc:mutate:185 - starting mutation process
+2026-03-18 19:00:09.401 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with add_gate
+2026-03-18 19:00:09.402 | INFO     | src.circuits.circuit:generate_pennylane_circuit:425 - input indexes: [0, 1, 2, 3], output_indexes: [4, 5]
+2026-03-18 19:00:09.403 | INFO     | __main__:<module>:246 - env=CartPole-v1 input_registers={'input': 4} output_registers={'output': 2}
+2026-03-18 19:00:09.403 | INFO     | src.evolution.exaqc:generate_genome:247 - generating a child via 3 mutations.
+2026-03-18 19:00:09.403 | INFO     | src.evolution.exaqc:mutate:185 - starting mutation process
+2026-03-18 19:00:09.403 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with add_gate
+2026-03-18 19:00:09.404 | INFO     | src.evolution.exaqc:mutate:185 - starting mutation process
+2026-03-18 19:00:09.404 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with add_gate
+2026-03-18 19:00:09.404 | INFO     | src.evolution.exaqc:mutate:185 - starting mutation process
+2026-03-18 19:00:09.404 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with qubit_swap
+2026-03-18 19:00:09.405 | INFO     | src.circuits.circuit:generate_pennylane_circuit:425 - input indexes: [0, 1, 2, 3], output_indexes: [4, 5]
+2026-03-18 19:00:09.427 | INFO     | __main__:<module>:246 - env=CartPole-v1 input_registers={'input': 4} output_registers={'output': 2}
+2026-03-18 19:00:09.428 | INFO     | src.evolution.exaqc:generate_genome:247 - generating a child via 2 mutations.
+2026-03-18 19:00:09.428 | INFO     | src.evolution.exaqc:mutate:185 - starting mutation process
+2026-03-18 19:00:09.428 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with add_gate
+2026-03-18 19:00:09.429 | INFO     | src.evolution.exaqc:mutate:185 - starting mutation process
+2026-03-18 19:00:09.430 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with add_gate
+2026-03-18 19:00:09.432 | INFO     | src.circuits.circuit:generate_pennylane_circuit:425 - input indexes: [0, 1, 2, 3], output_indexes: [4, 5]
+2026-03-18 19:00:09.447 | INFO     | __main__:<module>:246 - env=CartPole-v1 input_registers={'input': 4} output_registers={'output': 2}
+2026-03-18 19:00:09.448 | INFO     | src.evolution.exaqc:generate_genome:247 - generating a child via 2 mutations.
+2026-03-18 19:00:09.448 | INFO     | src.evolution.exaqc:mutate:185 - starting mutation process
+2026-03-18 19:00:09.449 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with clone
+2026-03-18 19:00:09.449 | INFO     | src.evolution.exaqc:mutate:185 - starting mutation process
+2026-03-18 19:00:09.449 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with reorder_gate
+2026-03-18 19:00:09.449 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with clone
+2026-03-18 19:00:09.450 | INFO     | src.evolution.exaqc:mutate:185 - starting mutation process
+2026-03-18 19:00:09.451 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with add_gate
+2026-03-18 19:00:09.452 | INFO     | src.evolution.exaqc:mutate:185 - starting mutation process
+2026-03-18 19:00:09.453 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with enable_gate
+2026-03-18 19:00:09.453 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with add_gate
+2026-03-18 19:00:09.456 | INFO     | src.circuits.circuit:generate_pennylane_circuit:425 - input indexes: [0, 1, 2, 3], output_indexes: [4, 5]
+2026-03-18 19:00:09.496 | INFO     | __main__:<module>:246 - env=CartPole-v1 input_registers={'input': 4} output_registers={'output': 2}
+2026-03-18 19:00:09.497 | INFO     | src.evolution.exaqc:generate_genome:247 - generating a child via 3 mutations.
+2026-03-18 19:00:09.497 | INFO     | src.evolution.exaqc:mutate:185 - starting mutation process
+2026-03-18 19:00:09.497 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with disable_gate
+2026-03-18 19:00:09.497 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with add_gate
+2026-03-18 19:00:09.498 | INFO     | src.evolution.exaqc:mutate:185 - starting mutation process
+2026-03-18 19:00:09.498 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with clone
+2026-03-18 19:00:09.498 | INFO     | src.evolution.exaqc:mutate:185 - starting mutation process
+2026-03-18 19:00:09.498 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with add_gate
+2026-03-18 19:00:09.499 | INFO     | src.circuits.circuit:generate_pennylane_circuit:425 - input indexes: [0, 1, 2, 3], output_indexes: [4, 5]
+2026-03-18 19:00:09.562 | INFO     | __main__:<module>:246 - env=CartPole-v1 input_registers={'input': 4} output_registers={'output': 2}
+2026-03-18 19:00:09.563 | INFO     | src.evolution.exaqc:generate_genome:247 - generating a child via 2 mutations.
+2026-03-18 19:00:09.563 | INFO     | src.evolution.exaqc:mutate:185 - starting mutation process
+2026-03-18 19:00:09.564 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with clone
+2026-03-18 19:00:09.564 | INFO     | src.evolution.exaqc:mutate:185 - starting mutation process
+2026-03-18 19:00:09.564 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with add_gate
+2026-03-18 19:00:09.565 | INFO     | src.circuits.circuit:generate_pennylane_circuit:425 - input indexes: [0, 1, 2, 3], output_indexes: [4, 5]
+2026-03-18 19:00:09.591 | INFO     | __main__:<module>:246 - env=CartPole-v1 input_registers={'input': 4} output_registers={'output': 2}
+2026-03-18 19:00:09.593 | INFO     | src.evolution.exaqc:generate_genome:247 - generating a child via 2 mutations.
+2026-03-18 19:00:09.593 | INFO     | src.evolution.exaqc:mutate:185 - starting mutation process
+2026-03-18 19:00:09.593 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with add_gate
+2026-03-18 19:00:09.594 | INFO     | src.evolution.exaqc:mutate:185 - starting mutation process
+2026-03-18 19:00:09.595 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with qubit_swap
+2026-03-18 19:00:09.596 | INFO     | src.circuits.circuit:generate_pennylane_circuit:425 - input indexes: [0, 1, 2, 3], output_indexes: [4, 5]
+/home/sr8685/GitHub/exaqc/src/objectives/policy_objectives.py:1250: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at /pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:836.)
+  return torch.as_tensor(out, dtype=torch.float32).flatten()
+2026-03-18 19:00:10.943 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0000] return=8.0 avg10=8.0eps=0.199 rb=8
+2026-03-18 19:00:10.973 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0000] return=11.0 avg10=11.0eps=0.199 rb=11
+/home/sr8685/GitHub/exaqc/src/objectives/policy_objectives.py:1250: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at /pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:836.)
+  return torch.as_tensor(out, dtype=torch.float32).flatten()
+/home/sr8685/GitHub/exaqc/src/objectives/policy_objectives.py:1250: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at /pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:836.)
+  return torch.as_tensor(out, dtype=torch.float32).flatten()
+/home/sr8685/GitHub/exaqc/src/objectives/policy_objectives.py:1250: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at /pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:836.)
+  return torch.as_tensor(out, dtype=torch.float32).flatten()
+2026-03-18 19:00:11.051 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0000] return=11.0 avg10=11.0eps=0.199 rb=11
+/home/sr8685/GitHub/exaqc/src/objectives/policy_objectives.py:1250: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at /pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:836.)
+  return torch.as_tensor(out, dtype=torch.float32).flatten()
+2026-03-18 19:00:11.080 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0000] return=8.0 avg10=8.0eps=0.199 rb=8
+2026-03-18 19:00:11.105 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0000] return=8.0 avg10=8.0eps=0.199 rb=8
+2026-03-18 19:00:11.119 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0000] return=12.0 avg10=12.0eps=0.199 rb=12
+/home/sr8685/GitHub/exaqc/src/objectives/policy_objectives.py:1250: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at /pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:836.)
+  return torch.as_tensor(out, dtype=torch.float32).flatten()
+2026-03-18 19:00:11.149 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0000] return=11.0 avg10=11.0eps=0.199 rb=11
+2026-03-18 19:00:11.156 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0000] return=8.0 avg10=8.0eps=0.199 rb=8
+/home/sr8685/GitHub/exaqc/src/objectives/policy_objectives.py:1250: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at /pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:836.)
+  return torch.as_tensor(out, dtype=torch.float32).flatten()
+2026-03-18 19:00:11.211 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0000] return=9.0 avg10=9.0eps=0.199 rb=9
+2026-03-18 19:00:11.256 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0000] return=11.0 avg10=11.0eps=0.199 rb=11
+2026-03-18 19:00:11.401 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0000] return=15.0 avg10=15.0eps=0.199 rb=15
+2026-03-18 19:00:11.691 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0010] return=20.0 avg10=11.6eps=0.189 rb=124
+2026-03-18 19:00:11.761 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0010] return=9.0 avg10=9.5eps=0.189 rb=103
+2026-03-18 19:00:11.761 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0010] return=9.0 avg10=11.6eps=0.189 rb=127
+2026-03-18 19:00:11.765 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0010] return=9.0 avg10=9.8eps=0.189 rb=109
+2026-03-18 19:00:11.809 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0010] return=9.0 avg10=10.5eps=0.189 rb=117
+2026-03-18 19:00:11.814 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0010] return=12.0 avg10=10.5eps=0.189 rb=113
+2026-03-18 19:00:11.897 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0010] return=9.0 avg10=9.7eps=0.189 rb=108
+2026-03-18 19:00:11.935 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0010] return=9.0 avg10=9.9eps=0.189 rb=110
+2026-03-18 19:00:11.941 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0010] return=10.0 avg10=10.5eps=0.189 rb=113
+2026-03-18 19:00:12.153 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0010] return=10.0 avg10=10.9eps=0.189 rb=118
+2026-03-18 19:00:12.379 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0020] return=8.0 avg10=9.8eps=0.180 rb=222
+2026-03-18 19:00:12.464 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0020] return=10.0 avg10=10.5eps=0.180 rb=222
+2026-03-18 19:00:12.467 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0020] return=8.0 avg10=9.7eps=0.180 rb=210
+2026-03-18 19:00:12.476 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0020] return=9.0 avg10=9.9eps=0.180 rb=202
+2026-03-18 19:00:12.557 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0020] return=12.0 avg10=11.2eps=0.180 rb=239
+2026-03-18 19:00:12.585 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0020] return=10.0 avg10=10.9eps=0.180 rb=218
+2026-03-18 19:00:12.665 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0020] return=8.0 avg10=9.7eps=0.180 rb=210
+2026-03-18 19:00:12.723 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0020] return=11.0 avg10=10.9eps=0.180 rb=219
+2026-03-18 19:00:12.785 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0010] return=11.0 avg10=20.5eps=0.189 rb=220
+2026-03-18 19:00:12.856 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0020] return=10.0 avg10=11.9eps=0.180 rb=227
+2026-03-18 19:00:12.900 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0020] return=13.0 avg10=10.1eps=0.180 rb=219
+2026-03-18 19:00:13.094 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0030] return=10.0 avg10=9.2eps=0.171 rb=314
+2026-03-18 19:00:13.124 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0030] return=8.0 avg10=9.9eps=0.171 rb=309
+2026-03-18 19:00:13.138 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0030] return=9.0 avg10=9.5eps=0.171 rb=297
+2026-03-18 19:00:13.235 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0030] return=11.0 avg10=10.6eps=0.171 rb=345
+2026-03-18 19:00:13.286 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0030] return=8.0 avg10=9.4eps=0.171 rb=304
+2026-03-18 19:00:13.292 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0030] return=12.0 avg10=10.7eps=0.171 rb=325
+2026-03-18 19:00:13.365 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0030] return=12.0 avg10=10.7eps=0.171 rb=326
+2026-03-18 19:00:13.388 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0030] return=10.0 avg10=10.0eps=0.171 rb=322
+2026-03-18 19:00:13.563 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0030] return=8.0 avg10=9.3eps=0.171 rb=312
+2026-03-18 19:00:13.655 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0020] return=29.0 avg10=16.5eps=0.180 rb=385
+2026-03-18 19:00:13.678 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0030] return=12.0 avg10=10.4eps=0.171 rb=331
+2026-03-18 19:00:13.853 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0040] return=10.0 avg10=9.5eps=0.163 rb=392
+2026-03-18 19:00:13.865 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0040] return=8.0 avg10=10.2eps=0.163 rb=447
+2026-03-18 19:00:13.876 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0040] return=14.0 avg10=11.0eps=0.163 rb=419
+2026-03-18 19:00:13.879 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0040] return=11.0 avg10=10.5eps=0.163 rb=419
+2026-03-18 19:00:13.930 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0040] return=8.0 avg10=10.7eps=0.163 rb=432
+2026-03-18 19:00:13.972 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0040] return=10.0 avg10=10.3eps=0.163 rb=407
+2026-03-18 19:00:14.030 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0040] return=8.0 avg10=10.0eps=0.163 rb=426
+2026-03-18 19:00:14.136 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0040] return=11.0 avg10=9.8eps=0.163 rb=420
+2026-03-18 19:00:14.319 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0040] return=10.0 avg10=11.0eps=0.163 rb=422
+2026-03-18 19:00:14.501 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0040] return=10.0 avg10=11.0eps=0.163 rb=441
+2026-03-18 19:00:14.544 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0050] return=12.0 avg10=10.1eps=0.155 rb=493
+2026-03-18 19:00:20.667 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0050] return=11.0 avg10=10.0eps=0.155 rb=507
+2026-03-18 19:00:26.211 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0050] return=10.0 avg10=9.8eps=0.155 rb=517
+2026-03-18 19:00:27.480 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0050] return=9.0 avg10=9.9eps=0.155 rb=519
+2026-03-18 19:00:29.465 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0050] return=10.0 avg10=10.3eps=0.155 rb=522
+2026-03-18 19:00:30.764 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0050] return=11.0 avg10=10.2eps=0.155 rb=524
+2026-03-18 19:00:33.655 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0050] return=9.0 avg10=9.9eps=0.155 rb=531
+2026-03-18 19:00:34.637 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0050] return=12.0 avg10=10.7eps=0.155 rb=533
+2026-03-18 19:00:46.061 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0050] return=9.0 avg10=10.4eps=0.155 rb=545
+2026-03-18 19:00:48.108 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0050] return=9.0 avg10=10.7eps=0.155 rb=554
+2026-03-18 19:01:05.890 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0030] return=11.0 avg10=21.6eps=0.171 rb=601
+2026-03-18 19:01:10.540 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0060] return=8.0 avg10=9.4eps=0.147 rb=587
+2026-03-18 19:01:16.267 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0060] return=11.0 avg10=9.6eps=0.147 rb=613
+2026-03-18 19:01:16.613 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0060] return=8.0 avg10=9.7eps=0.147 rb=604
+2026-03-18 19:01:21.293 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0060] return=10.0 avg10=10.3eps=0.147 rb=622
+2026-03-18 19:01:23.901 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0060] return=10.0 avg10=9.9eps=0.147 rb=621
+2026-03-18 19:01:25.055 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0060] return=11.0 avg10=10.0eps=0.147 rb=624
+2026-03-18 19:01:28.882 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0060] return=10.0 avg10=10.5eps=0.147 rb=638
+2026-03-18 19:01:31.700 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0060] return=11.0 avg10=10.9eps=0.147 rb=640
+2026-03-18 19:01:45.095 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0060] return=10.0 avg10=9.8eps=0.147 rb=652
+2026-03-18 19:01:55.130 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0060] return=10.0 avg10=10.7eps=0.147 rb=652
+2026-03-18 19:02:09.019 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0070] return=10.0 avg10=9.2eps=0.140 rb=679
+2026-03-18 19:02:12.306 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0070] return=9.0 avg10=10.2eps=0.140 rb=715
+2026-03-18 19:02:14.484 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0070] return=9.0 avg10=9.6eps=0.140 rb=700
+2026-03-18 19:02:15.012 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0070] return=10.0 avg10=9.8eps=0.140 rb=720
+2026-03-18 19:02:18.407 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0070] return=9.0 avg10=9.4eps=0.140 rb=715
+2026-03-18 19:02:22.672 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0070] return=10.0 avg10=10.0eps=0.140 rb=738
+2026-03-18 19:02:25.508 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0070] return=13.0 avg10=10.6eps=0.140 rb=730
+2026-03-18 19:02:28.172 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0070] return=10.0 avg10=10.1eps=0.140 rb=741
+2026-03-18 19:02:45.138 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0070] return=10.0 avg10=10.3eps=0.140 rb=755
+2026-03-18 19:03:01.669 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0040] return=11.0 avg10=22.8eps=0.163 rb=829
+2026-03-18 19:03:04.338 | INFO     | __main__:__call__:121 - [0002] train_return_mean=10.35 best_episode_return=20.00 eval_return_mean=9.30 eval_return_std=0.78 env=CartPole-v1
+2026-03-18 19:03:04.339 | SUCCESS  | src.evolution.steady_state_population:insert_genome:139 - 🎯 New best genome 2 [insertion 1] Population found new GLOBAL best genome with fitness: {'train_return_mean': 10.35, 'best_episode_return': 20.0, 'eval_return_mean': 9.3, 'eval_return_std': 0.7810249675906655, 'episodes': 80, 'env_id': 'CartPole-v1', 'algo': 'q_learning', 'n_actions': 2, 'input_mode': 'angle'}
+2026-03-18 19:03:04.340 | INFO     | src.circuits.circuit:generate_pennylane_circuit:425 - input indexes: [0, 1, 2, 3], output_indexes: [4, 5]
+2026-03-18 19:03:04.343 | INFO     | src.evolution.steady_state_population:_save_best_circuit:177 - writing NEW BEST gnome to ./cartpole_results/genome_2.json
+2026-03-18 19:03:04.859 | INFO     | src.evolution.master_worker:master:60 - evaluated 1 of max 2 genomes
+2026-03-18 19:03:04.859 | INFO     | src.evolution.exaqc:generate_genome:247 - generating a child via 2 mutations.
+2026-03-18 19:03:04.860 | INFO     | src.evolution.exaqc:mutate:185 - starting mutation process
+2026-03-18 19:03:04.860 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with clone
+2026-03-18 19:03:04.860 | INFO     | src.evolution.exaqc:mutate:185 - starting mutation process
+2026-03-18 19:03:04.860 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with qubit_swap
+2026-03-18 19:03:04.860 | INFO     | src.evolution.exaqc:mutate:191 -   attempting to mutate with add_gate
+2026-03-18 19:03:04.861 | INFO     | src.circuits.circuit:generate_pennylane_circuit:425 - input indexes: [0, 1, 2, 3], output_indexes: [4, 5]
+2026-03-18 19:03:04.915 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0000] return=9.0 avg10=9.0eps=0.199 rb=9
+2026-03-18 19:03:05.500 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0010] return=12.0 avg10=10.6eps=0.189 rb=115
+2026-03-18 19:03:05.753 | INFO     | __main__:__call__:121 - [0004] train_return_mean=9.95 best_episode_return=14.00 eval_return_mean=9.30 eval_return_std=0.78 env=CartPole-v1
+2026-03-18 19:03:05.754 | INFO     | src.evolution.master_worker:master:60 - evaluated 2 of max 2 genomes
+2026-03-18 19:03:06.029 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0020] return=8.0 avg10=10.0eps=0.180 rb=215
+2026-03-18 19:03:06.512 | INFO     | __main__:__call__:121 - [0008] train_return_mean=9.40 best_episode_return=16.00 eval_return_mean=9.40 eval_return_std=0.66 env=CartPole-v1
+2026-03-18 19:03:06.513 | SUCCESS  | src.evolution.steady_state_population:insert_genome:139 - 🎯 New best genome 8 [insertion 3] Population found new GLOBAL best genome with fitness: {'train_return_mean': 9.4, 'best_episode_return': 16.0, 'eval_return_mean': 9.4, 'eval_return_std': 0.6633249580710799, 'episodes': 80, 'env_id': 'CartPole-v1', 'algo': 'q_learning', 'n_actions': 2, 'input_mode': 'angle'}
+2026-03-18 19:03:06.514 | INFO     | src.circuits.circuit:generate_pennylane_circuit:425 - input indexes: [0, 1, 2, 3], output_indexes: [4, 5]
+2026-03-18 19:03:06.515 | INFO     | src.evolution.steady_state_population:_save_best_circuit:177 - writing NEW BEST gnome to ./cartpole_results/genome_8.json
+2026-03-18 19:03:06.738 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0030] return=8.0 avg10=9.8eps=0.171 rb=313
+2026-03-18 19:03:07.314 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0040] return=11.0 avg10=10.8eps=0.163 rb=421
+2026-03-18 19:03:07.656 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0070] return=14.0 avg10=10.8eps=0.140 rb=760
+2026-03-18 19:03:11.381 | INFO     | __main__:__call__:121 - [0007] train_return_mean=9.75 best_episode_return=15.00 eval_return_mean=9.40 eval_return_std=0.66 env=CartPole-v1
+2026-03-18 19:03:12.436 | INFO     | __main__:__call__:121 - [0006] train_return_mean=10.10 best_episode_return=15.00 eval_return_mean=9.30 eval_return_std=0.78 env=CartPole-v1
+2026-03-18 19:03:12.561 | INFO     | __main__:__call__:121 - [0009] train_return_mean=9.95 best_episode_return=14.00 eval_return_mean=9.40 eval_return_std=0.66 env=CartPole-v1
+2026-03-18 19:03:16.436 | INFO     | __main__:__call__:121 - [0011] train_return_mean=10.40 best_episode_return=16.00 eval_return_mean=9.40 eval_return_std=0.66 env=CartPole-v1
+2026-03-18 19:03:21.186 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0050] return=12.0 avg10=10.9eps=0.155 rb=530
+2026-03-18 19:03:21.437 | INFO     | __main__:__call__:121 - [0003] train_return_mean=10.55 best_episode_return=17.00 eval_return_mean=9.30 eval_return_std=0.78 env=CartPole-v1
+2026-03-18 19:03:32.923 | INFO     | __main__:__call__:121 - [0005] train_return_mean=10.30 best_episode_return=17.00 eval_return_mean=9.30 eval_return_std=0.78 env=CartPole-v1
+2026-03-18 19:03:47.247 | INFO     | __main__:__call__:121 - [0010] train_return_mean=10.15 best_episode_return=17.00 eval_return_mean=9.30 eval_return_std=0.78 env=CartPole-v1
+2026-03-18 19:03:53.733 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0060] return=8.0 avg10=9.4eps=0.147 rb=624
+2026-03-18 19:04:25.528 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0070] return=9.0 avg10=9.6eps=0.140 rb=720
+2026-03-18 19:04:58.311 | INFO     | __main__:__call__:121 - [0013] train_return_mean=9.90 best_episode_return=19.00 eval_return_mean=9.30 eval_return_std=0.78 env=CartPole-v1
+2026-03-18 19:05:12.258 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0050] return=29.0 avg10=38.4eps=0.155 rb=1213
+2026-03-18 19:06:55.945 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0060] return=53.0 avg10=33.8eps=0.147 rb=1551
+2026-03-18 19:09:15.032 | INFO     | src.objectives.policy_objectives:train_value_based:1445 - [Q_LEARNING ep 0070] return=32.0 avg10=45.4eps=0.140 rb=2005
+2026-03-18 19:10:56.510 | INFO     | __main__:__call__:121 - [0012] train_return_mean=42.35 best_episode_return=87.00 eval_return_mean=9.40 eval_return_std=0.66 env=CartPole-v1

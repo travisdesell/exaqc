@@ -1,0 +1,77 @@
+{
+    "fitness": {
+        "train_return_mean": 9.95,
+        "best_episode_return": 15.0,
+        "eval_return_mean": 9.4,
+        "eval_return_std": 0.6633249580710799,
+        "episodes": 80,
+        "env_id": "CartPole-v1",
+        "algo": "sarsa",
+        "n_actions": 2,
+        "input_mode": "angle"
+    },
+    "genome_number": 4,
+    "metadata": {},
+    "target": "pennylane",
+    "input_qubits": [
+        [
+            "input",
+            0
+        ],
+        [
+            "input",
+            1
+        ],
+        [
+            "input",
+            2
+        ],
+        [
+            "input",
+            3
+        ]
+    ],
+    "output_qubits": [
+        [
+            "output",
+            0
+        ],
+        [
+            "output",
+            1
+        ]
+    ],
+    "hyperparameters": {
+        "episodes": 80,
+        "eval_episodes": 10,
+        "max_steps": 500,
+        "gamma": 0.99,
+        "learning_rate": 0.0005,
+        "entropy_coef": 0.0,
+        "baseline": "mean",
+        "seed": 0,
+        "log_every": 10,
+        "env_kwargs": null,
+        "epochs": 5
+    },
+    "gates": [
+        {
+            "depth": 0.9059413297604639,
+            "method_name": "cx",
+            "qubits": [
+                [
+                    "input",
+                    0
+                ],
+                [
+                    "output",
+                    0
+                ]
+            ],
+            "parameters": {},
+            "innovation_number": 4,
+            "target": "pennylane",
+            "enabled": true
+        }
+    ]
+}

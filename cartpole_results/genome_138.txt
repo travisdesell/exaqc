@@ -1,0 +1,7 @@
+Genome 138
+Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
+
+0.363  cry  [('input', 2), ('output', 0)]  {'phi': 1.7588515869000938}
+0.492  cry  [('input', 2), ('output', 0)]  {'phi': 1.7588515869000938}
+0.502  ry  [('output', 0)]  {'phi': 0.7519434807158278}
+0.624  cswap  [('input', 1), ('output', 1), ('output', 0)]  {}

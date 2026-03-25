@@ -1,0 +1,12 @@
+Genome 134
+Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
+
+0.387  ry  [('output', 0)]  {'phi': 0.7519434807158278}
+0.501  ccx  [('input', 2), ('input', 1), ('output', 0)]  {}
+0.512  cp  [('input', 3), ('input', 2)]  {'phi': -2.9413341774007447}
+0.537  cswap  [('input', 1), ('output', 0), ('input', 2)]  {}
+0.662  cry  [('input', 2), ('output', 0)]  {'phi': 1.7588515869000938}
+0.824  u  [('output', 0)]  {'theta': 0.07068521667481908, 'phi': -1.2565314363821316, 'delta': -1.0047118234081864}
+0.924  ch  [('input', 0), ('output', 0)]  {}
+0.932  z  [('input', 0)]  {}
+0.996  mcx  [('input', 0), ('output', 1)]  {}

@@ -1,0 +1,10 @@
+Genome 256
+Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
+
+0.152  mcx  [('input', 1), ('output', 1)]  {}
+0.210  y  [('output', 1)]  {}
+0.467  y  [('input', 1)]  {}
+0.569  t  [('output', 1)]  {}
+0.656  iswap  [('output', 0), ('input', 3)]  {}
+0.779  rz  [('output', 0)]  {'phi': 0.7866790279570188}
+0.868  ch  [('output', 0), ('output', 1)]  {}

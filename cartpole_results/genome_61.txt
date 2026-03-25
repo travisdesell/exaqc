@@ -1,0 +1,7 @@
+Genome 61
+Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
+
+0.128  mcx  [('input', 0), ('output', 1)]  {}
+0.164  cx  [('input', 1), ('output', 0)]  {}
+0.509  rx  [('output', 0)]  {'phi': 2.916630115385992}
+0.682  cry  [('input', 3), ('input', 1)]  {'phi': 2.94354463809523}

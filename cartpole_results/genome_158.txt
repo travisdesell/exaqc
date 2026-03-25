@@ -1,0 +1,9 @@
+Genome 158
+Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
+
+0.437  ccx  [('input', 1), ('input', 0), ('output', 0)]  {}
+0.512  cp  [('input', 3), ('input', 2)]  {'phi': -2.9413341774007447}
+0.529  swap  [('input', 3), ('output', 0)]  {}
+0.789  h  [('input', 0)]  {}
+0.850  h  [('output', 1)]  {}
+0.932  z  [('input', 0)]  {}

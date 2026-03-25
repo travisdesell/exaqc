@@ -1,0 +1,6 @@
+Genome 40
+Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
+
+0.015  ch  [('input', 3), ('output', 0)]  {}
+0.115  s  [('output', 0)]  {}
+0.441  swap  [('input', 1), ('output', 1)]  {}

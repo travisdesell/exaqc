@@ -1,0 +1,6 @@
+Genome 101
+Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
+
+0.023  ccz  [('output', 0), ('input', 1), ('output', 1)]  {}
+0.135  cy  [('input', 1), ('output', 1)]  {}
+0.556  cx  [('input', 3), ('output', 0)]  {}

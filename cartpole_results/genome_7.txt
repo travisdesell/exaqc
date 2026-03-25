@@ -1,0 +1,4 @@
+Genome 7
+Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
+
+0.499  iswap  [('input', 0), ('output', 1)]  {}

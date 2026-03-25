@@ -1,0 +1,8 @@
+Genome 69
+Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
+
+0.040  crz  [('input', 1), ('output', 1)]  {'phi': -1.1519174436526143}
+0.101  x  [('output', 1)]  {}
+0.110  h  [('output', 1)]  {}
+0.322  cx  [('input', 3), ('output', 0)]  {}
+0.761  crz  [('output', 1), ('input', 3)]  {'phi': 0.7167649737500477}

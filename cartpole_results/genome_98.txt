@@ -1,0 +1,7 @@
+Genome 98
+Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
+
+0.177  ryy  [('input', 2), ('output', 0)]  {'phi': -0.8805120800902233}
+0.267  cswap  [('output', 0), ('input', 0), ('input', 1)]  {}
+0.701  ch  [('input', 0), ('output', 1)]  {}
+0.836  ch  [('output', 1), ('output', 0)]  {}

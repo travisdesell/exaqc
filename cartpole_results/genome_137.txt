@@ -1,0 +1,9 @@
+Genome 137
+Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
+
+0.128  mcx  [('input', 0), ('output', 1)]  {}
+0.164  cx  [('input', 1), ('output', 0)]  {}
+0.284  cy  [('output', 1), ('input', 3)]  {}
+0.547  rx  [('input', 0)]  {'phi': 2.916630115385992}
+0.682  cry  [('input', 3), ('input', 1)]  {'phi': 2.94354463809523}
+0.918  rxx  [('input', 3), ('output', 0)]  {'phi': 1.8957583557600568}

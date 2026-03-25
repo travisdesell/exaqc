@@ -1,0 +1,18 @@
+Genome 413
+Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
+
+0.012  s  [('input', 0)]  {}
+0.041  cy  [('input', 3), ('output', 0)]  {}
+0.099  h  [('input', 0)]  {}
+0.161  rz  [('input', 2)]  {'phi': 2.992479292021505}
+0.212  rz  [('input', 1)]  {'phi': 2.6999181707343}
+0.214  cry  [('input', 2), ('output', 0)]  {'phi': 2.449828333256643}
+0.226  u  [('input', 1)]  {'theta': 2.483646308013207, 'phi': 1.5424078267595753, 'delta': 2.834851707405247}
+0.239  cy  [('input', 1), ('output', 1)]  {}
+0.416  iswap  [('output', 0), ('input', 2)]  {}
+0.562  sx  [('output', 1)]  {}
+0.628  mcx  [('input', 1), ('output', 0)]  {}
+0.764  cswap  [('output', 1), ('input', 1), ('input', 0)]  {}
+0.854  t  [('output', 0)]  {}
+0.930  cry  [('input', 0), ('output', 0)]  {'phi': 1.7956901446374403}
+0.993  cz  [('input', 2), ('output', 0)]  {}

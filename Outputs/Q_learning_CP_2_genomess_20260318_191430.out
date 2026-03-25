@@ -1,0 +1,295 @@
+/home/sr8685/miniconda3/envs/exaqc/lib/python3.12/site-packages/pennylane/__init__.py:212: PennyLaneDeprecationWarning: PennyLane v0.44 has dropped maintainence support for NumPy < 2.0.0. You have version 1.26.4 installed. Future versions of PennyLane will not work with NumPy<2.0. Please consider upgrading NumPy using `python -m pip install numpy --upgrade`. 
+  warnings.warn(
+/home/sr8685/miniconda3/envs/exaqc/lib/python3.12/site-packages/pennylane/__init__.py:212: PennyLaneDeprecationWarning: PennyLane v0.44 has dropped maintainence support for NumPy < 2.0.0. You have version 1.26.4 installed. Future versions of PennyLane will not work with NumPy<2.0. Please consider upgrading NumPy using `python -m pip install numpy --upgrade`. 
+  warnings.warn(
+/home/sr8685/miniconda3/envs/exaqc/lib/python3.12/site-packages/pennylane/__init__.py:212: PennyLaneDeprecationWarning: PennyLane v0.44 has dropped maintainence support for NumPy < 2.0.0. You have version 1.26.4 installed. Future versions of PennyLane will not work with NumPy<2.0. Please consider upgrading NumPy using `python -m pip install numpy --upgrade`. 
+  warnings.warn(
+/home/sr8685/miniconda3/envs/exaqc/lib/python3.12/site-packages/pennylane/__init__.py:212: PennyLaneDeprecationWarning: PennyLane v0.44 has dropped maintainence support for NumPy < 2.0.0. You have version 1.26.4 installed. Future versions of PennyLane will not work with NumPy<2.0. Please consider upgrading NumPy using `python -m pip install numpy --upgrade`. 
+  warnings.warn(
+/home/sr8685/miniconda3/envs/exaqc/lib/python3.12/site-packages/pennylane/__init__.py:212: PennyLaneDeprecationWarning: PennyLane v0.44 has dropped maintainence support for NumPy < 2.0.0. You have version 1.26.4 installed. Future versions of PennyLane will not work with NumPy<2.0. Please consider upgrading NumPy using `python -m pip install numpy --upgrade`. 
+  warnings.warn(
+/home/sr8685/miniconda3/envs/exaqc/lib/python3.12/site-packages/pennylane/__init__.py:212: PennyLaneDeprecationWarning: PennyLane v0.44 has dropped maintainence support for NumPy < 2.0.0. You have version 1.26.4 installed. Future versions of PennyLane will not work with NumPy<2.0. Please consider upgrading NumPy using `python -m pip install numpy --upgrade`. 
+  warnings.warn(
+/home/sr8685/miniconda3/envs/exaqc/lib/python3.12/site-packages/pennylane/__init__.py:212: PennyLaneDeprecationWarning: PennyLane v0.44 has dropped maintainence support for NumPy < 2.0.0. You have version 1.26.4 installed. Future versions of PennyLane will not work with NumPy<2.0. Please consider upgrading NumPy using `python -m pip install numpy --upgrade`. 
+  warnings.warn(
+/home/sr8685/miniconda3/envs/exaqc/lib/python3.12/site-packages/pennylane/__init__.py:212: PennyLaneDeprecationWarning: PennyLane v0.44 has dropped maintainence support for NumPy < 2.0.0. You have version 1.26.4 installed. Future versions of PennyLane will not work with NumPy<2.0. Please consider upgrading NumPy using `python -m pip install numpy --upgrade`. 
+  warnings.warn(
+/home/sr8685/miniconda3/envs/exaqc/lib/python3.12/site-packages/pennylane/__init__.py:212: PennyLaneDeprecationWarning: PennyLane v0.44 has dropped maintainence support for NumPy < 2.0.0. You have version 1.26.4 installed. Future versions of PennyLane will not work with NumPy<2.0. Please consider upgrading NumPy using `python -m pip install numpy --upgrade`. 
+  warnings.warn(
+/home/sr8685/miniconda3/envs/exaqc/lib/python3.12/site-packages/pennylane/__init__.py:212: PennyLaneDeprecationWarning: PennyLane v0.44 has dropped maintainence support for NumPy < 2.0.0. You have version 1.26.4 installed. Future versions of PennyLane will not work with NumPy<2.0. Please consider upgrading NumPy using `python -m pip install numpy --upgrade`. 
+  warnings.warn(
+/home/sr8685/miniconda3/envs/exaqc/lib/python3.12/site-packages/pennylane/__init__.py:212: PennyLaneDeprecationWarning: PennyLane v0.44 has dropped maintainence support for NumPy < 2.0.0. You have version 1.26.4 installed. Future versions of PennyLane will not work with NumPy<2.0. Please consider upgrading NumPy using `python -m pip install numpy --upgrade`. 
+  warnings.warn(
+/home/sr8685/miniconda3/envs/exaqc/lib/python3.12/site-packages/pennylane/__init__.py:212: PennyLaneDeprecationWarning: PennyLane v0.44 has dropped maintainence support for NumPy < 2.0.0. You have version 1.26.4 installed. Future versions of PennyLane will not work with NumPy<2.0. Please consider upgrading NumPy using `python -m pip install numpy --upgrade`. 
+  warnings.warn(
+[32m2026-03-18 19:14:36.799[0m | [1mINFO    [0m | [36m__main__[0m:[36m<module>[0m:[36m246[0m - [1menv=CartPole-v1 input_registers={'input': 4} output_registers={'output': 2}[0m
+[32m2026-03-18 19:14:36.800[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m100[0m - [1mStarting EXAQC with the following allowed gates:[0m
+[32m2026-03-18 19:14:36.800[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Toffoli' : ccx(qubits=['control_qubit1', 'control_qubit2', 'target_qubit'], params=[])[0m
+[32m2026-03-18 19:14:36.800[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'CCZ' : ccz(qubits=['control_qubit1', 'control_qubit2', 'target_qubit'], params=[])[0m
+[32m2026-03-18 19:14:36.801[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Controlled Hadamard' : ch(qubits=['control_qubit', 'target_qubit'], params=[])[0m
+[32m2026-03-18 19:14:36.801[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Controlled Phase' : cp(qubits=['control_qubit', 'target_qubit'], params=['phi'])[0m
+[32m2026-03-18 19:14:36.801[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Controlled RX' : crx(qubits=['control_qubit', 'target_qubit'], params=['phi'])[0m
+[32m2026-03-18 19:14:36.801[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Controlled RY' : cry(qubits=['control_qubit', 'target_qubit'], params=['phi'])[0m
+[32m2026-03-18 19:14:36.801[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Controlled RZ' : crz(qubits=['control_qubit', 'target_qubit'], params=['phi'])[0m
+[32m2026-03-18 19:14:36.801[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Controlled S' : cs(qubits=['control_qubit', 'target_qubit'], params=[])[0m
+[32m2026-03-18 19:14:36.801[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Controlled S^dagger' : csdg(qubits=['control_qubit', 'target_qubit'], params=[])[0m
+[32m2026-03-18 19:14:36.801[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Controlled SWAP (Fredkin)' : cswap(qubits=['control_qubit', 'target_qubit1', 'target_qubit2'], params=[])[0m
+[32m2026-03-18 19:14:36.802[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Controlled sqrt X' : csx(qubits=['control_qubit', 'target_qubit'], params=[])[0m
+[32m2026-03-18 19:14:36.802[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Controlled U' : cu(qubits=['control_qubit', 'target_qubit'], params=['theta', 'phi', 'lam', 'gamma'])[0m
+[32m2026-03-18 19:14:36.802[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Controlled X' : cx(qubits=['control_qubit', 'target_qubit'], params=[])[0m
+[32m2026-03-18 19:14:36.802[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Controlled Y' : cy(qubits=['control_qubit', 'target_qubit'], params=[])[0m
+[32m2026-03-18 19:14:36.802[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Controlled Z' : cz(qubits=['control_qubit', 'target_qubit'], params=[])[0m
+[32m2026-03-18 19:14:36.803[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Double CNOT' : dcx(qubits=['qubit1', 'qubit2'], params=[])[0m
+[32m2026-03-18 19:14:36.803[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Echoed Cross-Resonance' : ecr(qubits=['qubit1', 'qubit2'], params=[])[0m
+[32m2026-03-18 19:14:36.803[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Hadamard' : h(qubits=['qubit'], params=[])[0m
+[32m2026-03-18 19:14:36.803[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Identity' : id(qubits=['qubit'], params=[])[0m
+[32m2026-03-18 19:14:36.803[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'iSWAP' : iswap(qubits=['qubit1', 'qubit2'], params=[])[0m
+[32m2026-03-18 19:14:36.803[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Multi-Controlled Phase' : mcp(qubits=['control_qubits...', 'target_qubit'], params=['theta'])[0m
+[32m2026-03-18 19:14:36.803[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Multi-Controlled X Rotation' : mcrx(qubits=['control_qubits...', 'target_qubit'], params=['theta'])[0m
+[32m2026-03-18 19:14:36.804[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Multi-Controlled Y Rotation' : mcry(qubits=['control_qubits...', 'target_qubit'], params=['theta'])[0m
+[32m2026-03-18 19:14:36.804[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Multi-Controlled Z Rotation' : mcrz(qubits=['control_qubits...', 'target_qubit'], params=['theta'])[0m
+[32m2026-03-18 19:14:36.804[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Multi-Controlled X' : mcx(qubits=['control_qubits...', 'target_qubit'], params=[])[0m
+[32m2026-03-18 19:14:36.805[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Phase' : p(qubits=['qubit'], params=['phi'])[0m
+[32m2026-03-18 19:14:36.805[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'R' : r(qubits=['qubit'], params=['theta', 'phi'])[0m
+[32m2026-03-18 19:14:36.805[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Simplified 3-Controlled Toffoli' : rcccx(qubits=['control_qubit1', 'control_qubit2', 'control_qubit3', 'target_qubit'], params=[])[0m
+[32m2026-03-18 19:14:36.806[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Simplified Toffoli (Margolus)' : rccx(qubits=['control_qubit1', 'control_qubit2', 'target_qubit'], params=[])[0m
+[32m2026-03-18 19:14:36.806[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'RV' : rv(qubits=['qubit'], params=['vx', 'vy', 'vz'])[0m
+[32m2026-03-18 19:14:36.806[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'RX' : rx(qubits=['qubit'], params=['phi'])[0m
+[32m2026-03-18 19:14:36.806[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'RXX' : rxx(qubits=['qubit1', 'qubit2'], params=['phi'])[0m
+[32m2026-03-18 19:14:36.806[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'RY' : ry(qubits=['qubit'], params=['phi'])[0m
+[32m2026-03-18 19:14:36.807[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'RYY' : ryy(qubits=['qubit1', 'qubit2'], params=['phi'])[0m
+[32m2026-03-18 19:14:36.807[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'RZ' : rz(qubits=['qubit'], params=['phi'])[0m
+[32m2026-03-18 19:14:36.807[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'RZX' : rzx(qubits=['qubit1', 'qubit2'], params=['theta'])[0m
+[32m2026-03-18 19:14:36.807[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'RZZ' : rzz(qubits=['qubit1', 'qubit2'], params=['phi'])[0m
+[32m2026-03-18 19:14:36.807[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'S' : s(qubits=['qubit'], params=[])[0m
+[32m2026-03-18 19:14:36.808[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'S-adjoint' : sdg(qubits=['qubit'], params=[])[0m
+[32m2026-03-18 19:14:36.808[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'SWAP' : swap(qubits=['qubit1', 'qubit2'], params=[])[0m
+[32m2026-03-18 19:14:36.808[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'sqrt X' : sx(qubits=['qubit'], params=[])[0m
+[32m2026-03-18 19:14:36.808[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'inverse sqrt X' : sxdg(qubits=['qubit'], params=[])[0m
+[32m2026-03-18 19:14:36.808[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'T' : t(qubits=['qubit'], params=[])[0m
+[32m2026-03-18 19:14:36.809[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'T-adjoint' : tdg(qubits=['qubit'], params=[])[0m
+[32m2026-03-18 19:14:36.809[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'U' : u(qubits=['qubit'], params=['theta', 'phi', 'delta'])[0m
+[32m2026-03-18 19:14:36.809[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'X' : x(qubits=['qubit'], params=[])[0m
+[32m2026-03-18 19:14:36.809[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Y' : y(qubits=['qubit'], params=[])[0m
+[32m2026-03-18 19:14:36.809[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36m__init__[0m:[36m104[0m - [1m	'Z' : z(qubits=['qubit'], params=[])[0m
+[32m2026-03-18 19:14:36.817[0m | [1mINFO    [0m | [36m__main__[0m:[36m<module>[0m:[36m246[0m - [1menv=CartPole-v1 input_registers={'input': 4} output_registers={'output': 2}[0m
+[32m2026-03-18 19:14:36.818[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mgenerate_genome[0m:[36m247[0m - [1mgenerating a child via 3 mutations.[0m
+[32m2026-03-18 19:14:36.818[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m185[0m - [1mstarting mutation process[0m
+[32m2026-03-18 19:14:36.818[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with clone[0m
+[32m2026-03-18 19:14:36.818[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m185[0m - [1mstarting mutation process[0m
+[32m2026-03-18 19:14:36.818[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with add_gate[0m
+[32m2026-03-18 19:14:36.819[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m185[0m - [1mstarting mutation process[0m
+[32m2026-03-18 19:14:36.819[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with disable_gate[0m
+[32m2026-03-18 19:14:36.819[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m185[0m - [1mstarting mutation process[0m
+[32m2026-03-18 19:14:36.819[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with add_gate[0m
+[32m2026-03-18 19:14:36.820[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m185[0m - [1mstarting mutation process[0m
+[32m2026-03-18 19:14:36.820[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with clone[0m
+[32m2026-03-18 19:14:36.821[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m185[0m - [1mstarting mutation process[0m
+[32m2026-03-18 19:14:36.821[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with add_gate[0m
+[32m2026-03-18 19:14:36.823[0m | [1mINFO    [0m | [36msrc.circuits.circuit[0m:[36mgenerate_pennylane_circuit[0m:[36m425[0m - [1minput indexes: [0, 1, 2, 3], output_indexes: [4, 5][0m
+[32m2026-03-18 19:14:36.843[0m | [1mINFO    [0m | [36m__main__[0m:[36m<module>[0m:[36m246[0m - [1menv=CartPole-v1 input_registers={'input': 4} output_registers={'output': 2}[0m
+[32m2026-03-18 19:14:36.844[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mgenerate_genome[0m:[36m247[0m - [1mgenerating a child via 1 mutations.[0m
+[32m2026-03-18 19:14:36.844[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m185[0m - [1mstarting mutation process[0m
+[32m2026-03-18 19:14:36.844[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with disable_gate[0m
+[32m2026-03-18 19:14:36.844[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with add_gate[0m
+[32m2026-03-18 19:14:36.847[0m | [1mINFO    [0m | [36msrc.circuits.circuit[0m:[36mgenerate_pennylane_circuit[0m:[36m425[0m - [1minput indexes: [0, 1, 2, 3], output_indexes: [4, 5][0m
+[32m2026-03-18 19:14:36.905[0m | [1mINFO    [0m | [36m__main__[0m:[36m<module>[0m:[36m246[0m - [1menv=CartPole-v1 input_registers={'input': 4} output_registers={'output': 2}[0m
+[32m2026-03-18 19:14:36.905[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mgenerate_genome[0m:[36m247[0m - [1mgenerating a child via 3 mutations.[0m
+[32m2026-03-18 19:14:36.906[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m185[0m - [1mstarting mutation process[0m
+[32m2026-03-18 19:14:36.906[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with add_gate[0m
+[32m2026-03-18 19:14:36.907[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m185[0m - [1mstarting mutation process[0m
+[32m2026-03-18 19:14:36.907[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with reorder_gate[0m
+[32m2026-03-18 19:14:36.907[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m185[0m - [1mstarting mutation process[0m
+[32m2026-03-18 19:14:36.907[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with reorder_gate[0m
+[32m2026-03-18 19:14:36.908[0m | [1mINFO    [0m | [36msrc.circuits.circuit[0m:[36mgenerate_pennylane_circuit[0m:[36m425[0m - [1minput indexes: [0, 1, 2, 3], output_indexes: [4, 5][0m
+[32m2026-03-18 19:14:36.929[0m | [1mINFO    [0m | [36m__main__[0m:[36m<module>[0m:[36m246[0m - [1menv=CartPole-v1 input_registers={'input': 4} output_registers={'output': 2}[0m
+[32m2026-03-18 19:14:36.930[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mgenerate_genome[0m:[36m247[0m - [1mgenerating a child via 2 mutations.[0m
+[32m2026-03-18 19:14:36.930[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m185[0m - [1mstarting mutation process[0m
+[32m2026-03-18 19:14:36.930[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with add_gate[0m
+[32m2026-03-18 19:14:36.931[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m185[0m - [1mstarting mutation process[0m
+[32m2026-03-18 19:14:36.931[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with clone[0m
+[32m2026-03-18 19:14:36.932[0m | [1mINFO    [0m | [36msrc.circuits.circuit[0m:[36mgenerate_pennylane_circuit[0m:[36m425[0m - [1minput indexes: [0, 1, 2, 3], output_indexes: [4, 5][0m
+[32m2026-03-18 19:14:36.959[0m | [1mINFO    [0m | [36m__main__[0m:[36m<module>[0m:[36m246[0m - [1menv=CartPole-v1 input_registers={'input': 4} output_registers={'output': 2}[0m
+[32m2026-03-18 19:14:36.959[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mgenerate_genome[0m:[36m247[0m - [1mgenerating a child via 1 mutations.[0m
+[32m2026-03-18 19:14:36.960[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m185[0m - [1mstarting mutation process[0m
+[32m2026-03-18 19:14:36.960[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with add_gate[0m
+[32m2026-03-18 19:14:36.960[0m | [1mINFO    [0m | [36m__main__[0m:[36m<module>[0m:[36m246[0m - [1menv=CartPole-v1 input_registers={'input': 4} output_registers={'output': 2}[0m
+[32m2026-03-18 19:14:36.961[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mgenerate_genome[0m:[36m247[0m - [1mgenerating a child via 3 mutations.[0m
+[32m2026-03-18 19:14:36.961[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m185[0m - [1mstarting mutation process[0m
+[32m2026-03-18 19:14:36.961[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with add_gate[0m
+[32m2026-03-18 19:14:36.962[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m185[0m - [1mstarting mutation process[0m
+[32m2026-03-18 19:14:36.962[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with add_gate[0m
+[32m2026-03-18 19:14:36.962[0m | [1mINFO    [0m | [36msrc.circuits.circuit[0m:[36mgenerate_pennylane_circuit[0m:[36m425[0m - [1minput indexes: [0, 1, 2, 3], output_indexes: [4, 5][0m
+[32m2026-03-18 19:14:36.962[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m185[0m - [1mstarting mutation process[0m
+[32m2026-03-18 19:14:36.962[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with clone[0m
+[32m2026-03-18 19:14:36.963[0m | [1mINFO    [0m | [36msrc.circuits.circuit[0m:[36mgenerate_pennylane_circuit[0m:[36m425[0m - [1minput indexes: [0, 1, 2, 3], output_indexes: [4, 5][0m
+[32m2026-03-18 19:14:37.005[0m | [1mINFO    [0m | [36m__main__[0m:[36m<module>[0m:[36m246[0m - [1menv=CartPole-v1 input_registers={'input': 4} output_registers={'output': 2}[0m
+[32m2026-03-18 19:14:37.006[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mgenerate_genome[0m:[36m247[0m - [1mgenerating a child via 1 mutations.[0m
+[32m2026-03-18 19:14:37.007[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m185[0m - [1mstarting mutation process[0m
+[32m2026-03-18 19:14:37.007[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with reorder_gate[0m
+[32m2026-03-18 19:14:37.007[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with add_gate[0m
+[32m2026-03-18 19:14:37.009[0m | [1mINFO    [0m | [36msrc.circuits.circuit[0m:[36mgenerate_pennylane_circuit[0m:[36m425[0m - [1minput indexes: [0, 1, 2, 3], output_indexes: [4, 5][0m
+[32m2026-03-18 19:14:37.024[0m | [1mINFO    [0m | [36m__main__[0m:[36m<module>[0m:[36m246[0m - [1menv=CartPole-v1 input_registers={'input': 4} output_registers={'output': 2}[0m
+[32m2026-03-18 19:14:37.025[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mgenerate_genome[0m:[36m247[0m - [1mgenerating a child via 1 mutations.[0m
+[32m2026-03-18 19:14:37.025[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m185[0m - [1mstarting mutation process[0m
+[32m2026-03-18 19:14:37.025[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with reorder_gate[0m
+[32m2026-03-18 19:14:37.025[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with add_gate[0m
+[32m2026-03-18 19:14:37.027[0m | [1mINFO    [0m | [36msrc.circuits.circuit[0m:[36mgenerate_pennylane_circuit[0m:[36m425[0m - [1minput indexes: [0, 1, 2, 3], output_indexes: [4, 5][0m
+[32m2026-03-18 19:14:37.045[0m | [1mINFO    [0m | [36m__main__[0m:[36m<module>[0m:[36m246[0m - [1menv=CartPole-v1 input_registers={'input': 4} output_registers={'output': 2}[0m
+[32m2026-03-18 19:14:37.046[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mgenerate_genome[0m:[36m247[0m - [1mgenerating a child via 3 mutations.[0m
+[32m2026-03-18 19:14:37.046[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m185[0m - [1mstarting mutation process[0m
+[32m2026-03-18 19:14:37.046[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with add_gate[0m
+[32m2026-03-18 19:14:37.047[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m185[0m - [1mstarting mutation process[0m
+[32m2026-03-18 19:14:37.047[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with add_gate[0m
+[32m2026-03-18 19:14:37.048[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m185[0m - [1mstarting mutation process[0m
+[32m2026-03-18 19:14:37.049[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with add_gate[0m
+[32m2026-03-18 19:14:37.050[0m | [1mINFO    [0m | [36msrc.circuits.circuit[0m:[36mgenerate_pennylane_circuit[0m:[36m425[0m - [1minput indexes: [0, 1, 2, 3], output_indexes: [4, 5][0m
+[32m2026-03-18 19:14:37.062[0m | [1mINFO    [0m | [36m__main__[0m:[36m<module>[0m:[36m246[0m - [1menv=CartPole-v1 input_registers={'input': 4} output_registers={'output': 2}[0m
+[32m2026-03-18 19:14:37.069[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mgenerate_genome[0m:[36m247[0m - [1mgenerating a child via 1 mutations.[0m
+[32m2026-03-18 19:14:37.069[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m185[0m - [1mstarting mutation process[0m
+[32m2026-03-18 19:14:37.069[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with add_gate[0m
+[32m2026-03-18 19:14:37.070[0m | [1mINFO    [0m | [36msrc.circuits.circuit[0m:[36mgenerate_pennylane_circuit[0m:[36m425[0m - [1minput indexes: [0, 1, 2, 3], output_indexes: [4, 5][0m
+[32m2026-03-18 19:14:37.086[0m | [1mINFO    [0m | [36m__main__[0m:[36m<module>[0m:[36m246[0m - [1menv=CartPole-v1 input_registers={'input': 4} output_registers={'output': 2}[0m
+[32m2026-03-18 19:14:37.087[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mgenerate_genome[0m:[36m247[0m - [1mgenerating a child via 1 mutations.[0m
+[32m2026-03-18 19:14:37.087[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m185[0m - [1mstarting mutation process[0m
+[32m2026-03-18 19:14:37.087[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with disable_gate[0m
+[32m2026-03-18 19:14:37.087[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with reorder_gate[0m
+[32m2026-03-18 19:14:37.087[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with reorder_gate[0m
+[32m2026-03-18 19:14:37.088[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with add_gate[0m
+[32m2026-03-18 19:14:37.089[0m | [1mINFO    [0m | [36msrc.circuits.circuit[0m:[36mgenerate_pennylane_circuit[0m:[36m425[0m - [1minput indexes: [0, 1, 2, 3], output_indexes: [4, 5][0m
+/home/sr8685/GitHub/exaqc/src/objectives/policy_objectives.py:1250: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at /pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:836.)
+  return torch.as_tensor(out, dtype=torch.float32).flatten()
+[32m2026-03-18 19:14:38.360[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0000] return=10.0 avg10=10.0eps=0.199 rb=10[0m
+/home/sr8685/GitHub/exaqc/src/objectives/policy_objectives.py:1250: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at /pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:836.)
+  return torch.as_tensor(out, dtype=torch.float32).flatten()
+[32m2026-03-18 19:14:38.393[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0000] return=10.0 avg10=10.0eps=0.199 rb=10[0m
+[32m2026-03-18 19:14:38.405[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0000] return=13.0 avg10=13.0eps=0.199 rb=13[0m
+/home/sr8685/GitHub/exaqc/src/objectives/policy_objectives.py:1250: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at /pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:836.)
+  return torch.as_tensor(out, dtype=torch.float32).flatten()
+/home/sr8685/GitHub/exaqc/src/objectives/policy_objectives.py:1250: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at /pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:836.)
+  return torch.as_tensor(out, dtype=torch.float32).flatten()
+[32m2026-03-18 19:14:38.452[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0000] return=8.0 avg10=8.0eps=0.199 rb=8[0m
+[32m2026-03-18 19:14:38.459[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0000] return=12.0 avg10=12.0eps=0.199 rb=12[0m
+[32m2026-03-18 19:14:38.468[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0000] return=12.0 avg10=12.0eps=0.199 rb=12[0m
+/home/sr8685/GitHub/exaqc/src/objectives/policy_objectives.py:1250: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at /pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:836.)
+  return torch.as_tensor(out, dtype=torch.float32).flatten()
+[32m2026-03-18 19:14:38.492[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0000] return=13.0 avg10=13.0eps=0.199 rb=13[0m
+[32m2026-03-18 19:14:38.522[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0000] return=8.0 avg10=8.0eps=0.199 rb=8[0m
+[32m2026-03-18 19:14:38.523[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0000] return=14.0 avg10=14.0eps=0.199 rb=14[0m
+[32m2026-03-18 19:14:38.524[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0000] return=9.0 avg10=9.0eps=0.199 rb=9[0m
+[32m2026-03-18 19:14:38.651[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0000] return=8.0 avg10=8.0eps=0.199 rb=8[0m
+[32m2026-03-18 19:14:39.054[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0010] return=10.0 avg10=10.5eps=0.189 rb=115[0m
+[32m2026-03-18 19:14:39.074[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0010] return=9.0 avg10=10.2eps=0.189 rb=115[0m
+[32m2026-03-18 19:14:39.115[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0010] return=13.0 avg10=10.4eps=0.189 rb=112[0m
+[32m2026-03-18 19:14:39.161[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0010] return=11.0 avg10=10.5eps=0.189 rb=117[0m
+[32m2026-03-18 19:14:39.169[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0010] return=11.0 avg10=11.9eps=0.189 rb=129[0m
+[32m2026-03-18 19:14:39.174[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0010] return=11.0 avg10=11.0eps=0.189 rb=123[0m
+[32m2026-03-18 19:14:39.216[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0010] return=15.0 avg10=11.2eps=0.189 rb=121[0m
+[32m2026-03-18 19:14:39.255[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0010] return=12.0 avg10=10.5eps=0.189 rb=119[0m
+[32m2026-03-18 19:14:39.296[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0010] return=10.0 avg10=10.1eps=0.189 rb=113[0m
+[32m2026-03-18 19:14:39.321[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0010] return=11.0 avg10=10.8eps=0.189 rb=116[0m
+[32m2026-03-18 19:14:39.570[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0010] return=12.0 avg10=10.8eps=0.189 rb=116[0m
+[32m2026-03-18 19:14:39.634[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0020] return=8.0 avg10=9.6eps=0.180 rb=211[0m
+[32m2026-03-18 19:14:39.732[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0020] return=11.0 avg10=10.3eps=0.180 rb=215[0m
+[32m2026-03-18 19:14:39.777[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0020] return=8.0 avg10=10.7eps=0.180 rb=230[0m
+[32m2026-03-18 19:14:39.780[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0020] return=8.0 avg10=9.8eps=0.180 rb=219[0m
+[32m2026-03-18 19:14:39.822[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0020] return=14.0 avg10=10.8eps=0.180 rb=223[0m
+[32m2026-03-18 19:14:39.856[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0020] return=8.0 avg10=11.4eps=0.180 rb=243[0m
+[32m2026-03-18 19:14:39.926[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0020] return=8.0 avg10=10.6eps=0.180 rb=222[0m
+[32m2026-03-18 19:14:39.943[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0020] return=10.0 avg10=10.3eps=0.180 rb=222[0m
+[32m2026-03-18 19:14:39.970[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0020] return=10.0 avg10=10.2eps=0.180 rb=219[0m
+[32m2026-03-18 19:14:40.087[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0020] return=8.0 avg10=9.7eps=0.180 rb=210[0m
+[32m2026-03-18 19:14:40.322[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0030] return=12.0 avg10=9.3eps=0.171 rb=308[0m
+[32m2026-03-18 19:14:40.324[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0030] return=8.0 avg10=9.4eps=0.171 rb=324[0m
+[32m2026-03-18 19:14:40.378[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0030] return=8.0 avg10=9.5eps=0.171 rb=314[0m
+[32m2026-03-18 19:14:40.399[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0030] return=8.0 avg10=10.7eps=0.171 rb=318[0m
+[32m2026-03-18 19:14:40.520[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0020] return=8.0 avg10=10.6eps=0.180 rb=222[0m
+[32m2026-03-18 19:14:40.552[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0030] return=10.0 avg10=10.6eps=0.171 rb=329[0m
+[32m2026-03-18 19:14:40.595[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0030] return=8.0 avg10=8.9eps=0.171 rb=311[0m
+[32m2026-03-18 19:14:40.666[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0030] return=8.0 avg10=9.7eps=0.171 rb=316[0m
+[32m2026-03-18 19:14:40.680[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0030] return=9.0 avg10=12.1eps=0.171 rb=364[0m
+[32m2026-03-18 19:14:40.689[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0030] return=11.0 avg10=11.0eps=0.171 rb=332[0m
+[32m2026-03-18 19:14:40.963[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0040] return=10.0 avg10=10.0eps=0.163 rb=424[0m
+[32m2026-03-18 19:14:41.020[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0030] return=8.0 avg10=9.7eps=0.171 rb=307[0m
+[32m2026-03-18 19:14:41.021[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0040] return=10.0 avg10=10.4eps=0.163 rb=412[0m
+[32m2026-03-18 19:14:41.127[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0040] return=10.0 avg10=10.0eps=0.163 rb=414[0m
+[32m2026-03-18 19:14:41.143[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0040] return=10.0 avg10=10.5eps=0.163 rb=423[0m
+[32m2026-03-18 19:14:41.260[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0040] return=8.0 avg10=10.1eps=0.163 rb=430[0m
+[32m2026-03-18 19:14:41.396[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0040] return=8.0 avg10=9.7eps=0.163 rb=429[0m
+[32m2026-03-18 19:14:41.398[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0040] return=10.0 avg10=10.8eps=0.163 rb=419[0m
+[32m2026-03-18 19:14:41.442[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0040] return=10.0 avg10=10.8eps=0.163 rb=424[0m
+[32m2026-03-18 19:14:41.449[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0040] return=11.0 avg10=12.1eps=0.163 rb=485[0m
+[32m2026-03-18 19:14:41.487[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0030] return=9.0 avg10=10.1eps=0.171 rb=323[0m
+[32m2026-03-18 19:14:41.901[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0040] return=10.0 avg10=10.2eps=0.163 rb=409[0m
+[32m2026-03-18 19:14:42.175[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0040] return=10.0 avg10=10.1eps=0.163 rb=424[0m
+[32m2026-03-18 19:14:44.604[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0050] return=10.0 avg10=9.2eps=0.155 rb=501[0m
+[32m2026-03-18 19:14:51.550[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0050] return=10.0 avg10=9.9eps=0.155 rb=513[0m
+[32m2026-03-18 19:14:51.892[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0050] return=10.0 avg10=10.2eps=0.155 rb=514[0m
+[32m2026-03-18 19:14:53.054[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0050] return=10.0 avg10=9.6eps=0.155 rb=515[0m
+[32m2026-03-18 19:14:58.712[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0050] return=10.0 avg10=10.2eps=0.155 rb=525[0m
+[32m2026-03-18 19:14:58.781[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0050] return=10.0 avg10=9.7eps=0.155 rb=521[0m
+[32m2026-03-18 19:14:59.088[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0050] return=9.0 avg10=9.5eps=0.155 rb=524[0m
+[32m2026-03-18 19:14:59.262[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0050] return=10.0 avg10=10.5eps=0.155 rb=529[0m
+[32m2026-03-18 19:15:00.906[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0050] return=9.0 avg10=10.0eps=0.155 rb=530[0m
+[32m2026-03-18 19:15:04.174[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0050] return=11.0 avg10=10.8eps=0.155 rb=532[0m
+[32m2026-03-18 19:15:39.873[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0050] return=17.0 avg10=12.0eps=0.155 rb=605[0m
+[32m2026-03-18 19:15:40.478[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0060] return=8.0 avg10=9.3eps=0.147 rb=607[0m
+[32m2026-03-18 19:15:43.565[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0060] return=8.0 avg10=9.3eps=0.147 rb=608[0m
+[32m2026-03-18 19:15:45.046[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0060] return=11.0 avg10=10.2eps=0.147 rb=615[0m
+[32m2026-03-18 19:15:50.300[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0060] return=11.0 avg10=10.2eps=0.147 rb=631[0m
+[32m2026-03-18 19:15:50.857[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0060] return=9.0 avg10=9.4eps=0.147 rb=595[0m
+[32m2026-03-18 19:15:52.425[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0060] return=11.0 avg10=9.7eps=0.147 rb=622[0m
+[32m2026-03-18 19:15:58.207[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0060] return=11.0 avg10=10.3eps=0.147 rb=627[0m
+[32m2026-03-18 19:15:59.090[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0060] return=11.0 avg10=10.7eps=0.147 rb=637[0m
+[32m2026-03-18 19:15:59.803[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0060] return=14.0 avg10=10.0eps=0.147 rb=621[0m
+[32m2026-03-18 19:16:06.686[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0060] return=8.0 avg10=10.5eps=0.147 rb=637[0m
+[32m2026-03-18 19:16:29.428[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0070] return=9.0 avg10=9.5eps=0.140 rb=702[0m
+[32m2026-03-18 19:16:33.320[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0060] return=8.0 avg10=10.0eps=0.147 rb=705[0m
+[32m2026-03-18 19:16:37.711[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0070] return=9.0 avg10=10.1eps=0.140 rb=716[0m
+[32m2026-03-18 19:16:40.454[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0070] return=9.0 avg10=10.4eps=0.140 rb=712[0m
+[32m2026-03-18 19:16:41.319[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0070] return=14.0 avg10=10.2eps=0.140 rb=733[0m
+[32m2026-03-18 19:16:49.915[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0070] return=10.0 avg10=10.3eps=0.140 rb=725[0m
+[32m2026-03-18 19:16:55.130[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0070] return=10.0 avg10=10.1eps=0.140 rb=728[0m
+[32m2026-03-18 19:16:56.086[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0070] return=9.0 avg10=9.5eps=0.140 rb=690[0m
+[32m2026-03-18 19:16:56.538[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0070] return=10.0 avg10=10.6eps=0.140 rb=743[0m
+[32m2026-03-18 19:16:57.673[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0070] return=9.0 avg10=9.5eps=0.140 rb=716[0m
+[32m2026-03-18 19:17:03.413[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0070] return=9.0 avg10=9.5eps=0.140 rb=732[0m
+[32m2026-03-18 19:17:20.340[0m | [1mINFO    [0m | [36m__main__[0m:[36m__call__[0m:[36m121[0m - [1m[0009] train_return_mean=9.95 best_episode_return=16.00 eval_return_mean=9.30 eval_return_std=0.78 env=CartPole-v1[0m
+[32m2026-03-18 19:17:20.342[0m | [32m[1mSUCCESS [0m | [36msrc.evolution.steady_state_population[0m:[36minsert_genome[0m:[36m139[0m - [32m[1m🎯 New best genome 9 [insertion 1] Population found new GLOBAL best genome with fitness: {'train_return_mean': 9.95, 'best_episode_return': 16.0, 'eval_return_mean': 9.3, 'eval_return_std': 0.7810249675906655, 'episodes': 80, 'env_id': 'CartPole-v1', 'algo': 'q_learning', 'n_actions': 2, 'input_mode': 'angle'}[0m
+[32m2026-03-18 19:17:20.342[0m | [1mINFO    [0m | [36msrc.circuits.circuit[0m:[36mgenerate_pennylane_circuit[0m:[36m425[0m - [1minput indexes: [0, 1, 2, 3], output_indexes: [4, 5][0m
+[32m2026-03-18 19:17:20.347[0m | [1mINFO    [0m | [36msrc.evolution.steady_state_population[0m:[36m_save_best_circuit[0m:[36m177[0m - [1mwriting NEW BEST gnome to ./cartpole_results/genome_9.json[0m
+[32m2026-03-18 19:17:20.838[0m | [1mINFO    [0m | [36msrc.evolution.master_worker[0m:[36mmaster[0m:[36m60[0m - [1mevaluated 1 of max 2 genomes[0m
+[32m2026-03-18 19:17:20.838[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mgenerate_genome[0m:[36m247[0m - [1mgenerating a child via 1 mutations.[0m
+[32m2026-03-18 19:17:20.839[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m185[0m - [1mstarting mutation process[0m
+[32m2026-03-18 19:17:20.839[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with qubit_swap[0m
+[32m2026-03-18 19:17:20.839[0m | [1mINFO    [0m | [36msrc.evolution.exaqc[0m:[36mmutate[0m:[36m191[0m - [1m	attempting to mutate with add_gate[0m
+[32m2026-03-18 19:17:20.841[0m | [1mINFO    [0m | [36msrc.circuits.circuit[0m:[36mgenerate_pennylane_circuit[0m:[36m425[0m - [1minput indexes: [0, 1, 2, 3], output_indexes: [4, 5][0m
+[32m2026-03-18 19:17:20.919[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0000] return=11.0 avg10=11.0eps=0.199 rb=11[0m
+[32m2026-03-18 19:17:21.577[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0010] return=10.0 avg10=10.9eps=0.189 rb=120[0m
+[32m2026-03-18 19:17:22.056[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0020] return=8.0 avg10=10.2eps=0.180 rb=222[0m
+[32m2026-03-18 19:17:22.518[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0030] return=8.0 avg10=9.5eps=0.171 rb=317[0m
+[32m2026-03-18 19:17:22.960[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0040] return=12.0 avg10=10.3eps=0.163 rb=420[0m
+[32m2026-03-18 19:17:27.239[0m | [1mINFO    [0m | [36m__main__[0m:[36m__call__[0m:[36m121[0m - [1m[0008] train_return_mean=10.25 best_episode_return=15.00 eval_return_mean=9.40 eval_return_std=0.66 env=CartPole-v1[0m
+[32m2026-03-18 19:17:27.240[0m | [32m[1mSUCCESS [0m | [36msrc.evolution.steady_state_population[0m:[36minsert_genome[0m:[36m139[0m - [32m[1m🎯 New best genome 8 [insertion 2] Population found new GLOBAL best genome with fitness: {'train_return_mean': 10.25, 'best_episode_return': 15.0, 'eval_return_mean': 9.4, 'eval_return_std': 0.6633249580710799, 'episodes': 80, 'env_id': 'CartPole-v1', 'algo': 'q_learning', 'n_actions': 2, 'input_mode': 'angle'}[0m
+[32m2026-03-18 19:17:27.240[0m | [1mINFO    [0m | [36msrc.circuits.circuit[0m:[36mgenerate_pennylane_circuit[0m:[36m425[0m - [1minput indexes: [0, 1, 2, 3], output_indexes: [4, 5][0m
+[32m2026-03-18 19:17:27.241[0m | [1mINFO    [0m | [36msrc.evolution.steady_state_population[0m:[36m_save_best_circuit[0m:[36m177[0m - [1mwriting NEW BEST gnome to ./cartpole_results/genome_8.json[0m
+[32m2026-03-18 19:17:27.574[0m | [1mINFO    [0m | [36msrc.evolution.master_worker[0m:[36mmaster[0m:[36m60[0m - [1mevaluated 2 of max 2 genomes[0m
+[32m2026-03-18 19:17:28.145[0m | [1mINFO    [0m | [36m__main__[0m:[36m__call__[0m:[36m121[0m - [1m[0006] train_return_mean=10.15 best_episode_return=16.00 eval_return_mean=9.30 eval_return_std=0.78 env=CartPole-v1[0m
+[32m2026-03-18 19:17:30.362[0m | [1mINFO    [0m | [36m__main__[0m:[36m__call__[0m:[36m121[0m - [1m[0012] train_return_mean=10.10 best_episode_return=14.00 eval_return_mean=9.30 eval_return_std=0.78 env=CartPole-v1[0m
+[32m2026-03-18 19:17:33.219[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0070] return=9.0 avg10=11.4eps=0.140 rb=819[0m
+[32m2026-03-18 19:17:34.991[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0050] return=12.0 avg10=10.3eps=0.155 rb=523[0m
+[32m2026-03-18 19:17:41.723[0m | [1mINFO    [0m | [36m__main__[0m:[36m__call__[0m:[36m121[0m - [1m[0002] train_return_mean=10.40 best_episode_return=14.00 eval_return_mean=9.30 eval_return_std=0.78 env=CartPole-v1[0m
+[32m2026-03-18 19:17:45.336[0m | [1mINFO    [0m | [36m__main__[0m:[36m__call__[0m:[36m121[0m - [1m[0011] train_return_mean=10.15 best_episode_return=15.00 eval_return_mean=9.30 eval_return_std=0.78 env=CartPole-v1[0m
+[32m2026-03-18 19:17:46.633[0m | [1mINFO    [0m | [36m__main__[0m:[36m__call__[0m:[36m121[0m - [1m[0003] train_return_mean=10.65 best_episode_return=15.00 eval_return_mean=9.30 eval_return_std=0.78 env=CartPole-v1[0m
+[32m2026-03-18 19:17:51.360[0m | [1mINFO    [0m | [36m__main__[0m:[36m__call__[0m:[36m121[0m - [1m[0010] train_return_mean=10.10 best_episode_return=14.00 eval_return_mean=9.40 eval_return_std=0.66 env=CartPole-v1[0m
+[32m2026-03-18 19:17:52.102[0m | [1mINFO    [0m | [36m__main__[0m:[36m__call__[0m:[36m121[0m - [1m[0004] train_return_mean=9.60 best_episode_return=14.00 eval_return_mean=9.30 eval_return_std=0.78 env=CartPole-v1[0m
+[32m2026-03-18 19:17:53.568[0m | [1mINFO    [0m | [36m__main__[0m:[36m__call__[0m:[36m121[0m - [1m[0007] train_return_mean=9.75 best_episode_return=17.00 eval_return_mean=9.30 eval_return_std=0.78 env=CartPole-v1[0m
+[32m2026-03-18 19:18:09.553[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0060] return=8.0 avg10=9.4eps=0.147 rb=617[0m
+[32m2026-03-18 19:18:16.045[0m | [1mINFO    [0m | [36m__main__[0m:[36m__call__[0m:[36m121[0m - [1m[0005] train_return_mean=11.65 best_episode_return=21.00 eval_return_mean=9.40 eval_return_std=0.66 env=CartPole-v1[0m
+[32m2026-03-18 19:18:42.168[0m | [1mINFO    [0m | [36msrc.objectives.policy_objectives[0m:[36mtrain_value_based[0m:[36m1445[0m - [1m[Q_LEARNING ep 0070] return=9.0 avg10=9.7eps=0.140 rb=714[0m
+[32m2026-03-18 19:19:14.169[0m | [1mINFO    [0m | [36m__main__[0m:[36m__call__[0m:[36m121[0m - [1m[0013] train_return_mean=9.95 best_episode_return=17.00 eval_return_mean=9.30 eval_return_std=0.78 env=CartPole-v1[0m
