@@ -194,9 +194,10 @@ class SteadyStateIslands(PopulationStrategy):
         self.global_best_genome = None
 
         self.profiler = profiler
-        if self.profiler is None:
+        if self.profiler is None and out_dir:
             self.profiler = EXAQCProfiler(
-                out_dir=out_dir,
+                out_dir=self.out_dir,
+                topk=5,
             )
 
     def is_initializing(self) -> bool:
@@ -401,6 +402,7 @@ class SteadyStateIslands(PopulationStrategy):
 
             if self.out_dir is not None:
                 self._save_best_circuit(genome, out_dir=self.out_dir, tag=tag)
+                self.profiler.plot_single_run()
 
     def _save_best_circuit(
         self, genome: CircuitGenome, out_dir: str = "artifacts/", tag: str = ""

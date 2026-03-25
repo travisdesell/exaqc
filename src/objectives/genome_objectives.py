@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import numpy as np
 import torch
+import copy
 
 from typing import Optional, Iterable, Callable, Any
 from loguru import logger
@@ -303,6 +304,8 @@ def _train_with_pennylane(
     train_list = list(train_data)
     test_list = list(test_data) if test_data is not None else None
 
+    best_params = None
+    best_metrics = None
     logger.info(f"getting loss function for '{loss_name}'")
     loss_fn = LOSS_REGISTRY[loss_name]
 
@@ -464,6 +467,8 @@ def _train_with_pennylane(
             "acc": float(correct / max(total, 1)),
         }
 
+    loss_global = float("inf")
+
     # ---- training loop ----
     for epoch in range(epochs):
         opt.zero_grad()
@@ -549,20 +554,29 @@ def _train_with_pennylane(
                         f"[{epoch:04d}] loss={tr['loss']:.6f} acc={tr['acc']:.3f}"
                     )
 
-    torch_params_to_genome(genome, torch_params)
+        torch_params_to_genome(genome, torch_params)
 
-    # return final metrics
-    metrics = eval_forward_only(
-        genome,
-        train_list,
-        test_list,
-        teacher_qnode=target_qnode,
-        n_classes=n_classes,
-        loss_fn=loss_fn,
-        class_counts=(train_data.class_counts, test_data.class_counts),
-        alpha=alpha,
-    )
-    genome.fitness = metrics
+        # return final metrics
+        metrics = eval_forward_only(
+            genome,
+            train_list,
+            test_list,
+            teacher_qnode=target_qnode,
+            n_classes=n_classes,
+            loss_fn=loss_fn,
+            class_counts=(train_data.class_counts, test_data.class_counts),
+            alpha=alpha,
+        )
+
+        if metrics["test_loss"] < loss_global:
+            loss_global = metrics["test_loss"]
+            best_params = copy.deepcopy(torch_params)
+            best_metrics = copy.deepcopy(metrics)
+            logger.info(f"Saved best model to genome:{genome.genome_number}")
+
+    # Save best loss genome params and metrics
+    torch_params_to_genome(genome, best_params)
+    genome.fitness = best_metrics
 
 
 # ---------- Qiskit ML route (TorchConnector + output-bit loss) ----------
