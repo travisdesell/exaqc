@@ -247,6 +247,23 @@ def encode_minigrid_image(obs: np.ndarray) -> torch.Tensor:
     return torch.tensor(obs.reshape(-1), dtype=torch.float32)
 
 
+def encode_discrete_to_angle_bits(s: int, n_bits: int) -> torch.Tensor:
+    """Encode a discrete integer state into binary bits as float values in [0, 1].
+
+    This is useful for angle encoding, where each bit is later mapped to a
+    rotation such as RY(pi * x_i).
+
+    Args:
+        s: Discrete state index.
+        n_bits: Number of bits to output.
+
+    Returns:
+        A float32 tensor of shape [n_bits] containing 0.0/1.0 values.
+    """
+    bits = [(s >> (n_bits - 1 - i)) & 1 for i in range(n_bits)]
+    return torch.tensor(bits, dtype=torch.float32)
+
+
 # ============================
 # Policy head (logits helpers)
 # ============================
@@ -1765,14 +1782,17 @@ def frozenlake_spec(
     n_states = 16 if map_name == "4x4" else 64
     n_bits = int(np.ceil(np.log2(n_states)))
 
+    # def encoder(obs):
+    #     return encode_discrete_to_bits(int(obs), n_bits)
+
     def encoder(obs):
-        return encode_discrete_to_bits(int(obs), n_bits)
+        return encode_discrete_to_angle_bits(int(obs), n_bits)
 
     return RLSpec(
         env_id="FrozenLake-v1",
         n_actions=4,
         algo=algo,
-        input_mode="basis",
+        input_mode="angle",
         return_expvals=True,
         obs_encoder=encoder,
         n_state_bits=n_bits,
