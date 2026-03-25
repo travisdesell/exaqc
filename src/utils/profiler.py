@@ -117,19 +117,21 @@ def _extract_train_fitness(genome: CircuitGenome) -> float:
     Returns:
         Extracted scalar train fitness value, or ``np.nan`` if unavailable.
     """
-    fit = getattr(genome, "fitness", None)
+    # fit = getattr(genome, "fitness", None)
 
-    if isinstance(fit, dict):
-        for key in (
-            "train_return_mean",
-            "eval_return_mean",
-            "best_episode_return",
-            "train_loss",
-            "test_loss",
-            "loss",
-        ):
-            if key in fit:
-                return _safe_float(fit[key])
+    # if isinstance(fit, dict):
+    #     for key in (
+    #         "train_return_mean",
+    #         "eval_return_mean",
+    #         "best_episode_return",
+    #         "train_loss",
+    #         "test_loss",
+    #         "loss",
+    #     ):
+    #         if key in fit:
+    #             return _safe_float(fit[key])
+
+    fit, _ = default_fitness_extractor(genome=genome)
 
     return _safe_float(fit)
 
