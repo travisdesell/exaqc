@@ -134,6 +134,33 @@ class CircuitGenome:
         # loss key
         return self.fitness[loss] < other.fitness[loss]
 
+    def get_gate_innovations(self) -> list[int]:
+        """
+        Returns:
+            A sorted list of all the enabled gate innovation numbers in this
+            genome.
+        """
+        gates = [gate.innovation_number for gate in self.gates if gate.enabled]
+        gates.sort()
+        return gates
+
+    def has_same_gates(self, other: CircuitGenome) -> bool:
+        """
+        This checks to see if this genome has the exact same enabled
+        gates as the other genome.
+
+        Returns:
+            True if both genomes have the same enabled gates innovation nubmers (but 
+            gates can potentially have different trained parameters).
+        """
+
+        self_gates = self.get_gate_innovations()
+        other_gates = other.get_gate_innovations()
+
+        logger.info(f"comparing self gates {self_gates} to other gates {other_gates}, equal? {self_gates == other_gates}")
+
+        return self.get_gate_innovations() == other.get_gate_innovations()
+
     def copy(self, genome_number: int = None) -> CircuitGenome:
         """
         Creates a deep copy of this CircuitGenome, with potentially a new

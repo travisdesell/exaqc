@@ -17,6 +17,14 @@ class PopulationStrategy(ABC):
         """
         pass
 
+    def get_best_genome(self) -> CircuitGenome:
+        """
+        Returns:
+            The best genome in the strategy. Will return none if no genomes 
+            have been inserted yet (i.e., the very beginning of the search).
+        """
+        pass
+
     @abstractmethod
     def get_parent(self, **kwargs) -> tuple[CircuitGenome, dict[str, any]]:
         """

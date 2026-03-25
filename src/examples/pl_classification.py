@@ -244,8 +244,9 @@ if __name__ == "__main__":
     )
     islands_parser.add_argument("--n_islands", type=int, default=10)
     islands_parser.add_argument("--max_island_size", type=int, default=10)
-    islands_parser.add_argument("--genomes_before_extinction", type=int, default=200)
-    islands_parser.add_argument("--islands_to_extinct", type=int, default=1)
+    islands_parser.add_argument("--genomes_before_extinction", type=int, default=100)
+    islands_parser.add_argument("--genomes_for_next_extinction", type=int, default=200)
+    islands_parser.add_argument("--islands_to_extinct", type=int, default=2)
     islands_parser.add_argument(
         "--intra_island_crossover_rate", type=float, default=0.5
     )
@@ -349,6 +350,7 @@ if __name__ == "__main__":
             n_islands=args.n_islands,
             max_island_size=args.max_island_size,
             genomes_before_extinction=args.genomes_before_extinction,
+            genomes_for_next_extinction=args.genomes_for_next_extinction,
             islands_to_extinct=args.islands_to_extinct,
             compare=compare,
             out_dir=args.out_dir,
