@@ -168,7 +168,7 @@ class SteadyStatePopulation(PopulationStrategy):
                 )
 
             self._save_best_circuit(genome, out_dir=self.out_dir, tag=tag)
-            self.profiler.plot_single_run()
+        self.profiler.plot_single_run()
 
         if len(self.population) > self.max_population_size:
             # remove the last genome from the population
