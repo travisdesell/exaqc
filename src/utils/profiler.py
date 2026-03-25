@@ -8,6 +8,7 @@ import glob
 import math
 import os
 import time
+from loguru import logger
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -131,6 +132,8 @@ def _extract_train_fitness(genome: CircuitGenome) -> float:
             if key in fit:
                 return _safe_float(fit[key])
 
+    # fit, _ = default_fitness_extractor(genome=genome)
+
     return _safe_float(fit)
 
 
@@ -248,6 +251,7 @@ class EXAQCPoint:
     best: float
     top5_mean: float
     pop_mean: float
+    worst: float
 
     gates_best: float
     gates_avg: float
@@ -338,6 +342,7 @@ class EXAQCProfiler:
                 best=0.0,
                 top5_mean=0.0,
                 pop_mean=0.0,
+                worst=0.0,
                 gates_best=0.0,
                 gates_avg=0.0,
                 gates_worst=0.0,
@@ -389,16 +394,11 @@ class EXAQCProfiler:
         vals = [value for value, _ in ordered]
         genomes = [genome for _, genome in ordered]
 
-        if mode == "rl":
-            best_genome = genomes[-1]
-            worst_genome = genomes[0]
-            best = vals[-1]
-            topk_vals = vals[-min(self.topk, len(vals)) :]
-        else:
-            best_genome = genomes[0]
-            worst_genome = genomes[-1]
-            best = vals[0]
-            topk_vals = vals[: min(self.topk, len(vals))]
+        best_genome = genomes[0]
+        worst_genome = genomes[-1]
+        best = vals[0]
+        worst = vals[-1]
+        topk_vals = vals[: min(self.topk, len(vals))]
 
         top5_mean = float(np.mean(topk_vals)) if topk_vals else float("nan")
         pop_mean = float(np.mean(vals)) if vals else float("nan")
@@ -449,6 +449,7 @@ class EXAQCProfiler:
             best=_safe_float(best),
             top5_mean=_safe_float(top5_mean),
             pop_mean=_safe_float(pop_mean),
+            worst=_safe_float(worst),
             gates_best=_safe_float(gates_best),
             gates_avg=_safe_float(gates_avg),
             gates_worst=_safe_float(gates_worst),
@@ -468,6 +469,8 @@ class EXAQCProfiler:
         with open(self.csv_path, "a", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=list(asdict(point).keys()))
             writer.writerow(asdict(point))
+
+        logger.info(f"Record Step Point: {asdict(point)}")
 
     def plot_single_run(
         self,
