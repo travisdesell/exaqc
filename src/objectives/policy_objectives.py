@@ -13,8 +13,9 @@ import gymnasium as gym
 
 from src.circuits.circuit import CircuitGenome
 from src.utils.helpers import torch_params_to_genome, genome_to_torch_params
-from .components import ReplayBuffer, UDReplayBuffer
-
+from src.utils.evilosses import NIG_NLL, NIG_Reg
+from .components import ReplayBuffer 
+from .components.UDReplayBuffer import UDReplayBuffer
 
 def train_rl(
     genome: CircuitGenome, *, spec: "RLSpec", algo: str = "reinforce"
@@ -1285,22 +1286,22 @@ def _infer_feature_dim(genome: CircuitGenome, spec: RLSpec) -> int:
         out0 = genome.circuit(x, params0)
     return int(torch.as_tensor(out0).numel())
 
-def NIG_NLL(y, mu, v, alpha, beta, reduce=True):
-    twoBlambda = 2*beta*(1+v)
-    nll = 0.5 * torch.log(torch.tensor(np.pi) / v) \
-        - alpha * torch.log(twoBlambda) \
-        + (alpha + 0.5) * torch.log(v * (y - mu) ** 2 + twoBlambda) \
-        + torch.lgamma(alpha) \
-        - torch.lgamma(alpha + 0.5)
+# def NIG_NLL(y, mu, v, alpha, beta, reduce=True):
+#     twoBlambda = 2*beta*(1+v)
+#     nll = 0.5 * torch.log(torch.tensor(np.pi) / v) \
+#         - alpha * torch.log(twoBlambda) \
+#         + (alpha + 0.5) * torch.log(v * (y - mu) ** 2 + twoBlambda) \
+#         + torch.lgamma(alpha) \
+#         - torch.lgamma(alpha + 0.5)
 
-    return torch.mean(nll) if reduce else nll
+#     return torch.mean(nll) if reduce else nll
 
-def NIG_Reg(y, mu, v, alpha, beta, reduce=True):
-    error = y - mu
-    evi = 2 * v + alpha + 1/beta
-    reg = error * evi
+# def NIG_Reg(y, mu, v, alpha, beta, reduce=True):
+#     error = y - mu
+#     evi = 2 * v + alpha + 1/beta
+#     reg = error * evi
 
-    return torch.mean(reg) if reduce else reg
+#     return torch.mean(reg) if reduce else reg
 
 def train_value_based(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
     """Train a genome using value-based RL (Q-learning or SARSA).
@@ -1620,4 +1621,204 @@ def frozenlake_spec(
         max_steps=100,
         eval_episodes=20,
         env_kwargs={"is_slippery": is_slippery},
+    )
+
+def halfcheetah_spec(
+    *,
+    episodes: int = 200,
+    lr: float = 3e-4,
+    seed: int = 0,
+    algo: str = "ppo",
+) -> RLSpec:
+    env_id = "HalfCheetah-v5"
+
+    def encoder(obs):
+        # tanh fallback is fine; MuJoCo obs magnitudes can vary
+        return encode_box_to_unit_interval(obs, scales=None)
+
+    # HalfCheetah action_dim = 6
+    # bounds usually [-1, 1] each
+    low = -np.ones(6, dtype=np.float32)
+    high = np.ones(6, dtype=np.float32)
+
+    return RLSpec(
+        env_id=env_id,
+        n_actions=6,  # unused for continuous
+        algo=algo,
+        action_space="continuous",
+        action_low=low,
+        action_high=high,
+        input_mode="angle",
+        return_expvals=True,  # use circuit expvals as features
+        obs_encoder=encoder,
+        episodes=episodes,
+        lr=lr,
+        seed=seed,
+        max_steps=1000,
+        eval_episodes=10,
+        rollout_steps=2048,
+        ppo_epochs=10,
+        ppo_minibatch=256,
+        entropy_coef=0.0,
+        value_coef=0.5,
+        gae_lambda=0.95,
+        ppo_clip=0.2,
+        target_kl=0.02,
+    )
+
+
+def walker2d_spec(
+    *,
+    episodes: int = 200,
+    lr: float = 3e-4,
+    seed: int = 0,
+    algo: str = "ppo",
+) -> RLSpec:
+    env_id = "Walker2d-v5"
+
+    def encoder(obs):
+        return encode_box_to_unit_interval(obs, scales=None)
+
+    # Walker2d action_dim = 6
+    low = -np.ones(6, dtype=np.float32)
+    high = np.ones(6, dtype=np.float32)
+
+    return RLSpec(
+        env_id=env_id,
+        n_actions=6,
+        algo=algo,
+        action_space="continuous",
+        action_low=low,
+        action_high=high,
+        input_mode="angle",
+        return_expvals=True,
+        obs_encoder=encoder,
+        episodes=episodes,
+        lr=lr,
+        seed=seed,
+        max_steps=1000,
+        eval_episodes=10,
+        rollout_steps=2048,
+        ppo_epochs=10,
+        ppo_minibatch=256,
+        entropy_coef=0.0,
+        value_coef=0.5,
+        gae_lambda=0.95,
+        ppo_clip=0.2,
+        target_kl=0.02,
+    )
+
+
+def mountaincar_continuous_spec(
+    *,
+    episodes: int = 200,
+    lr: float = 3e-4,
+    seed: int = 0,
+    algo: str = "ppo",
+) -> RLSpec:
+    # obs dim = 2 (position, velocity), action dim = 1 in [-1, 1]
+    scales = np.array([1.2, 0.07], dtype=np.float32)
+
+    def encoder(obs):
+        return encode_box_to_unit_interval(obs, scales=scales)
+
+    return RLSpec(
+        env_id="MountainCarContinuous-v0",
+        n_actions=1,
+        algo=algo,
+        action_space="continuous",
+        action_low=np.array([-1.0], dtype=np.float32),
+        action_high=np.array([1.0], dtype=np.float32),
+        clip_actions=True,
+        input_mode="angle",
+        return_expvals=True,
+        obs_encoder=encoder,
+        episodes=episodes,
+        lr=lr,
+        seed=seed,
+        max_steps=999,
+        eval_episodes=10,
+        rollout_steps=2048,
+        ppo_epochs=10,
+        ppo_minibatch=256,
+        entropy_coef=0.0,
+        value_coef=0.5,
+    )
+
+
+def minigrid_spec(
+    *,
+    env_id: str = "MiniGrid-Empty-8x8-v0",
+    obs_wrapper: str = "flat",  # "flat" or "image"
+    episodes: int = 200,
+    lr: float = 1e-3,
+    seed: int = 0,
+    algo: str = "ppo",
+    env_kwargs: Optional[dict[str, Any]] = None,
+) -> RLSpec:
+    """Returns specification template for MiniGrid environments.
+
+    Args:
+        env_id: MiniGrid environment id.
+        obs_wrapper: Observation wrapper type, one of {"flat", "image"}.
+        episodes: Number of training episodes/updates.
+        lr: Learning rate.
+        seed: Random seed.
+        algo: Algorithm name.
+        env_kwargs: Additional kwargs passed to gym.make.
+
+    Returns:
+        RLSpec configured for the chosen MiniGrid environment.
+    """
+    env_kwargs = dict(env_kwargs or {})
+    env_kwargs["obs_wrapper"] = obs_wrapper
+
+    # Probe wrapped env once to infer action count and observation dimension
+    env = _make_env(env_id, **env_kwargs)
+    obs, _ = env.reset(seed=seed)
+
+    if not isinstance(env.action_space, spaces.Discrete):
+        env.close()
+        raise ValueError(
+            f"MiniGrid spec expects a discrete action space, got {env.action_space}."
+        )
+
+    n_actions = int(env.action_space.n)
+
+    if obs_wrapper == "flat":
+        obs_encoder = encode_minigrid_flat
+        obs_dim = int(np.asarray(obs).reshape(-1).shape[0])
+    elif obs_wrapper == "image":
+        obs_encoder = encode_minigrid_image
+        obs_dim = int(np.asarray(obs).reshape(-1).shape[0])
+    else:
+        env.close()
+        raise ValueError(f"Unknown MiniGrid obs_wrapper={obs_wrapper}")
+
+    env.close()
+
+    return RLSpec(
+        env_id=env_id,
+        n_actions=n_actions,
+        action_space="discrete",
+        algo=algo,
+        input_mode="angle",
+        return_expvals=True,
+        obs_encoder=obs_encoder,
+        obs_dim=obs_dim,
+        obs_wrapper=obs_wrapper,
+        episodes=episodes,
+        lr=lr,
+        seed=seed,
+        max_steps=200,
+        eval_episodes=10,
+        rollout_steps=1024,
+        ppo_epochs=4,
+        ppo_minibatch=128,
+        entropy_coef=0.01,
+        value_coef=0.5,
+        gae_lambda=0.95,
+        ppo_clip=0.2,
+        target_kl=0.02,
+        env_kwargs=env_kwargs,
     )
