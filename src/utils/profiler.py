@@ -131,6 +131,8 @@ def _extract_train_fitness(genome: CircuitGenome) -> float:
             if key in fit:
                 return _safe_float(fit[key])
 
+    # fit, _ = default_fitness_extractor(genome=genome)
+
     return _safe_float(fit)
 
 
@@ -389,16 +391,10 @@ class EXAQCProfiler:
         vals = [value for value, _ in ordered]
         genomes = [genome for _, genome in ordered]
 
-        if mode == "rl":
-            best_genome = genomes[-1]
-            worst_genome = genomes[0]
-            best = vals[-1]
-            topk_vals = vals[-min(self.topk, len(vals)) :]
-        else:
-            best_genome = genomes[0]
-            worst_genome = genomes[-1]
-            best = vals[0]
-            topk_vals = vals[: min(self.topk, len(vals))]
+        best_genome = genomes[0]
+        worst_genome = genomes[-1]
+        best = vals[0]
+        topk_vals = vals[: min(self.topk, len(vals))]
 
         top5_mean = float(np.mean(topk_vals)) if topk_vals else float("nan")
         pop_mean = float(np.mean(vals)) if vals else float("nan")
