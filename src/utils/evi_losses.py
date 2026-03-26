@@ -2,7 +2,7 @@ import torch
 import numpy as np
 
 
-def NIG_NLL(y, mu, v, alpha, beta, reduce=True):
+def NIG_NLL(y, mu, v, alpha, beta, reduce=False):
     twoBlambda = 2 * beta * (1 + v)
     nll = (
         0.5 * torch.log(torch.tensor(np.pi) / v)
@@ -15,7 +15,7 @@ def NIG_NLL(y, mu, v, alpha, beta, reduce=True):
     return torch.mean(nll) if reduce else nll
 
 
-def NIG_Reg(y, mu, v, alpha, beta, reduce=True):
+def NIG_Reg(y, mu, v, alpha, beta, reduce=False):
     error = y - mu
     evi = 2 * v + alpha + 1 / beta
     reg = error * evi

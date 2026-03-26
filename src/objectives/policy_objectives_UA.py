@@ -1525,13 +1525,14 @@ def train_value_based(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
                 ) + 0.5 * NIG_Reg(target, mu_t, v_t, alpha_t, beta_t)
 
                 # Add evidential loss to the total loss
-                loss = torch.mean((q_sa_t - target) ** 2) + loss_evidence
+                # loss = torch.mean((q_sa_t - target) ** 2) + loss_evidence
+                loss = ((q_sa_t - target) ** 2) + loss_evidence
 
                 """
                 Since the transitions are weighted, multiply the loss by the
                 importance sampling weights
                 """
-                weights = torch.tensor(w, dtype=torch.float32).unsqueeze(-1)
+                weights = torch.tensor(w, dtype=torch.float32)
                 wts_loss = (weights * loss).mean()
 
                 opt.zero_grad()
