@@ -258,12 +258,48 @@ def balanced_ce_onehot_on_probs(
     probs = probs / probs.sum()
 
     y_onehot = y_onehot.to(dtype=probs.dtype, device=probs.device)
-    # alpha_per_class = alpha_per_class.to(dtype=probs.dtype, device=probs.device)
-
-    # logger.info(f"CALCULATING LOSS: y_onehot: {y_onehot}, probs: {probs}, alpha_per_class: {alpha_per_class}")
 
     return -(alpha_per_class * y_onehot * torch.log(probs)).sum()
 
+import torch
+
+def macro_ce_onehot_on_probs(
+    probs: torch.Tensor,      # [B, K]
+    y_onehot: torch.Tensor,   # [B, K]
+    eps: float = 1e-12,
+    **kwargs,
+) -> torch.Tensor:
+    """
+    Computes per-class averaged cross-entropy:
+      1. Compute CE per sample
+      2. Average CE within each class
+      3. Average across classes
+
+    Each class contributes equally, regardless of frequency.
+    """
+    probs = probs.clamp_min(eps)
+    probs = probs / probs.sum(dim=1, keepdim=True)
+
+    y_onehot = y_onehot.to(dtype=probs.dtype, device=probs.device)
+
+    # per-sample CE
+    ce_per_sample = -(y_onehot * torch.log(probs)).sum(dim=1)  # [B]
+
+    # class labels
+    true_classes = y_onehot.argmax(dim=1)  # [B]
+
+    class_losses = []
+    K = probs.shape[1]
+
+    for c in range(K):
+        mask = (true_classes == c)
+        if mask.any():
+            class_losses.append(ce_per_sample[mask].mean())
+
+    if len(class_losses) == 0:
+        return torch.tensor(0.0, dtype=probs.dtype, device=probs.device)
+
+    return torch.stack(class_losses).mean()
 
 def focal_onehot_on_probs(
     probs: torch.Tensor,
@@ -337,4 +373,5 @@ LOSS_REGISTRY: dict[str, Callable[..., torch.Tensor]] = {
     "ce": ce_onehot_on_probs,
     "bce": balanced_ce_onehot_on_probs,
     "focal": focal_onehot_on_probs,
+    "per_class": macro_ce_onehot_on_probs,
 }

@@ -15,4 +15,4 @@ spack env activate default-ml-x86_64-25052701
 
 source .venv/bin/activate
 
-srun python3 -m src.examples.pl_classification --logging_level INFO --dataset iris --number_genomes 500 --input_qubits 4 --out_dir ./artifacts/iris/runs/1
+srun python3 -m src.examples.pl_classification --logging_level INFO --dataset iris --number_genomes 500 --input_qubits 4 --out_dir ./artifacts/iris_f/runs/1 --loss ce steady_state --max_population_size 50
