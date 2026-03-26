@@ -1334,24 +1334,6 @@ def _infer_feature_dim(genome: CircuitGenome, spec: RLSpec) -> int:
     return int(torch.as_tensor(out0).numel())
 
 
-# def NIG_NLL(y, mu, v, alpha, beta, reduce=True):
-#     twoBlambda = 2*beta*(1+v)
-#     nll = 0.5 * torch.log(torch.tensor(np.pi) / v) \
-#         - alpha * torch.log(twoBlambda) \
-#         + (alpha + 0.5) * torch.log(v * (y - mu) ** 2 + twoBlambda) \
-#         + torch.lgamma(alpha) \
-#         - torch.lgamma(alpha + 0.5)
-
-#     return torch.mean(nll) if reduce else nll
-
-# def NIG_Reg(y, mu, v, alpha, beta, reduce=True):
-#     error = y - mu
-#     evi = 2 * v + alpha + 1/beta
-#     reg = error * evi
-
-#     return torch.mean(reg) if reduce else reg
-
-
 def train_value_based(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
     """Train a genome using value-based RL (Q-learning or SARSA).
 
