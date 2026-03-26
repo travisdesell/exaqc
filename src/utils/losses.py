@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import torch
-
 from typing import Sequence, Union, Callable
 
-# from loguru import logger
 
 InputState = Union[str, Sequence[int]]
 
@@ -258,11 +256,58 @@ def balanced_ce_onehot_on_probs(
     probs = probs / probs.sum()
 
     y_onehot = y_onehot.to(dtype=probs.dtype, device=probs.device)
-    # alpha_per_class = alpha_per_class.to(dtype=probs.dtype, device=probs.device)
-
-    # logger.info(f"CALCULATING LOSS: y_onehot: {y_onehot}, probs: {probs}, alpha_per_class: {alpha_per_class}")
 
     return -(alpha_per_class * y_onehot * torch.log(probs)).sum()
+
+
+def class_avg_ce_onehot_on_probs(
+    probs: torch.Tensor,  # [B, K]
+    y_onehot: torch.Tensor,  # [B, K]
+    eps: float = 1e-12,
+    **kwargs,
+) -> torch.Tensor:
+    """Compute per-class averaged cross-entropy from probabilities.
+
+    This ensures that each class contributes equally to the final loss,
+    regardless of its frequency in the batch.
+
+    Args:
+        probs (torch.Tensor): Predicted class probabilities of shape [B, K],
+            where B is the batch size and K is the number of classes. Values
+            are expected to be non-negative and will be normalized internally.
+        y_onehot (torch.Tensor): One-hot encoded ground truth labels of shape
+            [B, K].
+        eps (float, optional): Small constant for numerical stability to avoid
+            log(0). Defaults to 1e-12.
+        **kwargs: Additional unused keyword arguments for compatibility.
+
+    Returns:
+        torch.Tensor: Scalar tensor representing the macro-averaged
+        cross-entropy loss across classes.
+    """
+    probs = probs.clamp_min(eps)
+    probs = probs / probs.sum(dim=1, keepdim=True)
+
+    y_onehot = y_onehot.to(dtype=probs.dtype, device=probs.device)
+
+    # per-sample CE
+    ce_per_sample = -(y_onehot * torch.log(probs)).sum(dim=1)  # [B]
+
+    # class labels
+    true_classes = y_onehot.argmax(dim=1)  # [B]
+
+    class_losses = []
+    K = probs.shape[1]
+
+    for c in range(K):
+        mask = true_classes == c
+        if mask.any():
+            class_losses.append(ce_per_sample[mask].mean())
+
+    if len(class_losses) == 0:
+        return torch.tensor(0.0, dtype=probs.dtype, device=probs.device)
+
+    return torch.stack(class_losses).mean()
 
 
 def focal_onehot_on_probs(
@@ -337,4 +382,5 @@ LOSS_REGISTRY: dict[str, Callable[..., torch.Tensor]] = {
     "ce": ce_onehot_on_probs,
     "bce": balanced_ce_onehot_on_probs,
     "focal": focal_onehot_on_probs,
+    "per_class": class_avg_ce_onehot_on_probs,
 }

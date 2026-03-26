@@ -1,4 +1,4 @@
-for i in $(seq 1 10); do
+for i in $(seq 5 10); do
   mpiexec -n 4 python -m src.examples.pl_reinforce \
   --logging_level INFO \
   --algo reinforce \

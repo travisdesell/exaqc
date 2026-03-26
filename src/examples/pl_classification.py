@@ -21,7 +21,7 @@ from src.objectives.genome_objectives import (
     train_genome_objective,
 )
 from src.utils.helpers import genome_to_torch_params
-from src.utils.losses import LOSS_REGISTRY
+from src.utils.losses import LOSS_REGISTRY, ce_onehot_on_probs
 from src.datasets.classification import (
     IrisDataset,
     WineDataset,
@@ -69,6 +69,8 @@ def eval_probs_ce_and_acc(
 
     params = genome_to_torch_params(genome)  # empty dict if no params
     losses = []
+    probas = []
+    y_onehots = []
     correct = 0
     total = 0
     per_class_pred = {}
@@ -88,7 +90,7 @@ def eval_probs_ce_and_acc(
         probs_full = torch.as_tensor(probs_full, dtype=torch.float32)
 
         pred, probs = predict_from_probs(probs_full, n_classes=n_classes)
-        L = loss_fn(probs, y, alpha_per_class=alpha)
+        L = ce_onehot_on_probs(probs, y, alpha_per_class=alpha)
 
         losses.append(L)
         true = int(torch.argmax(y).item())
@@ -98,7 +100,16 @@ def eval_probs_ce_and_acc(
         if pred == true:
             per_class_pred[cls] += 1
 
-    avg_loss = float(torch.stack(losses).mean().item()) if losses else 0.0
+        probas.append(probs)
+        y_onehots.append(y)
+
+    if loss_fn.__name__ != "class_avg_ce_onehot_on_probs":
+        avg_loss = float(torch.stack(losses).mean().item()) if losses else 0.0
+    else:
+        probs = torch.stack([p.to(torch.float32) for p in probas], dim=0)
+        y_onehots = torch.stack([p.to(torch.float32) for p in y_onehots], dim=0)
+        avg_loss = float(loss_fn(probs, y_onehots))
+
     acc = float(correct / max(total, 1))
 
     log = ""
@@ -225,7 +236,9 @@ if __name__ == "__main__":
     )
 
     p.add_argument(
-        "--loss", default="ce", choices=["bce", "focal", "ce", "mse", "kl", "fidelity"]
+        "--loss",
+        default="ce",
+        choices=["per_class", "bce", "focal", "ce", "mse", "kl", "fidelity"],
     )
 
     subparsers = p.add_subparsers(

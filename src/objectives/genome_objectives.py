@@ -15,6 +15,7 @@ from src.utils.losses import (  # noqa: F401
     loss_state_angle,
     loss_obs_mse,
     ce_onehot_on_probs,
+    class_avg_ce_onehot_on_probs,
     LOSS_REGISTRY,
 )
 
@@ -157,6 +158,8 @@ def _eval_supervised_split(
     if data is None:
         return None
     losses = []
+    probas = []
+    y_onehots = []
     correct = 0
     total = 0
     for x, y, cls in data:
@@ -164,15 +167,24 @@ def _eval_supervised_split(
         probs = torch.as_tensor(probs, dtype=torch.float32)
         probs = probs[:n_classes]
         probs = probs / (probs.sum() + 1e-12)
-        L = loss_fn(probs, y, alpha_per_class=alpha)
+        L = ce_onehot_on_probs(probs, y, alpha_per_class=alpha)
         losses.append(L)
         pred = int(torch.argmax(probs).item())
         true = int(torch.argmax(y).item())
         correct += int(pred == true)
         total += 1
+        probas.append(probs)
+        y_onehots.append(y)
+
+    if loss_fn.__name__ != "class_avg_ce_onehot_on_probs":
+        loss = float(torch.stack(losses).mean().item()) if losses else 0.0
+    else:
+        probs = torch.stack([p.to(torch.float32) for p in probas], dim=0)
+        y_onehots = torch.stack([p.to(torch.float32) for p in y_onehots], dim=0)
+        loss = float(loss_fn(probs, y_onehots))
 
     return {
-        "loss": float(torch.stack(losses).mean().item()) if losses else 0.0,
+        "loss": loss,
         "acc": float(correct / max(total, 1)),
     }
 
@@ -235,7 +247,7 @@ def eval_forward_only(
                 genome,
                 params,
                 n_classes,
-                loss_fn=loss_fn,
+                loss_fn=ce_onehot_on_probs,
                 class_counts=class_counts[1],
                 alpha=alpha,
             )
@@ -315,6 +327,10 @@ def _train_with_pennylane(
         1.0 - np.power(beta, np.array(train_data.counts, dtype=np.float32))
     )
 
+    # soft weighting
+    # alpha = alpha / alpha.mean()
+    # alpha = alpha ** 0.5
+
     alpha = torch.as_tensor(alpha / alpha.mean(), dtype=torch.float32)
     logger.info(f"Selected alphas: {alpha}")
 
@@ -388,7 +404,7 @@ def _train_with_pennylane(
         probs = genome.circuit(x, torch_params)
         probs = torch.as_tensor(probs, dtype=torch.float32)
         probs = probs[:n_classes]
-        probs = probs / probs.sum()
+        probs = probs / (probs.sum() + 1e-12)
         return probs
 
     # --- eval teacher loss/metrics ---
@@ -408,7 +424,6 @@ def _train_with_pennylane(
         for x in data_list:
             phi = _normalize_state(_ensure_complex(target_qnode(x)))
             psi = forward_state(x)
-            # fid_loss = loss_one_minus_fidelity(phi, psi)
             fid_loss = loss_fn(phi, psi)
             losses.append(fid_loss)
             fidelities.append(1.0 - fid_loss)
@@ -438,6 +453,8 @@ def _train_with_pennylane(
             dict[str, float]: Mean loss and classification accuracy.
         """
         losses = []
+        probs = []
+        y_onehots = []
         # per_class_pred = {}
         correct = 0
         total = 0
@@ -445,7 +462,7 @@ def _train_with_pennylane(
             # if cls not in per_class_pred:
             #     per_class_pred[cls] = 0
             p = forward_probs(x)
-            eval_loss = loss_fn(
+            eval_loss = ce_onehot_on_probs(
                 p,
                 y,
                 alpha_per_class=alpha,
@@ -455,6 +472,8 @@ def _train_with_pennylane(
             true = int(torch.argmax(y).item())
             correct += int(pred == true)
             total += 1
+            probs.append(p)
+            y_onehots.append(y)
             # if pred == true:
             #     per_class_pred[cls] += 1
 
@@ -462,8 +481,17 @@ def _train_with_pennylane(
         # for k, v in class_counts.items():
         #     log += f"[{k}] Accuracy: {per_class_pred[k]/v:.4f} ({per_class_pred[k]}/{v}) | "
         # logger.info(f"{log}")
+        probs = torch.stack([p.to(torch.float32) for p in probs], dim=0)
+        y_onehots = torch.stack([p.to(torch.float32) for p in y_onehots], dim=0)
+
+        loss = (
+            torch.stack(losses).mean()
+            if loss_name != "per_class"
+            else loss_fn(probs, y_onehots)
+        )
+
         return {
-            "loss": float(torch.stack(losses).mean().item()),
+            "loss": float(loss.item()),
             "acc": float(correct / max(total, 1)),
         }
 
@@ -480,11 +508,12 @@ def _train_with_pennylane(
         )
 
         for i in range(batches_per_epoch):
-            # make sure we evaluate the entire dataset every epoch
 
             batch = sampler.sample()
 
             losses = []
+            probs = []
+            y_onehots = []
             if use_state:
                 for x in batch:
                     # teacher state: NO grad
@@ -500,14 +529,24 @@ def _train_with_pennylane(
             else:
                 for x, y, _ in batch:
                     p = forward_probs(x)
-                    L = (
-                        ce_onehot_on_probs(p, y, alpha_per_class=alpha)
-                        if loss_fn is None
-                        else loss_fn(p, y, alpha_per_class=alpha)
-                    )
-                    losses.append(L)
+                    if loss_name != "per_class":
+                        L = (
+                            ce_onehot_on_probs(p, y, alpha_per_class=alpha)
+                            if loss_fn is None
+                            else loss_fn(p, y, alpha_per_class=alpha)
+                        )
+                        losses.append(L)
+                    probs.append(p)
+                    y_onehots.append(y)
 
-            loss = torch.stack(losses).mean()
+            probs = torch.stack([p.to(torch.float32) for p in probs], dim=0)
+            y_onehots = torch.stack([p.to(torch.float32) for p in y_onehots], dim=0)
+
+            loss = (
+                torch.stack(losses).mean()
+                if loss_name != "per_class"
+                else loss_fn(probs, y_onehots)
+            )
 
             if not loss.requires_grad:
                 logger.warning(
@@ -525,7 +564,9 @@ def _train_with_pennylane(
                 genome.fitness = metrics
                 return
 
+            opt.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(list(torch_params.values()), max_norm=1.0)
             opt.step()
 
         if epoch % log_every == 0 or epoch == epochs - 1:
