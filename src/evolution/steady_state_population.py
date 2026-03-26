@@ -70,7 +70,7 @@ class SteadyStatePopulation(PopulationStrategy):
         """
         Returns:
             The best genome in the population if it exists, None otherwise.
-            Will only return none if no genomes have been inserted yet (i.e., 
+            Will only return none if no genomes have been inserted yet (i.e.,
             the very beginning of the search).
         """
 
@@ -78,7 +78,6 @@ class SteadyStatePopulation(PopulationStrategy):
             return self.population[0]
         else:
             return None
-
 
     def get_parent(self, **kwargs) -> tuple[CircuitGenome, dict[str, any]]:
         """
@@ -149,7 +148,7 @@ class SteadyStatePopulation(PopulationStrategy):
         for i in range(len(self.population)):
             match_genome = self.population[i]
             if match_genome.has_same_gates(genome):
-                #two genomes had the same enabled gates, keep the one with better fitness
+                # two genomes had the same enabled gates, keep the one with better fitness
 
                 if self.compare(match_genome, genome) > 0:
                     # the new genome has a better fitness, so remove the old genome
@@ -159,15 +158,18 @@ class SteadyStatePopulation(PopulationStrategy):
                         f"worse than the new genome fitness: {genome.fitness} where both have"
                         "the same enabled gates."
                     )
-                    logger.info(f"population genome gates: {match_genome.get_gate_innovations()}")
-                    logger.info(f"new genome gates:        {genome.get_gate_innovations()}")
+                    logger.info(
+                        f"population genome gates: {match_genome.get_gate_innovations()}"
+                    )
+                    logger.info(
+                        f"new genome gates:        {genome.get_gate_innovations()}"
+                    )
                     del self.population[i]
                     break
                 else:
                     # discard the new genome
                     self.insertions += 1
                     return
-
 
         bisect.insort(
             self.population,

@@ -150,14 +150,16 @@ class CircuitGenome:
         gates as the other genome.
 
         Returns:
-            True if both genomes have the same enabled gates innovation nubmers (but 
+            True if both genomes have the same enabled gates innovation nubmers (but
             gates can potentially have different trained parameters).
         """
 
         self_gates = self.get_gate_innovations()
         other_gates = other.get_gate_innovations()
 
-        logger.info(f"comparing self gates {self_gates} to other gates {other_gates}, equal? {self_gates == other_gates}")
+        logger.info(
+            f"comparing self gates {self_gates} to other gates {other_gates}, equal? {self_gates == other_gates}"
+        )
 
         return self.get_gate_innovations() == other.get_gate_innovations()
 
@@ -267,6 +269,7 @@ class CircuitGenome:
         method_name: str,
         qubits: list[tuple[str, int]] = [],
         parameters: dict[str, float] = {},
+        innovation_number: int = None,
     ):
         """
         Adds a new already created gate to this quantum circuit, keeping the

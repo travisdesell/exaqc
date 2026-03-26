@@ -20,7 +20,7 @@ class PopulationStrategy(ABC):
     def get_best_genome(self) -> CircuitGenome:
         """
         Returns:
-            The best genome in the strategy. Will return none if no genomes 
+            The best genome in the strategy. Will return none if no genomes
             have been inserted yet (i.e., the very beginning of the search).
         """
         pass
