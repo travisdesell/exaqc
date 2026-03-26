@@ -1,8 +1,0 @@
-Genome 228
-Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
-
-0.088  rxx  [('output', 1), ('input', 3)]  {'phi': 1.1662882357895201}
-0.192  cswap  [('input', 0), ('input', 3), ('output', 1)]  {}
-0.884  cz  [('input', 2), ('output', 1)]  {}
-0.887  s  [('output', 1)]  {}
-0.931  cy  [('input', 3), ('output', 0)]  {}

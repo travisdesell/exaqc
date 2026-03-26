@@ -1,9 +1,9 @@
 {
     "fitness": {
-        "train_return_mean": 10.2,
-        "best_episode_return": 20.0,
-        "eval_return_mean": 112.2,
-        "eval_return_std": 17.069270634681494,
+        "train_return_mean": 10.4,
+        "best_episode_return": 17.0,
+        "eval_return_mean": 66.7,
+        "eval_return_std": 14.683664392786973,
         "episodes": 80,
         "env_id": "CartPole-v1",
         "algo": "sarsa",
@@ -11,7 +11,7 @@
         "input_mode": "angle",
         "action_space": "discrete"
     },
-    "genome_number": 264,
+    "genome_number": 237,
     "metadata": {},
     "target": "pennylane",
     "input_qubits": [
@@ -84,8 +84,8 @@
             "enabled": true
         },
         {
-            "depth": 0.20058908656028362,
-            "method_name": "cx",
+            "depth": 0.2676286824763735,
+            "method_name": "cp",
             "qubits": [
                 [
                     "input",
@@ -93,16 +93,80 @@
                 ],
                 [
                     "input",
-                    0
+                    3
                 ]
             ],
-            "parameters": {},
-            "innovation_number": 416,
+            "parameters": {
+                "phi": 1.8397339783549826
+            },
+            "innovation_number": 234,
             "target": "pennylane",
             "enabled": true
         },
         {
-            "depth": 0.5804724262927836,
+            "depth": 0.29226480280270795,
+            "method_name": "ccx",
+            "qubits": [
+                [
+                    "input",
+                    0
+                ],
+                [
+                    "input",
+                    1
+                ],
+                [
+                    "input",
+                    3
+                ]
+            ],
+            "parameters": {},
+            "innovation_number": 343,
+            "target": "pennylane",
+            "enabled": true
+        },
+        {
+            "depth": 0.37008599742691545,
+            "method_name": "cry",
+            "qubits": [
+                [
+                    "input",
+                    3
+                ],
+                [
+                    "input",
+                    0
+                ]
+            ],
+            "parameters": {
+                "phi": 3.015001539174876
+            },
+            "innovation_number": 345,
+            "target": "pennylane",
+            "enabled": true
+        },
+        {
+            "depth": 0.5819980975908332,
+            "method_name": "cry",
+            "qubits": [
+                [
+                    "input",
+                    3
+                ],
+                [
+                    "output",
+                    0
+                ]
+            ],
+            "parameters": {
+                "phi": 3.015001539174876
+            },
+            "innovation_number": 233,
+            "target": "pennylane",
+            "enabled": false
+        },
+        {
+            "depth": 0.6174812222842683,
             "method_name": "rz",
             "qubits": [
                 [
@@ -111,29 +175,27 @@
                 ]
             ],
             "parameters": {
-                "phi": 2.9213552307258244
+                "phi": 1.128532509461662
             },
-            "innovation_number": 393,
+            "innovation_number": 377,
             "target": "pennylane",
             "enabled": true
         },
         {
-            "depth": 0.6360627656467758,
-            "method_name": "cz",
+            "depth": 0.6315937816829449,
+            "method_name": "rx",
             "qubits": [
                 [
-                    "input",
-                    0
-                ],
-                [
                     "output",
-                    1
+                    0
                 ]
             ],
-            "parameters": {},
-            "innovation_number": 394,
+            "parameters": {
+                "phi": 2.690832336811747
+            },
+            "innovation_number": 232,
             "target": "pennylane",
-            "enabled": true
+            "enabled": false
         },
         {
             "depth": 0.6885777829867575,
@@ -174,11 +236,35 @@
             "enabled": true
         },
         {
-            "depth": 0.7985955911971824,
-            "method_name": "mcx",
+            "depth": 0.7074117033651639,
+            "method_name": "cry",
             "qubits": [
                 [
-                    "input",
+                    "output",
+                    0
+                ],
+                [
+                    "output",
+                    1
+                ]
+            ],
+            "parameters": {
+                "phi": 0.6645418721116809
+            },
+            "innovation_number": 344,
+            "target": "pennylane",
+            "enabled": true
+        },
+        {
+            "depth": 0.9542390470291067,
+            "method_name": "ccz",
+            "qubits": [
+                [
+                    "output",
+                    1
+                ],
+                [
+                    "output",
                     0
                 ],
                 [
@@ -187,7 +273,7 @@
                 ]
             ],
             "parameters": {},
-            "innovation_number": 415,
+            "innovation_number": 378,
             "target": "pennylane",
             "enabled": true
         },
@@ -229,7 +315,7 @@
             },
             "innovation_number": 17,
             "target": "pennylane",
-            "enabled": false
+            "enabled": true
         }
     ]
 }

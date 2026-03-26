@@ -6,15 +6,16 @@ from typing import Any, Callable, Optional, Sequence
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from loguru import logger
 from torch.distributions import Categorical
 import gymnasium as gym
 from gymnasium import spaces
-import minigrid  # noqa
 
 from src.circuits.circuit import CircuitGenome
 from src.utils.helpers import torch_params_to_genome, genome_to_torch_params
-from .components import ReplayBuffer
+from src.utils.evi_losses import NIG_NLL, NIG_Reg
+from .components.UDReplayBuffer import UDReplayBuffer
 
 
 def train_rl(
@@ -288,14 +289,6 @@ def logits_from_kexpvals(z: torch.Tensor, n_actions: int) -> torch.Tensor:
     return z[:n_actions]
 
 
-def _clip_action(a: np.ndarray, spec: RLSpec) -> np.ndarray:
-    if not spec.clip_actions:
-        return a
-    if spec.action_low is not None and spec.action_high is not None:
-        return np.clip(a, spec.action_low, spec.action_high)
-    return a
-
-
 # ============================
 # Returns
 # ============================
@@ -333,8 +326,6 @@ class RLSpec:
         env_id: Gymnasium environment id.
         n_actions: Number of discrete actions.
         algo: Algorithm name (used by some trainers).
-
-        action_space: Specify whether the environment is discreet or continuous
 
         input_mode: How the genome encodes inputs ("angle" or "basis").
         return_expvals: If True, assume circuit returns expectation values.
@@ -386,16 +377,8 @@ class RLSpec:
     n_actions: int
     algo: str = "reinforce"
 
-    action_space: str = "discrete"  # "discrete" or "continuous"
-
     input_mode: str = "angle"  # "angle" or "basis"
     return_expvals: bool = True
-
-    # optional explicit observation dimension after wrapping/encoding
-    obs_dim: Optional[int] = None
-
-    # optional wrapper selection for envs like MiniGrid
-    obs_wrapper: Optional[str] = None  # e.g. None | "flat" | "image"
 
     # observation encoder
     obs_encoder: Optional[Callable[[Any], torch.Tensor]] = None
@@ -451,18 +434,6 @@ class RLSpec:
     target_update_every: int = 200  # steps between target net updates
     train_every: int = 1  # gradient step frequency
 
-    # continuous action handling
-    action_low: Optional[np.ndarray] = None
-    action_high: Optional[np.ndarray] = None
-    clip_actions: bool = True
-
-    # gaussian policy params
-    init_log_std: float = -0.5  # exp(-0.5) ~ 0.61
-    learn_std: bool = True  # if False -> fixed std
-    shared_std: bool = True  # if True -> one std for all dims
-    min_log_std: float = -5.0
-    max_log_std: float = 2.0
-
 
 # ============================
 # Policy+Value head
@@ -505,76 +476,6 @@ class PolicyValueHead(nn.Module):
         return logits, v
 
 
-class GaussianPolicyValueHead(nn.Module):
-    """
-    Maps circuit features -> (mu, log_std, value) for continuous actions.
-    """
-
-    def __init__(
-        self,
-        action_dim: int,
-        in_dim: int,
-        *,
-        init_log_std: float = -0.5,
-        learn_std: bool = True,
-        shared_std: bool = True,
-        min_log_std: float = -5.0,
-        max_log_std: float = 2.0,
-    ):
-        super().__init__()
-        self.action_dim = action_dim
-        self.in_dim = in_dim
-
-        self.mu = nn.Linear(in_dim, action_dim)
-        self.value = nn.Linear(in_dim, 1)
-
-        self.learn_std = learn_std
-        self.shared_std = shared_std
-        self.min_log_std = min_log_std
-        self.max_log_std = max_log_std
-
-        if learn_std:
-            if shared_std:
-                self.log_std = nn.Parameter(
-                    torch.tensor([init_log_std], dtype=torch.float32)
-                )
-            else:
-                self.log_std = nn.Parameter(
-                    torch.full((action_dim,), init_log_std, dtype=torch.float32)
-                )
-        else:
-            self.register_buffer(
-                "log_std_buf",
-                torch.full((1 if shared_std else action_dim,), init_log_std),
-            )
-
-    def forward(
-        self, features: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        f = torch.as_tensor(features, dtype=torch.float32).flatten()
-        if f.numel() < self.in_dim:
-            pad = torch.zeros(self.in_dim - f.numel(), dtype=f.dtype)
-            f = torch.cat([f, pad], dim=0)
-        f = f[: self.in_dim]
-
-        mu = self.mu(f)  # [A]
-
-        if self.learn_std:
-            ls = self.log_std
-        else:
-            ls = self.log_std_buf
-
-        if self.shared_std:
-            log_std = ls.expand(self.action_dim)
-        else:
-            log_std = ls
-
-        log_std = torch.clamp(log_std, self.min_log_std, self.max_log_std)
-        v = self.value(f).squeeze(-1)
-
-        return mu, log_std, v
-
-
 # ============================
 # Q head
 # ============================
@@ -613,16 +514,60 @@ class QHead(nn.Module):
 
 
 # ============================
+# Evidential head
+# ============================
+
+
+class EviHead(nn.Module):
+    """Evidential head over circuit features.
+
+    Args:
+        n_actions: Number of discrete actions.
+        in_dim: Feature dimension expected by the linear layer.
+    """
+
+    def __init__(self, n_actions: int, in_dim: int):
+        super().__init__()
+        self.n_actions = n_actions
+        self.evi = nn.Linear(in_dim, 4 * n_actions)
+
+    def evi_activation(self, out):
+        mu, logv, logalpha, logbeta = torch.split(out, self.n_actions, dim=-1)
+
+        v = F.softplus(logv)
+        alpha = F.softplus(logalpha) + 1
+        beta = F.softplus(logbeta)
+        return torch.concat([mu, v, alpha, beta], axis=-1)
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        """Compute evidence for each action.
+
+        Provides parameters of an NIG distribution fit over the predicted Q-values.
+
+        Args:
+            features: Feature tensor.
+
+        Returns:
+            Tensor of shape [4 * n_actions] containing evidence.
+        """
+        features = torch.as_tensor(features, dtype=torch.float32).flatten()
+        if features.numel() < self.evi.in_features:
+            pad = torch.zeros(
+                self.evi.in_features - features.numel(), dtype=features.dtype
+            )
+            features = torch.cat([features, pad], dim=0)
+        feature_evidence = self.evi(features[: self.evi.in_features])
+        evidence = self.evi_activation(feature_evidence)
+        return evidence
+
+
+# ============================
 # Core rollout (generic)
 # ============================
 
 
 def _make_env(env_id: str, **kwargs):
     """Instantiate a Gymnasium environment.
-
-    Supports optional MiniGrid wrappers through kwargs:
-        - obs_wrapper="flat"  -> FlatObsWrapper
-        - obs_wrapper="image" -> ImgObsWrapper
 
     Args:
         env_id: Gymnasium environment id.
@@ -631,23 +576,7 @@ def _make_env(env_id: str, **kwargs):
     Returns:
         A Gymnasium environment instance.
     """
-    obs_wrapper = kwargs.pop("obs_wrapper", None)
-    env = gym.make(env_id, **kwargs)
-
-    if env_id.startswith("MiniGrid-"):
-        try:
-            from minigrid.wrappers import FlatObsWrapper, ImgObsWrapper
-        except Exception as e:
-            raise RuntimeError(
-                "MiniGrid support requires the `minigrid` package to be installed."
-            ) from e
-
-        if obs_wrapper == "flat":
-            env = FlatObsWrapper(env)
-        elif obs_wrapper == "image":
-            env = ImgObsWrapper(env)
-
-    return env
+    return gym.make(env_id, **kwargs)
 
 
 def rollout_reinforce(
@@ -731,7 +660,7 @@ def rollout_actor_critic(
     params: dict[str, torch.nn.Parameter],
     *,
     spec: RLSpec,
-    head: nn.Module,  # PolicyValueHead OR GaussianPolicyValueHead
+    head: PolicyValueHead,
     episode_seed: int,
 ) -> dict[str, Any]:
     """Collect transitions for Actor-Critic or PPO.
@@ -772,39 +701,16 @@ def rollout_actor_critic(
         out = genome.circuit(x, params)
         feats = torch.as_tensor(out, dtype=torch.float32).flatten()
 
-        if spec.action_space == "discrete":
-            # ---- existing discrete behavior ----
-            logits, v = head(feats)  # PolicyValueHead
-            dist = Categorical(logits=logits)
-            a = dist.sample()
-            a_env = int(a.item())
-            logp = dist.log_prob(a)
-            ent = dist.entropy()
+        logits, v = head(feats)
+        dist = Categorical(logits=logits)
+        a = dist.sample()
 
-        else:
-            # ---- continuous (Gaussian) behavior ----
-            # head is GaussianPolicyValueHead
-            mu, log_std, v = head(feats)
-            std = torch.exp(log_std)
-            dist = torch.distributions.Normal(mu, std)
-
-            a = dist.sample()  # [action_dim]
-            # IMPORTANT: for multivariate independent Normal, sum logprob across dims
-            logp = dist.log_prob(a).sum()
-            ent = dist.entropy().sum()  # noqa
-
-            a_np = a.detach().cpu().numpy()
-            if getattr(spec, "clip_actions", True):
-                if spec.action_low is not None and spec.action_high is not None:
-                    a_np = np.clip(a_np, spec.action_low, spec.action_high)
-            a_env = a_np
-
-        next_obs, r, terminated, truncated, _ = env.step(a_env)
+        next_obs, r, terminated, truncated, _ = env.step(int(a.item()))
         done = terminated or truncated
 
         obs_tensors.append(x.detach().cpu())
         actions.append(a.detach().cpu())
-        logps_old.append(logp.detach().cpu())
+        logps_old.append(dist.log_prob(a).detach().cpu())
         values_old.append(v.detach().cpu())
         rewards.append(torch.tensor(float(r), dtype=torch.float32))
         dones.append(torch.tensor(1.0 if done else 0.0, dtype=torch.float32))
@@ -835,6 +741,7 @@ def rollout_actor_critic(
 @torch.no_grad()
 def eval_policy(
     genome: CircuitGenome,
+    *,
     spec: RLSpec,
     deterministic: bool = True,
     seed: int = 1234,
@@ -854,83 +761,37 @@ def eval_policy(
     """
     if getattr(genome, "circuit", None) is None or not callable(genome.circuit):
         genome.generate_pennylane_circuit(
-            input_mode=spec.input_mode,
-            measure_registers=spec.return_expvals,
+            input_mode=spec.input_mode, measure_registers=spec.return_expvals
         )
 
     params = genome_to_torch_params(genome)
 
-    # infer feature dim if continuous
-    head = None
-    if spec.action_space == "continuous":
-        env0 = _make_env(spec.env_id, **(spec.env_kwargs or {}))
-        o0, _ = env0.reset(seed=seed)
-        env0.close()
-
-        x0 = spec.obs_encoder(o0)
-        out0 = genome.circuit(x0, params)
-        in_dim = int(torch.as_tensor(out0).numel())
-
-        # if spec.action_dim is None:
-        #     raise ValueError("spec.action_dim must be set for continuous environments")
-
-        head = GaussianPolicyValueHead(
-            action_dim=spec.n_actions,
-            in_dim=in_dim,
-            init_log_std=getattr(spec, "init_log_std", -0.5),
-            learn_std=getattr(spec, "learn_std", True),
-            shared_std=getattr(spec, "shared_std", True),
-            min_log_std=getattr(spec, "min_log_std", -5.0),
-            max_log_std=getattr(spec, "max_log_std", 2.0),
-        )
-
     returns: list[float] = []
-
     for ep in range(spec.eval_episodes):
         env = _make_env(spec.env_id, **(spec.env_kwargs or {}))
         obs, _ = env.reset(seed=seed + ep)
 
         ep_ret = 0.0
-
         for _ in range(spec.max_steps):
             x = spec.obs_encoder(obs)
             out = genome.circuit(x, params)
 
-            if spec.action_space == "discrete":
-                if spec.return_expvals:
-                    out = torch.stack(list(out))
-                    logits = logits_from_kexpvals(out, spec.n_actions)
-                else:
-                    probs = torch.as_tensor(out, dtype=torch.float32).flatten()
-                    probs = probs[: spec.n_actions]
-                    probs = probs / (probs.sum() + 1e-12)
-                    logits = torch.log(probs.clamp_min(1e-12))
-
-                if deterministic:
-                    a = int(torch.argmax(logits).item())
-                else:
-                    a = int(Categorical(logits=logits).sample().item())
-
-                obs, r, terminated, truncated, _ = env.step(a)
-
+            if spec.return_expvals:
+                out = torch.stack(list(out))
+                logits = logits_from_kexpvals(out, spec.n_actions)
             else:
-                feats = torch.as_tensor(out, dtype=torch.float32).flatten()
-                mu, log_std, _ = head(feats)
+                probs = torch.as_tensor(out, dtype=torch.float32).flatten()
+                probs = probs[: spec.n_actions]
+                probs = probs / (probs.sum() + 1e-12)
+                logits = torch.log(probs.clamp_min(1e-12))
 
-                if deterministic:
-                    a = mu
-                else:
-                    std = torch.exp(log_std)
-                    dist = torch.distributions.Normal(mu, std)
-                    a = dist.sample()
+            if deterministic:
+                a = int(torch.argmax(logits).item())
+            else:
+                a = int(Categorical(logits=logits).sample().item())
 
-                a_np = a.detach().cpu().numpy()
-                a_np = _clip_action(a_np, spec)
-
-                obs, r, terminated, truncated, _ = env.step(a_np)
-
+            obs, r, terminated, truncated, _ = env.step(a)
             ep_ret += float(r)
-
             if terminated or truncated:
                 break
 
@@ -1094,32 +955,15 @@ def train_actor_critic(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
         }
         return genome
 
-    # ---- infer circuit feature dim ----
     with torch.no_grad():
         env0 = _make_env(spec.env_id, **(spec.env_kwargs or {}))
         o0, _ = env0.reset(seed=spec.seed)
         env0.close()
-        x0 = spec.obs_encoder(o0)
-        out0 = genome.circuit(x0, params)
+        dummy = spec.obs_encoder(o0)
+        out0 = genome.circuit(dummy, params)
         in_dim = int(torch.as_tensor(out0).numel())
 
-    # ---- build correct head ----
-    if spec.action_space == "discrete":
-        head: nn.Module = PolicyValueHead(n_actions=spec.n_actions, in_dim=in_dim)
-    else:
-        # if spec.action_dim is None:
-        #     raise ValueError("spec.action_dim must be set for continuous action envs")
-
-        head = GaussianPolicyValueHead(
-            action_dim=spec.n_actions,
-            in_dim=in_dim,
-            init_log_std=getattr(spec, "init_log_std", -0.5),
-            learn_std=getattr(spec, "learn_std", True),
-            shared_std=getattr(spec, "shared_std", True),
-            min_log_std=getattr(spec, "min_log_std", -5.0),
-            max_log_std=getattr(spec, "max_log_std", 2.0),
-        )
-
+    head = PolicyValueHead(n_actions=spec.n_actions, in_dim=in_dim)
     opt = torch.optim.Adam(
         list(params.values()) + list(head.parameters()), lr=spec.lr, weight_decay=0.0
     )
@@ -1128,11 +972,10 @@ def train_actor_critic(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
     recent_returns: list[float] = []
 
     for upd in range(spec.episodes):
-        obs_buf, act_buf, val_buf, rew_buf, done_buf = [], [], [], [], []
+        obs_buf, act_buf, logp_buf, val_buf, rew_buf, done_buf = [], [], [], [], [], []
         steps_collected = 0
         ep = 0
 
-        # ---- collect on-policy steps across episodes until rollout_steps ----
         while steps_collected < spec.rollout_steps:
             traj = rollout_actor_critic(
                 genome,
@@ -1147,25 +990,20 @@ def train_actor_critic(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
 
             obs_buf += traj["obs"]
             act_buf += traj["actions"]
+            logp_buf += traj["logps_old"]
             val_buf += traj["values_old"]
             rew_buf += traj["rewards"]
             done_buf += traj["dones"]
 
             steps_collected = len(obs_buf)
 
-        # ---- pack tensors ----
         obs_t = torch.stack([o.to(torch.float32) for o in obs_buf], dim=0)  # [T,D]
-
-        if spec.action_space == "discrete":
-            act_t = torch.stack(act_buf).long().view(-1)  # [T]
-        else:
-            act_t = torch.stack([a.to(torch.float32) for a in act_buf], dim=0)  # [T,A]
-
+        act_t = torch.stack(act_buf).long().view(-1)  # [T]
+        # logp_old_t = torch.stack(logp_buf).to(torch.float32).view(-1)  # [T]
         val_old_t = torch.stack(val_buf).to(torch.float32).view(-1)  # [T]
         rew_t = torch.stack(rew_buf).to(torch.float32).view(-1)  # [T]
         done_t = torch.stack(done_buf).to(torch.float32).view(-1)  # [T]
 
-        # ---- GAE ----
         adv_t, ret_t = gae_advantages(
             rew_t,
             val_old_t,
@@ -1176,7 +1014,6 @@ def train_actor_critic(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
         )
         adv_t = _normalize(adv_t)
 
-        # ---- compute new logps, values, entropies ----
         opt.zero_grad()
 
         new_logps: list[torch.Tensor] = []
@@ -1187,29 +1024,17 @@ def train_actor_critic(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
             x = obs_t[i]
             out = genome.circuit(x, params)
             feats = torch.as_tensor(out, dtype=torch.float32).flatten()
+            logits, v = head(feats)
+            dist = Categorical(logits=logits)
 
-            if spec.action_space == "discrete":
-                logits, v = head(feats)
-                dist = Categorical(logits=logits)
-                logp = dist.log_prob(act_t[i])
-                ent = dist.entropy()
-            else:
-                mu, log_std, v = head(feats)
-                std = torch.exp(log_std)
-                dist = torch.distributions.Normal(mu, std)
-                # act_t[i] is [A]
-                logp = dist.log_prob(act_t[i]).sum()
-                ent = dist.entropy().sum()
-
-            new_logps.append(logp)
-            entropies.append(ent)
+            new_logps.append(dist.log_prob(act_t[i]))
+            entropies.append(dist.entropy())
             new_vals.append(v)
 
         new_logp_t = torch.stack(new_logps)  # [T]
-        new_val_t = torch.stack(new_vals).view(-1)  # [T]
+        new_val_t = torch.stack(new_vals)  # [T]
         ent_t = torch.stack(entropies)  # [T]
 
-        # ---- losses ----
         loss_pi = -(new_logp_t * adv_t.detach()).mean()
         loss_v = 0.5 * (ret_t.detach() - new_val_t).pow(2).mean()
         loss_ent = -spec.entropy_coef * ent_t.mean() if spec.entropy_coef > 0 else 0.0
@@ -1235,8 +1060,7 @@ def train_actor_critic(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
             )
             logger.info(
                 f"[A2C upd {upd:04d}] loss={float(loss.item()):.4f} "
-                f"pi={float(loss_pi.item()):.4f} v={float(loss_v.item()):.4f} "
-                f"avg10ret={avg10:.1f}"
+                f"pi={float(loss_pi.item()):.4f} v={float(loss_v.item()):.4f} avg10ret={avg10:.1f}"
             )
 
     torch_params_to_genome(genome, params)
@@ -1307,7 +1131,6 @@ def train_ppo(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
         }
         return genome
 
-    # ---- infer feature dim ----
     with torch.no_grad():
         env = _make_env(spec.env_id, **(spec.env_kwargs or {}))
         o0, _ = env.reset(seed=spec.seed)
@@ -1316,23 +1139,7 @@ def train_ppo(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
         out0 = genome.circuit(x0, params)
         in_dim = int(torch.as_tensor(out0).numel())
 
-    # ---- build head ----
-    if spec.action_space == "discrete":
-        head: nn.Module = PolicyValueHead(n_actions=spec.n_actions, in_dim=in_dim)
-    else:
-        # if spec.action_dim is None:
-        #     raise ValueError("spec.action_dim must be set for continuous action envs")
-
-        head = GaussianPolicyValueHead(
-            action_dim=spec.n_actions,
-            in_dim=in_dim,
-            init_log_std=getattr(spec, "init_log_std", -0.5),
-            learn_std=getattr(spec, "learn_std", True),
-            shared_std=getattr(spec, "shared_std", True),
-            min_log_std=getattr(spec, "min_log_std", -5.0),
-            max_log_std=getattr(spec, "max_log_std", 2.0),
-        )
-
+    head = PolicyValueHead(n_actions=spec.n_actions, in_dim=in_dim)
     opt = torch.optim.Adam(
         list(params.values()) + list(head.parameters()), lr=spec.lr, weight_decay=0.0
     )
@@ -1345,7 +1152,6 @@ def train_ppo(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
         steps_collected = 0
         ep = 0
 
-        # ---- collect rollout buffer ----
         while steps_collected < spec.rollout_steps:
             traj = rollout_actor_critic(
                 genome,
@@ -1368,16 +1174,12 @@ def train_ppo(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
 
         T = len(obs_buf)
 
-        obs_t = torch.stack([o.to(torch.float32) for o in obs_buf], dim=0)  # [T,D]
-        logp_old_t = torch.stack(logp_buf).to(torch.float32).view(-1)  # [T]
-        val_old_t = torch.stack(val_buf).to(torch.float32).view(-1)  # [T]
-        rew_t = torch.stack(rew_buf).to(torch.float32).view(-1)  # [T]
-        done_t = torch.stack(done_buf).to(torch.float32).view(-1)  # [T]
-
-        if spec.action_space == "discrete":
-            act_t = torch.stack(act_buf).long().view(-1)  # [T]
-        else:
-            act_t = torch.stack([a.to(torch.float32) for a in act_buf], dim=0)  # [T,A]
+        obs_t = torch.stack([o.to(torch.float32) for o in obs_buf], dim=0)
+        act_t = torch.stack(act_buf).long().view(-1)
+        logp_old_t = torch.stack(logp_buf).to(torch.float32).view(-1)
+        val_old_t = torch.stack(val_buf).to(torch.float32).view(-1)
+        rew_t = torch.stack(rew_buf).to(torch.float32).view(-1)
+        done_t = torch.stack(done_buf).to(torch.float32).view(-1)
 
         adv_t, ret_t = gae_advantages(
             rew_t,
@@ -1406,28 +1208,16 @@ def train_ppo(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
                     x = obs_t[i]
                     out = genome.circuit(x, params)
                     feats = torch.as_tensor(out, dtype=torch.float32).flatten()
-
-                    if spec.action_space == "discrete":
-                        logits, v = head(feats)
-                        dist = Categorical(logits=logits)
-                        a = act_t[i]
-                        logp = dist.log_prob(a)
-                        ent = dist.entropy()
-                    else:
-                        mu, log_std, v = head(feats)
-                        std = torch.exp(log_std)
-                        dist = torch.distributions.Normal(mu, std)
-                        a = act_t[i]  # [A]
-                        logp = dist.log_prob(a).sum()
-                        ent = dist.entropy().sum()
-
-                    new_logps.append(logp)
+                    logits, v = head(feats)
+                    dist = Categorical(logits=logits)
+                    a = act_t[i]
+                    new_logps.append(dist.log_prob(a))
+                    entropies.append(dist.entropy())
                     new_vals.append(v)
-                    entropies.append(ent)
 
-                new_logp = torch.stack(new_logps).to(torch.float32)  # [mb]
-                new_val = torch.stack(new_vals).to(torch.float32).view(-1)  # [mb]
-                ent = torch.stack(entropies).to(torch.float32)  # [mb]
+                new_logp = torch.stack(new_logps)
+                new_val = torch.stack(new_vals)
+                ent = torch.stack(entropies)
 
                 ratio = torch.exp(new_logp - logp_old_t[idx])
 
@@ -1485,7 +1275,6 @@ def train_ppo(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
         "env_id": spec.env_id,
         "algo": "ppo",
     }
-
     return genome
 
 
@@ -1545,6 +1334,24 @@ def _infer_feature_dim(genome: CircuitGenome, spec: RLSpec) -> int:
     return int(torch.as_tensor(out0).numel())
 
 
+# def NIG_NLL(y, mu, v, alpha, beta, reduce=True):
+#     twoBlambda = 2*beta*(1+v)
+#     nll = 0.5 * torch.log(torch.tensor(np.pi) / v) \
+#         - alpha * torch.log(twoBlambda) \
+#         + (alpha + 0.5) * torch.log(v * (y - mu) ** 2 + twoBlambda) \
+#         + torch.lgamma(alpha) \
+#         - torch.lgamma(alpha + 0.5)
+
+#     return torch.mean(nll) if reduce else nll
+
+# def NIG_Reg(y, mu, v, alpha, beta, reduce=True):
+#     error = y - mu
+#     evi = 2 * v + alpha + 1/beta
+#     reg = error * evi
+
+#     return torch.mean(reg) if reduce else reg
+
+
 def train_value_based(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
     """Train a genome using value-based RL (Q-learning or SARSA).
 
@@ -1575,6 +1382,8 @@ def train_value_based(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
 
     feat_dim = _infer_feature_dim(genome, spec)
     q_head = QHead(n_actions=spec.n_actions, in_dim=feat_dim)
+    # Obtain the evidence for the Q-value predictions
+    evi_head = EviHead(n_actions=spec.n_actions, in_dim=feat_dim)
     q_tgt = QHead(n_actions=spec.n_actions, in_dim=feat_dim)
     q_tgt.load_state_dict(q_head.state_dict())
 
@@ -1582,7 +1391,8 @@ def train_value_based(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
         list(params.values()) + list(q_head.parameters()), lr=spec.lr, weight_decay=0.0
     )
 
-    rb = ReplayBuffer(spec.replay_capacity)
+    # rb = ReplayBuffer(spec.replay_capacity)
+    rb = UDReplayBuffer(spec.replay_capacity)
 
     epsilon = float(spec.epsilon)
     best_episode_return = -float("inf")
@@ -1602,26 +1412,50 @@ def train_value_based(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
             feats = _forward_features(genome, x, params)
             q_vals = q_head(feats)
 
+            # Calculate aleatoric and epistemic uncertainties from the evidential head output
+            evi = evi_head(feats)
+            mu, v, alpha, beta = torch.split(evi, int(spec.n_actions), dim=-1)
+            mu = mu.view(spec.n_actions)
+            v = v.view(spec.n_actions)
+            alpha = alpha.view(spec.n_actions)
+            beta = beta.view(spec.n_actions)
+
+            u_ep = torch.sqrt(beta / (v * (alpha - 1)))
+            u_al = beta / (alpha - 1)
+
             a = _epsilon_greedy_action(q_vals, epsilon)
+            unc_ratio = u_ep[a] / u_al[a]
 
             next_obs, r, terminated, truncated, _ = env.step(a)
             done = float(terminated or truncated)
             ep_ret += float(r)
 
             x2 = spec.obs_encoder(next_obs)
-            rb.push(x, a, r, x2, done)
+            # rb.push(x, a, r, x2, done)
+
+            # Push uncertainties along with the transition details to the replay buffer
+            rb.add(
+                x,
+                a,
+                r,
+                x2,
+                done,
+                u_ep.detach()[a],
+                u_al.detach()[a],
+                unc_ratio.detach(),
+            )
 
             obs = next_obs
             global_step += 1
 
             if len(rb) >= spec.warmup_steps and (global_step % spec.train_every) == 0:
-                batch = rb.sample(spec.td_batch_size)
+                s, a_b, r_b, s2, d_b, eps, als, idxs, w = rb.sample(spec.td_batch_size)
 
-                s = torch.stack([b[0].to(torch.float32) for b in batch], dim=0)
-                a_b = torch.tensor([b[1] for b in batch], dtype=torch.long)
-                r_b = torch.tensor([b[2] for b in batch], dtype=torch.float32)
-                s2 = torch.stack([b[3].to(torch.float32) for b in batch], dim=0)
-                d_b = torch.tensor([b[4] for b in batch], dtype=torch.float32)
+                a_b = torch.tensor([a for a in a_b], dtype=torch.long)
+                r_b = torch.tensor([r for r in r_b], dtype=torch.float32)
+                d_b = torch.tensor([d for d in d_b], dtype=torch.float32)
+                u_eps = torch.tensor([ep for ep in eps], dtype=torch.float32)
+                u_als = torch.tensor([al for al in als], dtype=torch.float32)
 
                 q_sa: list[torch.Tensor] = []
                 for i in range(s.shape[0]):
@@ -1630,26 +1464,92 @@ def train_value_based(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
                     q_sa.append(q_i[a_b[i]])
                 q_sa_t = torch.stack(q_sa)
 
+                """
+                The ratio of epistemic uncertainty to aleatoric uncertainty is used to prioritize
+                the transitions in the replay buffer. Higher epistemic uncertainty implies limited
+                knowledge and can help th model learn. Higher aleatoric uncertainty cannot be reduced
+                easily. Hence, the agent will benefit from high-epistemic and low-aleatoric transitions.
+                """
+                curr_unc_ratios = u_eps / u_als
+
+                unc_ratios: list[torch.Tensor] = []
                 with torch.no_grad():
                     q_next: list[torch.Tensor] = []
+                    mu: list[torch.Tensor] = []
+                    v: list[torch.Tensor] = []
+                    alpha: list[torch.Tensor] = []
+                    beta: list[torch.Tensor] = []
                     for i in range(s2.shape[0]):
                         feats2_i = _forward_features(genome, s2[i], params)
                         q2_i = q_tgt(feats2_i)
 
+                        """
+                        Calculate the uncertainty ratios for the next state to update the replay buffer.
+                        """
+                        evi_upd = evi_head(feats2_i)
+                        m, n, a, b = torch.split(evi_upd, int(spec.n_actions), dim=-1)
+                        m = m.view(spec.n_actions)
+                        n = n.view(spec.n_actions)
+                        a = a.view(spec.n_actions)
+                        b = b.view(spec.n_actions)
+                        u_ep = torch.sqrt(b / (n * (a - 1)))  # beta / (v * (alpha - 1))
+                        u_al = b / (a - 1)
+
                         if spec.algo == "sarsa":
                             a2 = _epsilon_greedy_action(q2_i, epsilon)
                             q_next.append(q2_i[a2])
+                            unc_ratios.append(u_ep[a2] / u_al[a2])
+                            mu.append(m[a2])
+                            v.append(n[a2])
+                            alpha.append(a[a2])
+                            beta.append(b[a2])
                         else:
                             q_next.append(torch.max(q2_i))
+                            max_idx = torch.argmax(q2_i)
+                            unc_ratios.append(u_ep[max_idx] / u_al[max_idx])
+                            mu.append(m[max_idx])
+                            v.append(n[max_idx])
+                            alpha.append(a[max_idx])
+                            beta.append(b[max_idx])
 
                     q_next_t = torch.stack(q_next)
+                    mu_t = torch.stack(mu)
+                    v_t = torch.stack(v)
+                    alpha_t = torch.stack(alpha)
+                    beta_t = torch.stack(beta)
                     target = r_b + spec.gamma * (1.0 - d_b) * q_next_t
 
-                loss = torch.mean((q_sa_t - target) ** 2)
+                # Calculate the evidential loss
+                loss_evidence = NIG_NLL(
+                    target, mu_t, v_t, alpha_t, beta_t
+                ) + 0.5 * NIG_Reg(target, mu_t, v_t, alpha_t, beta_t)
+
+                # Add evidential loss to the total loss
+                loss = torch.mean((q_sa_t - target) ** 2) + loss_evidence
+
+                """
+                Since the transitions are weighted, multiply the loss by the
+                importance sampling weights
+                """
+                weights = torch.tensor(w, dtype=torch.float32).unsqueeze(-1)
+                wts_loss = (weights * loss).mean()
 
                 opt.zero_grad()
-                loss.backward()
+                wts_loss.backward()
                 opt.step()
+
+                """
+                The buffer weights need to be updated periodically to prevent staleness.
+                The priorities are updated based on the current state-action uncertainty and
+                the next state-action uncertainty. Lambda_1 is used to balance between the current
+                visited state and the unvisited future potential.
+                """
+                lambda_1 = 0.7
+                new_priorities = lambda_1 * curr_unc_ratios + (
+                    1 - lambda_1
+                ) * torch.tensor(unc_ratios)
+
+                rb.update_priorities(idxs, new_priorities)
 
                 if (global_step % spec.target_update_every) == 0:
                     q_tgt.load_state_dict(q_head.state_dict())

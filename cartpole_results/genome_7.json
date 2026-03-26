@@ -1,14 +1,15 @@
 {
     "fitness": {
-        "train_return_mean": 10.0,
-        "best_episode_return": 14.0,
+        "train_return_mean": 10.2,
+        "best_episode_return": 16.0,
         "eval_return_mean": 9.3,
         "eval_return_std": 0.7810249675906655,
         "episodes": 80,
         "env_id": "CartPole-v1",
-        "algo": "sarsa",
+        "algo": "q_learning",
         "n_actions": 2,
-        "input_mode": "angle"
+        "input_mode": "angle",
+        "action_space": "discrete"
     },
     "genome_number": 7,
     "metadata": {},
@@ -51,31 +52,40 @@
         "baseline": "mean",
         "seed": 0,
         "log_every": 10,
+        "rollout_steps": 2048,
+        "ppo_epochs": 10,
+        "ppo_minibatch": 256,
+        "ppo_clip": 0.2,
+        "gae_lambda": 0.95,
+        "value_coef": 0.5,
+        "epsilon": 0.2,
+        "epsilon_min": 0.05,
+        "epsilon_decay": 0.995,
         "env_kwargs": null,
         "epochs": 5
     },
     "gates": [
         {
-            "depth": 0.4985366342353703,
-            "method_name": "iswap",
+            "depth": 0.6002577062020253,
+            "method_name": "cz",
             "qubits": [
                 [
                     "input",
-                    0
+                    2
                 ],
                 [
                     "output",
-                    1
+                    0
                 ]
             ],
             "parameters": {},
-            "innovation_number": 11,
+            "innovation_number": 8,
             "target": "pennylane",
             "enabled": true
         },
         {
-            "depth": 0.9759002907881519,
-            "method_name": "iswap",
+            "depth": 0.9282390335792021,
+            "method_name": "cz",
             "qubits": [
                 [
                     "input",
@@ -83,13 +93,13 @@
                 ],
                 [
                     "output",
-                    1
+                    0
                 ]
             ],
             "parameters": {},
-            "innovation_number": 10,
+            "innovation_number": 7,
             "target": "pennylane",
-            "enabled": false
+            "enabled": true
         }
     ]
 }

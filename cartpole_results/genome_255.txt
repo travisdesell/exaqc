@@ -1,11 +1,11 @@
-Genome 264
+Genome 255
 Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
 
-0.124  iswap  [('input', 1), ('input', 3)]  {}
-0.201  cx  [('input', 1), ('input', 0)]  {}
-0.580  rz  [('output', 0)]  {'phi': 2.9213552307258244}
-0.636  cz  [('input', 0), ('output', 1)]  {}
+0.071  iswap  [('output', 1), ('input', 3)]  {}
+0.157  mcx  [('input', 2), ('input', 1)]  {}
+0.268  cp  [('input', 1), ('input', 3)]  {'phi': 1.8397339783549826}
 0.689  iswap  [('input', 1), ('output', 0)]  {}
 0.696  rzz  [('input', 1), ('output', 0)]  {'phi': -1.522403042445707}
-0.799  mcx  [('input', 0), ('input', 3)]  {}
+0.737  y  [('input', 3)]  {}
 0.958  cry  [('input', 3), ('output', 1)]  {'phi': -2.820340305934675}
+0.980  rxx  [('output', 1), ('input', 3)]  {'phi': -0.11601768651092303}

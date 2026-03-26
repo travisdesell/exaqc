@@ -1,5 +1,0 @@
-Genome 42
-Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
-
-0.533  ch  [('input', 3), ('output', 0)]  {}
-0.844  ryy  [('output', 1), ('input', 1)]  {'phi': -1.098532379444371}

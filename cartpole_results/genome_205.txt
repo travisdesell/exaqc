@@ -1,8 +1,0 @@
-Genome 205
-Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
-
-0.232  cswap  [('input', 0), ('input', 3), ('input', 2)]  {}
-0.341  z  [('input', 0)]  {}
-0.501  ccx  [('input', 2), ('input', 1), ('output', 0)]  {}
-0.785  ch  [('input', 1), ('output', 1)]  {}
-0.951  z  [('output', 0)]  {}

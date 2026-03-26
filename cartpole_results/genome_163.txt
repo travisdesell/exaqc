@@ -1,0 +1,12 @@
+Genome 163
+Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
+
+0.014  iswap  [('input', 2), ('output', 0)]  {}
+0.192  cx  [('input', 0), ('output', 1)]  {}
+0.321  cp  [('input', 3), ('output', 1)]  {'phi': 0.49716255783747165}
+0.444  cry  [('output', 1), ('input', 0)]  {'phi': -2.733326672600617}
+0.445  iswap  [('input', 2), ('output', 0)]  {}
+0.492  cp  [('input', 3), ('output', 1)]  {'phi': 0.49716255783747165}
+0.639  cx  [('output', 0), ('output', 1)]  {}
+0.696  iswap  [('output', 0), ('input', 3)]  {}
+0.717  cp  [('input', 3), ('output', 1)]  {'phi': 0.49716255783747165}

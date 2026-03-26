@@ -1,14 +1,15 @@
 {
     "fitness": {
-        "train_return_mean": 10.05,
-        "best_episode_return": 17.0,
-        "eval_return_mean": 30.3,
-        "eval_return_std": 6.649060083951716,
+        "train_return_mean": 10.3,
+        "best_episode_return": 14.0,
+        "eval_return_mean": 9.4,
+        "eval_return_std": 0.6633249580710799,
         "episodes": 80,
         "env_id": "CartPole-v1",
-        "algo": "sarsa",
+        "algo": "q_learning",
         "n_actions": 2,
-        "input_mode": "angle"
+        "input_mode": "angle",
+        "action_space": "discrete"
     },
     "genome_number": 12,
     "metadata": {},
@@ -51,17 +52,40 @@
         "baseline": "mean",
         "seed": 0,
         "log_every": 10,
+        "rollout_steps": 2048,
+        "ppo_epochs": 10,
+        "ppo_minibatch": 256,
+        "ppo_clip": 0.2,
+        "gae_lambda": 0.95,
+        "value_coef": 0.5,
+        "epsilon": 0.2,
+        "epsilon_min": 0.05,
+        "epsilon_decay": 0.995,
         "env_kwargs": null,
         "epochs": 5
     },
     "gates": [
         {
-            "depth": 0.6792655748316913,
-            "method_name": "iswap",
+            "depth": 0.0590757188052381,
+            "method_name": "x",
+            "qubits": [
+                [
+                    "output",
+                    0
+                ]
+            ],
+            "parameters": {},
+            "innovation_number": 20,
+            "target": "pennylane",
+            "enabled": true
+        },
+        {
+            "depth": 0.46292858539343573,
+            "method_name": "cx",
             "qubits": [
                 [
                     "input",
-                    0
+                    2
                 ],
                 [
                     "output",
@@ -71,23 +95,23 @@
             "parameters": {},
             "innovation_number": 18,
             "target": "pennylane",
-            "enabled": true
+            "enabled": false
         },
         {
-            "depth": 0.928282439578693,
-            "method_name": "swap",
+            "depth": 0.6796014795053876,
+            "method_name": "cx",
             "qubits": [
                 [
-                    "output",
-                    1
+                    "input",
+                    2
                 ],
                 [
-                    "input",
-                    1
+                    "output",
+                    0
                 ]
             ],
             "parameters": {},
-            "innovation_number": 17,
+            "innovation_number": 19,
             "target": "pennylane",
             "enabled": true
         }

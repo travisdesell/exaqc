@@ -1,8 +1,0 @@
-Genome 265
-Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
-
-0.088  rxx  [('output', 1), ('input', 3)]  {'phi': 1.1662882357895201}
-0.392  mcx  [('input', 2), ('output', 0)]  {}
-0.471  ry  [('output', 1)]  {'phi': -1.5417881189168317}
-0.582  rz  [('output', 1)]  {'phi': 0.9708967197063227}
-0.866  sx  [('input', 2)]  {}

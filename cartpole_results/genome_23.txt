@@ -1,5 +1,0 @@
-Genome 23
-Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
-
-0.559  cry  [('input', 3), ('output', 0)]  {'phi': 2.0958708538468596}
-0.635  cswap  [('input', 1), ('input', 3), ('output', 1)]  {}

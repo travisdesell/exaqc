@@ -1,5 +1,0 @@
-Genome 38
-Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
-
-0.585  crx  [('input', 2), ('output', 0)]  {'phi': -1.6292550889806265}
-0.710  ccx  [('input', 1), ('input', 0), ('output', 1)]  {}

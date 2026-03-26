@@ -1,6 +1,0 @@
-Genome 45
-Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
-
-0.341  z  [('input', 0)]  {}
-0.501  ccx  [('input', 2), ('input', 1), ('output', 0)]  {}
-0.722  ch  [('input', 0), ('output', 1)]  {}

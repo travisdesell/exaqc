@@ -1,9 +1,0 @@
-Genome 46
-Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
-
-0.088  rxx  [('output', 1), ('input', 3)]  {'phi': 1.1662882357895201}
-0.231  cy  [('input', 0), ('input', 3)]  {}
-0.255  x  [('output', 1)]  {}
-0.392  mcx  [('input', 2), ('output', 0)]  {}
-0.710  cz  [('input', 1), ('output', 0)]  {}
-0.993  p  [('output', 1)]  {'phi': -2.318967781091557}

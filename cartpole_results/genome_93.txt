@@ -1,6 +1,0 @@
-Genome 93
-Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
-
-0.132  rx  [('output', 0)]  {'phi': -1.4496305944808543}
-0.135  cy  [('input', 1), ('output', 1)]  {}
-0.958  cx  [('input', 1), ('output', 0)]  {}
