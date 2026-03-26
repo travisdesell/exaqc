@@ -15,7 +15,7 @@ from src.utils.losses import (  # noqa: F401
     loss_state_angle,
     loss_obs_mse,
     ce_onehot_on_probs,
-    macro_ce_onehot_on_probs,
+    class_avg_ce_onehot_on_probs,
     LOSS_REGISTRY,
 )
 
@@ -176,7 +176,7 @@ def _eval_supervised_split(
         probas.append(probs)
         y_onehots.append(y)
 
-    if loss_fn.__name__ != "macro_ce_onehot_on_probs":
+    if loss_fn.__name__ != "class_avg_ce_onehot_on_probs":
         loss = float(torch.stack(losses).mean().item()) if losses else 0.0
     else:
         probs = torch.stack([p.to(torch.float32) for p in probas], dim=0)
@@ -424,7 +424,6 @@ def _train_with_pennylane(
         for x in data_list:
             phi = _normalize_state(_ensure_complex(target_qnode(x)))
             psi = forward_state(x)
-            # fid_loss = loss_one_minus_fidelity(phi, psi)
             fid_loss = loss_fn(phi, psi)
             losses.append(fid_loss)
             fidelities.append(1.0 - fid_loss)
@@ -485,7 +484,11 @@ def _train_with_pennylane(
         probs = torch.stack([p.to(torch.float32) for p in probs], dim=0)
         y_onehots = torch.stack([p.to(torch.float32) for p in y_onehots], dim=0)
 
-        loss = torch.stack(losses).mean() if loss_name != "per_class" else loss_fn(probs, y_onehots)
+        loss = (
+            torch.stack(losses).mean()
+            if loss_name != "per_class"
+            else loss_fn(probs, y_onehots)
+        )
 
         return {
             "loss": float(loss.item()),
@@ -505,7 +508,6 @@ def _train_with_pennylane(
         )
 
         for i in range(batches_per_epoch):
-            # make sure we evaluate the entire dataset every epoch
 
             batch = sampler.sample()
 
@@ -540,7 +542,11 @@ def _train_with_pennylane(
             probs = torch.stack([p.to(torch.float32) for p in probs], dim=0)
             y_onehots = torch.stack([p.to(torch.float32) for p in y_onehots], dim=0)
 
-            loss = torch.stack(losses).mean() if loss_name != "per_class" else loss_fn(probs, y_onehots)
+            loss = (
+                torch.stack(losses).mean()
+                if loss_name != "per_class"
+                else loss_fn(probs, y_onehots)
+            )
 
             if not loss.requires_grad:
                 logger.warning(

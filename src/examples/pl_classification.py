@@ -103,7 +103,7 @@ def eval_probs_ce_and_acc(
         probas.append(probs)
         y_onehots.append(y)
 
-    if loss_fn.__name__ != "macro_ce_onehot_on_probs":
+    if loss_fn.__name__ != "class_avg_ce_onehot_on_probs":
         avg_loss = float(torch.stack(losses).mean().item()) if losses else 0.0
     else:
         probs = torch.stack([p.to(torch.float32) for p in probas], dim=0)
@@ -235,7 +235,9 @@ if __name__ == "__main__":
     )
 
     p.add_argument(
-        "--loss", default="ce", choices=["per_class", "bce", "focal", "ce", "mse", "kl", "fidelity"]
+        "--loss",
+        default="ce",
+        choices=["per_class", "bce", "focal", "ce", "mse", "kl", "fidelity"],
     )
 
     subparsers = p.add_subparsers(

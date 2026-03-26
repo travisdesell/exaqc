@@ -181,8 +181,7 @@ class BalancedBatchSampler:
         return batch
 
     def sample_random(self):
-        """Return a random sample from the dataset
-        """
+        """Return a random sample from the dataset"""
         idx = self.rng.integers(0, self.n, size=self.batch_size)
         return [self.data[i] for i in idx.tolist()]
 
