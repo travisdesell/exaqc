@@ -66,6 +66,19 @@ class SteadyStatePopulation(PopulationStrategy):
 
         return len(self.population) < self.max_population_size
 
+    def get_best_genome(self) -> CircuitGenome:
+        """
+        Returns:
+            The best genome in the population if it exists, None otherwise.
+            Will only return none if no genomes have been inserted yet (i.e.,
+            the very beginning of the search).
+        """
+
+        if len(self.population) > 0:
+            return self.population[0]
+        else:
+            return None
+
     def get_parent(self, **kwargs) -> tuple[CircuitGenome, dict[str, any]]:
         """
         Used to get two or more parents to be used in mutation or
@@ -130,10 +143,33 @@ class SteadyStatePopulation(PopulationStrategy):
             True if it was inserted into the population, False otherwise.
         """
 
-        # TODO: don't add duplicate genomes to the population
-        # options:
-        # 1. if gate innovation numbers are the same, keep the genome with better fitness
-        # 2. if gate innovation numbers are the same but fitness different, keep both
+        # don't add duplicate genomes to the population
+        # if gate innovation numbers are the same, keep the genome with better fitness
+        for i in range(len(self.population)):
+            match_genome = self.population[i]
+            if match_genome.has_same_gates(genome):
+                # two genomes had the same enabled gates, keep the one with better fitness
+
+                if self.compare(match_genome, genome) > 0:
+                    # the new genome has a better fitness, so remove the old genome
+                    # and then the below bisect.insort will add it
+                    logger.info(
+                        f"removing genome from population because fitness: {match_genome.fitness} is"
+                        f"worse than the new genome fitness: {genome.fitness} where both have"
+                        "the same enabled gates."
+                    )
+                    logger.info(
+                        f"population genome gates: {match_genome.get_gate_innovations()}"
+                    )
+                    logger.info(
+                        f"new genome gates:        {genome.get_gate_innovations()}"
+                    )
+                    del self.population[i]
+                    break
+                else:
+                    # discard the new genome
+                    self.insertions += 1
+                    return
 
         bisect.insort(
             self.population,

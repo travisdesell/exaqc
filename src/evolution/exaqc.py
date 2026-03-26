@@ -67,6 +67,7 @@ class EXAQC:
         self.objective = objective
         self.hyperparameters = hyperparameters
         self.target = target
+        self.inserted_genomes = 0
 
         if input_registers is None and input_qubits is None:
             logger.critical(
@@ -114,6 +115,7 @@ class EXAQC:
             output_qubits=self.output_qubits.copy(),
         )
 
+        self.saved_epochs = 5
         self.initial_genome.hyperparameters = self.get_hyperparameters()
 
     def get_hyperparameters(self):
@@ -121,6 +123,10 @@ class EXAQC:
         Return:
             hyperparameters for a newly created child
         """
+
+        if self.genome_number > 0 and self.genome_number % 100 == 0:
+            # increase epochs every 100 genomes
+            self.saved_epochs += 1
 
         # TODO: make an evolutionary strategy for handling hyperparameter options
         hyperparameters = self.hyperparameters.copy()
@@ -132,7 +138,9 @@ class EXAQC:
         hyperparameters["epochs"] = random.choice([5, 10, 15, 20, 25, 30, 35, 40])
         """
         hyperparameters["learning_rate"] = 0.0005
-        hyperparameters["epochs"] = 5
+        # hyperparameters["epochs"] = random.choice([5, 10])
+        # hyperparameters["epochs"] = self.saved_epochs
+        hyperparameters["epochs"] = 10
 
         return hyperparameters
 
@@ -222,7 +230,7 @@ class EXAQC:
         binary_crossover_rate: float = 0.10,
         n_ary_crossover_rate: float = 0.10,
         exponential_crossover_rate: float = 0.10,
-        n_ary_parents: int = 3,
+        n_ary_parents: int = 5,
     ) -> CircuitGenome:
         """
         Generates a single genome for EXAQC.
@@ -277,6 +285,10 @@ class EXAQC:
 
                 if r < binary_crossover_rate:
                     parents, metadata = self.population.get_parents(2)
+
+                    if parents is None:
+                        continue
+
                     child = CircuitGenome(
                         genome_number=None,
                         target=self.target,
@@ -292,6 +304,10 @@ class EXAQC:
 
                 elif r < n_ary_cutoff:
                     parents, metadata = self.population.get_parents(n_ary_parents)
+
+                    if parents is None:
+                        continue
+
                     child = CircuitGenome(
                         genome_number=None,
                         target=self.target,
@@ -304,6 +320,10 @@ class EXAQC:
 
                 elif r < exponential_cutoff:
                     parents, metadata = self.population.get_parents(2)
+
+                    if parents is None:
+                        continue
+
                     child = CircuitGenome(
                         genome_number=None,
                         target=self.target,
@@ -351,7 +371,8 @@ class EXAQC:
         Args:
             genome: is the evaluated genome to insert
         """
-        self.population.insert_genome(genome)
+        self.population.insert_genome(genome, current_genome_number=self.genome_number)
+        self.inserted_genomes += 1
 
     def run_for(
         self,

@@ -129,6 +129,7 @@ def compare(genome1: CircuitGenome, genome2: CircuitGenome) -> int:
     # genome2 (genome1's fitness would be lower), and positive if genome2 should be before
     # genome1 (genome2's fitness would be lower)
     return genome1.fitness["test_loss"] - genome2.fitness["test_loss"]
+    # return genome2.fitness["test_acc"] - genome1.fitness["test_acc"]
 
 
 class ClassificationObjective(Objective):
@@ -243,8 +244,9 @@ if __name__ == "__main__":
     )
     islands_parser.add_argument("--n_islands", type=int, default=10)
     islands_parser.add_argument("--max_island_size", type=int, default=10)
-    islands_parser.add_argument("--genomes_before_extinction", type=int, default=200)
-    islands_parser.add_argument("--islands_to_extinct", type=int, default=1)
+    islands_parser.add_argument("--genomes_before_extinction", type=int, default=100)
+    islands_parser.add_argument("--genomes_for_next_extinction", type=int, default=200)
+    islands_parser.add_argument("--islands_to_extinct", type=int, default=2)
     islands_parser.add_argument(
         "--intra_island_crossover_rate", type=float, default=0.5
     )
@@ -348,6 +350,7 @@ if __name__ == "__main__":
             n_islands=args.n_islands,
             max_island_size=args.max_island_size,
             genomes_before_extinction=args.genomes_before_extinction,
+            genomes_for_next_extinction=args.genomes_for_next_extinction,
             islands_to_extinct=args.islands_to_extinct,
             compare=compare,
             out_dir=args.out_dir,
