@@ -78,7 +78,7 @@ def _make_genome(genome_number: int):
     return genome
 
 
-@pytest.mark.parametrize("algo", ["reinforce", "a2c", "ppo"])
+@pytest.mark.parametrize("algo", ["q_learning", "sarsa"])
 @pytest.mark.parametrize("n_genomes", [3])  # "small number of genomes"
 def test_cartpole_algos_smoke(algo: str, n_genomes: int):
     """
@@ -146,7 +146,7 @@ def test_cartpole_algos_smoke(algo: str, n_genomes: int):
         pytest.fail(f"Missing deps or project import failed: {e}")
 
 
-@pytest.mark.parametrize("algo", ["reinforce", "actor_critic", "ppo"])
+@pytest.mark.parametrize("algo", ["q_learning", "sarsa"])
 def test_cartpole_single_genome_sets_algo(algo: str):
     """
     Tiny focused test: ensure algo label is written (if your code sets it).
@@ -165,7 +165,7 @@ def test_cartpole_single_genome_sets_algo(algo: str):
         train_rl(g, spec=spec, algo=algo)
 
         if "algo" in g.fitness:
-            assert g.fitness["algo"] in {"reinforce", "actor_critic", "ppo"}
+            assert g.fitness["algo"] in {"q_learning", "sarsa"}
 
     except Exception as e:
         pytest.fail(f"Missing deps or project import failed: {e}")
