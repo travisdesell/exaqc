@@ -55,6 +55,7 @@ def eval_probs_ce_and_acc(
     *,
     n_classes: int,
     loss: Optional[str] = None,
+    alpha: torch.Tensor = None,
 ) -> dict[str, float]:
     """
     Assumes genome.circuit returns qml.probs(wires=output_wires) (real-valued).
@@ -75,12 +76,6 @@ def eval_probs_ce_and_acc(
     total = 0
     per_class_pred = {}
 
-    # setting Alpha from https://arxiv.org/pdf/1901.05555
-    beta = (len(dataset) - 1) / len(dataset)
-    alpha = (1.0 - beta) / (
-        1.0 - np.power(beta, np.array(dataset.counts, dtype=np.float32))
-    )
-    alpha = torch.as_tensor(alpha / alpha.mean(), dtype=torch.float32)
 
     for x, y, cls in dataset:
         if cls not in per_class_pred:
@@ -193,12 +188,19 @@ class ClassificationObjective(Objective):
                 batch_size=batch_size,
             )
 
+        # setting Alpha from https://arxiv.org/pdf/1901.05555
+        beta = (len(self.train_data) - 1) / len(self.train_data)
+        alpha = (1.0 - beta) / (
+            1.0 - np.power(beta, np.array(self.train_data.counts, dtype=np.float32))
+        )
+        alpha = torch.as_tensor(alpha / alpha.mean(), dtype=torch.float32)
+
         # Compute fresh train/test metrics from probs (works for both param & no-param cases)
         train_metrics = eval_probs_ce_and_acc(
-            genome, self.train_data, n_classes=self.n_classes, loss=self.loss
+            genome, self.train_data, n_classes=self.n_classes, loss=self.loss, alpha=alpha
         )
         test_metrics = eval_probs_ce_and_acc(
-            genome, self.test_data, n_classes=self.n_classes, loss=self.loss
+            genome, self.test_data, n_classes=self.n_classes, loss=self.loss, alpha=alpha
         )
 
         genome.fitness = {
