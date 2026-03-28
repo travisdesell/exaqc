@@ -115,7 +115,7 @@ class EXAQC:
             output_qubits=self.output_qubits.copy(),
         )
 
-        self.saved_epochs = 5
+        self.saved_epochs = 10
         self.initial_genome.hyperparameters = self.get_hyperparameters()
 
     def get_hyperparameters(self):
@@ -137,10 +137,10 @@ class EXAQC:
         )
         hyperparameters["epochs"] = random.choice([5, 10, 15, 20, 25, 30, 35, 40])
         """
-        hyperparameters["learning_rate"] = 0.0005
+        hyperparameters["learning_rate"] = 0.0010
         # hyperparameters["epochs"] = random.choice([5, 10])
-        # hyperparameters["epochs"] = self.saved_epochs
-        hyperparameters["epochs"] = 10
+        hyperparameters["epochs"] = self.saved_epochs
+        # hyperparameters["epochs"] = 10
 
         return hyperparameters
 

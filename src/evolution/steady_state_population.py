@@ -51,6 +51,7 @@ class SteadyStatePopulation(PopulationStrategy):
 
         # used to store the population, should be kept in sorted order.
         self.population: list[CircuitGenome] = []
+        self.accuracy_best_genome = None
 
         self.profiler = profiler
         if self.profiler is None:
@@ -181,6 +182,42 @@ class SteadyStatePopulation(PopulationStrategy):
 
         if self.profiler is not None:
             self.profiler.record(step=self.insertions, population=self.population)
+
+
+        if (
+            self.accuracy_best_genome is None
+            or (
+                "test_acc" in genome.fitness
+                and self.accuracy_best_genome.fitness["test_acc"]
+                < genome.fitness["test_acc"]
+            )
+        ):
+            self.accuracy_best_genome = genome
+
+            # this was a new genome with a best accuracy
+            logger.success(
+                f"[global insertion {self.insertions}] Population found new ACCURACY best genome "
+                f"with fitness: {genome.fitness}"
+            )
+
+            test_metric = genome.fitness.get("test_acc", None)
+            if test_metric is None:
+                test_metric = genome.fitness.get("test_fidelity")
+
+            tag = (
+                f"ACCURACY_trainloss_{genome.fitness['train_loss']:.4f}_testloss_"
+                f"{genome.fitness['test_loss']:.4f}_testacc_{test_metric:.3f}"
+            )
+
+            if self.out_dir is not None:
+                self._save_best_circuit(genome, out_dir=self.out_dir, tag=tag)
+                self.profiler.plot_single_run()
+
+            if genome.fitness["test_acc"] == 100.0:
+                # found a perfect solution, can quit
+                exit(1)
+
+
 
         if genome.genome_number == self.population[0].genome_number:
             # this was a new global best genome
