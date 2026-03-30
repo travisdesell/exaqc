@@ -43,6 +43,9 @@ def exponential_crossover(
         else:
             logger.debug("\tnot adding.")
 
+    child.metadata["parent_genomes"] = [p1.genome_number, p2.genome_number]
+    child.metadata["generated_by"] = ["exponential_crossover"]
+
     return child
 
 
@@ -154,6 +157,9 @@ def binary_crossover(
     child_gate_innovations = [gate.innovation_number for gate in child.gates]
 
     logger.debug(f"child genome has {len(child.gates)} gates: {child_gate_innovations}")
+
+    child.metadata["parent_genomes"] = [p1.genome_number, p2.genome_number]
+    child.metadata["generated_by"] = ["binary_crossover"]
 
     return child
 
@@ -319,6 +325,9 @@ def n_ary_crossover(
             child.add_existing_gate(child_gate)
 
     child_gate_innovations = [gate.innovation_number for gate in child.gates]
+
+    child.metadata["parent_genomes"] = [p.genome_number for p in parents]
+    child.metadata["generated_by"] = ["n_ary_crossover"]
 
     logger.debug(f"child genome has {len(child.gates)} gates: {child_gate_innovations}")
 

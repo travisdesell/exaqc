@@ -49,6 +49,11 @@ def compare(mock1: MockGenome, mock2: MockGenome) -> int:
 
 
 def test_island_repopulation():
+    """
+    Tests to make sure global best genomes are always inserted into repopulating
+    islands and also tests that genomes are discarded appropriately for repopulating
+    islands when their genome number is from before the repopulation event.
+    """
 
     island = Island(id=0, max_size=5, compare=compare)
     island.repopulation_genome_number = 100
@@ -59,28 +64,54 @@ def test_island_repopulation():
     island.insert_genome(m)
 
     assert len(island.population) == 0
+    assert m.metadata["insert_type"] == "discarded"
 
-    m = MockGenome(0.25, 15, {"global_best": False})
+    m = MockGenome(0.25, 15, {"insert_type": ""})
     island.insert_genome(m)
     assert len(island.population) == 0
+    assert m.metadata["insert_type"] == "discarded"
 
     # test adding a global best genome with a genome number
     # lower than the repopuation number (should be inserted)
 
-    m = MockGenome(0.5, 10, {"global_best": True})
+    m = MockGenome(0.5, 10, {"insert_type": "global_best"})
     island.insert_genome(m)
     assert len(island.population) == 1
+    assert m.metadata["insert_type"] == "global_best"
 
     # test adding a genome with a genome number greater than the
     # repopulation number (should be inserted)
 
-    m = MockGenome(0.5, 110, {"global_best": False})
+    m = MockGenome(0.55, 110, {"insert_type": "inserted"})
     island.insert_genome(m)
     assert len(island.population) == 2
+    assert m.metadata["insert_type"] == "inserted"
 
     m = MockGenome(0.5, 115, {})
     island.insert_genome(m)
     assert len(island.population) == 3
+    assert m.metadata["insert_type"] == "inserted"
+
+    # test the insert_type metadata is properly set for
+    # a new local best genome
+    m = MockGenome(0.15, 120, {})
+    island.insert_genome(m)
+    assert len(island.population) == 4
+    assert m.metadata["insert_type"] == "local_best"
+
+    # test the insert_type metadata is properly set for
+    # a genome being inserted to the island
+    m = MockGenome(0.65, 125, {})
+    island.insert_genome(m)
+    assert len(island.population) == 5
+    assert m.metadata["insert_type"] == "inserted"
+
+    # test the insert_type metadata is properly set for
+    # a genome being discarded from a full island
+    m = MockGenome(0.95, 130, {})
+    island.insert_genome(m)
+    assert len(island.population) == 5
+    assert m.metadata["insert_type"] == "discarded"
 
 
 def test_island_insertion():

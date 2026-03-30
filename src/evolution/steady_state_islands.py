@@ -1,21 +1,13 @@
 import random
-import json
 
 import bisect
 from functools import cmp_to_key
 from typing import Callable, Optional
 
 from loguru import logger
-import os
-import torch
-import pennylane as qml
-import matplotlib.pyplot as plt
 
 from src.circuits.circuit import CircuitGenome
 from src.evolution.population_strategy import PopulationStrategy
-from src.objectives.genome_objectives import (
-    genome_to_torch_params,
-)
 from src.utils.profiler import EXAQCProfiler
 
 
@@ -123,8 +115,17 @@ class Island:
             True if it was inserted into the population, False otherwise.
         """
 
-        if genome.genome_number < self.repopulation_genome_number and not (
-            "global_best" in genome.metadata and genome.metadata["global_best"] is True
+        if (
+            "insert_type" not in genome.metadata
+            or genome.metadata["insert_type"] != "global_best"
+        ):
+            # temporarily assign the insert type, if it doesn't yet exist as global best.
+            # set it to inserted which we can change later if it it a local best or gets discarded
+            genome.metadata["insert_type"] = "inserted"
+
+        if (
+            genome.genome_number < self.repopulation_genome_number
+            and genome.metadata["insert_type"] != "global_best"
         ):
             # discard genomes that were generated from before the island was repopulated unless they
             # were a new global best
@@ -133,6 +134,7 @@ class Island:
                 f"the repopulation genome number: {self.repopulation_genome_number} and was "
                 f"not global best, metadata: {genome.metadata}"
             )
+            genome.metadata["insert_type"] = "discarded"
             return
 
         # don't add duplicate genomes to the population
@@ -161,6 +163,7 @@ class Island:
                 else:
                     # discard the new genome
                     self.insertions += 1
+                    genome.metadata["insert_type"] = "discarded"
                     return
 
         bisect.insort(
@@ -174,6 +177,10 @@ class Island:
         if genome == self.population[0]:
             # this was a new best genome for the island
             self.last_new_best = self.insertions
+            if genome.metadata["insert_type"] != "global_best":
+                # if the genome was inserted at the front of the population it
+                # is a new local best unless it was already the global best
+                genome.metadata["insert_type"] = "local_best"
 
             # this was a new global best genome
             logger.success(
@@ -186,6 +193,11 @@ class Island:
 
         if len(self.population) > self.max_size:
             # remove the last genome from the population
+            if genome == self.population[-1]:
+                # if the genome was inserted at the bottom of the population
+                # and we're going to remove it, set it to discarded
+                genome.metadata["insert_type"] = "discarded"
+
             del self.population[-1]
 
 
@@ -259,6 +271,7 @@ class SteadyStateIslands(PopulationStrategy):
         self.current_island = 0
 
         self.global_best_genome = None
+        self.accuracy_best_genome = None
 
         self.profiler = profiler
         if self.profiler is None and out_dir:
@@ -509,20 +522,36 @@ class SteadyStateIslands(PopulationStrategy):
                 population=merged_population,
             )
 
+        if self.accuracy_best_genome is None or (
+            "test_acc" in genome.fitness
+            and self.accuracy_best_genome.fitness["test_acc"]
+            < genome.fitness["test_acc"]
+        ):
+            self.accuracy_best_genome = genome
+
+            # this was a new genome with a best accuracy
+            logger.success(
+                f"[global insertion {self.insertions}] Population found new ACCURACY best genome "
+                f"with fitness: {genome.fitness}"
+            )
+
+            if self.out_dir is not None:
+                genome.save_circuit(insert_type="best_accuracy", out_dir=self.out_dir)
+                self.profiler.plot_single_run()
+
+            if genome.fitness["test_acc"] == 100.0:
+                # found a perfect solution, can quit
+                exit(1)
+
         if (
             self.global_best_genome is None
             or self.compare(self.global_best_genome, genome) > 0
-            or (
-                "test_acc" in genome.fitness
-                and self.global_best_genome.fitness["test_acc"]
-                < genome.fitness["test_acc"]
-            )
         ):
             self.global_best_genome = genome
             # set its metadata as global best so we can use this during repopulation
             # on the chance it would be discarded due to being generated from before
             # the island was repopulated
-            self.global_best_genome.metadata["global_best"] = True
+            genome.metadata["insert_type"] = "global_best"
 
             # update the best island to the island of this genome
             self.best_island = target_island
@@ -533,23 +562,19 @@ class SteadyStateIslands(PopulationStrategy):
                 f"with fitness: {genome.fitness}"
             )
 
-            test_metric = genome.fitness.get("test_acc", None)
-            if test_metric is None:
-                test_metric = genome.fitness.get("test_fidelity")
-
-            tag = (
-                f"trainloss_{genome.fitness['train_loss']:.4f}_testloss_"
-                f"{genome.fitness['test_loss']:.4f}_testacc_{test_metric:.3f}"
-            )
-
             if self.out_dir is not None:
-                self._save_best_circuit(genome, out_dir=self.out_dir, tag=tag)
+                genome.save_circuit(insert_type="best_fitness", out_dir=self.out_dir)
                 self.profiler.plot_single_run()
 
         # check to see if the genome was a new global best
         logger.debug(f"target island id: {target_island.id}")
         target_island.insert_genome(genome)
         self.insertions += 1
+
+        if self.out_dir is not None:
+            genome.save_circuit(
+                insert_type="genome", out_dir=self.out_dir + "/all_genomes/"
+            )
 
         if (
             self.insertions > 0
@@ -590,46 +615,3 @@ class SteadyStateIslands(PopulationStrategy):
                     repopulation_genome_number=current_genome_number
                 )
                 removed += 1
-
-    def _save_best_circuit(
-        self, genome: CircuitGenome, out_dir: str = "artifacts/", tag: str = ""
-    ):
-        if genome is None:
-            logger.error("Genome cannot be None")
-            raise ValueError
-
-        os.makedirs(out_dir, exist_ok=True)
-
-        json_path = os.path.join(out_dir, f"genome_{genome.genome_number}.json")
-        logger.info(f"writing NEW BEST gnome to {json_path}")
-        with open(json_path, "w") as fp:
-            json.dump(genome.to_dict(), fp, ensure_ascii=False, indent=4)
-
-        # --- Text gate list ---
-        txt_path = os.path.join(out_dir, f"genome_{genome.genome_number}.txt")
-        with open(txt_path, "w") as f:
-            genome.sort_gates()
-            f.write(f"Genome {genome.genome_number}\n")
-            f.write(f"Qubits: {genome.qubits}\n\n")
-            for g in genome.gates:
-                if getattr(g, "enabled", True):
-                    f.write(
-                        f"{g.depth:.3f}  {g.method_name}  {g.qubits}  {g.parameters}\n"
-                    )
-
-        # --- PennyLane draw ---
-        genome.generate_pennylane_circuit(return_probs=True, input_mode="angle")
-        # logger.info(f"genome circuit: {genome.circuit}")
-
-        try:
-            params = genome_to_torch_params(genome)
-            x0 = torch.zeros(len(genome.input_indexes))
-            fig, ax = qml.draw_mpl(genome.circuit)(x0, params)
-            ax.set_title(f"Genome {genome.genome_number}")
-            path = os.path.join(
-                out_dir, f"best_genome_{genome.genome_number}_{tag}.png"
-            )
-            fig.savefig(path, dpi=200, bbox_inches="tight")
-            plt.close(fig)
-        except Exception as e:
-            logger.warning(f"Could not draw circuit: {e}")

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import TYPE_CHECKING
 
 import math
 import numpy as np
@@ -7,7 +8,10 @@ import copy
 
 from typing import Optional, Iterable, Callable, Any
 from loguru import logger
-from src.circuits.circuit import CircuitGenome
+
+if TYPE_CHECKING:
+    from src.circuits.circuit import CircuitGenome
+
 from src.utils.losses import (  # noqa: F401
     loss_ce,
     loss_kl_divergence,
