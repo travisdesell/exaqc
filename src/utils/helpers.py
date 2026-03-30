@@ -1,3 +1,6 @@
+from __future__ import annotations
+from typing import TYPE_CHECKING
+
 import numpy as np
 import torch
 
@@ -5,7 +8,9 @@ from collections import deque
 from typing import Optional
 from loguru import logger
 
-from src.circuits.circuit import CircuitGenome
+if TYPE_CHECKING:
+    from src.circuits.circuit import CircuitGenome
+
 
 GATE_COMPLEXITY = {
     "id": {"gate_count": 1, "cnot_count": 0, "rot_count": 0},

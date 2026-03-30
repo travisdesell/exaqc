@@ -3,7 +3,6 @@ from __future__ import annotations
 import torch
 from typing import Sequence, Union, Callable
 
-
 InputState = Union[str, Sequence[int]]
 
 
