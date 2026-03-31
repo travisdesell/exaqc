@@ -103,6 +103,6 @@ if __name__ == "__main__":
     print("\n\n")
     print(f"best metrics: {best_metrics}")
     print(f"min {metric}: {np.min(best_metrics)}")
-    print(f"avg {metric}: {np.max(best_metrics)}")
-    print(f"max {metric}: {np.mean(best_metrics)}")
+    print(f"max {metric}: {np.max(best_metrics)}")
+    print(f"avg {metric}: {np.mean(best_metrics)}")
     print(f"stddev {metric}: {np.std(best_metrics)}")
