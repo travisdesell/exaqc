@@ -54,6 +54,12 @@ if __name__ == "__main__":
     insert_counts = {}
 
     best_metrics = []
+    best_n_gates_list = []
+    best_n_parameters_list = []
+
+    overall_best_metric = 0
+    overall_best_n_gates = 0
+    overall_best_n_parameters = 0
 
     for directory in args.input_directories:
         logger.info(f"parsing directory: {directory}")
@@ -68,8 +74,21 @@ if __name__ == "__main__":
                 genome = json.load(file)
 
                 metric_value = genome["fitness"][metric]
+                n_gates = len(genome["gates"])
+                n_parameters = sum(
+                    [len(gate["parameters"]) for gate in genome["gates"]]
+                )
+
                 if metric_value > best_metric:
                     best_metric = metric_value
+                    best_n_gates = n_gates
+                    best_n_parameters = n_parameters
+
+                if metric_value > overall_best_metric:
+                    overall_best_metric = metric_value
+
+                    overall_best_n_gates = n_gates
+                    overall_best_n_parameters = n_parameters
 
                 metadata = genome["metadata"]
                 insert_type = metadata["insert_type"]
@@ -89,6 +108,8 @@ if __name__ == "__main__":
                         insert_counts[gen_type][insert_type] += 1
 
         best_metrics.append(best_metric)
+        best_n_gates_list.append(best_n_gates)
+        best_n_parameters_list.append(best_n_parameters)
 
     for gen_type in sorted(insert_counts.keys()):
         total = insert_counts[gen_type]["total"]
@@ -106,3 +127,21 @@ if __name__ == "__main__":
     print(f"max {metric}: {np.max(best_metrics)}")
     print(f"avg {metric}: {np.mean(best_metrics)}")
     print(f"stddev {metric}: {np.std(best_metrics)}")
+
+    print("\n")
+    print(f"best n_gates_list: {best_n_gates_list}")
+    print(f"min n gates: {np.min(best_n_gates_list)}")
+    print(f"max n gates : {np.max(best_n_gates_list)}")
+    print(f"avg n gates: {np.mean(best_n_gates_list)}")
+    print(f"stddev n_gates: {np.std(best_n_gates_list)}")
+
+    print("\n")
+    print(f"best n_parameters_list: {best_n_parameters_list}")
+    print(f"min n parameters: {np.min(best_n_parameters_list)}")
+    print(f"max n parameters : {np.max(best_n_parameters_list)}")
+    print(f"avg n parameters: {np.mean(best_n_parameters_list)}")
+    print(f"stddev n_parameters: {np.std(best_n_parameters_list)}")
+
+    print("\n")
+    print(f"best genome n gates: {overall_best_n_gates}")
+    print(f"best genome n parameters: {overall_best_n_parameters}")
