@@ -250,6 +250,8 @@ class EXAQCPoint:
     best: float
     top5_mean: float
     pop_mean: float
+    worst: float
+    pop_std: float
 
     gates_best: float
     gates_avg: float
@@ -340,6 +342,8 @@ class EXAQCProfiler:
                 best=0.0,
                 top5_mean=0.0,
                 pop_mean=0.0,
+                pop_std=0.0,
+                worst=0.0,
                 gates_best=0.0,
                 gates_avg=0.0,
                 gates_worst=0.0,
@@ -394,10 +398,12 @@ class EXAQCProfiler:
         best_genome = genomes[0]
         worst_genome = genomes[-1]
         best = vals[0]
+        worst = vals[-1]
         topk_vals = vals[: min(self.topk, len(vals))]
 
         top5_mean = float(np.mean(topk_vals)) if topk_vals else float("nan")
         pop_mean = float(np.mean(vals)) if vals else float("nan")
+        pop_std = float(np.std(vals)) if vals else float("nan")
 
         train_fitness_vals = np.array(
             [_extract_train_fitness(genome) for genome in population],
@@ -445,6 +451,8 @@ class EXAQCProfiler:
             best=_safe_float(best),
             top5_mean=_safe_float(top5_mean),
             pop_mean=_safe_float(pop_mean),
+            pop_std=_safe_float(pop_std),
+            worst=_safe_float(worst),
             gates_best=_safe_float(gates_best),
             gates_avg=_safe_float(gates_avg),
             gates_worst=_safe_float(gates_worst),

@@ -430,7 +430,7 @@ class RLSpec:
     lr: float = 1e-2
     baseline: str = "mean"  # "mean" or "none"
     seed: int = 0
-    log_every: int = 10
+    log_every: int = 50
 
     # evaluation
     eval_episodes: int = 10
@@ -674,28 +674,8 @@ def rollout_reinforce(
     spec: RLSpec,
     episode_seed: int,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float]:
-    """Collect one REINFORCE episode rollout.
+    """Collect one REINFORCE episode rollout."""
 
-    For each step:
-      - encode observation via `spec.obs_encoder`
-      - run `genome.circuit(x, params)` to produce outputs
-      - convert outputs into logits (from expvals or probs)
-      - sample action, step environment
-      - store log-prob and entropy for policy gradient
-
-    Args:
-        genome: CircuitGenome policy.
-        params: Trainable parameters dict for the genome.
-        spec: RLSpec configuration.
-        episode_seed: Seed for environment reset.
-
-    Returns:
-        A tuple (logps, entropies, returns, ep_return):
-            logps: Tensor [T] of log-probabilities.
-            entropies: Tensor [T] of entropies.
-            returns: Tensor [T] of discounted returns.
-            ep_return: Episode return as float.
-    """
     env = _make_env(spec.env_id, **(spec.env_kwargs or {}))
     obs, _ = env.reset(seed=episode_seed)
 
@@ -705,27 +685,56 @@ def rollout_reinforce(
 
     ep_return = 0.0
 
+    # Optional Gaussian std for continuous REINFORCE
+    if spec.action_space == "continuous":
+        log_std = torch.full(
+            (spec.n_actions,),
+            float(getattr(spec, "init_log_std", -0.5)),
+            dtype=torch.float32,
+        )
+
     for _ in range(spec.max_steps):
         x = spec.obs_encoder(obs)
-
         out = genome.circuit(x, params)
-        if spec.return_expvals:
-            out = torch.stack(list(out))
-            logits = logits_from_kexpvals(out, spec.n_actions)
+
+        if spec.action_space == "discrete":
+            if spec.return_expvals:
+                out = torch.stack(list(out))
+                logits = logits_from_kexpvals(out, spec.n_actions)
+            else:
+                probs = torch.as_tensor(out, dtype=torch.float32).flatten()
+                probs = probs[: spec.n_actions]
+                probs = probs / (probs.sum() + 1e-12)
+                logits = torch.log(probs.clamp_min(1e-12))
+
+            dist = Categorical(logits=logits)
+            a = dist.sample()
+            action_env = int(a.item())
+            logp = dist.log_prob(a)
+            ent = dist.entropy()
+
         else:
-            probs = torch.as_tensor(out, dtype=torch.float32).flatten()
-            probs = probs[: spec.n_actions]
-            probs = probs / (probs.sum() + 1e-12)
-            logits = torch.log(probs.clamp_min(1e-12))
+            feats = torch.as_tensor(out, dtype=torch.float32).flatten()
+            mu = feats[: spec.n_actions]
+            if mu.numel() < spec.n_actions:
+                pad = torch.zeros(spec.n_actions - mu.numel(), dtype=mu.dtype)
+                mu = torch.cat([mu, pad], dim=0)
 
-        dist = Categorical(logits=logits)
-        a = dist.sample()
+            std = torch.exp(log_std)
+            dist = torch.distributions.Normal(mu, std)
 
-        obs, r, terminated, truncated, _ = env.step(int(a.item()))
+            a = dist.sample()
+            logp = dist.log_prob(a).sum()
+            ent = dist.entropy().sum()
+
+            action_env = a.detach().cpu().numpy()
+            action_env = _clip_action(action_env, spec)
+
+        obs, r, terminated, truncated, _ = env.step(action_env)
         ep_return += float(r)
 
-        logps.append(dist.log_prob(a))
-        entropies.append(dist.entropy())
+        logps.append(logp)
+        entropies.append(ent)
         rewards.append(torch.tensor(r, dtype=torch.float32))
 
         if terminated or truncated:
@@ -1792,7 +1801,7 @@ def frozenlake_spec(
         env_id="FrozenLake-v1",
         n_actions=4,
         algo=algo,
-        input_mode="angle",
+        input_mode="basis",
         return_expvals=True,
         obs_encoder=encoder,
         n_state_bits=n_bits,
@@ -1800,8 +1809,8 @@ def frozenlake_spec(
         lr=lr,
         seed=seed,
         max_steps=100,
-        eval_episodes=20,
-        env_kwargs={"is_slippery": is_slippery},
+        eval_episodes=50,
+        env_kwargs={"is_slippery": True},
     )
 
 

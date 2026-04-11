@@ -298,8 +298,8 @@ if __name__ == "__main__":
     elif args.env == "frozenlake":
         spec = frozenlake_spec(
             map_name=args.map_name,
-            is_slippery=args.is_slippery,
-            episodes=args.episodes,
+            is_slippery=False, #args.is_slippery,
+            episodes=1000, #args.episodes,
             lr=args.learning_rate,
             seed=args.seed,
             algo=args.algo,
