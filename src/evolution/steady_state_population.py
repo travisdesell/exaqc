@@ -1,19 +1,13 @@
 import bisect
 import random
-import json
 
 from functools import cmp_to_key
 from typing import Callable, Optional
 
 from loguru import logger
-import os
-import torch
-import pennylane as qml
-import matplotlib.pyplot as plt
 
 from src.circuits.circuit import CircuitGenome
 from src.evolution.population_strategy import PopulationStrategy
-from src.utils.helpers import genome_to_torch_params
 from src.utils.profiler import EXAQCProfiler
 
 
@@ -51,6 +45,7 @@ class SteadyStatePopulation(PopulationStrategy):
 
         # used to store the population, should be kept in sorted order.
         self.population: list[CircuitGenome] = []
+        self.accuracy_best_genome = None
 
         self.profiler = profiler
         if self.profiler is None:
@@ -65,6 +60,19 @@ class SteadyStatePopulation(PopulationStrategy):
         """
 
         return len(self.population) < self.max_population_size
+
+    def get_best_genome(self) -> CircuitGenome:
+        """
+        Returns:
+            The best genome in the population if it exists, None otherwise.
+            Will only return none if no genomes have been inserted yet (i.e.,
+            the very beginning of the search).
+        """
+
+        if len(self.population) > 0:
+            return self.population[0]
+        else:
+            return None
 
     def get_parent(self, **kwargs) -> tuple[CircuitGenome, dict[str, any]]:
         """
@@ -130,21 +138,64 @@ class SteadyStatePopulation(PopulationStrategy):
             True if it was inserted into the population, False otherwise.
         """
 
-        # TODO: don't add duplicate genomes to the population
-        # options:
-        # 1. if gate innovation numbers are the same, keep the genome with better fitness
-        # 2. if gate innovation numbers are the same but fitness different, keep both
+        # don't add duplicate genomes to the population
+        # if gate innovation numbers are the same, keep the genome with better fitness
+        for i in range(len(self.population)):
+            match_genome = self.population[i]
+            if match_genome.has_same_gates(genome):
+                # two genomes had the same enabled gates, keep the one with better fitness
+
+                if self.compare(match_genome, genome) > 0:
+                    # the new genome has a better fitness, so remove the old genome
+                    # and then the below bisect.insort will add it
+                    logger.info(
+                        f"removing genome from population because fitness: {match_genome.fitness} is"
+                        f"worse than the new genome fitness: {genome.fitness} where both have"
+                        "the same enabled gates."
+                    )
+                    logger.info(
+                        f"population genome gates: {match_genome.get_gate_innovations()}"
+                    )
+                    logger.info(
+                        f"new genome gates:        {genome.get_gate_innovations()}"
+                    )
+                    del self.population[i]
+                    break
+                else:
+                    # discard the new genome
+                    self.insertions += 1
+                    return
 
         bisect.insort(
             self.population,
             genome,
             key=cmp_to_key(self.compare),
         )
+        genome.metadata["insert_type"] = "inserted"
 
         self.insertions += 1
 
         if self.profiler is not None:
             self.profiler.record(step=self.insertions, population=self.population)
+
+        if self.accuracy_best_genome is None or (
+            "test_acc" in genome.fitness
+            and self.accuracy_best_genome.fitness["test_acc"]
+            < genome.fitness["test_acc"]
+        ):
+            self.accuracy_best_genome = genome
+
+            # this was a new genome with a best accuracy
+            logger.success(
+                f"[global insertion {self.insertions}] Population found new ACCURACY best genome "
+                f"with fitness: {genome.fitness}"
+            )
+            if self.out_dir is not None:
+                genome.save_circuit(insert_type="best_accuracy", out_dir=self.out_dir)
+
+            if genome.fitness["test_acc"] == 100.0:
+                # found a perfect solution, can quit
+                exit(1)
 
         if genome.genome_number == self.population[0].genome_number:
             # this was a new global best genome
@@ -152,67 +203,19 @@ class SteadyStatePopulation(PopulationStrategy):
                 f"🎯 New best genome {genome.genome_number} "
                 f"[insertion {self.insertions}] Population found new GLOBAL best genome with fitness: {genome.fitness}"
             )
-            test_metric = genome.fitness.get("test_acc", None)
-            if test_metric is None:
-                test_metric = genome.fitness.get("test_fidelity")
-
-            try:
-                tag = (
-                    f"trainloss_{genome.fitness['train_loss']:.4f}_testloss_"
-                    f"{genome.fitness['test_loss']:.4f}_testacc_{test_metric:.3f}"
-                )
-            except Exception:
-                tag = (
-                    f"best_ep_return_{genome.fitness['best_episode_return']:.4f}_"
-                    f"eval_return_mean_{genome.fitness['eval_return_mean']:.4f}"
-                )
-
-            self._save_best_circuit(genome, out_dir=self.out_dir, tag=tag)
-        self.profiler.plot_single_run()
+            genome.metadata["insert_type"] = "global_best"
+            if self.out_dir is not None:
+                genome.save_circuit(insert_type="best_fitness", out_dir=self.out_dir)
 
         if len(self.population) > self.max_population_size:
             # remove the last genome from the population
+            if genome == self.population[-1]:
+                # the genome that was inserted is going to be discarded, so flag its metadata
+                genome.metadata["insert_type"] = "discarded"
             del self.population[-1]
 
-    def _save_best_circuit(
-        self, genome: CircuitGenome, out_dir: str = "artifacts/", tag: str = ""
-    ):
-        if genome is None:
-            logger.error("Genome cannot be None")
-            raise ValueError
-
-        os.makedirs(out_dir, exist_ok=True)
-
-        genome.generate_pennylane_circuit(return_probs=True, input_mode="angle")
-        # logger.info(f"genome circuit: {genome.circuit}")
-
-        json_path = os.path.join(out_dir, f"genome_{genome.genome_number}.json")
-        logger.info(f"writing NEW BEST gnome to {json_path}")
-        with open(json_path, "w") as json_file:
-            json.dump(genome.to_dict(), json_file, ensure_ascii=False, indent=4)
-
-        # --- Text gate list ---
-        txt_path = os.path.join(out_dir, f"genome_{genome.genome_number}.txt")
-        with open(txt_path, "w") as f:
-            genome.sort_gates()
-            f.write(f"Genome {genome.genome_number}\n")
-            f.write(f"Qubits: {genome.qubits}\n\n")
-            for g in genome.gates:
-                if getattr(g, "enabled", True):
-                    f.write(
-                        f"{g.depth:.3f}  {g.method_name}  {g.qubits}  {g.parameters}\n"
-                    )
-
-        # --- PennyLane draw ---
-        try:
-            params = genome_to_torch_params(genome)
-            x0 = torch.zeros(len(genome.input_indexes))
-            fig, ax = qml.draw_mpl(genome.circuit)(x0, params)
-            ax.set_title(f"Genome {genome.genome_number}")
-            path = os.path.join(
-                out_dir, f"best_genome_{genome.genome_number}_{tag}.png"
+        if self.out_dir is not None:
+            genome.save_circuit(
+                insert_type="genome", out_dir=self.out_dir + "/all_genomes/"
             )
-            fig.savefig(path, dpi=200, bbox_inches="tight")
-            plt.close(fig)
-        except Exception as e:
-            logger.warning(f"Could not draw circuit: {e}")
+            self.profiler.plot_single_run()

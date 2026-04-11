@@ -8,6 +8,7 @@ import glob
 import math
 import os
 import time
+from loguru import logger
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -472,6 +473,8 @@ class EXAQCProfiler:
         with open(self.csv_path, "a", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=list(asdict(point).keys()))
             writer.writerow(asdict(point))
+
+        logger.info(f"Record Step Point: {asdict(point)}")
 
     def plot_single_run(
         self,

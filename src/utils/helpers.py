@@ -1,3 +1,6 @@
+from __future__ import annotations
+from typing import TYPE_CHECKING
+
 import numpy as np
 import torch
 
@@ -5,7 +8,9 @@ from collections import deque
 from typing import Optional
 from loguru import logger
 
-from src.circuits.circuit import CircuitGenome
+if TYPE_CHECKING:
+    from src.circuits.circuit import CircuitGenome
+
 
 GATE_COMPLEXITY = {
     "id": {"gate_count": 1, "cnot_count": 0, "rot_count": 0},
@@ -92,6 +97,8 @@ class BalancedBatchSampler:
         self.shuffle = shuffle
         self.n_samples = len(data)
 
+        self.rng = np.random.default_rng(seed=42)
+
         class_indices: dict[str, list[int]] = {}
         for i, (_, _, cls) in enumerate(data):
             class_indices.setdefault(cls, []).append(i)
@@ -177,6 +184,11 @@ class BalancedBatchSampler:
             indices = self._draw(cls, self.samples_per_class)
             batch.extend(self.data[i] for i in indices)
         return batch
+
+    def sample_random(self):
+        """Return a random sample from the dataset"""
+        idx = self.rng.integers(0, self.n, size=self.batch_size)
+        return [self.data[i] for i in idx.tolist()]
 
     def reset(self) -> None:
         """Rebuild all class queues from scratch.

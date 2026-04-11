@@ -2,6 +2,10 @@ from __future__ import annotations
 from loguru import logger
 from typing import Dict, Optional
 import bisect
+import os
+import json
+
+import matplotlib.pyplot as plt
 
 from qiskit import QuantumCircuit
 from qiskit import QuantumRegister, ClassicalRegister
@@ -9,6 +13,9 @@ import pennylane as qml
 import torch
 
 from src.circuits.gate import Gate
+from src.objectives.genome_objectives import (
+    genome_to_torch_params,
+)
 
 
 class CircuitGenome:
@@ -134,6 +141,35 @@ class CircuitGenome:
         # loss key
         return self.fitness[loss] < other.fitness[loss]
 
+    def get_gate_innovations(self) -> list[int]:
+        """
+        Returns:
+            A sorted list of all the enabled gate innovation numbers in this
+            genome.
+        """
+        gates = [gate.innovation_number for gate in self.gates if gate.enabled]
+        gates.sort()
+        return gates
+
+    def has_same_gates(self, other: CircuitGenome) -> bool:
+        """
+        This checks to see if this genome has the exact same enabled
+        gates as the other genome.
+
+        Returns:
+            True if both genomes have the same enabled gates innovation nubmers (but
+            gates can potentially have different trained parameters).
+        """
+
+        self_gates = self.get_gate_innovations()
+        other_gates = other.get_gate_innovations()
+
+        logger.info(
+            f"comparing self gates {self_gates} to other gates {other_gates}, equal? {self_gates == other_gates}"
+        )
+
+        return self.get_gate_innovations() == other.get_gate_innovations()
+
     def copy(self, genome_number: int = None) -> CircuitGenome:
         """
         Creates a deep copy of this CircuitGenome, with potentially a new
@@ -240,6 +276,7 @@ class CircuitGenome:
         method_name: str,
         qubits: list[tuple[str, int]] = [],
         parameters: dict[str, float] = {},
+        innovation_number: int = None,
     ):
         """
         Adds a new already created gate to this quantum circuit, keeping the
@@ -488,3 +525,68 @@ class CircuitGenome:
             gate.describe_pennylane_circuit(self.qubits)
 
         return dev, qnode_fn
+
+    def save_circuit(
+        self,
+        insert_type: str,
+        out_dir: str = "artifacts/",
+    ):
+        """
+        Saves this genome into the specified output directory in JSON and
+        txt format.
+
+        Args:
+            insert_type: a tag to put at the beginning of the filename, e.g.
+                'best' for global_best genomes.
+            out_dir: where to write the genome files.
+        """
+        os.makedirs(out_dir, exist_ok=True)
+
+        json_path = os.path.join(out_dir, f"genome_{self.genome_number}.json")
+        logger.info(f"writing NEW BEST gnome to {json_path}")
+        with open(json_path, "w") as fp:
+            json.dump(self.to_dict(), fp, ensure_ascii=False, indent=4)
+
+        # --- Text gate list ---
+        txt_path = os.path.join(out_dir, f"genome_{self.genome_number}.txt")
+        with open(txt_path, "w") as f:
+            self.sort_gates()
+            f.write(f"Genome {self.genome_number}\n")
+            f.write(f"Qubits: {self.qubits}\n\n")
+            for g in self.gates:
+                if getattr(g, "enabled", True):
+                    f.write(
+                        f"{g.depth:.3f}  {g.method_name}  {g.qubits}  {g.parameters}\n"
+                    )
+
+        # --- PennyLane draw ---
+        self.generate_pennylane_circuit(return_probs=True, input_mode="angle")
+        # logger.info(f"genome circuit: {self.circuit}")
+
+        test_metric = self.fitness.get("test_acc", None)
+        if test_metric is None:
+            test_metric = self.fitness.get("test_fidelity")
+
+        try:
+            tag = (
+                f"trainloss_{self.fitness['train_loss']:.4f}_testloss_"
+                f"{self.fitness['test_loss']:.4f}_testacc_{test_metric:.3f}"
+            )
+        except Exception:
+            tag = (
+                f"best_ep_return_{self.fitness['best_episode_return']:.4f}_"
+                f"eval_return_mean_{self.fitness['eval_return_mean']:.4f}"
+            )
+
+        try:
+            params = genome_to_torch_params(self)
+            x0 = torch.zeros(len(self.input_indexes))
+            fig, ax = qml.draw_mpl(self.circuit)(x0, params)
+            ax.set_title(f"Genome {self.genome_number}")
+            path = os.path.join(
+                out_dir, f"{insert_type}_genome_{self.genome_number}_{tag}.png"
+            )
+            fig.savefig(path, dpi=200, bbox_inches="tight")
+            plt.close(fig)
+        except Exception as e:
+            logger.warning(f"Could not draw circuit: {e}")
