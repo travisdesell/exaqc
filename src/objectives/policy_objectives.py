@@ -688,27 +688,56 @@ def rollout_reinforce(
 
     ep_return = 0.0
 
+    # Optional Gaussian std for continuous REINFORCE
+    if spec.action_space == "continuous":
+        log_std = torch.full(
+            (spec.n_actions,),
+            float(getattr(spec, "init_log_std", -0.5)),
+            dtype=torch.float32,
+        )
+
     for _ in range(spec.max_steps):
         x = spec.obs_encoder(obs)
-
         out = genome.circuit(x, params)
-        if spec.return_expvals:
-            out = torch.stack(list(out))
-            logits = logits_from_kexpvals(out, spec.n_actions)
+
+        if spec.action_space == "discrete":
+            if spec.return_expvals:
+                out = torch.stack(list(out))
+                logits = logits_from_kexpvals(out, spec.n_actions)
+            else:
+                probs = torch.as_tensor(out, dtype=torch.float32).flatten()
+                probs = probs[: spec.n_actions]
+                probs = probs / (probs.sum() + 1e-12)
+                logits = torch.log(probs.clamp_min(1e-12))
+
+            dist = Categorical(logits=logits)
+            a = dist.sample()
+            action_env = int(a.item())
+            logp = dist.log_prob(a)
+            ent = dist.entropy()
+
         else:
-            probs = torch.as_tensor(out, dtype=torch.float32).flatten()
-            probs = probs[: spec.n_actions]
-            probs = probs / (probs.sum() + 1e-12)
-            logits = torch.log(probs.clamp_min(1e-12))
+            feats = torch.as_tensor(out, dtype=torch.float32).flatten()
+            mu = feats[: spec.n_actions]
+            if mu.numel() < spec.n_actions:
+                pad = torch.zeros(spec.n_actions - mu.numel(), dtype=mu.dtype)
+                mu = torch.cat([mu, pad], dim=0)
 
-        dist = Categorical(logits=logits)
-        a = dist.sample()
+            std = torch.exp(log_std)
+            dist = torch.distributions.Normal(mu, std)
 
-        obs, r, terminated, truncated, _ = env.step(int(a.item()))
+            a = dist.sample()
+            logp = dist.log_prob(a).sum()
+            ent = dist.entropy().sum()
+
+            action_env = a.detach().cpu().numpy()
+            action_env = _clip_action(action_env, spec)
+
+        obs, r, terminated, truncated, _ = env.step(action_env)
         ep_return += float(r)
 
-        logps.append(dist.log_prob(a))
-        entropies.append(dist.entropy())
+        logps.append(logp)
+        entropies.append(ent)
         rewards.append(torch.tensor(r, dtype=torch.float32))
 
         if terminated or truncated:
