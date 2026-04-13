@@ -1936,6 +1936,51 @@ def mountaincar_continuous_spec(
         value_coef=0.5,
     )
 
+def mountaincar_spec(
+    *,
+    episodes: int = 200,
+    lr: float = 1e-3,
+    seed: int = 0,
+    algo: str = "ppo",
+) -> RLSpec:
+    """
+    Ready-to-use spec for MountainCar-v0.
+
+    Observation:
+        2D Box state [position, velocity]
+    Action space:
+        Discrete(3)
+    """
+    # position in about [-1.2, 0.6], velocity in about [-0.07, 0.07]
+    scales = np.array([1.2, 0.07], dtype=np.float32)
+
+    def encoder(obs):
+        return encode_box_to_unit_interval(obs, scales=scales)
+
+    return RLSpec(
+        env_id="MountainCar-v0",
+        n_actions=3,
+        algo=algo,
+        action_space="discrete",
+        input_mode="angle",
+        return_expvals=True,
+        obs_encoder=encoder,
+        box_scales=scales,
+        episodes=episodes,
+        lr=lr,
+        seed=seed,
+        max_steps=200,
+        eval_episodes=20,
+        rollout_steps=1024,
+        ppo_epochs=4,
+        ppo_minibatch=128,
+        entropy_coef=0.01,
+        value_coef=0.5,
+        gae_lambda=0.95,
+        ppo_clip=0.2,
+        target_kl=0.02,
+    )
+
 
 def minigrid_spec(
     *,
@@ -2012,4 +2057,51 @@ def minigrid_spec(
         ppo_clip=0.2,
         target_kl=0.02,
         env_kwargs=env_kwargs,
+    )
+
+
+def acrobot_spec(
+    *,
+    episodes: int = 200,
+    lr: float = 1e-3,
+    seed: int = 0,
+    algo: str = "ppo",
+) -> RLSpec:
+    """
+    Ready-to-use spec for Acrobot-v1.
+
+    Observation:
+        6D Box state (cos/sin of joint angles + angular velocities)
+    Action space:
+        Discrete(3)
+    """
+    # Reasonable scaling for Acrobot observations
+    # [cosθ1, sinθ1, cosθ2, sinθ2, θ̇1, θ̇2]
+    scales = np.array([1.0, 1.0, 1.0, 1.0, 12.0, 28.0], dtype=np.float32)
+
+    def encoder(obs):
+        return encode_box_to_unit_interval(obs, scales=scales)
+
+    return RLSpec(
+        env_id="Acrobot-v1",
+        n_actions=3,
+        algo=algo,
+        action_space="discrete",
+        input_mode="angle",
+        return_expvals=True,
+        obs_encoder=encoder,
+        box_scales=scales,
+        episodes=episodes,
+        lr=lr,
+        seed=seed,
+        max_steps=500,
+        eval_episodes=20,
+        rollout_steps=1024,
+        ppo_epochs=4,
+        ppo_minibatch=128,
+        entropy_coef=0.01,
+        value_coef=0.5,
+        gae_lambda=0.95,
+        ppo_clip=0.2,
+        target_kl=0.02,
     )

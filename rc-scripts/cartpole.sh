@@ -1,8 +1,8 @@
 #!/bin/bash -l
 #SBATCH -J cartpole
 #SBATCH -t 2-00:00:00
-#SBATCH -o ./outs/frozenlake/runs/output.o
-#SBATCH -e ./logs/frozenlake/runs/error.e
+#SBATCH -o ./outs/cartpole/runs/output.o
+#SBATCH -e ./logs/cartpole/runs/error.e
 #SBATCH -A cps -p tier3
 #SBATCH --nodes=1
 #SBATCH --ntasks=12

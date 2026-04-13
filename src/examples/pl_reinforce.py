@@ -22,6 +22,8 @@ from src.objectives.policy_objectives import (
     eval_policy,
     train_rl,
     minigrid_spec,
+    mountaincar_spec,
+    acrobot_spec,
 )
 
 
@@ -85,6 +87,8 @@ class RLObjective(Objective):
                 elif spec.env_id == "CartPole-v1":
                     self.input_size = 4
                 elif spec.env_id == "MountainCarContinuous-v0":
+                    self.input_size = 2
+                elif spec.env_id == "MountainCar-v0":
                     self.input_size = 2
                 elif spec.env_id == "HalfCheetah-v5":
                     self.input_size = 17
@@ -183,6 +187,7 @@ if __name__ == "__main__":
             "cartpole",
             "frozenlake",
             "mountaincar_continuous",
+            "mountaincar",
             "halfcheetah",
             "walker2d",
             "minigrid",
@@ -352,6 +357,22 @@ if __name__ == "__main__":
         )
         # discrete env; output features/logits
         default_out_qubits = 4
+
+    elif args.env == "mountaincar":
+        spec = mountaincar_spec(
+            episodes=args.episodes,
+            lr=args.learning_rate,
+            seed=args.seed,
+            algo=args.algo,
+        )
+
+    elif args.env == "acrobot":
+        spec = acrobot_spec(
+            episodes=args.episodes,
+            lr=args.learning_rate,
+            seed=args.seed,
+            algo=args.algo,
+        )
 
     else:
         raise ValueError(args.env)
