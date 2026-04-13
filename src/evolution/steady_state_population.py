@@ -182,6 +182,10 @@ class SteadyStatePopulation(PopulationStrategy):
             "test_acc" in genome.fitness
             and self.accuracy_best_genome.fitness["test_acc"]
             < genome.fitness["test_acc"]
+        ) or (
+            "eval_return_mean" in genome.fitness
+            and self.accuracy_best_genome.fitness["eval_return_mean"]
+            < genome.fitness["eval_return_mean"]
         ):
             self.accuracy_best_genome = genome
 
@@ -193,7 +197,7 @@ class SteadyStatePopulation(PopulationStrategy):
             if self.out_dir is not None:
                 genome.save_circuit(insert_type="best_accuracy", out_dir=self.out_dir)
 
-            if genome.fitness["test_acc"] == 100.0:
+            if genome.fitness.get("test_acc", -1.0) == 100.0:
                 # found a perfect solution, can quit
                 exit(1)
 
