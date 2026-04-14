@@ -191,6 +191,7 @@ if __name__ == "__main__":
             "halfcheetah",
             "walker2d",
             "minigrid",
+            "acrobot",
         ],
         required=True,
     )
