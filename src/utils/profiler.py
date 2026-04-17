@@ -704,7 +704,7 @@ class EXAQCProfiler:
 
         plt.xlabel("Insertion / step")
         plt.ylabel("Count")
-        plt.title(f"{title}  (n_runs={n_runs})")
+        plt.title(f"{title}")
         plt.legend()
         plt.grid(True, alpha=0.25)
 
