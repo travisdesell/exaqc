@@ -10,6 +10,7 @@ from pathlib import Path
 
 from src.circuits.circuit import CircuitGenome
 
+
 def get_group_metrics(
     input_directories: list[str], metric: str, group: str = None
 ) -> (dict[str, dict[str, int]], dict[str, list[float]], int, int):
@@ -70,7 +71,10 @@ def get_group_metrics(
                 # logger.info(f"\tgenome: {genome_json} had metric '{metric}': {metric_value}")
 
                 if metric_value > best_metric:
-                    logger.info(f"genome {genome_json} had NEW best metric {metric_value} with n gates {n_gates} and n parameters {n_parameters}")
+                    logger.info(
+                        f"genome {genome_json} had NEW best metric {metric_value} with n "
+                        f"gates {n_gates} and n parameters {n_parameters}"
+                    )
 
                     best_metric = metric_value
                     best_n_gates = n_gates
@@ -78,12 +82,18 @@ def get_group_metrics(
 
                 if metric_value == best_metric:
                     if n_gates + n_parameters < best_n_gates + best_n_parameters:
-                        logger.info(f"genome {genome_json} had SMALLER best metric {metric_value} with n gates {n_gates} and n parameters {n_parameters}")
+                        logger.info(
+                            f"genome {genome_json} had SMALLER best metric {metric_value} with n "
+                            f"gates {n_gates} and n parameters {n_parameters}"
+                        )
                         best_n_gates = n_gates
                         best_n_parameters = n_parameters
 
                 if metric_value > overall_best_metric:
-                    logger.info(f"genome {genome_json} had NEW overall best metric {metric_value} with n gates {n_gates} and n parameters {n_parameters}")
+                    logger.info(
+                        f"genome {genome_json} had NEW overall best metric {metric_value} with n "
+                        f"gates {n_gates} and n parameters {n_parameters}"
+                    )
                     overall_best_json = genome_json
                     overall_best_metric = metric_value
 
@@ -91,15 +101,20 @@ def get_group_metrics(
                     overall_best_n_parameters = n_parameters
 
                 if metric_value == overall_best_metric:
-                    if n_gates + n_parameters < overall_best_n_gates + overall_best_n_parameters:
-                        logger.info(f"genome {genome_json} had SMALLER overall best metric {metric_value} with n gates {n_gates} and n parameters {n_parameters}")
+                    if (
+                        n_gates + n_parameters
+                        < overall_best_n_gates + overall_best_n_parameters
+                    ):
+                        logger.info(
+                            f"genome {genome_json} had SMALLER overall best metric {metric_value} "
+                            f"with n gates {n_gates} and n parameters {n_parameters}"
+                        )
                         overall_best_json = genome_json
                         overall_best_n_gates = n_gates
                         overall_best_n_parameters = n_parameters
 
                         circuit_genome = CircuitGenome.from_dict(genome)
                         circuit_genome.save_circuit("analysis_smallest", "./")
-
 
                 metadata = genome["metadata"]
                 insert_type = metadata["insert_type"]
