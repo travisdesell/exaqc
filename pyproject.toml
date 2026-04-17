@@ -19,6 +19,7 @@ dependencies = [
     "pennylane-qiskit",
     "torch",
     "matplotlib",
+    "seaborn",
     "pytest",
     "loguru",
     "pylatexenc",
