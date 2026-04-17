@@ -178,9 +178,9 @@ class SteadyStatePopulation(PopulationStrategy):
         if self.profiler is not None:
             self.profiler.record(step=self.insertions, population=self.population)
 
-        if self.accuracy_best_genome is None or (
-            "test_acc" in genome.fitness
-            and self.accuracy_best_genome.fitness["test_acc"]
+        if "test_acc" in genome.fitness and (
+            self.accuracy_best_genome is None
+            or self.accuracy_best_genome.fitness["test_acc"]
             < genome.fitness["test_acc"]
         ):
             self.accuracy_best_genome = genome
