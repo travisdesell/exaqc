@@ -8,6 +8,8 @@ import sys
 from loguru import logger
 from pathlib import Path
 
+from src.circuits.circuit import CircuitGenome
+
 
 def get_group_metrics(
     input_directories: list[str], metric: str, group: str = None
@@ -37,8 +39,10 @@ def get_group_metrics(
     best_n_parameters_list = []
 
     overall_best_metric = 0
-    overall_best_n_gates = 0
-    overall_best_n_parameters = 0
+    overall_best_n_gates = 100000
+    overall_best_n_parameters = 100000
+
+    overall_best_json = ""
 
     for directory in args.input_directories:
         if group is not None:
@@ -46,13 +50,14 @@ def get_group_metrics(
             if group not in directory:
                 continue
 
-        logger.info(f"parsing directory: {directory}")
-
         genome_directory = Path(directory + "/all_genomes/")
+        logger.info(f"parsing directory: {genome_directory}")
 
         best_metric = 0
+        best_n_gates = 10000
+        best_n_parameters = 10000
+
         for genome_json in genome_directory.glob("*.json"):
-            # logger.info(f"\tgenome: {genome_json}")
 
             with open(genome_json, "r") as file:
                 genome = json.load(file)
@@ -63,16 +68,53 @@ def get_group_metrics(
                     [len(gate["parameters"]) for gate in genome["gates"]]
                 )
 
+                # logger.info(f"\tgenome: {genome_json} had metric '{metric}': {metric_value}")
+
                 if metric_value > best_metric:
+                    logger.info(
+                        f"genome {genome_json} had NEW best metric {metric_value} with n "
+                        f"gates {n_gates} and n parameters {n_parameters}"
+                    )
+
                     best_metric = metric_value
                     best_n_gates = n_gates
                     best_n_parameters = n_parameters
 
+                if metric_value == best_metric:
+                    if n_gates + n_parameters < best_n_gates + best_n_parameters:
+                        logger.info(
+                            f"genome {genome_json} had SMALLER best metric {metric_value} with n "
+                            f"gates {n_gates} and n parameters {n_parameters}"
+                        )
+                        best_n_gates = n_gates
+                        best_n_parameters = n_parameters
+
                 if metric_value > overall_best_metric:
+                    logger.info(
+                        f"genome {genome_json} had NEW overall best metric {metric_value} with n "
+                        f"gates {n_gates} and n parameters {n_parameters}"
+                    )
+                    overall_best_json = genome_json
                     overall_best_metric = metric_value
 
                     overall_best_n_gates = n_gates
                     overall_best_n_parameters = n_parameters
+
+                if metric_value == overall_best_metric:
+                    if (
+                        n_gates + n_parameters
+                        < overall_best_n_gates + overall_best_n_parameters
+                    ):
+                        logger.info(
+                            f"genome {genome_json} had SMALLER overall best metric {metric_value} "
+                            f"with n gates {n_gates} and n parameters {n_parameters}"
+                        )
+                        overall_best_json = genome_json
+                        overall_best_n_gates = n_gates
+                        overall_best_n_parameters = n_parameters
+
+                        circuit_genome = CircuitGenome.from_dict(genome)
+                        circuit_genome.save_circuit("analysis_smallest", "./")
 
                 metadata = genome["metadata"]
                 insert_type = metadata["insert_type"]
@@ -127,8 +169,11 @@ def get_group_metrics(
     print(f"stddev n_parameters: {np.std(best_n_parameters_list)}")
 
     print("\n")
-    print(f"best genome n gates: {overall_best_n_gates}")
     print(f"best genome n parameters: {overall_best_n_parameters}")
+    print(f"best genome n gates: {overall_best_n_gates}")
+
+    print("\n")
+    print(f"best genome json: {overall_best_json}")
 
     best_lists = {}
     best_lists[metric] = best_metrics
