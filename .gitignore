@@ -212,3 +212,6 @@ plots/
 artifacts/
 outs/
 logs/
+
+# Data
+data/
