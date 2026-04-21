@@ -11,7 +11,6 @@ import time
 from loguru import logger
 
 import matplotlib.pyplot as plt
-import seaborn as sns
 import numpy as np
 
 from src.circuits.circuit import CircuitGenome
@@ -543,9 +542,9 @@ class EXAQCProfiler:
         out_path: str,
         metric: Optional[str] = "top5_mean",
         conf: str = "std",
-        title: str = "EXAQC (mean ± confidence)",
+        title: str = "EXAQC",
     ) -> None:
-        """Aggregate multiple run CSVs and plot mean with confidence bounds.
+        """Aggregate multiple run CSVs and plot mean with confidence bounds. (mean ± confidence)
 
         This method aligns runs by the intersection of their available step
         values, then plots the mean of the selected metric with either
@@ -612,8 +611,9 @@ class EXAQCProfiler:
             plt.fill_between(common_steps, lo, hi, alpha=0.15)
 
         plt.xlabel("Insertion / step")
+        # plt.xlim(0, 1000)
         plt.ylabel("Reward / Loss")
-        plt.title(f"{title}  (n_runs={n_runs})")
+        plt.title(f"{title} (mean ± {conf.lower()}) (n_runs=10)")
         plt.legend()
         plt.grid(True, alpha=0.25)
 
@@ -643,6 +643,8 @@ class EXAQCProfiler:
             FileNotFoundError: If no CSV files match ``csv_glob``.
             RuntimeError: If the runs do not share any common steps.
         """
+        import seaborn as sns
+        
         paths = sorted(glob.glob(csv_glob))
         if not paths:
             raise FileNotFoundError(f"No CSVs matched: {csv_glob}")
@@ -703,6 +705,7 @@ class EXAQCProfiler:
             plt.fill_between(common_steps, lo, hi, alpha=0.14, color=color)
 
         plt.xlabel("Insertion / step")
+        plt.xlim(0, 1000)
         plt.ylabel("Count")
         plt.title(f"{title}")
         plt.legend()
