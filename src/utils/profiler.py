@@ -644,7 +644,7 @@ class EXAQCProfiler:
             RuntimeError: If the runs do not share any common steps.
         """
         import seaborn as sns
-        
+
         paths = sorted(glob.glob(csv_glob))
         if not paths:
             raise FileNotFoundError(f"No CSVs matched: {csv_glob}")
