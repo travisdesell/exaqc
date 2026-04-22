@@ -23,7 +23,7 @@ for i in $(seq 1 10); do
   --number_genomes 1000 \
   --input_qubits 4 \
   --output_qubits 2 \
-  --episodes 80 \
+  --episodes 100 \
   --out_dir artifacts/cartpole_rf/pop/runs/${i} \
   steady_state --max_population_size 50
   echo "Completed run ${i}"

@@ -18,7 +18,7 @@ for i in $(seq 1 10); do
   srun python -m src.examples.pl_reinforce \
     --env walker2d \
     --algo reinforce \
-    --number_genomes 2000 \
+    --number_genomes 1000 \
     --episodes 100 \
     --learning_rate 3e-4 \
     --rollout_steps 2048 \
@@ -28,6 +28,6 @@ for i in $(seq 1 10); do
     --input_qubits 6 \
     --output_qubits 6 \
     --episodes 100 \
-    --out_dir artifacts/walker2d/islands/runs/${i} \
-    islands --n_islands 10 --max_island_size 3
+    --out_dir artifacts/walker2d_rf/pop/runs/${i} \
+    steady_state --max_population_size 50
 done

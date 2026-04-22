@@ -22,6 +22,10 @@ from src.objectives.policy_objectives import (
     eval_policy,
     train_rl,
     minigrid_spec,
+    mountaincar_spec,
+    acrobot_spec,
+    lunarlander_spec,
+    pendulum_spec,
 )
 
 
@@ -186,6 +190,10 @@ if __name__ == "__main__":
             "halfcheetah",
             "walker2d",
             "minigrid",
+            "lunarlander",
+            "pendulum",
+            "mountaincar",
+            "acrobot",
         ],
         required=True,
     )
@@ -351,6 +359,40 @@ if __name__ == "__main__":
         )
         # discrete env; output features/logits
         default_out_qubits = 4
+
+    elif args.env == "mountaincar":
+        spec = mountaincar_spec(
+            episodes=args.episodes,
+            lr=args.learning_rate,
+            seed=args.seed,
+            algo=args.algo,
+        )
+
+    elif args.env == "acrobot":
+        spec = acrobot_spec(
+            episodes=args.episodes,
+            lr=args.learning_rate,
+            seed=args.seed,
+            algo=args.algo,
+        )
+
+    elif args.env == "lunarlander":
+        spec = lunarlander_spec(
+            episodes=args.episodes,
+            lr=args.learning_rate,
+            seed=args.seed,
+            algo=args.algo,
+            max_steps=args.max_steps,
+        )
+
+    elif args.env == "pendulum":
+        spec = pendulum_spec(
+            episodes=args.episodes,
+            lr=args.learning_rate,
+            seed=args.seed,
+            algo=args.algo,
+            max_steps=args.max_steps,
+        )
 
     else:
         raise ValueError(args.env)

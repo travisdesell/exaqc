@@ -18,8 +18,7 @@ for i in $(seq 1 10); do
     srun python -m src.examples.pl_reinforce \
     --algo reinforce \
     --env frozenlake \
-    --is_slippery \
-    --number_genomes 1000 \
+    --number_genomes 2000 \
     --input_qubits 4 \
     --output_qubits 4 \
     --episodes 1000 \
@@ -31,6 +30,8 @@ for i in $(seq 1 10); do
     --seed 0 \
     --log_every 50 \
     --logging_level INFO \
-    --out_dir artifacts/frozenlake_rf/pop/runs/${i} \
+    --out_dir artifacts/frozenlake_rf/pop/runs1/${i} \
     steady_state --max_population_size 50
 done
+
+# --is_slippery \
