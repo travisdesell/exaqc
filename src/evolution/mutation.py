@@ -460,3 +460,37 @@ def add_gate_with_selection(
 
         logger.debug(f"\tattempting with selected {gate_specification}")
         return add_gate(gate_specification, circuit)
+
+
+
+
+def mutate_some_weights(
+    circuit: CircuitGenome,
+    percentage: float,
+) -> bool:
+    """
+
+    Args:
+        circuit: is the CircuitGenome to mutate
+        percentage: what percentage of weights to re-initialize.
+
+    Returns:
+        False if the circuit has no weights to mutate, True otherwise.
+    """
+
+
+
+def mutate_all_weights(
+    circuit: CircuitGenome,
+    scale: float,
+) -> bool:
+    """
+
+    Args:
+        circuit: is the CircuitGenome to mutate
+        scale: scale value for the normal distribution to modify each weight
+            by.
+
+    Returns:
+        False if the circuit has no weights to mutate, True otherwise.
+    """

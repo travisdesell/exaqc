@@ -1,4 +1,5 @@
 import random
+import numpy as np
 
 from loguru import logger
 
@@ -260,8 +261,9 @@ class EXAQC:
         if self.population.is_initializing():
             # still need to populate the initial population
             # mutation_count = random.choice([1, 2, 3, 4, 5, 6, 7, 8, 9])
-            mutation_count = random.choice([1, 2, 3])
-            # mutation_count = random.choice([1, 2, 3, 4])
+            # mutation_count = random.choice([1, 2, 3])
+
+            mutation_count = round(np.random.exponential(scale=1)) + 1
 
             # keep retrying until we have a valid child
             child = None
@@ -313,6 +315,7 @@ class EXAQC:
                         continue
 
                 elif r < n_ary_cutoff:
+                    n_ary_parents = round(np.random.exponential(scale=1)) + 2
                     parents, metadata = self.population.get_parents(n_ary_parents)
 
                     if parents is None:
@@ -348,7 +351,9 @@ class EXAQC:
                     parent, metadata = self.population.get_parent()
 
                     # mutation_count = random.choice([0, 1, 2, 3, 4])
-                    mutation_count = random.choice([1, 2, 3])
+                    # mutation_count = random.choice([1, 2, 3])
+                    mutation_count = round(np.random.exponential(scale=1) + 1)
+
                     logger.info(
                         f"generating a child via {mutation_count + 1} mutations."
                     )
