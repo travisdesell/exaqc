@@ -357,8 +357,8 @@ def _train_with_pennylane(
 
     if use_state:
         genome.generate_pennylane_circuit(
-            input_mode=encoding, 
-            return_probs=False, 
+            input_mode=encoding,
+            return_probs=False,
             measure_registers=False,
             noise_model=noise_model,
         )
@@ -368,7 +368,7 @@ def _train_with_pennylane(
             )
     else:
         genome.generate_pennylane_circuit(
-            input_mode=encoding, 
+            input_mode=encoding,
             return_probs=True,
             noise_model=noise_model,
         )

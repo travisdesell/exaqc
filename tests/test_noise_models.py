@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 
 from src.noise import (
-    BaseNoiseModel, 
-    PennyLaneNoiseModel, 
+    BaseNoiseModel,
+    PennyLaneNoiseModel,
     QiskitNoiseModel,
 )
 
@@ -130,7 +130,8 @@ def test_pennylane_thermal_relaxation_not_implemented():
     with pytest.raises(NotImplementedError):
         noise.apply_to_wires([0])
 
-@pytest.skip(reason="Qiskit not yet implemented")
+
+@pytest.mark.skip(reason="Qiskit not yet implemented")
 def test_qiskit_noise_model_none_returns_none():
     pytest.importorskip("qiskit_aer")
 
@@ -140,7 +141,8 @@ def test_qiskit_noise_model_none_returns_none():
     assert noise.is_noisy() is False
     assert noise.to_qiskit_noise_model() is None
 
-@pytest.skip(reason="Qiskit not yet implemented")
+
+@pytest.mark.skip(reason="Qiskit not yet implemented")
 @pytest.mark.parametrize(
     "noise_type",
     [

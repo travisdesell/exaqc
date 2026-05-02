@@ -79,11 +79,21 @@ def test_classification_train_one_epoch(
 
     out_qubits = int(math.ceil(math.log(n_classes, 2))) if n_classes > 1 else 1
 
+    hyperparameters = {
+        "epochs": 1,
+        "learning_rate": 1e-3,
+        "log_every": 15,
+        "batch_size": 3,
+        "encoding": "angle",
+    }
+
     genome = make_dummy_genome(
         genome_number=0,
         input_qubits=min(input_size, 15),
         out_qubits=out_qubits,
     )
+
+    genome.hyperparameters = hyperparameters
 
     genome.generate_pennylane_circuit(return_probs=True, input_mode="angle")
 

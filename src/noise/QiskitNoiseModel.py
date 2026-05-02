@@ -30,9 +30,7 @@ class QiskitNoiseModel(BaseNoiseModel):
                 phase_damping_error,
             )
         except Exception as e:
-            raise ImportError(
-                "Qiskit noise support requires qiskit-aer."
-            ) from e
+            raise ImportError("Qiskit noise support requires qiskit-aer.") from e
 
         noise_model = NoiseModel()
 

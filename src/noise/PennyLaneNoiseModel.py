@@ -71,7 +71,7 @@ class PennyLaneNoiseModel(BaseNoiseModel):
                 "Thermal relaxation is backend/version dependent in PennyLane. "
                 "Use amplitude_damping/phase_damping or implement a custom channel."
             )
-        
+
         else:
             raise ValueError(f"Unknown noise_type={self.noise_type}")
 

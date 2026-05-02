@@ -467,7 +467,9 @@ class CircuitGenome:
             f"input indexes: {self.input_indexes}, output_indexes: {self.output_indexes}"
         )
 
-        device_name = noise_model.device_name() if noise_model is not None else "default.qubit"
+        device_name = (
+            noise_model.device_name() if noise_model is not None else "default.qubit"
+        )
 
         # 1️⃣ Instantiate PennyLane device
         dev = qml.device(
@@ -504,7 +506,7 @@ class CircuitGenome:
                 )
             else:
                 raise ValueError(f"Unknown input_mode={input_mode}")
-            
+
             # 3️⃣ Noise to all inputs after encoding
             if noise_model is not None:
                 noise_model.after_input_encoding(self.input_indexes)
@@ -521,9 +523,9 @@ class CircuitGenome:
             if return_probs:
                 if noise_model is not None:
                     noise_model.before_measurement(self.output_indexes)
-                    
+
                 return qml.probs(wires=self.output_indexes)
-            
+
             elif measure_registers:
                 # fallback if you want expvals
                 expvals = [
