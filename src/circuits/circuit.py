@@ -16,6 +16,7 @@ from src.circuits.gate import Gate
 from src.objectives.genome_objectives import (
     genome_to_torch_params,
 )
+from src.noise import PennyLaneNoiseModel
 
 
 class CircuitGenome:
@@ -26,7 +27,7 @@ class CircuitGenome:
         target: str,
         input_qubits: list[tuple[str, int]],
         output_qubits: list[tuple[str, int]] = None,
-        metadata: dict[str, any] = {},
+        metadata: dict[str, any] = None,
     ):
         """
         Initializes an empty quantum circuit.
@@ -42,6 +43,8 @@ class CircuitGenome:
                 track other information about the genome.
         """
         self.genome_number = genome_number
+        if metadata is None:
+            metadata = {}
         self.metadata = metadata
 
         # these should be specified by EXAQC
@@ -206,7 +209,7 @@ class CircuitGenome:
 
         return new_genome
 
-    def to_dict(self) -> dict(str, any):
+    def to_dict(self) -> dict[str, any]:
         """
         Creates a dict representation of the circuit genome that can be converted to JSON
         or used for MPI serialization. This won't contain any of the qiskit or pennylane
@@ -441,6 +444,7 @@ class CircuitGenome:
         shots: Optional[int] = None,
         input_mode: str = "basis",
         return_probs: bool = False,
+        noise_model: Optional[PennyLaneNoiseModel] = None,
     ):
         """
         Converts this genome into a PennyLane QNode-ready function.
@@ -463,14 +467,16 @@ class CircuitGenome:
             f"input indexes: {self.input_indexes}, output_indexes: {self.output_indexes}"
         )
 
-        # Instantiate PennyLane device
+        device_name = noise_model.device_name() if noise_model is not None else "default.qubit"
+
+        # 1️⃣ Instantiate PennyLane device
         dev = qml.device(
             device_name,
             wires=self.total_qubits,
             shots=shots,
         )
 
-        # Define the QNode function
+        # 2️⃣ Define the QNode function
         @qml.qnode(dev, interface="torch", diff_method="backprop")
         def qnode_fn(
             input_bits: torch.Tensor,
@@ -498,15 +504,26 @@ class CircuitGenome:
                 )
             else:
                 raise ValueError(f"Unknown input_mode={input_mode}")
+            
+            # 3️⃣ Noise to all inputs after encoding
+            if noise_model is not None:
+                noise_model.after_input_encoding(self.input_indexes)
 
-            # Apply all gates in depth order
+            # 4️⃣  Apply all gates in depth order
             self.sort_gates()
             for gate in self.gates:
                 gate.add_to_pennylane_circuit(self.qubits, params=params)
 
-            # 4️⃣ Measurement
+                if noise_model is not None:
+                    noise_model.after_gate(self.input_indexes)
+
+            # 5️⃣ Measurement
             if return_probs:
+                if noise_model is not None:
+                    noise_model.before_measurement(self.output_indexes)
+                    
                 return qml.probs(wires=self.output_indexes)
+            
             elif measure_registers:
                 # fallback if you want expvals
                 expvals = [

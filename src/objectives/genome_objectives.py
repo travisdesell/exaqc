@@ -11,6 +11,7 @@ from loguru import logger
 
 if TYPE_CHECKING:
     from src.circuits.circuit import CircuitGenome
+from src.noise import PennyLaneNoiseModel
 
 from src.utils.losses import (  # noqa: F401
     loss_ce,
@@ -346,6 +347,9 @@ def _train_with_pennylane(
         data=train_list, batch_size=batch_size, shuffle=shuffle_each_epoch
     )
 
+    # Noise Model
+    noise_model = PennyLaneNoiseModel.from_hyperparameters(genome.hyperparameters)
+
     # ----- choose output type -----
     use_state = (
         loss_name in {"fidelity", "angle", "kl"} and target_qnode
@@ -353,14 +357,21 @@ def _train_with_pennylane(
 
     if use_state:
         genome.generate_pennylane_circuit(
-            input_mode=encoding, return_probs=False, measure_registers=False
+            input_mode=encoding, 
+            return_probs=False, 
+            measure_registers=False,
+            noise_model=noise_model,
         )
         if target_qnode is None:
             raise ValueError(
                 "target_qnode is required for teacher training with statevector losses."
             )
     else:
-        genome.generate_pennylane_circuit(input_mode=encoding, return_probs=True)
+        genome.generate_pennylane_circuit(
+            input_mode=encoding, 
+            return_probs=True,
+            noise_model=noise_model,
+        )
 
     torch_params = genome_to_torch_params(genome)
 
