@@ -76,7 +76,6 @@ def eval_probs_ce_and_acc(
     total = 0
     per_class_pred = {}
 
-
     for x, y, cls in dataset:
         if cls not in per_class_pred:
             per_class_pred[cls] = 0
@@ -197,10 +196,18 @@ class ClassificationObjective(Objective):
 
         # Compute fresh train/test metrics from probs (works for both param & no-param cases)
         train_metrics = eval_probs_ce_and_acc(
-            genome, self.train_data, n_classes=self.n_classes, loss=self.loss, alpha=alpha
+            genome,
+            self.train_data,
+            n_classes=self.n_classes,
+            loss=self.loss,
+            alpha=alpha,
         )
         test_metrics = eval_probs_ce_and_acc(
-            genome, self.test_data, n_classes=self.n_classes, loss=self.loss, alpha=alpha
+            genome,
+            self.test_data,
+            n_classes=self.n_classes,
+            loss=self.loss,
+            alpha=alpha,
         )
 
         genome.fitness = {

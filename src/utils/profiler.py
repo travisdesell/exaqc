@@ -615,5 +615,7 @@ class EXAQCProfiler:
         plt.grid(True, alpha=0.25)
 
         os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-        fig.savefig(os.path.join(out_path, "master_plot.png"), dpi=220, bbox_inches="tight")
+        fig.savefig(
+            os.path.join(out_path, "master_plot.png"), dpi=220, bbox_inches="tight"
+        )
         plt.close(fig)
