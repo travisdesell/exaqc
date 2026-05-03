@@ -31,6 +31,7 @@ class EXAQC:
         population: PopulationStrategy,
         objective: Objective,
         hyperparameters: dict[str, any],
+        mutation_strategy: list[str] = None,
         input_qubits: list[tuple[str, int]] = None,
         input_registers: dict[str, int] = None,
         output_registers: dict[str, int] = None,
@@ -50,6 +51,11 @@ class EXAQC:
                 value.
             hyperparameters: a dict specifying which hyperparameters to use in the training process, and if
                 this is an additional search space to search over.
+            mutation_strategy: specifies how many mutations should be performed if mutation is selected. current
+                options are 'uniform <min> <max>' which will select a number of mutations uniformly at random
+                between range(min, max), where min should be at least 1; or 'exponential <scale>' which will select the
+                number of mutations using an exponential distribution with the given scale plus 1 to ensure at least
+                1 mutation happens.
             input_registers: a dict of register names and sizes (the key is the qubit name, the value is its size). must
                 be specified if input_qubits is not specified.
             input_qubits: a list of qubit tuples (name, register_index) which would be the expanded form of the
@@ -69,6 +75,11 @@ class EXAQC:
         self.hyperparameters = hyperparameters
         self.target = target
         self.inserted_genomes = 0
+
+        # make sure the mutation count strategy is one we currently support
+        self.validate_mutation_strategy(mutation_strategy)
+
+        self.mutation_strategy = mutation_strategy
 
         if input_registers is None and input_qubits is None:
             logger.critical(
@@ -119,6 +130,56 @@ class EXAQC:
         self.saved_epochs = 10
         self.initial_genome.hyperparameters = self.get_hyperparameters()
 
+    def validate_mutation_strategy(self, mutation_strategy: list[str]):
+        """
+        Validates that the mutation count strategy provided on the command line is
+        correctly formatted and specifies. Will report an error and quit if not.
+        """
+
+        if mutation_strategy[0] == "uniform":
+            if len(mutation_strategy) != 3:
+                logger.error(
+                    "'uniform' mutation strategy requires two additional arguments, which are the "
+                    "min and max range of potential number of mutations, which need to be integers."
+                )
+                exit(1)
+
+            if not mutation_strategy[1].isdigit() or int(mutation_strategy[1]) < 1:
+                logger.error(
+                    "<min> value for uniform strategy must be an int and at least 1, but value "
+                    f"provided was {mutation_strategy[1]}"
+                )
+                exit(1)
+
+            if not mutation_strategy[1].isdigit() or (
+                int(mutation_strategy[1]) > int(mutation_strategy[2])
+            ):
+                logger.error(
+                    "<max> value for uniform strategy must be an int and at least the <min> value, "
+                    f"value provided was {mutation_strategy[1]}"
+                )
+                exit(1)
+
+        elif mutation_strategy[0] == "exponential":
+            if len(mutation_strategy) != 2:
+                logger.error(
+                    "'exponential' mutation strategy requires one additional argument, which is "
+                    "the scale for the exponential distribution, which needs to be a float."
+                )
+                exit(1)
+
+            try:
+                float(mutation_strategy[1])
+            except ValueError:
+                logger.error(
+                    f"'scale' value was {mutation_strategy[1]} was not a float."
+                )
+                exit(1)
+
+        else:
+            logger.error(f"Unknown mutation strategy was provided: {mutation_strategy}")
+            exit(1)
+
     def get_hyperparameters(self):
         """
         Return:
@@ -144,6 +205,24 @@ class EXAQC:
         # hyperparameters["epochs"] = 10
 
         return hyperparameters
+
+    def get_mutation_count(self) -> int:
+        """
+        Given the provided mutation strategy this will determine how many mutations
+        to perform for the current time mutation was selected.
+
+        Returns:
+            How many mutations to perform for the next child.
+        """
+
+        if self.mutation_strategy[0] == "uniform":
+            min_value = int(self.mutation_strategy[1])
+            max_value = int(self.mutation_strategy[2])
+            return random.choice(range(min_value, max_value))
+
+        elif self.mutation_strategy[0] == "exponential":
+            scale = float(self.mutation_strategy[1])
+            return round(np.random.exponential(scale=scale)) + 1
 
     def next_genome_number(self) -> int:
         """
@@ -260,10 +339,9 @@ class EXAQC:
 
         if self.population.is_initializing():
             # still need to populate the initial population
-            # mutation_count = random.choice([1, 2, 3, 4, 5, 6, 7, 8, 9])
-            # mutation_count = random.choice([1, 2, 3])
 
-            mutation_count = round(np.random.exponential(scale=1)) + 1
+            mutation_count = random.choice([1, 2, 3])
+            # mutation_count = round(np.random.exponential(scale=1)) + 1
 
             # keep retrying until we have a valid child
             child = None
@@ -350,9 +428,8 @@ class EXAQC:
                 else:
                     parent, metadata = self.population.get_parent()
 
-                    # mutation_count = random.choice([0, 1, 2, 3, 4])
-                    # mutation_count = random.choice([1, 2, 3])
-                    mutation_count = round(np.random.exponential(scale=1) + 1)
+                    mutation_count = random.choice([1, 2, 3])
+                    # mutation_count = round(np.random.exponential(scale=1) + 1)
 
                     logger.info(
                         f"generating a child via {mutation_count + 1} mutations."

@@ -241,6 +241,14 @@ if __name__ == "__main__":
         choices=["per_class", "bce", "focal", "ce", "mse", "kl", "fidelity"],
     )
 
+    p.add_argument(
+        "--mutation_strategy",
+        "-ms",
+        type=str,
+        nargs="+",
+        required=True,
+    )
+
     subparsers = p.add_subparsers(
         dest="population_strategy",
         help="Specify how genomes will be handled.",
@@ -298,6 +306,8 @@ if __name__ == "__main__":
     # create a new logging handler at the appropriate level
     logger.add(sys.stdout, level=args.logging_level)
     logger.add(os.path.join(args.out_dir, "run.log"))
+
+    logger.info(f"mutation strategy: {args.mutation_strategy}")
 
     # specify hyperparameter options for genome evaluation
     hyperparameters = {
@@ -374,6 +384,7 @@ if __name__ == "__main__":
         population=population,
         objective=objective,
         hyperparameters=hyperparameters,
+        mutation_strategy=args.mutation_strategy,
         run_for=args.number_genomes,
         input_registers={"input": min(args.input_qubits, objective.input_size)},
         output_registers={"output": math.ceil(math.log(objective.n_classes, 2))},

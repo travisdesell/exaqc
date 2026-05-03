@@ -462,8 +462,6 @@ def add_gate_with_selection(
         return add_gate(gate_specification, circuit)
 
 
-
-
 def mutate_some_weights(
     circuit: CircuitGenome,
     percentage: float,
@@ -477,7 +475,6 @@ def mutate_some_weights(
     Returns:
         False if the circuit has no weights to mutate, True otherwise.
     """
-
 
 
 def mutate_all_weights(
