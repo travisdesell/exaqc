@@ -6,7 +6,7 @@ from src.noise.BaseNoiseModel import BaseNoiseModel
 class QiskitNoiseModel(BaseNoiseModel):
     """Qiskit/Aer implementation of the backend-agnostic noise model.
 
-    Qiskit/Aer noise is typically attached to simulator execution through 
+    Qiskit/Aer noise is typically attached to simulator execution through
     a backend-level noise model.
 
     Supported noise models include:

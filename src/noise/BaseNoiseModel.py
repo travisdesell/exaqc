@@ -144,13 +144,7 @@ class BaseNoiseModel(ABC):
             p_1q=hp.get("noise_p_1q", None),
             p_2q=hp.get("noise_p_2q", None),
             gamma=float(hp.get("noise_gamma", 0.0)),
-            apply_after_input_encoding=bool(
-                hp.get("noise_after_encoding", False)
-            ),
-            apply_after_gates=bool(
-                hp.get("noise_after_gates", True)
-            ),
-            apply_before_measurement=bool(
-                hp.get("noise_before_measurement", False)
-            ),
+            apply_after_input_encoding=bool(hp.get("noise_after_encoding", False)),
+            apply_after_gates=bool(hp.get("noise_after_gates", True)),
+            apply_before_measurement=bool(hp.get("noise_before_measurement", False)),
         )
