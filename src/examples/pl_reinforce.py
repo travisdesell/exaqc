@@ -213,6 +213,14 @@ if __name__ == "__main__":
     p.add_argument("--max_population_size", type=int, default=30)
     p.add_argument("--number_genomes", type=int, default=500)
 
+    p.add_argument(
+        "--mutation_strategy",
+        "-ms",
+        type=str,
+        nargs="+",
+        required=True,
+    )
+
     # Registers
     p.add_argument("--input_qubits", type=int, default=6)
     p.add_argument("--output_qubits", type=int, default=None)
@@ -422,6 +430,7 @@ if __name__ == "__main__":
         population=population,
         objective=objective,
         hyperparameters=hyperparameters,
+        mutation_strategy=args.mutation_strategy,
         run_for=args.number_genomes,
         input_registers=input_registers,
         output_registers=output_registers,
