@@ -218,11 +218,15 @@ class EXAQC:
         if self.mutation_strategy[0] == "uniform":
             min_value = int(self.mutation_strategy[1])
             max_value = int(self.mutation_strategy[2])
-            return random.choice(range(min_value, max_value))
+            n_mutations = random.choice(range(min_value, max_value))
+            logger.info(f"uniform mutation count generated: {n_mutations}")
+            return n_mutations
 
         elif self.mutation_strategy[0] == "exponential":
             scale = float(self.mutation_strategy[1])
-            return round(np.random.exponential(scale=scale)) + 1
+            n_mutations = round(np.random.exponential(scale=scale)) + 1
+            logger.info(f"exponential mutation count generated: {n_mutations}")
+            return n_mutations
 
     def next_genome_number(self) -> int:
         """
@@ -427,7 +431,7 @@ class EXAQC:
                 else:
                     parent, metadata = self.population.get_parent()
 
-                    mutation_count = get_mutation_count()
+                    mutation_count = self.get_mutation_count()
 
                     logger.info(
                         f"generating a child via {mutation_count + 1} mutations."
