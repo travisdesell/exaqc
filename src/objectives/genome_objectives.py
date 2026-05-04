@@ -11,7 +11,7 @@ from loguru import logger
 
 if TYPE_CHECKING:
     from src.circuits.circuit import CircuitGenome
-from src.noise import PennyLaneNoiseModel
+from src.noise import BaseNoiseModel, PennyLaneNoiseModel
 
 from src.utils.losses import (  # noqa: F401
     loss_ce,
@@ -281,6 +281,7 @@ def _train_with_pennylane(
     # NEW:
     target_qnode: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
     encoding: str = "angle",
+    noise_model: Optional[PennyLaneNoiseModel] = None,
 ):
     """Train a CircuitGenome using PennyLane-based differentiable execution.
 
@@ -314,6 +315,8 @@ def _train_with_pennylane(
         shuffle_each_epoch (bool): Whether to reshuffle data each epoch.
         target_qnode (Callable, optional): Reference QNode producing target
             quantum states (required for teacher mode).
+        encoding (str): The type of quantum encoding
+        noise_model (Object, optional): The noise model to adopt
 
     Returns:
         None. The genome is updated in-place, and `genome.fitness` is set.
@@ -348,7 +351,8 @@ def _train_with_pennylane(
     )
 
     # Noise Model
-    noise_model = PennyLaneNoiseModel.from_hyperparameters(genome.hyperparameters)
+    if noise_model is None:
+        noise_model = PennyLaneNoiseModel.from_hyperparameters(genome.hyperparameters)
 
     # ----- choose output type -----
     use_state = (
@@ -631,7 +635,9 @@ def _train_with_pennylane(
             logger.info(f"Saved best model to genome:{genome.genome_number}")
 
     # Save best loss genome params and metrics
-    torch_params_to_genome(genome, best_params)
+    if best_params is not None:
+        torch_params_to_genome(genome, best_params)
+
     genome.fitness = best_metrics
 
 
@@ -817,6 +823,7 @@ def train_genome_objective(
     n_classes: int = 3,
     log_every: int = 50,
     batch_size: int = None,
+    noise_model: Optional[BaseNoiseModel] = None,
     qiskit_config: Optional[dict[str, Any]] = None,
 ) -> CircuitGenome:
     """
@@ -840,6 +847,7 @@ def train_genome_objective(
             batch_size=batch_size,
             target_qnode=teacher_qnode,
             encoding=encoding,
+            noise_model=noise_model,
         )
         return
 

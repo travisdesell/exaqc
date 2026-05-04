@@ -151,6 +151,7 @@ class ClassificationObjective(Objective):
 
     def __call__(self, genome: CircuitGenome):
         hp = genome.hyperparameters
+        noise_model = None
 
         learning_rate = hp["learning_rate"]
         epochs = hp["epochs"]
@@ -158,7 +159,8 @@ class ClassificationObjective(Objective):
         log_every = hp["log_every"]
         encoding = hp["encoding"]
 
-        noise_model = PennyLaneNoiseModel.from_hyperparameters(hp)
+        if hp["noise_type"] != "none":
+            noise_model = PennyLaneNoiseModel.from_hyperparameters(hp)
 
         torch_params = genome_to_torch_params(genome)
         if len(torch_params) > 0:

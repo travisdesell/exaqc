@@ -516,8 +516,8 @@ class CircuitGenome:
             for gate in self.gates:
                 gate.add_to_pennylane_circuit(self.qubits, params=params)
 
-                if noise_model is not None:
-                    noise_model.after_gate(self.input_indexes)
+            if noise_model is not None:
+                noise_model.after_gate(self.input_indexes)
 
             # 5️⃣ Measurement
             if return_probs:
