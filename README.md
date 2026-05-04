@@ -48,16 +48,25 @@ mpiexec -n 12 python3 -m src.examples.pl_classification --logging_level INFO --d
 These can be run for repeated experiments using the scripts provided in the [./scripts](./scripts) directory (the following will create 10 repeats for each):
 
 ```
-sh scripts/run_iris.sh 1 10 per_class ./2026_ppsn_exaqc
-sh scripts/run_seeds.sh 1 10 per_class ./2026_ppsn_exaqc
-sh scripts/run_breast_cancer.sh 1 10 per_class ./2026_ppsn_exaqc
-sh scripts/run_wine.sh 1 10 per_class ./2026_ppsn_exaqc
+sh scripts/run_iris.sh 1 10 per_class ./2026_ppsn_exaqc/classification
+sh scripts/run_seeds.sh 1 10 per_class ./2026_ppsn_exaqc/classification
+sh scripts/run_breast_cancer.sh 1 10 per_class ./2026_ppsn_exaqc/classification
+sh scripts/run_wine.sh 1 10 per_class ./2026_ppsn_exaqc/classification
+```
+
+And reinforcement learning experiments can be run with:
+```
+sh scripts/run_cartpole.sh 1 10 per_class ./2026_ppsn_exaqc/rl
+sh scripts/run_frozenlake.sh 1 10 per_class ./2026_ppsn_exaqc/rl
+sh scripts/run_walker2d.sh 1 10 per_class ./2026_ppsn_exaqc/rl
+sh scripts/run_mountaincar_continuous.sh 1 10 per_class ./2026_ppsn_exaqc/rl
 ```
 
 The results of these can then be processed to generate the table of mutation and crossover rates as well as statistics on the best found genomes:
 
 ```
-python3 -m src.analysis.analyze_genome_generation --input_directories ./2026_ppsn_exaqc/* --groups iris seeds wine breast_cancer --metric test_acc
+python3 -m src.analysis.analyze_genome_generation --input_directories ./2026_ppsn_exaqc/classification/* --groups iris seeds wine breast_cancer --metric test_acc
+python3 -m src.analysis.analyze_genome_generation --input_directories ./2026_ppsn_exaqc/rl/* --groups iris seeds wine breast_cancer --metric test_acc
 ```
 
 

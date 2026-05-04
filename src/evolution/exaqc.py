@@ -340,8 +340,7 @@ class EXAQC:
         if self.population.is_initializing():
             # still need to populate the initial population
 
-            mutation_count = random.choice([1, 2, 3])
-            # mutation_count = round(np.random.exponential(scale=1)) + 1
+            mutation_count = self.get_mutation_count()
 
             # keep retrying until we have a valid child
             child = None
@@ -428,8 +427,7 @@ class EXAQC:
                 else:
                     parent, metadata = self.population.get_parent()
 
-                    mutation_count = random.choice([1, 2, 3])
-                    # mutation_count = round(np.random.exponential(scale=1) + 1)
+                    mutation_count = get_mutation_count()
 
                     logger.info(
                         f"generating a child via {mutation_count + 1} mutations."
