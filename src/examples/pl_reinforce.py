@@ -291,6 +291,7 @@ if __name__ == "__main__":
     if args.env == "cartpole":
         spec = cartpole_spec(
             episodes=args.episodes,
+            eval_episodes=args.eval_episodes,
             lr=args.learning_rate,
             seed=args.seed,
             algo=args.algo,
@@ -302,6 +303,7 @@ if __name__ == "__main__":
             map_name=args.map_name,
             is_slippery=args.is_slippery,
             episodes=args.episodes,
+            eval_episodes=args.eval_episodes,
             lr=args.learning_rate,
             seed=args.seed,
             algo=args.algo,
@@ -315,6 +317,7 @@ if __name__ == "__main__":
     elif args.env == "mountaincar_continuous":
         spec = mountaincar_continuous_spec(
             episodes=args.episodes,
+            eval_episodes=args.eval_episodes,
             lr=args.learning_rate,
             seed=args.seed,
             algo=args.algo,
@@ -325,6 +328,7 @@ if __name__ == "__main__":
     elif args.env == "halfcheetah":
         spec = halfcheetah_spec(
             episodes=args.episodes,
+            eval_episodes=args.eval_episodes,
             lr=args.learning_rate,
             seed=args.seed,
             algo=args.algo,
@@ -335,6 +339,7 @@ if __name__ == "__main__":
     elif args.env == "walker2d":
         spec = walker2d_spec(
             episodes=args.episodes,
+            eval_episodes=args.eval_episodes,
             lr=args.learning_rate,
             seed=args.seed,
             algo=args.algo,
