@@ -1730,12 +1730,12 @@ def train_value_based(genome: CircuitGenome, *, spec: RLSpec) -> CircuitGenome:
 
 
 def cartpole_spec(
-    *, 
-    episodes: int = 100, 
-    eval_episodes: int = 10, 
-    lr: float = 1e-2, 
-    seed: int = 0, 
-    algo: str = "reinforce"
+    *,
+    episodes: int = 100,
+    eval_episodes: int = 10,
+    lr: float = 1e-2,
+    seed: int = 0,
+    algo: str = "reinforce",
 ) -> RLSpec:
     """Create a ready-to-use CartPole RLSpec.
 
@@ -1776,7 +1776,7 @@ def frozenlake_spec(
     map_name: str = "4x4",
     is_slippery: bool = True,
     episodes: int = 300,
-    eval_episodes: int = 100, 
+    eval_episodes: int = 100,
     lr: float = 2e-2,
     seed: int = 0,
     algo: str = "reinforce",
@@ -1823,7 +1823,7 @@ def frozenlake_spec(
 def halfcheetah_spec(
     *,
     episodes: int = 200,
-    eval_episodes: int = 10, 
+    eval_episodes: int = 10,
     lr: float = 3e-4,
     seed: int = 0,
     algo: str = "ppo",
@@ -1868,7 +1868,7 @@ def halfcheetah_spec(
 def walker2d_spec(
     *,
     episodes: int = 200,
-    eval_episodes: int = 10, 
+    eval_episodes: int = 10,
     lr: float = 3e-4,
     seed: int = 0,
     algo: str = "ppo",
@@ -1911,7 +1911,7 @@ def walker2d_spec(
 def mountaincar_continuous_spec(
     *,
     episodes: int = 200,
-    eval_episodes: int = 10, 
+    eval_episodes: int = 10,
     lr: float = 3e-4,
     seed: int = 0,
     algo: str = "ppo",
@@ -1951,7 +1951,7 @@ def minigrid_spec(
     env_id: str = "MiniGrid-Empty-8x8-v0",
     obs_wrapper: str = "flat",  # "flat" or "image"
     episodes: int = 200,
-    eval_episodes: int = 10, 
+    eval_episodes: int = 10,
     lr: float = 1e-3,
     seed: int = 0,
     algo: str = "ppo",
