@@ -351,6 +351,7 @@ if __name__ == "__main__":
             env_id=args.minigrid_env_id,
             obs_wrapper=args.minigrid_obs_wrapper,
             episodes=args.episodes,
+            eval_episodes=args.eval_episodes,
             lr=args.learning_rate,
             seed=args.seed,
             algo=args.algo,

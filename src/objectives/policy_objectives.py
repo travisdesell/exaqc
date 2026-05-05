@@ -1775,7 +1775,7 @@ def frozenlake_spec(
     *,
     map_name: str = "4x4",
     is_slippery: bool = True,
-    episodes: int = 300,
+    episodes: int = 1000,
     eval_episodes: int = 100,
     lr: float = 2e-2,
     seed: int = 0,
