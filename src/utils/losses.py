@@ -228,8 +228,9 @@ def ce_onehot_on_probs(
     Returns:
         A scalar tensor denoting the cross-entropy loss
     """
+    probs = torch.nan_to_num(probs, nan=eps, posinf=1.0, neginf=eps)
     probs = probs.clamp_min(eps)
-    probs = probs / probs.sum()
+    probs = probs / probs.sum().clamp_min(eps)
     y_onehot = y_onehot.to(dtype=probs.dtype, device=probs.device)
     return -(y_onehot * torch.log(probs)).sum()
 

@@ -5,6 +5,8 @@ import math
 import os
 import sys
 from typing import Iterable, Optional
+import json
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -27,6 +29,99 @@ from src.noise import PennyLaneNoiseModel
 from src.objectives.genome_objectives import train_genome_objective
 from src.utils.helpers import genome_to_torch_params
 from src.utils.losses import LOSS_REGISTRY, ce_onehot_on_probs
+
+
+def build_noise_model(args) -> Optional[PennyLaneNoiseModel]:
+    """Build PennyLane noise model from arguments."""
+    from qiskit_aer.noise import NoiseModel
+
+    if args.noise_type == "none":
+        return None
+
+    if args.noise_type == "ibm_backend":
+        from qiskit_ibm_runtime import QiskitRuntimeService
+
+        if args.ibm_backend is None:
+            raise ValueError("--ibm_backend is required when --noise_type ibm_backend")
+
+        if args.ibm_instance is not None:
+            service = QiskitRuntimeService(
+                channel=args.ibm_channel,
+                instance=args.ibm_instance,
+            )
+        else:
+            service = QiskitRuntimeService(channel=args.ibm_channel)
+
+        backend = service.backend(args.ibm_backend)
+
+        qiskit_noise = NoiseModel.from_backend(backend)
+        
+        def make_json_safe(obj):
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            if isinstance(obj, np.integer):
+                return int(obj)
+            if isinstance(obj, np.floating):
+                return float(obj)
+            if isinstance(obj, np.complexfloating):
+                return {"real": float(obj.real), "imag": float(obj.imag)}
+            if isinstance(obj, complex):
+                return {"real": obj.real, "imag": obj.imag}
+            if isinstance(obj, dict):
+                return {str(k): make_json_safe(v) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [make_json_safe(v) for v in obj]
+            if isinstance(obj, tuple):
+                return [make_json_safe(v) for v in obj]
+            return obj
+
+        path = Path(
+            os.path.join(args.out_dir, "noise_profiles", args.ibm_backend, "ibm_noise_summary.json")
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(path, "w") as f:
+            json.dump(qiskit_noise.to_dict(), f, indent=2, default=make_json_safe)
+
+
+        # noise_model = PennyLaneNoiseModel.from_ibm_backend(
+        #     backend,
+        #     verbose=args.ibm_noise_verbose,
+        #     # decimal_places=args.ibm_noise_decimal_places,
+        # )
+
+        noise_model = PennyLaneNoiseModel.from_ibm_backend(
+            backend,
+            noise_type=args.noise_type,
+            apply_after_gates=args.noise_after_gates,
+        )
+
+        profile_dir = os.path.join(args.out_dir, "noise_profiles", args.ibm_backend)
+        # noise_model.save_noise_profile(profile_dir)
+        noise_model.save_noise_summary(
+            os.path.join(args.out_dir, "noise_profiles", args.ibm_backend, "pennylane_ibm_summary.txt")
+        )
+
+        logger.info(f"Saved IBM/PennyLane noise profile to {profile_dir}")
+        return noise_model
+
+    return PennyLaneNoiseModel.from_hyperparameters(
+        {
+            "noise_type": args.noise_type,
+            "noise_p": args.noise_p,
+            "noise_p_1q": args.noise_p_1q,
+            "noise_p_2q": args.noise_p_2q,
+            "noise_gamma": args.noise_gamma,
+            "noise_t1": args.noise_t1,
+            "noise_t2": args.noise_t2,
+            "noise_gate_time_1q": args.noise_gate_time_1q,
+            "noise_gate_time_2q": args.noise_gate_time_2q,
+            "noise_excited_state_population": args.noise_excited_state_population,
+            "noise_after_encoding": args.noise_after_encoding,
+            "noise_after_gates": args.noise_after_gates,
+            "noise_before_measurement": args.noise_before_measurement,
+        }
+    )
 
 
 # ---------------------------------------------------------------------
@@ -141,6 +236,7 @@ class ClassificationObjective(Objective):
         input_size: int,
         n_classes: int,
         loss: str = "ce",
+        noise_model: Optional[PennyLaneNoiseModel] = None,
     ):
         self.train_data = train_data
         self.test_data = test_data
@@ -148,6 +244,7 @@ class ClassificationObjective(Objective):
         self.n_classes = n_classes
         self.loss = loss
         self.target = "pennylane"
+        self.noise_model = noise_model
 
     def __call__(self, genome: CircuitGenome):
         hp = genome.hyperparameters
@@ -159,8 +256,7 @@ class ClassificationObjective(Objective):
         log_every = hp["log_every"]
         encoding = hp["encoding"]
 
-        if hp["noise_type"] != "none":
-            noise_model = PennyLaneNoiseModel.from_hyperparameters(hp)
+        noise_model = self.noise_model
 
         torch_params = genome_to_torch_params(genome)
         if len(torch_params) > 0:
@@ -294,6 +390,7 @@ if __name__ == "__main__":
             "phase_damping",
             "thermal_relaxation",
             "mixed",
+            "ibm_backend",
         ],
         default="none",
     )
@@ -303,9 +400,48 @@ if __name__ == "__main__":
     p.add_argument("--noise_p_2q", type=float, default=None)
     p.add_argument("--noise_gamma", type=float, default=0.0)
 
+    # Thermal Relaxation
+    p.add_argument("--noise_t1", type=float, default=50e-6)
+    p.add_argument("--noise_t2", type=float, default=70e-6)
+    p.add_argument("--noise_gate_time_1q", type=float, default=50e-9)
+    p.add_argument("--noise_gate_time_2q", type=float, default=300e-9)
+    p.add_argument("--noise_excited_state_population", type=float, default=0.0)
+
     p.add_argument("--noise_after_encoding", action="store_true")
     p.add_argument("--noise_after_gates", action="store_true")
     p.add_argument("--noise_before_measurement", action="store_true")
+
+    # -------------------------
+    # IBM backend noise arguments
+    # -------------------------
+
+    p.add_argument(
+        "--ibm_backend",
+        type=str,
+        default=None,
+        help="IBM backend name, required when --noise_type ibm_backend.",
+    )
+    p.add_argument(
+        "--ibm_channel",
+        type=str,
+        default="ibm_quantum_platform",
+    )
+    p.add_argument(
+        "--ibm_instance",
+        type=str,
+        default=None,
+    )
+    p.add_argument(
+        "--ibm_noise_verbose",
+        action="store_true",
+        help="Print verbose conversion output from qml.from_qiskit_noise.",
+    )
+    p.add_argument(
+        "--ibm_noise_decimal_places",
+        type=int,
+        default=None,
+        help="Optional rounding precision for qml.from_qiskit_noise.",
+    )
 
     # -------------------------
     # Population strategy
@@ -343,6 +479,8 @@ if __name__ == "__main__":
     logger.add(sys.stdout, level=args.logging_level)
     logger.add(os.path.join(args.out_dir, "run.log"))
 
+    noise_model = build_noise_model(args)
+
     hyperparameters = {
         "epochs": args.epochs,
         "learning_rate": args.learning_rate,
@@ -366,6 +504,7 @@ if __name__ == "__main__":
             loss=args.loss,
             input_size=4,
             n_classes=3,
+            noise_model=noise_model,
         )
 
     elif args.dataset == "wine":
@@ -375,6 +514,7 @@ if __name__ == "__main__":
             loss=args.loss,
             input_size=13,
             n_classes=3,
+            noise_model=noise_model,
         )
 
     elif args.dataset == "seeds":
@@ -384,6 +524,7 @@ if __name__ == "__main__":
             loss=args.loss,
             input_size=7,
             n_classes=3,
+            noise_model=noise_model,
         )
 
     elif args.dataset == "breast_cancer":
@@ -393,6 +534,7 @@ if __name__ == "__main__":
             loss=args.loss,
             input_size=30,
             n_classes=2,
+            noise_model=noise_model,
         )
 
     else:

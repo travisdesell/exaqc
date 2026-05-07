@@ -235,6 +235,32 @@ class Gate:
 
         gate_method(**self.parameters, **qubit_args)
 
+    def get_pennylane_wires(
+        self,
+        circuit_qubits: list[tuple[str, int]],
+    ) -> list[int]:
+        """Return the PennyLane wire indexes used by this gate.
+
+        Args:
+            circuit_qubits: Ordered list of all qubit tuples in the circuit.
+
+        Returns:
+            List of PennyLane wire indexes corresponding to the qubits acted on
+            by this gate.
+        """
+        if not self.enabled:
+            return []
+
+        spec = pennylane_gate_specifications[self.method_name]
+        n_qubits = getattr(spec, "n_qubits", len(self.qubits))
+
+        qubit_wires = []
+        for i in range(n_qubits):
+            qubit_wires.append(circuit_qubits.index(self.qubits[i]))
+
+        return qubit_wires
+    
+
     def add_to_pennylane_circuit(
         self,
         circuit_qubits: list[tuple[str, int]],

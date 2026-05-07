@@ -4,6 +4,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Literal, Optional
 
+from qiskit_aer.noise import NoiseModel
+
 
 NoiseType = Literal[
     "none",
@@ -14,6 +16,7 @@ NoiseType = Literal[
     "phase_damping",
     "thermal_relaxation",
     "mixed",
+    "ibm_backend",
 ]
 
 
@@ -66,9 +69,17 @@ class BaseNoiseModel(ABC):
     p_2q: Optional[float] = None
     gamma: float = 0.0
 
+    t1: float = 50e-6
+    t2: float = 70e-6
+    gate_time_1q: float = 50e-9
+    gate_time_2q: float = 300e-9
+    excited_state_population: float = 0.0
+
     apply_after_input_encoding: bool = False
     apply_after_gates: bool = True
     apply_before_measurement: bool = False
+
+    imported_noise: bool = False
 
     def is_noisy(self) -> bool:
         """Determine whether the model applies any non-trivial noise.
@@ -111,6 +122,14 @@ class BaseNoiseModel(ABC):
             Name of the backend associated with the noise model.
         """
         raise NotImplementedError
+    
+    @abstractmethod
+    def get_imported_noise_model(self) -> NoiseModel:
+        raise NotImplementedError
+
+    @abstractmethod
+    def save_noise_profile(self, path: str) -> None:
+        raise NotImplementedError
 
     @classmethod
     def from_hyperparameters(cls, hp: dict):
@@ -144,6 +163,11 @@ class BaseNoiseModel(ABC):
             p_1q=hp.get("noise_p_1q", None),
             p_2q=hp.get("noise_p_2q", None),
             gamma=float(hp.get("noise_gamma", 0.0)),
+            t1=float(hp.get("noise_t1", 50e-6)),
+            t2=float(hp.get("noise_t2", 70e-6)),
+            gate_time_1q=float(hp.get("noise_gate_time_1q", 50e-9)),
+            gate_time_2q=float(hp.get("noise_gate_time_2q", 300e-9)),
+            excited_state_population=float(hp.get("noise_excited_state_population", 0.0)),
             apply_after_input_encoding=bool(hp.get("noise_after_encoding", False)),
             apply_after_gates=bool(hp.get("noise_after_gates", True)),
             apply_before_measurement=bool(hp.get("noise_before_measurement", False)),

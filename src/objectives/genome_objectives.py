@@ -145,6 +145,7 @@ def _eval_supervised_split(
     loss_fn: Optional[Callable] = None,
     class_counts: Optional[dict] = None,
     alpha=None,
+    eps:float = 1e-08
 ):
     """Evaluate supervised classification metrics on a dataset split.
 
@@ -170,8 +171,12 @@ def _eval_supervised_split(
     for x, y, cls in data:
         probs = genome.circuit(x, params)
         probs = torch.as_tensor(probs, dtype=torch.float32)
+
+        probs = torch.nan_to_num(probs, nan=eps, posinf=1.0, neginf=eps)
+        probs = probs.clamp_min(eps)
+
         probs = probs[:n_classes]
-        probs = probs / (probs.sum() + 1e-12)
+        probs = probs / (probs.sum() + 1e-12).clamp_min(eps)
         L = ce_onehot_on_probs(probs, y, alpha_per_class=alpha)
         losses.append(L)
         pred = int(torch.argmax(probs).item())
@@ -411,7 +416,7 @@ def _train_with_pennylane(
         return psi
 
     # --- probs forward (your existing CE path) ---
-    def forward_probs(x: torch.Tensor) -> torch.Tensor:
+    def forward_probs(x: torch.Tensor, eps:float = 1e-08) -> torch.Tensor:
         """Forward pass returning normalized class probabilities.
 
         Args:
@@ -422,8 +427,12 @@ def _train_with_pennylane(
         """
         probs = genome.circuit(x, torch_params)
         probs = torch.as_tensor(probs, dtype=torch.float32)
+
+        probs = torch.nan_to_num(probs, nan=eps, posinf=1.0, neginf=eps)
+        probs = probs.clamp_min(eps)
+
         probs = probs[:n_classes]
-        probs = probs / (probs.sum() + 1e-12)
+        probs = probs / (probs.sum() + 1e-12).clamp_min(eps)
         return probs
 
     # --- eval teacher loss/metrics ---

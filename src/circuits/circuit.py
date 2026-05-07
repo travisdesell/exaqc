@@ -467,9 +467,18 @@ class CircuitGenome:
             f"input indexes: {self.input_indexes}, output_indexes: {self.output_indexes}"
         )
 
-        device_name = (
-            noise_model.device_name() if noise_model is not None else "default.qubit"
-        )
+        imported_noise = None
+        if noise_model is not None and noise_model.imported_noise:
+            imported_noise = noise_model.get_imported_noise_model()
+            device_name = "default.mixed"
+        elif noise_model is not None:
+            device_name = noise_model.device_name()
+        else:
+            device_name = "default.qubit"
+
+        # device_name = (
+        #     noise_model.device_name() if noise_model is not None else "default.qubit"
+        # )
 
         # 1️⃣ Instantiate PennyLane device
         dev = qml.device(
@@ -508,7 +517,7 @@ class CircuitGenome:
                 raise ValueError(f"Unknown input_mode={input_mode}")
 
             # 3️⃣ Noise to all inputs after encoding
-            if noise_model is not None:
+            if noise_model is not None and imported_noise is None:
                 noise_model.after_input_encoding(self.input_indexes)
 
             # 4️⃣  Apply all gates in depth order
@@ -516,12 +525,13 @@ class CircuitGenome:
             for gate in self.gates:
                 gate.add_to_pennylane_circuit(self.qubits, params=params)
 
-            if noise_model is not None:
-                noise_model.after_gate(self.input_indexes)
+                if noise_model is not None and imported_noise is None:
+                    gate_wires = gate.get_pennylane_wires(self.qubits)
+                    noise_model.after_gate(gate_wires)
 
             # 5️⃣ Measurement
             if return_probs:
-                if noise_model is not None:
+                if noise_model is not None and imported_noise is None:
                     noise_model.before_measurement(self.output_indexes)
 
                 return qml.probs(wires=self.output_indexes)
@@ -535,6 +545,9 @@ class CircuitGenome:
                 return expvals
 
             return qml.state()
+        
+        if imported_noise is not None:
+            qnode_fn = qml.add_noise(qnode_fn, imported_noise)
 
         self.circuit = qnode_fn
 

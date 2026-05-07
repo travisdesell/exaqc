@@ -1,4 +1,6 @@
 from __future__ import annotations
+from pathlib import Path
+import json
 
 from src.noise.BaseNoiseModel import BaseNoiseModel
 
@@ -22,6 +24,18 @@ class QiskitNoiseModel(BaseNoiseModel):
         This class requires ``qiskit-aer`` to be installed.
     """
 
+    @classmethod
+    def from_ibm_backend(cls, backend):
+        from qiskit_aer.noise import NoiseModel
+
+        model = cls(noise_type="ibm_backend")
+        model.qiskit_noise_model = NoiseModel.from_backend(backend)
+        model.imported_noise = True
+        return model
+    
+    def get_imported_noise_model(self):
+        return getattr(self, "qiskit_noise_model", None)
+
     def backend_name(self) -> str:
         """Return the backend identifier.
 
@@ -29,6 +43,22 @@ class QiskitNoiseModel(BaseNoiseModel):
             The string ``"qiskit"``.
         """
         return "qiskit"
+    
+    def save_noise_profile(self, path: str | Path) -> None:
+        """Save Qiskit Aer noise model to JSON.
+
+        Args:
+            path:
+                Output JSON file path.
+        """
+        if self.qiskit_noise_model is None:
+            raise ValueError("No Qiskit noise model available to save.")
+
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(path, "w") as f:
+            json.dump(self.qiskit_noise_model.to_dict(), f, indent=2)
 
     def _apply_noise_model(self, noise_model, noise_type_handlers) -> None:
         """Dispatch and apply the configured Qiskit noise model.
@@ -68,6 +98,9 @@ class QiskitNoiseModel(BaseNoiseModel):
             ValueError:
                 If an unsupported Qiskit noise type is requested.
         """
+        if self.noise_type == "ibm_backend":
+            return self.qiskit_noise_model
+    
         if not self.is_noisy():
             return None
 
@@ -178,3 +211,12 @@ class QiskitNoiseModel(BaseNoiseModel):
         self._apply_noise_model(noise_model, noise_type_handlers)
 
         return noise_model
+
+    def save_qiskit_noise_model(self, path: str) -> None:
+        """Save Qiskit Aer noise model to JSON."""
+        qiskit_noise = self.to_qiskit_noise_model()
+        if qiskit_noise is None:
+            return
+
+        with open(path, "w") as f:
+            json.dump(qiskit_noise.to_dict(), f, indent=2)
