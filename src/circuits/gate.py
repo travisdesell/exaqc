@@ -3,6 +3,7 @@ from __future__ import annotations
 from loguru import logger
 
 from qiskit import QuantumCircuit, QuantumRegister
+from qiskit.circuit import Parameter as QiskitParameter
 import pennylane as qml
 import torch
 
@@ -203,6 +204,7 @@ class Gate:
         self,
         register_dict: dict[tuple[str, int], QuantumRegister],
         circuit: QuantumCircuit,
+        parametric: bool = False,
     ):
         """
         Adds this gate to the qiskit QuantumCircuit using reflection
@@ -211,6 +213,11 @@ class Gate:
         Args:
             register_dict: is a dict of qubit tuples to the appropriate quantum register
             circuit: is the qiskit QuantumCircuit to add this gate to
+            parametric: if True, replace numeric parameter values with qiskit
+                Parameter symbols (cached on this Gate) so the resulting
+                QuantumCircuit can be used with autodiff via SamplerQNN /
+                EstimatorQNN. The float values stay in self.parameters and
+                are used as the initial values for the Parameters at bind time.
         """
 
         logger.debug(
@@ -219,12 +226,16 @@ class Gate:
 
         gate_method = getattr(circuit, self.method_name)
 
+        # Look up the qiskit spec at call time so a genome built with
+        # target="pennylane" can still be rendered as a qiskit circuit.
+        qiskit_specs = qiskit_gate_specifications[self.method_name]
+
         qubit_args = {}
 
         for i, qubit in enumerate(self.qubits):
             qubit_name = qubit[0]
             qubit_index = qubit[1]
-            argument_name = self.specs.qubits[i]
+            argument_name = qiskit_specs.qubits[i]
             logger.debug(
                 f"\tsetting argument '{argument_name}' = '{qubit_name}[{qubit_index}]'"
             )
@@ -233,7 +244,32 @@ class Gate:
             # name
             qubit_args[argument_name] = register_dict[qubit]
 
-        gate_method(**self.parameters, **qubit_args)
+        if parametric and self.parameters:
+            param_args = self._get_qiskit_parameters()
+        else:
+            param_args = self.parameters
+
+        gate_method(**param_args, **qubit_args)
+
+    def _get_qiskit_parameters(self) -> dict[str, "QiskitParameter"]:
+        """Return a dict of qiskit.circuit.Parameter objects for this gate.
+
+        Allocated lazily and cached so the same Parameter objects are reused
+        across multiple builds of the same parametric circuit (e.g. when the
+        QNN is re-instantiated). The Parameter name encodes the gate's
+        innovation number to keep names unique across the genome.
+
+        Returns:
+            Dict mapping param name -> qiskit Parameter symbol.
+        """
+        cache = getattr(self, "_qiskit_parameter_cache", None)
+        if cache is None:
+            cache = {
+                pname: QiskitParameter(f"g{self.innovation_number}_{pname}")
+                for pname in self.parameters.keys()
+            }
+            self._qiskit_parameter_cache = cache
+        return cache
 
     def get_pennylane_wires(
         self,

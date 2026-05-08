@@ -403,9 +403,22 @@ class CircuitGenome:
 
         return sorted(possible_output_indexes)
 
-    def generate_qiskit_circuit(self) -> QuantumCircuit:
+    def generate_qiskit_circuit(
+        self,
+        parametric: bool = False,
+        measure: bool = True,
+    ) -> QuantumCircuit:
         """
         Converts this genome into a useable qiskit instationation.
+
+        Args:
+            parametric: if True, gate parameter values become qiskit Parameter
+                symbols (for use with EstimatorQNN / SamplerQNN autodiff).
+                Use generate_qiskit_circuit_parametric() for the autodiff path
+                that returns both the circuit and the ordered Parameter list.
+            measure: if True (default), append a measurement for each output
+                qubit into a ClassicalRegister. Set False when the circuit
+                will be used inside a QNN that handles measurement itself.
 
         Returns:
             A qiskit QuantumCircuit instantiation of this circuit genome.
@@ -418,24 +431,55 @@ class CircuitGenome:
             quantum_registers.append(quantum_register)
             register_dict[(qubit_name, qubit_index)] = quantum_register
 
-        for qubit_name, qubit_index in self.output_qubits:
-            classical_registers.append(ClassicalRegister(1))
+        if measure:
+            for qubit_name, qubit_index in self.output_qubits:
+                classical_registers.append(ClassicalRegister(1))
 
         circuit = QuantumCircuit(*quantum_registers, *classical_registers)
 
         # make sure we apply the gates in the correct ordering by depth
         self.sort_gates()
         for gate in self.gates:
-            gate.add_to_qiskit_circuit(register_dict, circuit)
+            gate.add_to_qiskit_circuit(register_dict, circuit, parametric=parametric)
 
-        for output_index, input_index in enumerate(self.output_indexes):
-            circuit.measure(
-                quantum_registers[input_index], classical_registers[output_index]
-            )
+        if measure:
+            for output_index, input_index in enumerate(self.output_indexes):
+                circuit.measure(
+                    quantum_registers[input_index], classical_registers[output_index]
+                )
 
         self.circuit = circuit
 
         return circuit
+
+    def generate_qiskit_circuit_parametric(
+        self,
+    ) -> tuple[QuantumCircuit, list]:
+        """Build a parametric (autodiff-ready) qiskit circuit.
+
+        No measurements are appended; an EstimatorQNN / SamplerQNN downstream
+        is expected to attach observables. All trainable gate parameters become
+        qiskit Parameter symbols whose ordering is returned alongside the
+        circuit so the caller can bind values in the same order their
+        gradients are returned.
+
+        Returns:
+            (circuit, ordered_parameters): the parametric QuantumCircuit and
+            the list of qiskit Parameter symbols in the canonical order
+            (sorted by gate.innovation_number, then by param name).
+        """
+        circuit = self.generate_qiskit_circuit(parametric=True, measure=False)
+
+        ordered = []
+        self.sort_gates()
+        for gate in self.gates:
+            if not gate.enabled:
+                continue
+            qparams = gate._get_qiskit_parameters()
+            for pname in sorted(qparams.keys()):
+                ordered.append(qparams[pname])
+
+        return circuit, ordered
 
     def generate_pennylane_circuit(
         self,

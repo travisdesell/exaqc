@@ -18,7 +18,6 @@ from src.utils.losses import (  # noqa: F401
     loss_kl_divergence,
     loss_one_minus_fidelity,
     loss_state_angle,
-    loss_obs_mse,
     ce_onehot_on_probs,
     class_avg_ce_onehot_on_probs,
     LOSS_REGISTRY,
@@ -677,172 +676,6 @@ def _train_with_pennylane(
     genome.fitness = best_metrics
 
 
-# ---------- Qiskit ML route (TorchConnector + output-bit loss) ----------
-
-
-def _train_with_qiskit_ml_outputs(
-    genome: CircuitGenome,
-    *,
-    dataset: Iterable[tuple[torch.Tensor, Any]],
-    n_qubits: int,
-    input_qubits: list[int],
-    output_qubits: list[int],
-    x_extractor: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
-    y_extractor: Optional[Callable[[Any], torch.Tensor]] = None,
-    epochs: int = 300,
-    lr: float = 0.05,
-    loss_fn: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-) -> dict[str, float]:
-    """
-    Generic Qiskit ML + Torch training for genomes.
-
-    Learns weights of a parametric circuit (from genome) using EstimatorQNN outputs:
-      - features: x (derived from input_bits)
-      - labels:   y (derived from target object)
-      - outputs:  Z expvals on output_qubits -> converted to p(bit=1)
-
-    The abstraction points are x_extractor and y_extractor.
-
-    Requirements:
-      - Gate.add_to_qiskit_circuit(... backend="qiskit_ml") creates/caches Parameters internally
-      - dataset yields (input_bits, target_obj)
-    """
-    import numpy as np
-    from qiskit import QuantumCircuit, QuantumRegister
-    from qiskit.circuit import ParameterVector
-    from qiskit.quantum_info import SparsePauliOp
-    from qiskit_machine_learning.neural_networks import EstimatorQNN
-    from qiskit_machine_learning.connectors import TorchConnector
-
-    try:
-        from qiskit.primitives import StatevectorEstimator as PrimitiveEstimator
-    except Exception as e:
-        raise RuntimeError(
-            "Need qiskit.primitives.Estimator for Qiskit ML backend."
-        ) from e
-    from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
-
-    # Gradient classes live here in modern Qiskit
-    from qiskit_algorithms.gradients import ParamShiftEstimatorGradient
-
-    if x_extractor is None:
-        # Default: use raw bits on input_qubits as float vector
-        def x_extractor(input_bits: torch.Tensor) -> torch.Tensor:
-            return torch.tensor(
-                [float(input_bits[q].item()) for q in input_qubits], dtype=torch.float32
-            )
-
-    if y_extractor is None:
-        raise ValueError(
-            "y_extractor is required (how to turn target into training labels)."
-        )
-
-    if loss_fn is None:
-        # Default: MSE
-        loss_fn = loss_obs_mse
-
-    # ----- Feature map: RX(pi*x) on input qubits -----
-    x_params = ParameterVector("x", len(input_qubits))
-    feature_map = QuantumCircuit(n_qubits)
-    for i, q in enumerate(input_qubits):
-        feature_map.rx(np.pi * x_params[i], q)
-
-    # ----- Ansatz from genome (parametric via Gate backend='qiskit_ml') -----
-    qregs = {
-        name: QuantumRegister(size, name=name)
-        for name, size in genome.registers.items()
-    }
-    ansatz = QuantumCircuit(*qregs.values())
-
-    genome.sort_gates()
-    for gate in genome.gates:
-        gate.add_to_qiskit_circuit(qregs, ansatz)
-
-    # ansatz = genome.generate_qiskit_circuit(measure_registers=True)
-
-    # compose
-    full = QuantumCircuit(n_qubits)
-    full.compose(feature_map, inplace=True)
-    full.compose(ansatz, inplace=True)
-
-    # ----- Stable weight order (Gate-owned Parameters) -----
-    weight_params = []
-    weight_keys = []
-    genome.sort_gates()
-    for gate in genome.gates:
-        if not gate.enabled:
-            continue
-        qparams = gate._get_qiskit_parameters()  # {pname: Parameter}
-        for pname in sorted(qparams.keys()):
-            weight_params.append(qparams[pname])
-            weight_keys.append(f"{gate.innovation_number}:{pname}")
-
-    # ----- Observables: Z on output qubits -----
-    observables = []
-    for q in output_qubits:
-        pauli = ["I"] * n_qubits
-        pauli[n_qubits - 1 - q] = "Z"  # Qiskit: rightmost is qubit 0
-        observables.append(SparsePauliOp("".join(pauli)))
-
-    pm = generate_preset_pass_manager(optimization_level=1)  # good default
-    estimator = PrimitiveEstimator()
-    gradient = ParamShiftEstimatorGradient(estimator=estimator)
-
-    qnn = EstimatorQNN(
-        circuit=full,
-        estimator=estimator,
-        input_params=list(x_params),
-        weight_params=weight_params,
-        observables=observables,
-        gradient=gradient,
-        pass_manager=pm,
-    )
-
-    model = TorchConnector(qnn)
-    opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0.0001)
-
-    # ----- Train -----
-    for _ in range(epochs):
-        opt.zero_grad()
-        losses = []
-        for input_bits, target_obj in dataset:
-            x = x_extractor(input_bits)  # shape [len(input_qubits)]
-            y = y_extractor(target_obj)  # shape [len(output_qubits)] or compatible
-
-            expvals = model(x)  # [-1,1]
-            p1 = (1.0 - expvals) / 2.0  # prob(bit=1)
-            losses.append(loss_fn(p1, y))
-
-        loss = torch.stack(losses).mean()
-        loss.backward()
-        opt.step()
-
-    # ----- Write weights back to genome -----
-    trained_w = model.weight.detach().cpu().flatten()
-    trained = {
-        weight_keys[i]: float(trained_w[i].item()) for i in range(len(weight_keys))
-    }
-
-    for gate in genome.gates:
-        for pname in gate.parameters.keys():
-            k = f"{gate.innovation_number}:{pname}"
-            if k in trained:
-                gate.parameters[pname] = trained[k]
-
-    # ----- Eval avg loss -----
-    with torch.no_grad():
-        eval_losses = []
-        for input_bits, target_obj in dataset:
-            x = x_extractor(input_bits)
-            y = y_extractor(target_obj)
-            expvals = model(x)
-            p1 = (1.0 - expvals) / 2.0
-            eval_losses.append(loss_fn(p1, y))
-        avg_loss = float(torch.stack(eval_losses).mean().cpu().item())
-
-    return {"loss": avg_loss}
-
-
 # ---------- Public unified API ----------
 
 
@@ -889,33 +722,31 @@ def train_genome_objective(
 
     if backend == "qiskit":
         if dataset is None:
-            raise ValueError("qiskit_ml requires dataset.")
+            raise ValueError("qiskit backend requires dataset.")
 
-        n_qubits = qiskit_config.get("n_qubits")
-        input_qubits = qiskit_config.get("input_qubits")
-        output_qubits = qiskit_config.get("output_qubits")
-        x_extractor = qiskit_config.get("x_extractor")
-        y_extractor = qiskit_config.get("y_extractor")
-        loss_fn = LOSS_REGISTRY[loss]
+        # New EstimatorQNN-based path that mirrors _train_with_pennylane.
+        # qiskit_config keys honored:
+        #   gradient_method: "reverse" (default) | "param_shift"
+        from src.objectives.qiskit_train import _train_with_qiskit
 
-        if n_qubits is None or input_qubits is None or output_qubits is None:
-            raise ValueError(
-                "qiskit_ml requires n_qubits, input_qubits, output_qubits in qiskit_config."
-            )
+        gradient_method = qiskit_config.get("gradient_method", "reverse")
 
-        metrics = _train_with_qiskit_ml_outputs(
+        train_data = dataset[0]
+        test_data = dataset[1]
+        _train_with_qiskit(
             genome,
-            dataset=dataset,
-            n_qubits=n_qubits,
-            input_qubits=input_qubits,
-            output_qubits=output_qubits,
-            x_extractor=x_extractor,
-            y_extractor=y_extractor,
+            train_data=train_data,
+            test_data=test_data,
             epochs=epochs,
             lr=lr,
-            loss_fn=loss_fn,
+            log_every=log_every,
+            n_classes=n_classes,
+            batch_size=batch_size,
+            loss_name=loss,
+            encoding=encoding,
+            gradient_method=gradient_method,
+            noise_model=noise_model,
         )
-        genome.fitness = metrics
         return genome
 
     raise ValueError(f"Unknown backend: {backend}")
