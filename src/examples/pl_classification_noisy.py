@@ -136,6 +136,9 @@ def predict_from_probs(
     n_classes: int,
     eps: float = 1e-12,
 ) -> tuple[int, torch.Tensor]:
+    # Sanitize NaN/Inf that can come out of noisy default.mixed circuits.
+    probs_full = torch.nan_to_num(probs_full, nan=eps, posinf=1.0, neginf=eps)
+    probs_full = probs_full.clamp_min(eps)
     probs = probs_full[:n_classes]
     probs = probs / (probs.sum() + eps)
     pred = int(torch.argmax(probs).item())

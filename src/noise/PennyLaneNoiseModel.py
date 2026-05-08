@@ -106,6 +106,11 @@ class PennyLaneNoiseModel(BaseNoiseModel):
         def mean_or_default(xs, default):
             return float(sum(xs) / len(xs)) if xs else default
 
+        # "ibm_backend" is not a PennyLane channel; this manual path always
+        # applies thermal_relaxation populated from IBM stats.
+        if noise_type == "ibm_backend":
+            noise_type = "thermal_relaxation"
+
         model = cls(
             noise_type=noise_type,
             p_1q=mean_or_default(one_qubit_errors, 0.001),
@@ -283,7 +288,7 @@ class PennyLaneNoiseModel(BaseNoiseModel):
 
     def _apply_thermal_relaxation(self, wires: list[int]) -> None:
         """Apply PennyLane thermal relaxation error to target wires.
-        
+
         Args:
             wires:
                 Target wires for the mixed noise process.
@@ -291,14 +296,34 @@ class PennyLaneNoiseModel(BaseNoiseModel):
         n_wires = len(wires)
         gate_time = self.gate_time_1q if n_wires <= 1 else self.gate_time_2q
 
+        t1 = float(self.t1)
+        t2 = float(self.t2)
+        tg = float(gate_time)
+        pe = float(self.excited_state_population)
+
+        # Non-positive timescales would produce non-CP Kraus ops (NaN at measurement).
+        # Skip noise rather than emit NaN.
+        if t1 <= 0.0 or t2 <= 0.0 or tg <= 0.0:
+            return
+
+        # PennyLane's ThermalRelaxationError requires t2 <= 2*t1; averaged IBM
+        # stats can violate this even when each qubit individually satisfies it.
+        if t2 > 2.0 * t1:
+            t2 = 2.0 * t1
+
+        # Gate time must be strictly less than relaxation timescales for the
+        # channel to remain physical.
+        max_tg = 0.999 * min(t1, t2)
+        if tg >= max_tg:
+            tg = max_tg
+
+        if pe < 0.0:
+            pe = 0.0
+        elif pe > 1.0:
+            pe = 1.0
+
         for w in wires:
-            qml.ThermalRelaxationError(
-                self.excited_state_population,
-                self.t1,
-                self.t2,
-                gate_time,
-                wires=w,
-            )
+            qml.ThermalRelaxationError(pe, t1, t2, tg, wires=w)
 
     def apply_to_wires(self, wires: Sequence[int] | int) -> None:
         """Apply the configured noise process to selected wires.
@@ -340,6 +365,10 @@ class PennyLaneNoiseModel(BaseNoiseModel):
             "phase_damping": self._apply_phase_damping,
             "thermal_relaxation": self._apply_thermal_relaxation,
             "mixed": self._apply_mixed,
+            # If a model was constructed with noise_type="ibm_backend" but
+            # imported_noise is False, treat it as thermal_relaxation rather
+            # than crashing inside the QNode.
+            "ibm_backend": self._apply_thermal_relaxation,
         }
 
         if self.noise_type in noise_handlers:

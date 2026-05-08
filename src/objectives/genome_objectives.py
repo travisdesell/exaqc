@@ -594,8 +594,35 @@ def _train_with_pennylane(
 
             opt.zero_grad()
             loss.backward()
+
+            # Sanitize NaN/Inf grads so they cannot persist into params.
+            # clip_grad_norm_ does NOT fix NaN — its norm is NaN, so it scales
+            # by NaN and leaves NaN gradients in place.
+            nonfinite_grad = False
+            for p in torch_params.values():
+                if p.grad is not None and not torch.isfinite(p.grad).all():
+                    nonfinite_grad = True
+                    p.grad = torch.where(
+                        torch.isfinite(p.grad),
+                        p.grad,
+                        torch.zeros_like(p.grad),
+                    )
+
             torch.nn.utils.clip_grad_norm_(list(torch_params.values()), max_norm=1.0)
             opt.step()
+
+            # Belt-and-suspenders: if a param somehow became non-finite,
+            # sanitize so NaNs cannot bake into the genome.
+            for p in torch_params.values():
+                if not torch.isfinite(p.data).all():
+                    p.data = torch.nan_to_num(p.data, nan=0.0, posinf=1.0, neginf=-1.0)
+                    nonfinite_grad = True
+
+            if nonfinite_grad:
+                logger.warning(
+                    f"NaN/Inf gradients or params detected in genome "
+                    f"{getattr(genome, 'genome_number', '?')} epoch {epoch}; sanitized."
+                )
 
         if epoch % log_every == 0 or epoch == epochs - 1:
             if use_state:

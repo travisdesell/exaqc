@@ -37,6 +37,9 @@ def predict_from_probs(
     """
     probs_full: float tensor [2**n_output_qubits] (e.g., 4 if output has 2 qubits)
     """
+    # Sanitize NaN/Inf that can come out of noisy default.mixed circuits.
+    probs_full = torch.nan_to_num(probs_full, nan=eps, posinf=1.0, neginf=eps)
+    probs_full = probs_full.clamp_min(eps)
     probs = probs_full[:n_classes]
     probs = probs / (probs.sum() + eps)
     pred = int(torch.argmax(probs).item())
