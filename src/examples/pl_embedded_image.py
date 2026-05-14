@@ -13,12 +13,15 @@ from loguru import logger
 from src.circuits.circuit import CircuitGenome
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
 from src.datasets import QuantumDataset
-from src.datasets.classification import ImageDataset
+from src.datasets.image_embeddings import (
+    CIFAR10EmbeddingDataset,
+    FashionMNISTEmbeddingDataset,
+    MNISTEmbeddingDataset,
+)
 from src.evolution.master_worker import master_worker
 from src.evolution.objective import Objective
 from src.evolution.steady_state_islands import SteadyStateIslands
 from src.evolution.steady_state_population import SteadyStatePopulation
-from src.models import LinearImageEncoder
 from src.objectives.genome_objectives import train_genome_objective
 from src.utils.helpers import genome_to_torch_params
 from src.utils.losses import LOSS_REGISTRY, ce_onehot_on_probs
@@ -29,14 +32,11 @@ def predict_from_probs(
     probs_full: torch.Tensor,
     *,
     n_classes: int,
-    eps: float = 1e-8,
+    eps: float = 1e-12,
 ) -> tuple[int, torch.Tensor]:
-    """Convert full output probabilities into a class prediction."""
-    probs = torch.as_tensor(probs_full, dtype=torch.float32).flatten()
-    probs = probs[:n_classes]
-    probs = torch.nan_to_num(probs, nan=eps, posinf=1.0, neginf=eps)
-    probs = probs.clamp_min(eps)
-    probs = probs / probs.sum().clamp_min(eps)
+    """Convert full output probabilities into a prediction over n_classes."""
+    probs = probs_full[:n_classes]
+    probs = probs / (probs.sum() + eps)
     pred = int(torch.argmax(probs).item())
     return pred, probs
 
@@ -48,18 +48,10 @@ def eval_probs_ce_and_acc(
     *,
     n_classes: int,
     loss: Optional[str] = None,
-    encoding: str = "angle",
-    embedding_model: torch.nn.Module | None = None,
 ) -> dict[str, float]:
-    """Evaluate loss and accuracy from quantum probability outputs."""
-    if embedding_model is not None:
-        embedding_model.eval()
-
+    """Evaluate loss and accuracy from probability outputs."""
     if getattr(genome, "circuit", None) is None or not callable(genome.circuit):
-        genome.generate_pennylane_circuit(
-            return_probs=True,
-            input_mode=encoding,
-        )
+        genome.generate_pennylane_circuit(return_probs=True, input_mode="angle")
 
     loss_fn = LOSS_REGISTRY[loss]
     params = genome_to_torch_params(genome)
@@ -67,7 +59,6 @@ def eval_probs_ce_and_acc(
     losses: list[torch.Tensor] = []
     probas: list[torch.Tensor] = []
     y_onehots: list[torch.Tensor] = []
-
     correct = 0
     total = 0
     per_class_correct: dict[str, int] = {}
@@ -81,12 +72,10 @@ def eval_probs_ce_and_acc(
     for x, y, cls in dataset:
         per_class_correct.setdefault(cls, 0)
 
-        if embedding_model is not None:
-            x = embedding_model(x)
-
         probs_full = genome.circuit(x, params)
-        pred, probs = predict_from_probs(probs_full, n_classes=n_classes)
+        probs_full = torch.as_tensor(probs_full, dtype=torch.float32)
 
+        pred, probs = predict_from_probs(probs_full, n_classes=n_classes)
         loss_value = ce_onehot_on_probs(probs, y, alpha_per_class=alpha)
 
         losses.append(loss_value)
@@ -121,54 +110,37 @@ def eval_probs_ce_and_acc(
     return {"loss": avg_loss, "acc": acc}
 
 
-def compare(genome1: CircuitGenome, genome2: CircuitGenome) -> float:
-    """Compare two genomes by test loss."""
+def compare(genome1: CircuitGenome, genome2: CircuitGenome) -> int:
+    """Compare two genomes for population sorting."""
     return genome1.fitness["test_loss"] - genome2.fitness["test_loss"]
 
 
-class ImageClassificationObjective(Objective):
-    """Image classification objective with a learnable classical encoder."""
+class ClassificationObjective(Objective):
+    """Classification objective for precomputed image embeddings."""
 
     def __init__(
         self,
         train_data: QuantumDataset,
         test_data: QuantumDataset,
-        *,
-        image_input_dim: int,
         input_size: int,
         n_classes: int,
-        hidden_dims: list[int],
         loss: str = "ce",
     ) -> None:
         self.train_data = train_data
         self.test_data = test_data
-        self.image_input_dim = image_input_dim
         self.input_size = input_size
         self.n_classes = n_classes
-        self.hidden_dims = hidden_dims
         self.loss = loss
         self.target = "pennylane"
 
-    def build_embedding_model(self) -> torch.nn.Module:
-        """Create a fresh image encoder for one genome evaluation."""
-        return LinearImageEncoder(
-            input_dim=self.image_input_dim,
-            embedding_dim=self.input_size,
-            hidden_dims=self.hidden_dims,
-            use_sigmoid=True,
-        )
-
     def __call__(self, genome: CircuitGenome) -> None:
-        """Train and evaluate one genome."""
-        hp = genome.hyperparameters
-
-        learning_rate = hp["learning_rate"]
-        epochs = hp["epochs"]
-        batch_size = hp["batch_size"]
-        log_every = hp["log_every"]
-        encoding = hp["encoding"]
-
-        embedding_model = self.build_embedding_model()
+        """Train and evaluate a genome."""
+        hyperparameters = genome.hyperparameters
+        learning_rate = hyperparameters["learning_rate"]
+        epochs = hyperparameters["epochs"]
+        batch_size = hyperparameters["batch_size"]
+        log_every = hyperparameters["log_every"]
+        encoding = hyperparameters["encoding"]
 
         torch_params = genome_to_torch_params(genome)
         if len(torch_params) > 0:
@@ -183,7 +155,6 @@ class ImageClassificationObjective(Objective):
                 n_classes=self.n_classes,
                 log_every=log_every,
                 batch_size=batch_size,
-                embedding_model=embedding_model,
             )
 
         train_metrics = eval_probs_ce_and_acc(
@@ -191,17 +162,12 @@ class ImageClassificationObjective(Objective):
             self.train_data,
             n_classes=self.n_classes,
             loss=self.loss,
-            encoding=encoding,
-            embedding_model=embedding_model,
         )
-
         test_metrics = eval_probs_ce_and_acc(
             genome,
             self.test_data,
             n_classes=self.n_classes,
             loss=self.loss,
-            encoding=encoding,
-            embedding_model=embedding_model,
         )
 
         genome.fitness = {
@@ -209,7 +175,6 @@ class ImageClassificationObjective(Objective):
             "train_acc": float(train_metrics["acc"]),
             "test_loss": float(test_metrics["loss"]),
             "test_acc": float(test_metrics["acc"]),
-            "encoder_hidden_dims": self.hidden_dims,
         }
 
         logger.info(
@@ -222,55 +187,55 @@ class ImageClassificationObjective(Objective):
 
 
 def build_objective(
-    *,
     dataset_name: str,
-    data_root: str,
-    input_qubits: int,
-    hidden_dims: list[int],
+    embedding_root: str,
     loss: str,
-    max_train_samples: int | None,
-    max_test_samples: int | None,
-) -> ImageClassificationObjective:
-    """Construct image objective from raw image datasets."""
-    train_data = ImageDataset(
-        dataset=dataset_name,
-        root=data_root,
-        split="train",
-        max_samples=max_train_samples,
-    )
-
-    test_data = ImageDataset(
-        dataset=dataset_name,
-        root=data_root,
-        split="test",
-        max_samples=max_test_samples,
-    )
-
-    if dataset_name == "cifar10":
-        image_input_dim = 3 * 32 * 32
-    elif dataset_name in {"mnist", "fashion_mnist"}:
-        image_input_dim = 1 * 28 * 28
+) -> ClassificationObjective:
+    """Construct the EXAQC classification objective for an embedding dataset."""
+    if dataset_name == "mnist":
+        train_data = MNISTEmbeddingDataset(
+            split="train",
+            embedding_root=embedding_root,
+        )
+        test_data = MNISTEmbeddingDataset(
+            split="test",
+            embedding_root=embedding_root,
+        )
+    elif dataset_name == "fashion_mnist":
+        train_data = FashionMNISTEmbeddingDataset(
+            split="train",
+            embedding_root=embedding_root,
+        )
+        test_data = FashionMNISTEmbeddingDataset(
+            split="test",
+            embedding_root=embedding_root,
+        )
+    elif dataset_name == "cifar10":
+        train_data = CIFAR10EmbeddingDataset(
+            split="train",
+            embedding_root=embedding_root,
+        )
+        test_data = CIFAR10EmbeddingDataset(
+            split="test",
+            embedding_root=embedding_root,
+        )
     else:
         raise ValueError(f"Unsupported dataset: {dataset_name}")
 
-    n_classes = 10
+    input_size = int(train_data.X.shape[1])
+    n_classes = int(train_data.num_classes)
 
     logger.info(
-        f"Loaded raw image dataset={dataset_name} | "
-        f"image_input_dim={image_input_dim} | "
-        f"embedding_dim={input_qubits} | "
-        f"hidden_dims={hidden_dims} | "
-        f"n_classes={n_classes} | "
+        f"Loaded dataset={dataset_name} | "
+        f"input_size={input_size} | n_classes={n_classes} | "
         f"train={len(train_data)} | test={len(test_data)}"
     )
 
-    return ImageClassificationObjective(
+    return ClassificationObjective(
         train_data=train_data,
         test_data=test_data,
-        image_input_dim=image_input_dim,
-        input_size=input_qubits,
+        input_size=input_size,
         n_classes=n_classes,
-        hidden_dims=hidden_dims,
         loss=loss,
     )
 
@@ -283,80 +248,79 @@ if __name__ == "__main__":
         choices=["mnist", "fashion_mnist", "cifar10"],
         required=True,
     )
-
     parser.add_argument(
-        "--data_root",
+        "--embedding_root",
         type=str,
-        default="./data",
-        help="Root directory for raw image datasets.",
+        default="src/embeddings/images",
+        help="Root directory containing saved embedding datasets.",
     )
-
     parser.add_argument(
         "--out_dir",
         type=str,
         default="artifacts",
+        help="Output directory to store run artifacts.",
     )
-
     parser.add_argument(
         "--loss",
-        default="mse",
+        default="ce",
         choices=["per_class", "bce", "focal", "ce", "mse", "kl", "fidelity"],
     )
 
-    parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--learning_rate", "-lr", type=float, default=1e-3)
-    parser.add_argument("--number_genomes", type=int, default=500)
-    parser.add_argument("--input_qubits", type=int, default=15)
-
-    parser.add_argument(
-        "--hidden_dims",
-        type=int,
-        nargs="*",
-        default=[],
-        help=(
-            "Hidden layer sizes for image encoder. "
-            "Use no values for pure linear projection."
-        ),
-    )
-
-    parser.add_argument(
-        "--use_input_u3_layer",
-        action="store_true",
-        help=(
-            "If set, add an innovation-tracked trainable U3 layer on all input "
-            "qubits after angle encoding and before evolved genome gates."
-        ),
-    )
-
-    parser.add_argument(
-        "--encoding",
-        choices=["basis", "angle", "amplitude"],
-        type=str,
-        default="angle",
-    )
-
-    parser.add_argument("--batch_size", type=int, required=True)
-
-    parser.add_argument("--max_train_samples", type=int, default=None)
-    parser.add_argument("--max_test_samples", type=int, default=None)
-
-    parser.add_argument("--logging_level", type=str, default="INFO")
-
     subparsers = parser.add_subparsers(
         dest="population_strategy",
+        help="Specify how genomes will be handled.",
         required=True,
     )
 
-    steady_state_parser = subparsers.add_parser("steady_state")
+    steady_state_parser = subparsers.add_parser(
+        "steady_state",
+        help="Use a single steady state population.",
+    )
     steady_state_parser.add_argument("--max_population_size", type=int, default=30)
 
-    islands_parser = subparsers.add_parser("islands")
+    islands_parser = subparsers.add_parser(
+        "islands",
+        help="Use multiple islands of steady state populations.",
+    )
     islands_parser.add_argument("--n_islands", type=int, default=10)
     islands_parser.add_argument("--max_island_size", type=int, default=10)
     islands_parser.add_argument("--genomes_before_extinction", type=int, default=100)
     islands_parser.add_argument("--genomes_for_next_extinction", type=int, default=200)
     islands_parser.add_argument("--islands_to_extinct", type=int, default=2)
-    islands_parser.add_argument("--intra_island_crossover_rate", type=float, default=0.5)
+    islands_parser.add_argument(
+        "--intra_island_crossover_rate",
+        type=float,
+        default=0.5,
+    )
+
+    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--learning_rate", "-lr", type=float, default=5e-4)
+    parser.add_argument("--number_genomes", type=int, default=2000)
+    parser.add_argument(
+        "--input_qubits",
+        type=int,
+        default=15,
+        help="Input qubits to allocate. Final used size is min(input_qubits, embedding_dim).",
+    )
+    parser.add_argument(
+        "--encoding",
+        choices=["basis", "angle", "amplitude"],
+        type=str,
+        default="angle",
+        help="Choose the encoding type.",
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        required=True,
+        help="Mini-batch size for training.",
+    )
+    parser.add_argument(
+        "--logging_level",
+        type=str,
+        default="INFO",
+        help="Logging level for terminal output.",
+    )
 
     args = parser.parse_args()
 
@@ -372,18 +336,12 @@ if __name__ == "__main__":
         "log_every": 15,
         "batch_size": args.batch_size,
         "encoding": args.encoding,
-        "hidden_dims": args.hidden_dims,
-        "use_input_u3_layer": args.use_input_u3_layer,
     }
 
     objective = build_objective(
         dataset_name=args.dataset,
-        data_root=args.data_root,
-        input_qubits=args.input_qubits,
-        hidden_dims=args.hidden_dims,
+        embedding_root=args.embedding_root,
         loss=args.loss,
-        max_train_samples=args.max_train_samples,
-        max_test_samples=args.max_test_samples,
     )
 
     if args.population_strategy == "steady_state":
@@ -392,7 +350,6 @@ if __name__ == "__main__":
             compare=compare,
             out_dir=args.out_dir,
         )
-
     elif args.population_strategy == "islands":
         population = SteadyStateIslands(
             n_islands=args.n_islands,
@@ -403,18 +360,13 @@ if __name__ == "__main__":
             compare=compare,
             out_dir=args.out_dir,
         )
-
     else:
         raise ValueError(args.population_strategy)
 
     logger.info(
-        f"Starting EXAQC image run | dataset={args.dataset} | "
+        f"Starting EXAQC run | dataset={args.dataset} | "
         f"population_strategy={args.population_strategy} | "
-        f"input_qubits={args.input_qubits} | "
-        f"encoding={args.encoding} | "
-        f"use_input_u3_layer={args.use_input_u3_layer} | "
-        f"hidden_dims={args.hidden_dims} | "
-        f"n_classes={objective.n_classes}"
+        f"input_size={objective.input_size} | n_classes={objective.n_classes}"
     )
 
     master_worker(
@@ -423,7 +375,7 @@ if __name__ == "__main__":
         objective=objective,
         hyperparameters=hyperparameters,
         run_for=args.number_genomes,
-        input_registers={"input": args.input_qubits},
+        input_registers={"input": min(args.input_qubits, objective.input_size)},
         output_registers={"output": math.ceil(math.log(objective.n_classes, 2))},
         target="pennylane",
     )
