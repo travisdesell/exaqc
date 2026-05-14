@@ -127,6 +127,9 @@ class EXAQC:
             output_qubits=self.output_qubits.copy(),
         )
 
+        # if self.hyperparameters.get("use_input_u3_layer", False):
+        #     self.initial_genome.add_input_u3_layer()
+
         self.saved_epochs = 10
         self.initial_genome.hyperparameters = self.get_hyperparameters()
 

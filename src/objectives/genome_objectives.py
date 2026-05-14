@@ -144,6 +144,7 @@ def _eval_supervised_split(
     loss_fn: Optional[Callable] = None,
     class_counts: Optional[dict] = None,
     alpha=None,
+    embedding_model: torch.nn.Module | None = None,
 ):
     """Evaluate supervised classification metrics on a dataset split.
 
@@ -161,12 +162,18 @@ def _eval_supervised_split(
     """
     if data is None:
         return None
+    if embedding_model is not None:
+        embedding_model.eval()
+
     losses = []
     probas = []
     y_onehots = []
     correct = 0
     total = 0
     for x, y, cls in data:
+        if embedding_model is not None:
+            x = embedding_model(x)
+
         probs = genome.circuit(x, params)
         probs = torch.as_tensor(probs, dtype=torch.float32)
         probs = probs[:n_classes]
@@ -203,6 +210,7 @@ def eval_forward_only(
     loss_fn: Optional[Callable] = None,
     class_counts: Optional[tuple] = None,
     alpha: Optional[torch.Tensor] = None,
+    embedding_model: torch.nn.Module | None = None,
 ):
     """Evaluate a genome without gradient updates.
 
@@ -244,6 +252,7 @@ def eval_forward_only(
             loss_fn=loss_fn,
             class_counts=class_counts[0],
             alpha=alpha,
+            embedding_model=embedding_model,
         )
         te = (
             _eval_supervised_split(
@@ -254,6 +263,7 @@ def eval_forward_only(
                 loss_fn=ce_onehot_on_probs,
                 class_counts=class_counts[1],
                 alpha=alpha,
+                embedding_model=embedding_model,
             )
             if test_list is not None
             else None
@@ -280,6 +290,7 @@ def _train_with_pennylane(
     # NEW:
     target_qnode: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
     encoding: str = "angle",
+    embedding_model: torch.nn.Module | None = None,
 ):
     """Train a CircuitGenome using PennyLane-based differentiable execution.
 
@@ -362,10 +373,15 @@ def _train_with_pennylane(
     else:
         genome.generate_pennylane_circuit(input_mode=encoding, return_probs=True)
 
-    torch_params = genome_to_torch_params(genome)
+    # Get all the parameters
+    torch_params = genome_to_torch_params(genome)  # Genome
+
+    optim_params = list(torch_params.values())
+    if embedding_model is not None:
+        optim_params += list(embedding_model.parameters())
 
     # no params: forward-only eval
-    if len(torch_params) == 0:
+    if len(optim_params) == 0:
         metrics = eval_forward_only(
             genome,
             train_list,
@@ -375,11 +391,12 @@ def _train_with_pennylane(
             loss_fn=loss_fn,
             class_counts=(train_data.class_counts, test_data.class_counts),
             alpha=alpha,
+            embedding_model=embedding_model,
         )
         genome.fitness = metrics
         return
 
-    opt = torch.optim.Adam(torch_params.values(), lr=lr, weight_decay=0.00000)
+    opt = torch.optim.Adam(optim_params, lr=lr, weight_decay=0.00000)
 
     # --- state forward ---
     def forward_state(x: torch.Tensor) -> torch.Tensor:
@@ -405,6 +422,8 @@ def _train_with_pennylane(
         Returns:
             torch.Tensor: Probability vector of shape `[n_classes]`.
         """
+        if embedding_model is not None:
+            x = embedding_model(x)
         probs = genome.circuit(x, torch_params)
         probs = torch.as_tensor(probs, dtype=torch.float32)
         probs = probs[:n_classes]
@@ -456,6 +475,9 @@ def _train_with_pennylane(
         Returns:
             dict[str, float]: Mean loss and classification accuracy.
         """
+        if embedding_model is not None:
+            embedding_model.eval()
+
         losses = []
         probs = []
         y_onehots = []
@@ -518,6 +540,7 @@ def _train_with_pennylane(
             losses = []
             probs = []
             y_onehots = []
+
             if use_state:
                 for x in batch:
                     # teacher state: NO grad
@@ -564,6 +587,7 @@ def _train_with_pennylane(
                     n_classes=n_classes,
                     loss_fn=loss_fn,
                     alpha=alpha,
+                    embedding_model=embedding_model,
                 )
                 genome.fitness = metrics
                 return
@@ -611,6 +635,7 @@ def _train_with_pennylane(
             loss_fn=loss_fn,
             class_counts=(train_data.class_counts, test_data.class_counts),
             alpha=alpha,
+            embedding_model=embedding_model,
         )
 
         if metrics["test_loss"] < loss_global:
@@ -806,6 +831,7 @@ def train_genome_objective(
     n_classes: int = 3,
     log_every: int = 50,
     batch_size: int = None,
+    embedding_model: torch.nn.Module | None = None,
     qiskit_config: Optional[dict[str, Any]] = None,
 ) -> CircuitGenome:
     """
@@ -829,6 +855,7 @@ def train_genome_objective(
             batch_size=batch_size,
             target_qnode=teacher_qnode,
             encoding=encoding,
+            embedding_model=embedding_model,
         )
         return
 

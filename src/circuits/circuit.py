@@ -434,6 +434,92 @@ class CircuitGenome:
 
         return circuit
 
+    def _has_input_u3_layer(self) -> bool:
+        """Check whether the genome already contains a trainable input U3 layer.
+
+        The input U3 layer is identified by enabled ``"u"`` gates that contain
+        the ``"input_u3_layer"`` metadata flag. These gates are inserted at the
+        beginning of the circuit and act as trainable preprocessing layers
+        applied after classical input encoding.
+
+        Returns:
+            bool: ``True`` if the genome already contains at least one enabled
+            input U3 layer gate, otherwise ``False``.
+        """
+        return any(
+            gate.enabled
+            and gate.method_name == "u"
+            and getattr(gate, "metadata", {}).get("input_u3_layer", False)
+            for gate in self.gates
+        )
+
+    def add_input_u3_layer(
+        self,
+        base_depth: float = 1e-6,
+        depth_eps: float = 1e-9,
+        init_scale: float = 0.01,
+    ) -> None:
+        """Add a trainable U3 preprocessing layer to all input qubits.
+
+        This method inserts one parametric ``U3`` gate per input qubit near the
+        beginning of the circuit. The added gates are standard innovation-tracked
+        genome gates, meaning their parameters participate naturally in mutation,
+        crossover, serialization, and gradient-based optimization.
+
+        Each inserted gate contains three trainable parameters:
+
+        - ``theta``
+        - ``phi``
+        - ``delta``
+
+        These parameters are automatically exposed through the genome parameter
+        helpers using keys of the form:
+
+            <innovation_number>:theta
+            <innovation_number>:phi
+            <innovation_number>:delta
+
+        The layer is inserted only once. If the genome already contains an input
+        U3 layer, the method returns immediately without modification.
+
+        Args:
+            base_depth (float, optional): Base circuit depth used for the first
+                inserted U3 gate. This should be close to zero so the layer is
+                applied immediately after input encoding. Defaults to ``1e-6``.
+
+            depth_eps (float, optional): Small depth offset added between adjacent
+                U3 gates to preserve deterministic ordering during sorting.
+                Defaults to ``1e-9``.
+
+            init_scale (float, optional): Initial parameter value assigned to all
+                U3 gate parameters. Defaults to ``0.01``.
+
+        Returns:
+            None
+        """
+
+        if self._has_input_u3_layer():
+            return
+
+        for i, qubit in enumerate(self.input_qubits):
+            self.add_gate(
+                depth=base_depth + i * depth_eps,
+                method_name="u",
+                qubits=[qubit],
+                parameters={
+                    "theta": init_scale,
+                    "phi": init_scale,
+                    "delta": init_scale,
+                },
+            )
+
+            self.gates[-1].metadata = {
+                "input_u3_layer": True,
+                "input_index": i,
+            }
+
+        self.sort_gates()
+
     def generate_pennylane_circuit(
         self,
         device_name: str = "default.qubit",
@@ -496,6 +582,30 @@ class CircuitGenome:
                     normalize=False,
                     pad_with=0.0,
                 )
+
+            elif input_mode == "u3":
+                expected_dim = 3 * len(self.input_indexes)
+
+                input_bits = input_bits.flatten()
+
+                if input_bits.shape[0] != expected_dim:
+                    raise ValueError(
+                        f"learned_u3 encoding expects {expected_dim} values "
+                        f"for {len(self.input_indexes)} input qubits, "
+                        f"but got {input_bits.shape[0]}."
+                    )
+
+                # Map raw encoder outputs into valid angle range (-pi, pi).
+                # angles = torch.pi * torch.tanh(input_bits)
+                angles = torch.pi * input_bits
+
+                for i, w in enumerate(self.input_indexes):
+                    theta = angles[3 * i + 0]
+                    phi = angles[3 * i + 1]
+                    delta = angles[3 * i + 2]
+
+                    qml.U3(theta, phi, delta, wires=w)
+
             else:
                 raise ValueError(f"Unknown input_mode={input_mode}")
 
