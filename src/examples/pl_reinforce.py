@@ -213,6 +213,14 @@ if __name__ == "__main__":
     p.add_argument("--max_population_size", type=int, default=30)
     p.add_argument("--number_genomes", type=int, default=500)
 
+    p.add_argument(
+        "--mutation_strategy",
+        "-ms",
+        type=str,
+        nargs="+",
+        required=True,
+    )
+
     # Registers
     p.add_argument("--input_qubits", type=int, default=6)
     p.add_argument("--output_qubits", type=int, default=None)
@@ -291,6 +299,7 @@ if __name__ == "__main__":
     if args.env == "cartpole":
         spec = cartpole_spec(
             episodes=args.episodes,
+            eval_episodes=args.eval_episodes,
             lr=args.learning_rate,
             seed=args.seed,
             algo=args.algo,
@@ -302,6 +311,7 @@ if __name__ == "__main__":
             map_name=args.map_name,
             is_slippery=args.is_slippery,
             episodes=args.episodes,
+            eval_episodes=args.eval_episodes,
             lr=args.learning_rate,
             seed=args.seed,
             algo=args.algo,
@@ -315,6 +325,7 @@ if __name__ == "__main__":
     elif args.env == "mountaincar_continuous":
         spec = mountaincar_continuous_spec(
             episodes=args.episodes,
+            eval_episodes=args.eval_episodes,
             lr=args.learning_rate,
             seed=args.seed,
             algo=args.algo,
@@ -325,6 +336,7 @@ if __name__ == "__main__":
     elif args.env == "halfcheetah":
         spec = halfcheetah_spec(
             episodes=args.episodes,
+            eval_episodes=args.eval_episodes,
             lr=args.learning_rate,
             seed=args.seed,
             algo=args.algo,
@@ -335,6 +347,7 @@ if __name__ == "__main__":
     elif args.env == "walker2d":
         spec = walker2d_spec(
             episodes=args.episodes,
+            eval_episodes=args.eval_episodes,
             lr=args.learning_rate,
             seed=args.seed,
             algo=args.algo,
@@ -346,6 +359,7 @@ if __name__ == "__main__":
             env_id=args.minigrid_env_id,
             obs_wrapper=args.minigrid_obs_wrapper,
             episodes=args.episodes,
+            eval_episodes=args.eval_episodes,
             lr=args.learning_rate,
             seed=args.seed,
             algo=args.algo,
@@ -422,6 +436,7 @@ if __name__ == "__main__":
         population=population,
         objective=objective,
         hyperparameters=hyperparameters,
+        mutation_strategy=args.mutation_strategy,
         run_for=args.number_genomes,
         input_registers=input_registers,
         output_registers=output_registers,

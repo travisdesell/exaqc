@@ -55,6 +55,7 @@ def eval_probs_ce_and_acc(
     *,
     n_classes: int,
     loss: Optional[str] = None,
+    alpha: torch.Tensor = None,
 ) -> dict[str, float]:
     """
     Assumes genome.circuit returns qml.probs(wires=output_wires) (real-valued).
@@ -74,13 +75,6 @@ def eval_probs_ce_and_acc(
     correct = 0
     total = 0
     per_class_pred = {}
-
-    # setting Alpha from https://arxiv.org/pdf/1901.05555
-    beta = (len(dataset) - 1) / len(dataset)
-    alpha = (1.0 - beta) / (
-        1.0 - np.power(beta, np.array(dataset.counts, dtype=np.float32))
-    )
-    alpha = torch.as_tensor(alpha / alpha.mean(), dtype=torch.float32)
 
     for x, y, cls in dataset:
         if cls not in per_class_pred:
@@ -194,12 +188,27 @@ class ClassificationObjective(Objective):
                 batch_size=batch_size,
             )
 
+        # setting Alpha from https://arxiv.org/pdf/1901.05555
+        beta = (len(self.train_data) - 1) / len(self.train_data)
+        alpha = (1.0 - beta) / (
+            1.0 - np.power(beta, np.array(self.train_data.counts, dtype=np.float32))
+        )
+        alpha = torch.as_tensor(alpha / alpha.mean(), dtype=torch.float32)
+
         # Compute fresh train/test metrics from probs (works for both param & no-param cases)
         train_metrics = eval_probs_ce_and_acc(
-            genome, self.train_data, n_classes=self.n_classes, loss=self.loss
+            genome,
+            self.train_data,
+            n_classes=self.n_classes,
+            loss=self.loss,
+            alpha=alpha,
         )
         test_metrics = eval_probs_ce_and_acc(
-            genome, self.test_data, n_classes=self.n_classes, loss=self.loss
+            genome,
+            self.test_data,
+            n_classes=self.n_classes,
+            loss=self.loss,
+            alpha=alpha,
         )
 
         genome.fitness = {
@@ -239,6 +248,14 @@ if __name__ == "__main__":
         "--loss",
         default="ce",
         choices=["per_class", "bce", "focal", "ce", "mse", "kl", "fidelity"],
+    )
+
+    p.add_argument(
+        "--mutation_strategy",
+        "-ms",
+        type=str,
+        nargs="+",
+        required=True,
     )
 
     subparsers = p.add_subparsers(
@@ -298,6 +315,8 @@ if __name__ == "__main__":
     # create a new logging handler at the appropriate level
     logger.add(sys.stdout, level=args.logging_level)
     logger.add(os.path.join(args.out_dir, "run.log"))
+
+    logger.info(f"mutation strategy: {args.mutation_strategy}")
 
     # specify hyperparameter options for genome evaluation
     hyperparameters = {
@@ -374,6 +393,7 @@ if __name__ == "__main__":
         population=population,
         objective=objective,
         hyperparameters=hyperparameters,
+        mutation_strategy=args.mutation_strategy,
         run_for=args.number_genomes,
         input_registers={"input": min(args.input_qubits, objective.input_size)},
         output_registers={"output": math.ceil(math.log(objective.n_classes, 2))},
