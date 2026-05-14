@@ -86,7 +86,9 @@ class LinearImageEncoder(nn.Module):
             x = x.flatten(start_dim=1)
 
         else:
-            raise ValueError(f"Unsupported input shape for image encoder: {tuple(x.shape)}")
+            raise ValueError(
+                f"Unsupported input shape for image encoder: {tuple(x.shape)}"
+            )
 
         z = self.network(x)
 

@@ -214,9 +214,7 @@ def build_transforms(
             ]
         )
     else:
-        raise ValueError(
-            "dataset_name must be one of: mnist, fashion_mnist, cifar10."
-        )
+        raise ValueError("dataset_name must be one of: mnist, fashion_mnist, cifar10.")
 
     return train_transform, test_transform
 
@@ -285,9 +283,7 @@ def build_datasets(
         in_channels = 3
 
     else:
-        raise ValueError(
-            "dataset_name must be one of: mnist, fashion_mnist, cifar10."
-        )
+        raise ValueError("dataset_name must be one of: mnist, fashion_mnist, cifar10.")
 
     return train_dataset, test_dataset, num_classes, in_channels
 

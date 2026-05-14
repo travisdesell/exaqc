@@ -171,7 +171,7 @@ class ImageClassificationObjective(Objective):
 
         embedding_model = self.build_embedding_model()
 
-        torch_params = genome_to_torch_params(genome)
+        # torch_params = genome_to_torch_params(genome)
         # if len(torch_params) > 0:
         train_genome_objective(
             genome,
@@ -249,9 +249,7 @@ def build_objective(
         max_samples=max_test_samples,
     )
 
-    encoder_output_dim = (
-        3 * input_qubits if encoding == "u3" else input_qubits
-    )
+    encoder_output_dim = 3 * input_qubits if encoding == "u3" else input_qubits
 
     if dataset_name == "cifar10":
         image_input_dim = 3 * 32 * 32
@@ -371,7 +369,9 @@ if __name__ == "__main__":
     islands_parser.add_argument("--genomes_before_extinction", type=int, default=100)
     islands_parser.add_argument("--genomes_for_next_extinction", type=int, default=200)
     islands_parser.add_argument("--islands_to_extinct", type=int, default=2)
-    islands_parser.add_argument("--intra_island_crossover_rate", type=float, default=0.5)
+    islands_parser.add_argument(
+        "--intra_island_crossover_rate", type=float, default=0.5
+    )
 
     args = parser.parse_args()
 

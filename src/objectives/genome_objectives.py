@@ -210,7 +210,7 @@ def eval_forward_only(
     loss_fn: Optional[Callable] = None,
     class_counts: Optional[tuple] = None,
     alpha: Optional[torch.Tensor] = None,
-    embedding_model: nn.Module | None = None,
+    embedding_model: torch.nn.Module | None = None,
 ):
     """Evaluate a genome without gradient updates.
 
@@ -373,9 +373,8 @@ def _train_with_pennylane(
     else:
         genome.generate_pennylane_circuit(input_mode=encoding, return_probs=True)
 
-
     # Get all the parameters
-    torch_params = genome_to_torch_params(genome) # Genome
+    torch_params = genome_to_torch_params(genome)  # Genome
 
     optim_params = list(torch_params.values())
     if embedding_model is not None:
@@ -856,7 +855,7 @@ def train_genome_objective(
             batch_size=batch_size,
             target_qnode=teacher_qnode,
             encoding=encoding,
-            embedding_model = embedding_model,
+            embedding_model=embedding_model,
         )
         return
 

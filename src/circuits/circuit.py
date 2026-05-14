@@ -453,7 +453,6 @@ class CircuitGenome:
             for gate in self.gates
         )
 
-
     def add_input_u3_layer(
         self,
         base_depth: float = 1e-6,

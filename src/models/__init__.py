@@ -1,1 +1,1 @@
-from .LinearImageEncoder import LinearImageEncoder #noqa
+from .LinearImageEncoder import LinearImageEncoder  # noqa
