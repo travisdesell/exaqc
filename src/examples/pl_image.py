@@ -133,12 +133,12 @@ class ImageClassificationObjective(Objective):
         self,
         train_data: QuantumDataset,
         test_data: QuantumDataset,
-        *,
         image_input_dim: int,
         input_size: int,
         n_classes: int,
         hidden_dims: list[int],
         loss: str = "ce",
+        activation: str = "tanh",
     ) -> None:
         self.train_data = train_data
         self.test_data = test_data
@@ -148,6 +148,7 @@ class ImageClassificationObjective(Objective):
         self.hidden_dims = hidden_dims
         self.loss = loss
         self.target = "pennylane"
+        self.activation = activation
 
     def build_embedding_model(self) -> torch.nn.Module:
         """Create a fresh image encoder for one genome evaluation."""
@@ -155,7 +156,7 @@ class ImageClassificationObjective(Objective):
             input_dim=self.image_input_dim,
             embedding_dim=self.input_size,
             hidden_dims=self.hidden_dims,
-            use_sigmoid=True,
+            activation=self.activation,
         )
 
     def __call__(self, genome: CircuitGenome) -> None:
@@ -171,20 +172,20 @@ class ImageClassificationObjective(Objective):
         embedding_model = self.build_embedding_model()
 
         torch_params = genome_to_torch_params(genome)
-        if len(torch_params) > 0:
-            train_genome_objective(
-                genome,
-                dataset=[self.train_data, self.test_data],
-                backend=self.target,
-                encoding=encoding,
-                loss=self.loss,
-                epochs=epochs,
-                lr=learning_rate,
-                n_classes=self.n_classes,
-                log_every=log_every,
-                batch_size=batch_size,
-                embedding_model=embedding_model,
-            )
+        # if len(torch_params) > 0:
+        train_genome_objective(
+            genome,
+            dataset=[self.train_data, self.test_data],
+            backend=self.target,
+            encoding=encoding,
+            loss=self.loss,
+            epochs=epochs,
+            lr=learning_rate,
+            n_classes=self.n_classes,
+            log_every=log_every,
+            batch_size=batch_size,
+            embedding_model=embedding_model,
+        )
 
         train_metrics = eval_probs_ce_and_acc(
             genome,
@@ -230,6 +231,8 @@ def build_objective(
     loss: str,
     max_train_samples: int | None,
     max_test_samples: int | None,
+    encoding: str = "angle",
+    activation: str = "tanh",
 ) -> ImageClassificationObjective:
     """Construct image objective from raw image datasets."""
     train_data = ImageDataset(
@@ -244,6 +247,10 @@ def build_objective(
         root=data_root,
         split="test",
         max_samples=max_test_samples,
+    )
+
+    encoder_output_dim = (
+        3 * input_qubits if encoding == "u3" else input_qubits
     )
 
     if dataset_name == "cifar10":
@@ -268,10 +275,11 @@ def build_objective(
         train_data=train_data,
         test_data=test_data,
         image_input_dim=image_input_dim,
-        input_size=input_qubits,
+        input_size=encoder_output_dim,
         n_classes=n_classes,
         hidden_dims=hidden_dims,
         loss=loss,
+        activation=activation,
     )
 
 
@@ -330,9 +338,16 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--encoding",
-        choices=["basis", "angle", "amplitude"],
+        choices=["basis", "angle", "amplitude", "u3"],
         type=str,
         default="angle",
+    )
+
+    parser.add_argument(
+        "--activation",
+        choices=["tanh", "sigmoid"],
+        type=str,
+        default="tanh",
     )
 
     parser.add_argument("--batch_size", type=int, required=True)
@@ -373,6 +388,7 @@ if __name__ == "__main__":
         "batch_size": args.batch_size,
         "encoding": args.encoding,
         "hidden_dims": args.hidden_dims,
+        "activation": args.activation,
         "use_input_u3_layer": args.use_input_u3_layer,
     }
 
@@ -384,6 +400,8 @@ if __name__ == "__main__":
         loss=args.loss,
         max_train_samples=args.max_train_samples,
         max_test_samples=args.max_test_samples,
+        encoding=args.encoding,
+        activation=args.activation,
     )
 
     if args.population_strategy == "steady_state":

@@ -17,15 +17,16 @@ source .venv/bin/activate
 srun python -m src.examples.pl_image \
   --dataset mnist \
   --loss ce \
-  --epochs 1 \
+  --epochs 50 \
   --learning_rate 1e-3 \
   --number_genomes 500 \
-  --input_qubits 15 \
+  --input_qubits 8 \
   --batch_size 32 \
   --hidden_dims \
+  --activation tanh \
   --max_train_samples 2000 \
   --max_test_samples 500 \
   --out_dir artifacts/mnist_linear_encoder \
-  --use_input_u3_layer \
+  --encoding u3 \
   steady_state \
   --max_population_size 30

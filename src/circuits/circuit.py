@@ -584,6 +584,29 @@ class CircuitGenome:
                     pad_with=0.0,
                 )
 
+            elif input_mode == "u3":
+                expected_dim = 3 * len(self.input_indexes)
+
+                input_bits = input_bits.flatten()
+
+                if input_bits.shape[0] != expected_dim:
+                    raise ValueError(
+                        f"learned_u3 encoding expects {expected_dim} values "
+                        f"for {len(self.input_indexes)} input qubits, "
+                        f"but got {input_bits.shape[0]}."
+                    )
+
+                # Map raw encoder outputs into valid angle range (-pi, pi).
+                # angles = torch.pi * torch.tanh(input_bits)
+                angles = torch.pi * input_bits
+
+                for i, w in enumerate(self.input_indexes):
+                    theta = angles[3 * i + 0]
+                    phi = angles[3 * i + 1]
+                    delta = angles[3 * i + 2]
+
+                    qml.U3(theta, phi, delta, wires=w)
+
             else:
                 raise ValueError(f"Unknown input_mode={input_mode}")
 

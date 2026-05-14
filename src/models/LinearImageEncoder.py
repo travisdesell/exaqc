@@ -31,14 +31,14 @@ class LinearImageEncoder(nn.Module):
         input_dim: int,
         embedding_dim: int,
         hidden_dims: list[int],
-        use_sigmoid: bool = True,
+        activation: str = "tanh",
     ):
         super().__init__()
 
         self.input_dim = input_dim
         self.embedding_dim = embedding_dim
         self.hidden_dims = hidden_dims
-        self.use_sigmoid = use_sigmoid
+        self.use_sigmoid = activation == "sigmoid"
 
         dims = [input_dim] + hidden_dims + [embedding_dim]
 
@@ -50,8 +50,10 @@ class LinearImageEncoder(nn.Module):
             if i < len(dims) - 2:
                 layers.append(nn.ReLU())
 
-        if use_sigmoid:
+        if self.use_sigmoid:
             layers.append(nn.Sigmoid())
+        else:
+            layers.append(nn.Tanh())
 
         self.network = nn.Sequential(*layers)
 
