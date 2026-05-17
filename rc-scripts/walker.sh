@@ -26,7 +26,7 @@ for i in $(seq 1 10); do
     --input_qubits 6 \
     --output_qubits 6 \
     --episodes 100 \
-    --number_genomes 2000 \
+    --number_genomes 1000 \
     --mutation_strategy uniform 1 3 \
     --out_dir artifacts/walker2d/islands/run/${i} \
     islands \
