@@ -540,9 +540,9 @@ class EXAQCProfiler:
         out_path: str,
         metric: Optional[str] = "top5_mean",
         conf: str = "std",
-        title: str = "EXAQC (mean ± confidence)",
+        title: str = "EXAQC",
     ) -> None:
-        """Aggregate multiple run CSVs and plot mean with confidence bounds.
+        """Aggregate multiple run CSVs and plot mean with confidence bounds. (mean ± confidence)
 
         This method aligns runs by the intersection of their available step
         values, then plots the mean of the selected metric with either
@@ -609,8 +609,103 @@ class EXAQCProfiler:
             plt.fill_between(common_steps, lo, hi, alpha=0.15)
 
         plt.xlabel("Insertion / step")
+        # plt.xlim(0, 1000)
         plt.ylabel("Reward / Loss")
-        plt.title(f"{title}  (n_runs={n_runs})")
+        plt.title(f"{title} (mean ± {conf.lower()}) (n_runs=10)")
+        plt.legend()
+        plt.grid(True, alpha=0.25)
+
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        fig.savefig(out_path, dpi=220, bbox_inches="tight")
+        plt.close(fig)
+
+    @staticmethod
+    def aggregate_and_plot_complexity(
+        *,
+        csv_glob: str,
+        out_path: str,
+        conf: str = "std",
+        title: str = "EXAQC Complexity Trends",
+    ) -> None:
+        """Aggregate multiple run CSVs and plot gate/parameter complexity trends.
+
+        Args:
+            csv_glob: Glob pattern matching profiler CSV files.
+            out_path: Output path for the aggregated figure.
+            conf: Confidence style. Supported values:
+                - "std": mean ± 1 standard deviation
+                - "95ci": mean ± 1.96 * std / sqrt(n_runs)
+            title: Plot title.
+
+        Raises:
+            FileNotFoundError: If no CSV files match ``csv_glob``.
+            RuntimeError: If the runs do not share any common steps.
+        """
+        import seaborn as sns
+
+        paths = sorted(glob.glob(csv_glob))
+        if not paths:
+            raise FileNotFoundError(f"No CSVs matched: {csv_glob}")
+
+        runs = [
+            EXAQCProfiler._load_csv(path) for path in paths if path.endswith(".csv")
+        ]
+
+        step_sets = [{int(row["step"]) for row in run} for run in runs]
+        common_steps = sorted(set.intersection(*step_sets))
+        if not common_steps:
+            raise RuntimeError(
+                "No common steps across runs. Try using the same run length."
+            )
+
+        n_runs = len(runs)
+
+        metric_specs = [
+            ("gates_best", "Best gates", "-"),
+            ("gates_avg", "Average gates", "--"),
+            ("params_best", "Best parameters", "-"),
+            ("params_avg", "Average parameters", "--"),
+        ]
+
+        # Distinct palette, avoiding default blue/orange/green emphasis.
+        colors = sns.color_palette("magma", n_colors=len(metric_specs))
+
+        fig = plt.figure(figsize=(10, 6))
+
+        for (metric_name, label, linestyle), color in zip(metric_specs, colors):
+            Y = []
+            for run in runs:
+                step_to_value = {
+                    int(row["step"]): row.get(metric_name, np.nan) for row in run
+                }
+                Y.append([step_to_value[step] for step in common_steps])
+
+            Y = np.array(Y, dtype=np.float32)
+            mu = np.nanmean(Y, axis=0)
+            sd = np.nanstd(Y, axis=0)
+
+            if conf.lower() == "std":
+                lo = mu - sd
+                hi = mu + sd
+            else:
+                sem = sd / max(math.sqrt(n_runs), 1.0)
+                lo = mu - 1.96 * sem
+                hi = mu + 1.96 * sem
+
+            plt.plot(
+                common_steps,
+                mu,
+                label=label,
+                linestyle=linestyle,
+                linewidth=2.2,
+                color=color,
+            )
+            plt.fill_between(common_steps, lo, hi, alpha=0.14, color=color)
+
+        plt.xlabel("Insertion / step")
+        plt.xlim(0, 1000)
+        plt.ylabel("Count")
+        plt.title(f"{title}")
         plt.legend()
         plt.grid(True, alpha=0.25)
 
