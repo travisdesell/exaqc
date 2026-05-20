@@ -49,7 +49,6 @@ class PennyLaneNoiseModel(BaseNoiseModel):
     def from_ibm_backend(
         cls,
         backend,
-        *,
         noise_type: str = "thermal_relaxation",
         apply_after_input_encoding: bool = False,
         apply_after_gates: bool = True,
@@ -147,7 +146,7 @@ class PennyLaneNoiseModel(BaseNoiseModel):
         """
         return "default.mixed" if self.is_noisy() else "default.qubit"
     
-    def save_noise_profile(self, path: str | Path) -> None:
+    def save_noise_profile(self, path: str | Path, formatter: Callable=None) -> None:
         """Save PennyLane noise model summary as text.
 
         Args:
@@ -157,13 +156,12 @@ class PennyLaneNoiseModel(BaseNoiseModel):
         if self.pennylane_noise_model is None:
             raise ValueError("No PennyLane noise model available to save.")
 
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        # path = Path(path)
+        # path.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(path, "w") as f:
-            f.write(str(self.pennylane_noise_model))
+        # with open(path, "w") as f:
+        #     f.write(str(self.pennylane_noise_model))
 
-    def save_noise_summary(self, path: str) -> None:
         os.makedirs(os.path.dirname(path), exist_ok=True)
 
         with open(path, "w") as f:
@@ -180,6 +178,24 @@ class PennyLaneNoiseModel(BaseNoiseModel):
             f.write(f"after_encoding={self.apply_after_input_encoding}\n")
             f.write(f"after_gates={self.apply_after_gates}\n")
             f.write(f"before_measurement={self.apply_before_measurement}\n")
+
+    # def save_noise_summary(self, path: str) -> None:
+    #     os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    #     with open(path, "w") as f:
+    #         f.write(f"backend={getattr(self, 'ibm_backend_name', None)}\n")
+    #         f.write(f"noise_type={self.noise_type}\n")
+    #         f.write(f"p={self.p}\n")
+    #         f.write(f"p_1q={self.p_1q}\n")
+    #         f.write(f"p_2q={self.p_2q}\n")
+    #         f.write(f"gamma={self.gamma}\n")
+    #         f.write(f"t1={getattr(self, 't1', None)}\n")
+    #         f.write(f"t2={getattr(self, 't2', None)}\n")
+    #         f.write(f"gate_time_1q={getattr(self, 'gate_time_1q', None)}\n")
+    #         f.write(f"gate_time_2q={getattr(self, 'gate_time_2q', None)}\n")
+    #         f.write(f"after_encoding={self.apply_after_input_encoding}\n")
+    #         f.write(f"after_gates={self.apply_after_gates}\n")
+    #         f.write(f"before_measurement={self.apply_before_measurement}\n")
             
 
     def _as_wires(self, wires: Sequence[int] | int) -> list[int]:

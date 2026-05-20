@@ -205,7 +205,7 @@ class CircuitGenome:
         new_genome.hyperparameters = self.hyperparameters.copy()
 
         for gate in self.gates:
-            new_genome.add_existing_gate(gate)
+            new_genome.add_existing_gate(gate.copy())
 
         return new_genome
 
@@ -440,6 +440,8 @@ class CircuitGenome:
         # make sure we apply the gates in the correct ordering by depth
         self.sort_gates()
         for gate in self.gates:
+            if not gate.enabled:
+                continue
             gate.add_to_qiskit_circuit(register_dict, circuit, parametric=parametric)
 
         if measure:
@@ -452,34 +454,64 @@ class CircuitGenome:
 
         return circuit
 
-    def generate_qiskit_circuit_parametric(
-        self,
-    ) -> tuple[QuantumCircuit, list]:
-        """Build a parametric (autodiff-ready) qiskit circuit.
-
-        No measurements are appended; an EstimatorQNN / SamplerQNN downstream
-        is expected to attach observables. All trainable gate parameters become
-        qiskit Parameter symbols whose ordering is returned alongside the
-        circuit so the caller can bind values in the same order their
-        gradients are returned.
-
-        Returns:
-            (circuit, ordered_parameters): the parametric QuantumCircuit and
-            the list of qiskit Parameter symbols in the canonical order
-            (sorted by gate.innovation_number, then by param name).
-        """
+    def generate_qiskit_circuit_parametric(self):
         circuit = self.generate_qiskit_circuit(parametric=True, measure=False)
 
         ordered = []
         self.sort_gates()
+
         for gate in self.gates:
             if not gate.enabled:
                 continue
+
             qparams = gate._get_qiskit_parameters()
             for pname in sorted(qparams.keys()):
-                ordered.append(qparams[pname])
+                p = qparams[pname]
+                if p in circuit.parameters:
+                    ordered.append(p)
+
+        circuit_params = set(circuit.parameters)
+        ordered_params = set(ordered)
+
+        if circuit_params != ordered_params:
+            raise ValueError(
+                "Qiskit parameter mismatch:\n"
+                f"circuit-only: {[str(p) for p in circuit_params - ordered_params]}\n"
+                f"ordered-only: {[str(p) for p in ordered_params - circuit_params]}\n"
+                f"circuit params: {[str(p) for p in circuit_params]}\n"
+                f"ordered params: {[str(p) for p in ordered_params]}"
+            )
 
         return circuit, ordered
+
+    # def generate_qiskit_circuit_parametric(
+    #     self,
+    # ) -> tuple[QuantumCircuit, list]:
+    #     """Build a parametric (autodiff-ready) qiskit circuit.
+
+    #     No measurements are appended; an EstimatorQNN / SamplerQNN downstream
+    #     is expected to attach observables. All trainable gate parameters become
+    #     qiskit Parameter symbols whose ordering is returned alongside the
+    #     circuit so the caller can bind values in the same order their
+    #     gradients are returned.
+
+    #     Returns:
+    #         (circuit, ordered_parameters): the parametric QuantumCircuit and
+    #         the list of qiskit Parameter symbols in the canonical order
+    #         (sorted by gate.innovation_number, then by param name).
+    #     """
+    #     circuit = self.generate_qiskit_circuit(parametric=True, measure=False)
+
+    #     ordered = []
+    #     self.sort_gates()
+    #     for gate in self.gates:
+    #         if not gate.enabled:
+    #             continue
+    #         qparams = gate._get_qiskit_parameters()
+    #         for pname in sorted(qparams.keys()):
+    #             ordered.append(qparams[pname])
+
+    #     return circuit, ordered
 
     def generate_pennylane_circuit(
         self,

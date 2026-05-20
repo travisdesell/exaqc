@@ -701,6 +701,9 @@ def train_genome_objective(
     if qiskit_config is None:
         qiskit_config = {}
 
+    if dataset is None:
+        raise ValueError("Backend requires dataset.")
+
     if backend == "pennylane":
         train_data = dataset[0]
         test_data = dataset[1]
@@ -721,8 +724,6 @@ def train_genome_objective(
         return
 
     if backend == "qiskit":
-        if dataset is None:
-            raise ValueError("qiskit backend requires dataset.")
 
         # New EstimatorQNN-based path that mirrors _train_with_pennylane.
         # qiskit_config keys honored:

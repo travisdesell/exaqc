@@ -178,6 +178,7 @@ qiskit_gate_specifications["rccx"] = GateSpecification(
 )
 
 qiskit_gate_specifications["rv"] = GateSpecification(
+    needs_validation=True,
     name="RV",
     parameters=["vx", "vy", "vz"],
     qubits=["qubit"],

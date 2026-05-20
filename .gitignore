@@ -211,5 +211,7 @@ __marimo__/
 plots/
 artifacts/
 outs/
+outputs/
 logs/
 data/
+ibm/

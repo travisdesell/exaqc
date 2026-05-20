@@ -44,7 +44,7 @@ class QiskitNoiseModel(BaseNoiseModel):
         """
         return "qiskit"
     
-    def save_noise_profile(self, path: str | Path) -> None:
+    def save_noise_profile(self, path: str | Path, formatter: Callable=None) -> None:
         """Save Qiskit Aer noise model to JSON.
 
         Args:
@@ -58,7 +58,7 @@ class QiskitNoiseModel(BaseNoiseModel):
         path.parent.mkdir(parents=True, exist_ok=True)
 
         with open(path, "w") as f:
-            json.dump(self.qiskit_noise_model.to_dict(), f, indent=2)
+            json.dump(self.qiskit_noise_model.to_dict(), f, indent=2, default=formatter)
 
     def _apply_noise_model(self, noise_model, noise_type_handlers) -> None:
         """Dispatch and apply the configured Qiskit noise model.
@@ -123,7 +123,7 @@ class QiskitNoiseModel(BaseNoiseModel):
         p1 = self.probability_for_n_wires(1)
         p2 = self.probability_for_n_wires(2)
 
-        def apply_depolarizing(noise_model) -> None:
+        def apply_depolarizing(noise_model: NoiseModel) -> None:
             """Apply depolarizing noise to one- and two-qubit gates.
 
             Args:
@@ -141,7 +141,7 @@ class QiskitNoiseModel(BaseNoiseModel):
                     two_qubit_gates,
                 )
 
-        def apply_bit_flip(noise_model) -> None:
+        def apply_bit_flip(noise_model: NoiseModel) -> None:
             """Apply bit-flip noise to one-qubit gates.
 
             Args:
@@ -151,7 +151,7 @@ class QiskitNoiseModel(BaseNoiseModel):
             error = pauli_error([("X", p1), ("I", 1.0 - p1)])
             noise_model.add_all_qubit_quantum_error(error, one_qubit_gates)
 
-        def apply_phase_flip(noise_model) -> None:
+        def apply_phase_flip(noise_model: NoiseModel) -> None:
             """Apply phase-flip noise to one-qubit gates.
 
             Args:
@@ -161,7 +161,7 @@ class QiskitNoiseModel(BaseNoiseModel):
             error = pauli_error([("Z", p1), ("I", 1.0 - p1)])
             noise_model.add_all_qubit_quantum_error(error, one_qubit_gates)
 
-        def apply_amplitude_damping(noise_model) -> None:
+        def apply_amplitude_damping(noise_model: NoiseModel) -> None:
             """Apply amplitude damping noise to one-qubit gates.
 
             Args:
@@ -171,7 +171,7 @@ class QiskitNoiseModel(BaseNoiseModel):
             error = amplitude_damping_error(self.gamma)
             noise_model.add_all_qubit_quantum_error(error, one_qubit_gates)
 
-        def apply_phase_damping(noise_model) -> None:
+        def apply_phase_damping(noise_model: NoiseModel) -> None:
             """Apply phase damping noise to one-qubit gates.
 
             Args:
@@ -181,7 +181,7 @@ class QiskitNoiseModel(BaseNoiseModel):
             error = phase_damping_error(self.gamma)
             noise_model.add_all_qubit_quantum_error(error, one_qubit_gates)
 
-        def apply_mixed(noise_model) -> None:
+        def apply_mixed(noise_model: NoiseModel) -> None:
             """Apply mixed depolarizing and amplitude-damping noise.
 
             Args:
@@ -211,12 +211,3 @@ class QiskitNoiseModel(BaseNoiseModel):
         self._apply_noise_model(noise_model, noise_type_handlers)
 
         return noise_model
-
-    def save_qiskit_noise_model(self, path: str) -> None:
-        """Save Qiskit Aer noise model to JSON."""
-        qiskit_noise = self.to_qiskit_noise_model()
-        if qiskit_noise is None:
-            return
-
-        with open(path, "w") as f:
-            json.dump(qiskit_noise.to_dict(), f, indent=2)

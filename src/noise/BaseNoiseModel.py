@@ -128,7 +128,7 @@ class BaseNoiseModel(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def save_noise_profile(self, path: str) -> None:
+    def save_noise_profile(self, path: str, formatter: Callable=None) -> None:
         raise NotImplementedError
 
     @classmethod

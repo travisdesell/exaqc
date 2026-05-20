@@ -265,7 +265,7 @@ class Gate:
         cache = getattr(self, "_qiskit_parameter_cache", None)
         if cache is None:
             cache = {
-                pname: QiskitParameter(f"g{self.innovation_number}_{pname}")
+                pname: QiskitParameter(f"{self.innovation_number}:{pname}")
                 for pname in self.parameters.keys()
             }
             self._qiskit_parameter_cache = cache

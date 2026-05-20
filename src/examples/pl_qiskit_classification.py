@@ -14,6 +14,7 @@ from loguru import logger
 
 from src.circuits.circuit import CircuitGenome
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
+from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
 from src.datasets import QuantumDataset
 from src.datasets.classification import (
     BreastCancerDataset,
@@ -25,13 +26,13 @@ from src.evolution.master_worker import master_worker
 from src.evolution.objective import Objective
 from src.evolution.steady_state_islands import SteadyStateIslands
 from src.evolution.steady_state_population import SteadyStatePopulation
-from src.noise import PennyLaneNoiseModel
+from src.noise import BaseNoiseModel, PennyLaneNoiseModel, QiskitNoiseModel
 from src.objectives.genome_objectives import train_genome_objective
 from src.utils.helpers import genome_to_torch_params
 from src.utils.losses import LOSS_REGISTRY, ce_onehot_on_probs
 
 
-def build_noise_model(args) -> Optional[PennyLaneNoiseModel]:
+def build_noise_model(args) -> Optional[BaseNoiseModel]:
     """Build PennyLane noise model from arguments."""
     from qiskit_aer.noise import NoiseModel
 
@@ -90,38 +91,58 @@ def build_noise_model(args) -> Optional[PennyLaneNoiseModel]:
         #     # decimal_places=args.ibm_noise_decimal_places,
         # )
 
-        noise_model = PennyLaneNoiseModel.from_ibm_backend(
-            backend,
-            noise_type=args.noise_type,
-            apply_after_gates=args.noise_after_gates,
-        )
-
         profile_dir = os.path.join(args.out_dir, "noise_profiles", args.ibm_backend)
         # noise_model.save_noise_profile(profile_dir)
-        noise_model.save_noise_summary(
-            os.path.join(args.out_dir, "noise_profiles", args.ibm_backend, "pennylane_ibm_summary.txt")
+
+        if args.target == "pennylane":
+            noise_model = PennyLaneNoiseModel.from_ibm_backend(
+                backend,
+                noise_type=args.noise_type,
+                apply_after_gates=args.noise_after_gates,
+            )
+            # noise_model.save_noise_summary(
+            #     os.path.join(profile_dir f"{args.target}_ibm_summary.txt")
+            # )
+
+        elif args.target == "qiskit":
+            noise_model = QiskitNoiseModel.from_ibm_backend(
+                backend,
+            )
+
+        else:
+            raise ValueError("Unknown target lib selected; options are [pennylane, qiskit]")
+
+        noise_model.save_noise_profile(
+            os.path.join(profile_dir, f"{args.target}_ibm_summary.txt"), 
+            formatter=make_json_safe,
         )
 
         logger.info(f"Saved IBM/PennyLane noise profile to {profile_dir}")
         return noise_model
 
-    return PennyLaneNoiseModel.from_hyperparameters(
-        {
-            "noise_type": args.noise_type,
-            "noise_p": args.noise_p,
-            "noise_p_1q": args.noise_p_1q,
-            "noise_p_2q": args.noise_p_2q,
-            "noise_gamma": args.noise_gamma,
-            "noise_t1": args.noise_t1,
-            "noise_t2": args.noise_t2,
-            "noise_gate_time_1q": args.noise_gate_time_1q,
-            "noise_gate_time_2q": args.noise_gate_time_2q,
-            "noise_excited_state_population": args.noise_excited_state_population,
-            "noise_after_encoding": args.noise_after_encoding,
-            "noise_after_gates": args.noise_after_gates,
-            "noise_before_measurement": args.noise_before_measurement,
-        }
-    )
+    hp = {
+        "noise_type": args.noise_type,
+        "noise_p": args.noise_p,
+        "noise_p_1q": args.noise_p_1q,
+        "noise_p_2q": args.noise_p_2q,
+        "noise_gamma": args.noise_gamma,
+        "noise_t1": args.noise_t1,
+        "noise_t2": args.noise_t2,
+        "noise_gate_time_1q": args.noise_gate_time_1q,
+        "noise_gate_time_2q": args.noise_gate_time_2q,
+        "noise_excited_state_population": args.noise_excited_state_population,
+        "noise_after_encoding": args.noise_after_encoding,
+        "noise_after_gates": args.noise_after_gates,
+        "noise_before_measurement": args.noise_before_measurement,
+    }
+
+    if args.target == "pennylane":
+        return PennyLaneNoiseModel.from_hyperparameters(hp)
+
+    if args.target == "qiskit":
+        return QiskitNoiseModel.from_hyperparameters(hp)
+
+    raise ValueError(f"Unknown target={args.target}")
 
 
 # ---------------------------------------------------------------------
@@ -149,12 +170,12 @@ def predict_from_probs(
 def eval_probs_ce_and_acc(
     genome: CircuitGenome,
     dataset: Iterable[tuple[torch.Tensor, torch.Tensor, str]],
-    *,
     n_classes: int,
     loss: Optional[str] = None,
     encoding: str = "angle",
     alpha: torch.Tensor = None,
     noise_model: Optional[PennyLaneNoiseModel] = None,
+    target: str = "pennylane",
 ) -> dict[str, float]:
     """Evaluate a genome using probability readout.
 
@@ -184,12 +205,9 @@ def eval_probs_ce_and_acc(
 
         probs_full = genome.circuit(x, params)
         probs_full = torch.as_tensor(probs_full, dtype=torch.float32)
-
         pred, probs = predict_from_probs(probs_full, n_classes=n_classes)
-
         # Keep CE reporting consistent.
         L = ce_onehot_on_probs(probs, y, alpha_per_class=alpha)
-
         losses.append(L)
         true = int(torch.argmax(y).item())
         correct += int(pred == true)
@@ -239,14 +257,15 @@ class ClassificationObjective(Objective):
         input_size: int,
         n_classes: int,
         loss: str = "ce",
-        noise_model: Optional[PennyLaneNoiseModel] = None,
+        noise_model: Optional[BaseNoiseModel] = None,
+        target: str = "pennylane",
     ):
         self.train_data = train_data
         self.test_data = test_data
         self.input_size = input_size
         self.n_classes = n_classes
         self.loss = loss
-        self.target = "pennylane"
+        self.target = target
         self.noise_model = noise_model
 
     def __call__(self, genome: CircuitGenome):
@@ -275,6 +294,9 @@ class ClassificationObjective(Objective):
                 log_every=log_every,
                 batch_size=batch_size,
                 noise_model=noise_model,
+                qiskit_config={
+                    "gradient_method": hp.get("qiskit_gradient_method", "param_shift"),
+                },
             )
 
         # setting Alpha from https://arxiv.org/pdf/1901.05555
@@ -284,46 +306,97 @@ class ClassificationObjective(Objective):
         )
         alpha = torch.as_tensor(alpha / alpha.mean(), dtype=torch.float32)
 
-        train_metrics = eval_probs_ce_and_acc(
-            genome,
-            self.train_data,
-            n_classes=self.n_classes,
-            loss=self.loss,
-            encoding=encoding,
-            alpha=alpha,
-            noise_model=noise_model,
-        )
+        if self.target == "qiskit":
+            from src.objectives.qiskit_train import build_qiskit_eval_model, _eval_with_qnn
 
-        test_metrics = eval_probs_ce_and_acc(
-            genome,
-            self.test_data,
-            n_classes=self.n_classes,
-            loss=self.loss,
-            encoding=encoding,
-            alpha=alpha,
-            noise_model=noise_model,
-        )
+            loss_fn = LOSS_REGISTRY[self.loss]
 
-        genome.fitness = {
-            "train_loss": float(train_metrics["loss"]),
-            "train_acc": float(train_metrics["acc"]),
-            "test_loss": float(test_metrics["loss"]),
-            "test_acc": float(test_metrics["acc"]),
-            "noise_type": hp.get("noise_type", "none"),
-            "noise_p": float(hp.get("noise_p", 0.0)),
-            "noise_p_1q": hp.get("noise_p_1q", None),
-            "noise_p_2q": hp.get("noise_p_2q", None),
-            "noise_gamma": float(hp.get("noise_gamma", 0.0)),
-        }
+            model = build_qiskit_eval_model(
+                genome,
+                encoding=encoding,
+                gradient_method=hp.get("qiskit_gradient_method", "reverse"),
+                noise_model=noise_model,
+            )
 
-        logger.info(
-            f"[{genome.genome_number:04d}] "
-            f"train loss={train_metrics['loss']:.4f} "
-            f"train acc={train_metrics['acc']:.4f} "
-            f"test loss={test_metrics['loss']:.4f} "
-            f"test acc={test_metrics['acc']:.4f} "
-            f"noise={hp.get('noise_type', 'none')}"
-        )
+            metrics = _eval_with_qnn(
+                model,
+                list(self.train_data),
+                list(self.test_data),
+                self.n_classes,
+                alpha,
+                loss_fn,
+                self.loss,
+            )
+
+            genome.fitness = {
+                "train_loss": float(metrics["train_loss"]),
+                "train_acc": float(metrics["train_acc"]),
+                "test_loss": float(metrics["test_loss"]),
+                "test_acc": float(metrics["test_acc"]),
+                "noise_type": hp.get("noise_type", "none"),
+                "noise_p": float(hp.get("noise_p", 0.0)),
+                "noise_p_1q": hp.get("noise_p_1q", None),
+                "noise_p_2q": hp.get("noise_p_2q", None),
+                "noise_gamma": float(hp.get("noise_gamma", 0.0)),
+            }
+
+            logger.info(
+                f"[{genome.genome_number:04d}] "
+                f"qiskit eval train loss={metrics['train_loss']:.4f} "
+                f"train acc={metrics['train_acc']:.4f} "
+                f"test loss={metrics['test_loss']:.4f} "
+                f"test acc={metrics['test_acc']:.4f}"
+            )
+
+            return
+
+        elif self.target == "pennylane":
+            # Pennylane
+            train_metrics = eval_probs_ce_and_acc(
+                genome,
+                self.train_data,
+                n_classes=self.n_classes,
+                loss=self.loss,
+                encoding=encoding,
+                alpha=alpha,
+                noise_model=noise_model,
+                target=self.target,
+            )
+
+            test_metrics = eval_probs_ce_and_acc(
+                genome,
+                self.test_data,
+                n_classes=self.n_classes,
+                loss=self.loss,
+                encoding=encoding,
+                alpha=alpha,
+                noise_model=noise_model,
+                target=self.target,
+            )
+
+            genome.fitness = {
+                "train_loss": float(train_metrics["loss"]),
+                "train_acc": float(train_metrics["acc"]),
+                "test_loss": float(test_metrics["loss"]),
+                "test_acc": float(test_metrics["acc"]),
+                "noise_type": hp.get("noise_type", "none"),
+                "noise_p": float(hp.get("noise_p", 0.0)),
+                "noise_p_1q": hp.get("noise_p_1q", None),
+                "noise_p_2q": hp.get("noise_p_2q", None),
+                "noise_gamma": float(hp.get("noise_gamma", 0.0)),
+            }
+
+            logger.info(
+                f"[{genome.genome_number:04d}] "
+                f"train loss={train_metrics['loss']:.4f} "
+                f"train acc={train_metrics['acc']:.4f} "
+                f"test loss={test_metrics['loss']:.4f} "
+                f"test acc={test_metrics['acc']:.4f} "
+                f"noise={hp.get('noise_type', 'none')}"
+            )
+        
+        else:
+            raise ValueError(f"backend not supported: {self.target}")
 
 
 # ---------------------------------------------------------------------
@@ -376,6 +449,13 @@ if __name__ == "__main__":
         "--logging_level",
         type=str,
         default="INFO",
+    )
+
+    p.add_argument(
+        "--target",
+        choices=["pennylane", "qiskit"],
+        type=str,
+        default="pennylane",
     )
 
     # -------------------------
@@ -508,6 +588,7 @@ if __name__ == "__main__":
             input_size=4,
             n_classes=3,
             noise_model=noise_model,
+            target=args.target,
         )
 
     elif args.dataset == "wine":
@@ -518,6 +599,7 @@ if __name__ == "__main__":
             input_size=13,
             n_classes=3,
             noise_model=noise_model,
+            target=args.target,
         )
 
     elif args.dataset == "seeds":
@@ -528,6 +610,7 @@ if __name__ == "__main__":
             input_size=7,
             n_classes=3,
             noise_model=noise_model,
+            target=args.target,
         )
 
     elif args.dataset == "breast_cancer":
@@ -538,6 +621,7 @@ if __name__ == "__main__":
             input_size=30,
             n_classes=2,
             noise_model=noise_model,
+            target=args.target,
         )
 
     else:
@@ -571,13 +655,26 @@ if __name__ == "__main__":
     else:
         raise ValueError(args.population_strategy)
 
+    gate_spec_map = {
+        "pennylane": pennylane_gate_specifications,
+        "qiskit": qiskit_gate_specifications,
+    }
+
+    if args.target not in gate_spec_map:
+        raise ValueError(
+            f"Unsupported target backend: {args.target}. "
+            "Supported backends are: pennylane, qiskit."
+        )
+
+    gate_specs = gate_spec_map[args.target]
+
     master_worker(
-        gate_specifications=pennylane_gate_specifications,
+        gate_specifications=gate_specs,
         population=population,
         objective=objective,
         hyperparameters=hyperparameters,
         run_for=args.number_genomes,
         input_registers={"input": min(args.input_qubits, objective.input_size)},
         output_registers={"output": math.ceil(math.log(objective.n_classes, 2))},
-        target="pennylane",
+        target=args.target,
     )

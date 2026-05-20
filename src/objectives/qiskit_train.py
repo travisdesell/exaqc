@@ -34,6 +34,8 @@ from qiskit_algorithms.gradients import (
 from qiskit_machine_learning.connectors import TorchConnector
 from qiskit_machine_learning.neural_networks import EstimatorQNN
 
+from qiskit_aer.noise import NoiseModel
+
 from src.utils.helpers import (
     BalancedBatchSampler,
     genome_to_torch_params,
@@ -58,6 +60,7 @@ def _build_qnn(
     encoding: str,
     gradient_method: str,
     estimator,
+    basis_gates: Optional[list[str]] = None,
 ) -> tuple[EstimatorQNN, list]:
     """Compose feature_map + ansatz, attach observables + gradient.
 
@@ -65,6 +68,8 @@ def _build_qnn(
     the qiskit Parameter list in canonical order so we can map TorchConnector
     weights back into genome gate parameters at the end.
     """
+    from qiskit import transpile
+    
     if encoding != "angle":
         raise NotImplementedError(
             f"qiskit train currently only supports encoding='angle' (got '{encoding}')"
@@ -83,6 +88,26 @@ def _build_qnn(
     full = QuantumCircuit(n_total)
     full.compose(feature_map, inplace=True)
     full.compose(ansatz, inplace=True)
+
+    input_params = list(x_params)
+    weight_params = list(weight_params)
+
+    if basis_gates is not None:
+        full = transpile(
+            full,
+            basis_gates=basis_gates,
+            optimization_level=0,
+        )
+
+        all_params = set(full.parameters)
+        known_params = set(input_params) | set(weight_params)
+
+        if all_params != known_params:
+            raise ValueError(
+                "Parameter mismatch after noisy transpilation:\n"
+                f"circuit-only={sorted(str(p) for p in all_params - known_params)}\n"
+                f"listed-only={sorted(str(p) for p in known_params - all_params)}"
+            )
 
     observables = output_projector_observables(n_total, list(genome.output_indexes))
 
@@ -105,6 +130,33 @@ def _build_qnn(
     )
     return qnn, weight_params
 
+def build_qiskit_eval_model(
+    genome,
+    encoding: str = "angle",
+    gradient_method: str = "reverse",
+    noise_model=None,
+):
+    """Build a TorchConnector Qiskit model from a trained genome."""
+    if noise_model is not None:
+        estimator, basis_gates = _build_aer_estimator(noise_model)
+        if gradient_method == "reverse":
+            gradient_method = "param_shift"
+    else:
+        estimator = StatevectorEstimator()
+        basis_gates = None
+
+    qnn, weight_params = _build_qnn(
+        genome,
+        encoding=encoding,
+        gradient_method=gradient_method,
+        estimator=estimator,
+        basis_gates=basis_gates,
+    )
+
+    initial_weights = _initial_torch_weights(genome, weight_params)
+    model = TorchConnector(qnn, initial_weights=initial_weights)
+
+    return model
 
 def _initial_torch_weights(
     genome: "CircuitGenome",
@@ -197,15 +249,17 @@ def _train_with_qiskit(
                 "Pass gradient_method='param_shift' explicitly to silence this."
             )
             gradient_method = "param_shift"
-        estimator = _build_aer_estimator(noise_model)
+        estimator, basis_gates = _build_aer_estimator(noise_model)
     else:
         estimator = StatevectorEstimator()
+        basis_gates = None
 
     qnn, weight_params = _build_qnn(
         genome,
         encoding=encoding,
         gradient_method=gradient_method,
         estimator=estimator,
+        basis_gates=basis_gates,
     )
 
     if len(weight_params) == 0:
@@ -321,6 +375,39 @@ def _train_with_qiskit(
     trained_tensor = list(model.parameters())[0].detach()
     _write_back_weights(genome, weight_params, trained_tensor)
 
+def _extract_basis_gates(qiskit_noise: NoiseModel):
+    from qiskit_aer import AerSimulator
+
+    raw_basis_gates = set(getattr(qiskit_noise, "basis_gates", []) or [])
+
+    # Ask Aer what it supports for density_matrix.
+    sim = AerSimulator(method="density_matrix")
+    aer_basis = set(sim.configuration().basis_gates)
+
+    # Remove pseudo/control-flow/non-unitary ops.
+    blocked = {
+        "delay",
+        "measure",
+        "reset",
+        "barrier",
+        "snapshot",
+        "if_else",
+        "for_loop",
+        "while_loop",
+        "switch_case",
+        "break_loop",
+        "continue_loop",
+        "store",
+    }
+
+    cleaned = sorted((raw_basis_gates & aer_basis) - blocked)
+
+    logger.info(f"IBM raw basis_gates: {raw_basis_gates}")
+    logger.info(f"Aer density_matrix basis_gates: {aer_basis}")
+    logger.info(f"Using filtered noisy basis gates: {cleaned}")
+
+    return cleaned
+
 
 def _build_aer_estimator(noise_model):
     """Build an AerEstimator wrapping a qiskit noise model.
@@ -336,14 +423,18 @@ def _build_aer_estimator(noise_model):
         else noise_model
     )
 
+    # basis_gates = getattr(qiskit_noise, "basis_gates", None)
+    basis_gates = _extract_basis_gates(qiskit_noise)
+
     options = {
         "backend_options": {
             "method": "density_matrix",
             "noise_model": qiskit_noise,
+            "basis_gates": basis_gates,
         },
         "default_precision": 0.0,  # exact density-matrix expectation, no shots
     }
-    return AerEstimator(options=options)
+    return AerEstimator(options=options), basis_gates
 
 
 @torch.no_grad()
