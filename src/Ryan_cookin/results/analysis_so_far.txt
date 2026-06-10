@@ -1,0 +1,578 @@
+================================================================================
+ANALYSIS SO FAR -- Stage A vs B vs C vs D vs E
+on Iris, Wine, Seeds, Breast Cancer
+================================================================================
+
+This is the synthesis document. Pros, cons, and head-to-head comparisons of
+each formulation we built. Backing data lives in:
+  stage_a_trained.csv  (Stage A,        64 cells, single-seed)
+  stage_b.csv          (Stage B,        96 cells, single-seed)
+  stage_c.csv          (Stage C,        24 cells, single-seed)
+  stage_e.csv          (Stage E,         4 cells, 120-genome budget)
+  stage_e_v2.csv       (Stage E v2,      4 cells, 300-genome budget)
+  stage_c_multiseed.csv (Stage C winners x seeds 1,2,  24 cells)
+  stage_b_multiseed.csv (Stage B winners x seeds 1,2,  96 cells)
+  stage_f_v1.csv          (Stage F v1,       4 cells, hybrid)
+  stage_f_v2.csv          (Stage F v2,       4 cells, full feature-dep)
+  stage_f_v2_multiseed.csv (Stage F v2 seeds 1,2, 8 cells)            *NEW*
+  stage_f_v2_big.csv      (Stage F v2,       4 cells, 300-gen budget) *NEW*
+
+All experiments through 2026-06-07 are folded in below. Per-(dataset,
+encoder, N) numbers below for Stages B and C are means over 3 seeds
+(0, 1, 2) for the three winning encoders. Stages A, E, F still
+single-seed (Stage F multi-seed is a future follow-up).
+
+--------------------------------------------------------------------------------
+0. What each stage actually does (in one line)
+--------------------------------------------------------------------------------
+
+  Stage A:  trained encoder + FIXED ansatz (RY-CNOT chain), N swept manually
+  Stage B:  trained encoder + EVOLVED ansatz (CircuitGenome), N swept manually
+  Stage C:  trained encoder + EVOLVED ansatz + EVOLVED N (grow/shrink_register)
+  Stage D:  adds two new ENCODERS (linear_proj, reupload_euler) -- not a driver,
+            consumed by Stage B and Stage C through --encoders flag
+  Stage E:  EVOLVED encoder (feature-dep enc_ry/rx/rz, single-axis single-
+            feature) + evolved ansatz + evolved N -- full co-evolution, weak
+            encoder primitives
+  Stage F:  Stage E redesigned with UNIVERSAL primitives. enc_rot is feature-
+            dep universal-1-qubit (Rot(alpha,beta,gamma), 6 params). Two
+            variants:
+              v1 (hybrid)        : enc_rot + scalar rxx/ryy/rzz entanglers
+              v2 (full feat-dep) : enc_rot + enc_xx/yy/zz feature-dep
+                                   entanglers (3 params each)
+            Tests "does packaging universal primitives into single gates
+            beat composing them from simpler ones?"
+
+--------------------------------------------------------------------------------
+1. Headline numbers
+--------------------------------------------------------------------------------
+
+  Stage     n cells   mean acc   best acc   worst acc
+  A         64        0.707      0.967      0.306
+  B         96        0.794      1.000      0.333
+  C         24        0.862      1.000      0.528
+  E         4         0.790      0.851      0.700
+  E v2      4         0.787      0.877      0.633   (300-gen budget)
+  F v1      4         0.804      0.842      0.733   (hybrid)
+  F v2      4         0.904      0.967      0.857   (full feat-dep)  *NEW BEST CO-EVOLUTION*
+
+Per-dataset side-by-side, seed=0 only (B + reupload_euler at champion N for
+reference):
+
+  dataset         E v1    E v2    F v1    F v2    B+reup_euler
+  iris            0.700   0.633   0.733   0.967   1.000
+  wine            0.778   0.806   0.806   0.917   1.000
+  seeds           0.833   0.833   0.833   0.857   1.000
+  breast_cancer   0.851   0.877   0.842   0.877   0.974
+  ----------     -----   -----   -----   -----   -----
+  mean            0.790   0.787   0.804   0.904   ~0.99
+
+**Stage F v2 beats Stage E on every dataset, by 0.024 to 0.267.** The
+iris jump (+0.267) is the biggest single-experiment improvement we've
+made. v1 is barely better than Stage E (+0.014 mean); v2 jumps +0.114.
+**The difference between v1 and v2 (+0.100) is the feature-dependence
+of the 2-qubit gates** -- with hindsight, universal-1-qubit-feature-dep
+gates aren't enough on their own; the entanglers also need to read the
+data. Stage F v2 still loses to Stage B + reupload_euler (~0.987) by
+~0.08, so the staged-design ceiling is not yet beaten by co-evolution.
+
+Stage F v2 follow-ups (2026-06-07, finishing the day's work):
+
+  Stage F v2 over 3 seeds (multi-seed mean +- std):
+    iris            0.989 +- 0.019   *(matches Stage B + learned exactly)*
+    wine            0.852 +- 0.058   *(seed=0 0.917 was high tail)*
+    seeds           0.841 +- 0.014
+    breast_cancer   0.880 +- 0.005
+    mean            0.891 (vs single-seed 0.904 -- mild overestimate)
+
+  Stage F v2 with 300-genome budget (vs 120, both seed=0):
+    iris            0.967 -> 0.967   (saturated)
+    wine            0.917 -> 0.861   (wine is noisy; within seed noise)
+    seeds           0.857 -> 0.857   (no change)
+    breast_cancer   0.877 -> 0.912   (+0.035, MEANINGFUL gain)
+    mean            0.904 -> 0.899
+
+**Multi-seed confirms the headline finding:** Stage F v2's iris jump
+is robust at the ceiling (3/3 seeds at 0.989 +- 0.019). Wine and
+breast_cancer were dragged toward their true means by the new seeds.
+**The 300-genome budget helps where the feature space is largest:**
+breast_cancer (D=30) jumped +0.035, while iris (D=4) saturated. This
+mirrors the Stage E v2 finding but in the OPPOSITE direction --
+Stage E was budget-saturated everywhere, Stage F v2 is search-limited
+on the biggest datasets. The architecture really was the bottleneck
+for Stage E; Stage F's universal primitives let evolution find use
+for additional compute.
+
+Champions per dataset, MULTI-SEED (best (encoder, N) cell across all
+stages, mean +/- std over seeds 0+1+2):
+
+  iris            Stage B  reupload_euler  N=4   1.000 +- 0.000
+  wine            Stage B  reupload_euler  N=4   1.000 +- 0.000
+                  Stage B  linear_proj     N=4   1.000 +- 0.000  (tie)
+  seeds           Stage B  reupload_euler  N=6   0.976 +- 0.024
+                  Stage B  linear_proj     N=8   0.976 +- 0.041  (tie, lower std)
+  breast_cancer   Stage B  reupload_euler  N=4   0.971 +- 0.005
+                  Stage B  linear_proj     N=8   0.971 +- 0.005  (tie)
+
+**Correction from earlier single-seed table:** the iris seed=0 champion
+was `learned` at N=4 with test_acc=1.000. Multi-seed says `learned`
+N=4 mean is 0.989 +- 0.019 -- the perfect seed=0 score was the high
+end of its noise. The true iris champion across seeds is
+reupload_euler N=4 at 1.000 +- 0.000 (perfect every seed). Lesson:
+seed=0 champion tables are misleading without error bars.
+
+reupload_euler is a co-champion on every dataset, always with the
+smallest std. linear_proj ties on every dataset; learned is below the
+ceiling everywhere.
+
+Per-encoder mean over 3 seeds (winners only):
+
+  encoder         Stage B (n=48)   Stage C (n=12)
+  learned         0.903            0.891
+  linear_proj     0.977            0.976
+  reupload_euler  0.981            0.989
+
+Both stages give the same ranking. Stage C's evolved-N gives a small
+boost (+0.008) for reupload_euler, basically zero for linear_proj,
+and a small drop for learned. Differences are at-or-below the noise
+floor except for the encoder-rank effect (which is robust).
+
+Per (dataset, encoder) mean +/- std across 3 seeds in Stage C:
+
+                    learned          linear_proj      reupload_euler
+  iris              0.934 +- 0.058   0.978 +- 0.039   0.989 +- 0.019
+  wine              0.879 +- 0.080   0.991 +- 0.016   1.000 +- 0.000
+  seeds             0.849 +- 0.028   0.968 +- 0.036   0.992 +- 0.014
+  breast_cancer     0.900 +- 0.027   0.968 +- 0.005   0.974 +- 0.000
+
+Per (dataset, encoder) at BEST N across 3 seeds in Stage B:
+
+                    learned          linear_proj      reupload_euler
+  iris (N=4)        0.989 +- 0.019   0.989 +- 0.019   1.000 +- 0.000
+  wine (best N)     0.898 +- 0.042   1.000 +- 0.000   1.000 +- 0.000
+                    (N=8)            (N=4)            (N=4)
+  seeds (best N)    0.944 +- 0.036   0.976 +- 0.041   0.976 +- 0.024
+                    (N=8)            (N=8)            (N=6)
+  breast (best N)   0.933 +- 0.005   0.971 +- 0.005   0.971 +- 0.005
+                    (N=8)            (N=8)            (N=4)
+
+reupload_euler is essentially error-bar-tight at the ceiling (std 0.000
+on iris N=4, wine N=4 in Stage B; std 0.000 on wine, breast_cancer in
+Stage C). learned has the widest spread (up to +/- 0.080 on wine in
+Stage C) -- its seed=0 results can be misleadingly high or low.
+
+Stage E budget bump (n_genomes 120 -> 300, pop_size 25 -> 30):
+
+  dataset         E v1 acc   E v2 acc   delta
+  iris            0.700      0.633      -0.067  (worse!)
+  wine            0.778      0.806      +0.028
+  seeds           0.833      0.833       0.000
+  breast_cancer   0.851      0.877      +0.026
+  -------         -----      -----      -----
+  mean            0.790      0.787      -0.003
+
+**Stage E does NOT improve with 2.5x compute.** Mean test_acc is
+unchanged. Iris actively regressed. Gate counts grew (enc=10, ans=11 on
+iris) but accuracy did not. This kills the "Stage E is just budget-
+limited" hypothesis: the bottleneck is architectural -- the feature-
+dependent enc_ry/rx/rz gates are individually less expressive than
+linear_proj or reupload_euler, and no amount of co-evolution recovers
+that.
+
+--------------------------------------------------------------------------------
+2. Per-stage pros and cons
+--------------------------------------------------------------------------------
+
+STAGE A (fixed ansatz baseline)
+  Pros:
+    - Cheapest to run (~30-60s per cell on Win machine). 64-cell sweep
+      fits in ~30 min.
+    - Deterministic, reproducible -- no evolution randomness. Bit-exact
+      reruns with same seed match to 1e-9.
+    - Easy to interpret: the ansatz is hand-built (RY + linear CNOT chain
+      at depth=2), so a result tells you which (encoder, N) combo is best.
+    - Useful as the "encoder choice only" comparison axis.
+  Cons:
+    - Hand-built ansatz is a confound: when a cell does badly you can't
+      tell whether the encoder is bad or the ansatz can't use it.
+    - Wide N sweep is mandatory because the structure is frozen --
+      can't trade qubits for gates.
+    - `fixed_amplitude` does very poorly here because N is fixed and
+      doesn't match log2(D); evolved-N rescues this in C.
+
+STAGE B (evolved ansatz, N swept)
+  Pros:
+    - All four champions live here. Hit ceiling on 3/4 datasets.
+    - Best wall-time-per-cell vs Stage C (small fanout from evolution
+      since N is still swept manually).
+    - Cleanly isolates "does evolving the ansatz help?" relative to A.
+      Answer: yes for `learned`/`linear_proj`/`reupload_euler`,
+      negligible for `fixed_basis`/`fixed_angle`.
+    - The "structure search" axis works for the universal encoders --
+      Stage B + reupload_euler is the best practical workflow we found.
+  Cons:
+    - Manual N sweep means we pay 4x for each encoder/dataset combo.
+    - Some cells with `gates=0` (~8% of B's 96 cells) -- evolution
+      occasionally fails to add a gate due to a known add_gate
+      limitation on small output-qubit sets. EXAQC retries but can
+      stall in unlucky chains. Not a crash, just a wasted cell.
+    - Single-seed; no error bars yet (multi-seed rerun in flight).
+
+STAGE C (evolved ansatz + evolved N)
+  Pros:
+    - Best mean test_acc (0.862) of any stage. Strong sweep-level
+      result.
+    - Drops the N dimension from the sweep, so 4 cells per (dataset,
+      encoder) become 1 cell -- way cheaper per encoder/dataset combo
+      than B once you account for the N-axis.
+    - Rescued `fixed_amplitude` by finding N = log2(D) automatically
+      (iris went 4->2, test_acc 0.733 -> 0.900).
+    - Genuinely "set and forget" for production: pick an encoder, run
+      Stage C, done.
+  Cons:
+    - On the `learned` encoder, B->C delta is NEGATIVE on every
+      dataset: manual N sweep beat evolved N at 80-genome budget.
+      Suggests Stage C is budget-limited for that encoder.
+    - Per-cell wall time is much longer than Stage B (especially
+      breast_cancer: up to ~1100s for `learned`, ~660s for
+      `linear_proj`, ~1145s for `reupload_euler`).
+    - Pre-fix had two crashing bugs (register evolution + qubit_swap);
+      both fixed 2026-05-21 but the search behavior is sensitive to
+      those edge cases. Watch for regressions.
+    - Same gates=0 noise as Stage B.
+
+STAGE D (universal encoders)
+  Pros:
+    - HIGHEST-LEVERAGE CHANGE WE SHIPPED. `reupload_euler` mean acc
+      0.983 (B) / 0.993 (C); `linear_proj` 0.972 (B) / 0.968 (C).
+      That's a bigger gain than every level of evolution combined.
+    - Encoder is universal: 3 Euler angles per qubit covers all of
+      SU(2). Combined with reuploading depth=2, it can represent
+      arbitrary feature-to-state maps that fit on N qubits.
+    - Both encoders are smooth drop-in replacements for `learned` --
+      same training loop, no special harness.
+    - Initialization biases the first forward to match `fixed_angle`,
+      so they don't start from a random unitary -- training is stable.
+  Cons:
+    - Largest parameter count of any encoder we tried (reupload_euler
+      breast_cancer/N=10/depth=2 is 1860 params, vs 40 for `learned`
+      at the same shape). This raises the "is it expressivity or just
+      more params?" confound flagged in Stage A's original report.
+    - No fairness control yet against `learned` + more ansatz layers.
+    - Specifically vulnerable to overfitting on small datasets
+      because of the high param count -- not visible at the current
+      train/test split scale but worth checking with k-fold.
+
+STAGE F (universal-gate-set co-evolution: v1 hybrid, v2 full feat-dep)
+  Pros:
+    - **HUGE improvement over Stage E.** v2 mean test_acc 0.904 vs
+      Stage E's 0.790 -- the biggest stage-to-stage delta we've ever
+      shipped, and decisive evidence that wrapping universal
+      primitives into single gates helps evolution find them.
+    - Encoder ceiling raised: v2 iris 0.967, wine 0.917 -- approaching
+      the staged ceiling.
+    - Same EXAQC machinery as Stage E; only the gate vocabulary
+      changed. Cheap to extend.
+    - Architecturally clean: enc_rot is universal 1-qubit (covers all
+      of SU(2)); enc_xx/yy/zz are feature-dep entanglers that combined
+      with enc_rot span universal 2-qubit operations via KAK
+      decomposition. The gate pool *is* a universal basis.
+  Cons:
+    - Still loses to Stage B + reupload_euler by ~0.08 mean.
+      Co-evolution remains harder than staging for these benchmarks.
+    - v1 (hybrid: universal-1-qubit-feature-dep encoder + scalar
+      2-qubit entanglers) is barely better than Stage E (0.804 vs
+      0.790). **The feature-dependence of the 2-qubit gates is the
+      key**, not the universality of the 1-qubit ones. This was not
+      obvious before running both variants.
+    - Single-seed only -- variance unknown. Strong recommend to
+      multi-seed before drawing tight conclusions on the iris jump.
+    - Param cost per cell is moderate but real. v2 cells used 5-14
+      enabled gates total (more than Stage E's 4-9), reflecting the
+      richer pool.
+    - Longest cell so far: breast_cancer v1 at ~777s, v2 at ~709s.
+
+STAGE E (fully evolved encoder + ansatz + N)
+  Pros:
+    - The "most automated" formulation -- you pick a dataset and
+      EXAQC decides everything else.
+    - Encoder gates use feature-dependent rotations (R<axis>(a*x[q%D]
+      + b)) directly, so the encoder structure is genuinely part of
+      the genome (not a separate module).
+    - Successfully exercised the full evolution machinery: 120+
+      genomes, register growth on every dataset (all 4 grew to N=5
+      or N=6 from initial N=4), nontrivial encoder gate counts (4-5).
+  Cons:
+    - LOSES on every dataset relative to the best of A/B/C, by
+      0.123 (breast_cancer) to 0.300 (iris). Worst per-cell delta of
+      any stage.
+    - **Stage E v2 (300 genomes) CONFIRMS it is not budget-limited.**
+      2.5x compute changed mean test_acc by -0.003 (0.790 -> 0.787).
+      Iris actually got worse (0.700 -> 0.633). Gate counts grew
+      (iris evolved enc=10, ans=11) but accuracy did not.
+    - The enc_ry/rx/rz feature-dependent gates are each a single
+      feature reference (a*x[q%D] + b), not a full feature mixing
+      linear projection. This is fundamentally weaker than the
+      universal Stage-D encoders that mix all D features per axis.
+      No amount of evolution recovers expressivity that's missing
+      at the per-gate level.
+    - In practice, Stage E is a strictly worse choice than Stage B
+      + reupload_euler on every dataset tested.
+
+--------------------------------------------------------------------------------
+3. Per-encoder pros and cons (across Stages A, B, C)
+--------------------------------------------------------------------------------
+
+fixed_basis (computational-basis encoding via thresholding)
+  - Mean acc: A 0.678, B 0.618, C 0.654
+  - Pros: zero trainable params, interpretable (each qubit = "feature i
+    above median"), reproducible.
+  - Cons: discretizes the input (throws away continuous info), and the
+    A->B delta is negative on most cells -- ansatz evolution can't
+    recover info the encoder destroyed. Consistently the worst encoder.
+
+fixed_angle (RY(pi*x_q) per qubit, no train)
+  - Mean acc: A 0.785, B 0.753, C 0.844
+  - Pros: zero trainable params, simple. Reasonable baseline; preserves
+    continuous structure.
+  - Cons: feature-to-qubit assignment is trivial (q -> x[q%D]); no
+    feature mixing. C does much better because evolved N adapts the
+    register to the encoder's natural scaling.
+
+fixed_amplitude (AmplitudeEmbedding, zero-padded, no train)
+  - Mean acc: A 0.493, B 0.534, C 0.832
+  - Pros: information-theoretic ideal -- packs D features into log2(D)
+    qubits. Explodes under Stage C because evolved N finds the right
+    width.
+  - Cons: catastrophic outside its natural N (the A and B sweeps had to
+    use N >= 4 which is too big for iris/D=4 -> 2-qubit ideal). When
+    N > log2(D), zero-padding pushes the state into a tiny subspace.
+
+learned (RY(a*x[q%D] + b) with 4N trainable params)
+  - Mean acc: A 0.871, B 0.903, C 0.882
+  - Pros: cheap trainable encoder (4N params), each qubit gets a
+    learnable affine on its natural feature. Iris/learned/N=4 was the
+    Stage B champion at test_acc=1.000.
+  - Cons: only sees ONE feature per qubit (no cross-feature mixing).
+    Saturated by Stage B -- adding evolved N (Stage C) doesn't help and
+    sometimes hurts. Outperformed by the universal encoders almost
+    everywhere.
+
+linear_proj (RY(W*x + b), full N*D matrix)
+  - Mean acc: A n/a, B 0.972, C 0.968
+  - Pros: full feature mixing per qubit. Wine champion (1.000, B/N=4).
+    Strictly more expressive than `learned` (which is the diagonal
+    special case).
+  - Cons: ~depth*(D+1)x more params than `learned`. No A baseline
+    (was added in Stage D). Stage B already saturates so Stage C
+    doesn't add much.
+
+reupload_euler (Rot(a, b, g) per qubit, each Euler angle a learned
+linear function of features, depth=2)
+  - Mean acc: A n/a, B 0.983, C 0.993
+  - Pros: BEST OVERALL. Universal single-qubit unitary capacity per
+    qubit, every Euler angle is a feature-mixed linear map. Three
+    champions (seeds, breast_cancer, also ties on wine).
+  - Cons: largest param count of any encoder. With depth=2 it's
+    3*2*N*(D+1) params, e.g. 1860 for breast_cancer/N=10. The "is it
+    more expressive, or just more params?" question remains open
+    until a fairness experiment runs.
+
+--------------------------------------------------------------------------------
+4. Per-dataset winner analysis
+--------------------------------------------------------------------------------
+
+IRIS (D=4 features, K=3 classes, 150 samples)
+  - Champion: Stage B, learned, N=4 -> 1.000 (3 gates)
+  - Close seconds: Stage B/C reupload_euler at N=4 (both ~1.000)
+  - Notable: iris is small enough that almost any reasonable
+    (encoder, ansatz) hits 0.97+. Stage C shrinks `fixed_amplitude`
+    from N=4 to N=2 and rescues it from 0.733 -> 0.900.
+  - Best ansatz size: 3-6 gates. Tiny circuits, no need for depth.
+
+WINE (D=13, K=3, 178 samples)
+  - Champion: Stage B, linear_proj, N=4 -> 1.000 (5 gates)
+  - Close seconds: Stage B reupload_euler ~1.000; Stage C
+    reupload_euler ~1.000 at N=4.
+  - Notable: hardest dataset for `fixed_basis` and `fixed_amplitude`
+    (thresholding loses too much; D=13 doesn't fit cleanly into
+    log2 spread).
+  - Best ansatz size: 2-5 gates.
+
+SEEDS (D=7, K=3, 210 samples)
+  - Champion: Stage B, reupload_euler, N=6 -> 1.000 (2 gates)
+    Co-champion: Stage C, linear_proj, N=4 -> 1.000 (1 gate)
+  - Notable: Stage A's best was 0.881 (learned/N=8); Stage B
+    pushed it to 1.000. Biggest single-stage improvement over A.
+  - Best ansatz size: 1-3 gates. Stage C found a 1-gate solution
+    for linear_proj.
+
+BREAST_CANCER (D=30, K=2, 569 samples)
+  - Champion: Stage B, reupload_euler, N=4 -> 0.974 (2 gates)
+    Co-champion: Stage C, reupload_euler, N=6 -> 0.974 (1 gate)
+  - Notable: only dataset that doesn't hit 1.000 (ceiling at
+    ~0.974). Stage A's best (learned/N=6) was 0.895, so universal
+    encoders + evolution pushed it +0.079.
+  - Best ansatz size: 1-7 gates. Stage C breast_cancer cells
+    were the slowest cells in the entire sweep (~1100s for
+    `learned`, ~1145s for `reupload_euler`).
+
+--------------------------------------------------------------------------------
+5. Cross-cutting trends
+--------------------------------------------------------------------------------
+
+TREND 1 -- Encoder choice >> evolution
+  The single biggest accuracy lever is the encoder family. Going from
+  `learned` to `reupload_euler` (Stage D's contribution) gives
+  ~0.08-0.10 accuracy on average, which is more than the A->B->C
+  evolution stack contributes combined.
+
+TREND 2 -- Evolution helps but with diminishing returns
+  Per-stage mean acc deltas: A->B +0.087, B->C +0.068. Both positive
+  but shrinking. Stage E (full co-evolution) is a regression at
+  current budget -- not strictly monotone.
+
+TREND 3 -- Small N wins
+  Mode of evolved N in Stage C is N=4 (14/24 cells). Champions all
+  use N <= 8. The "throw more qubits at it" narrative is wrong for
+  these classification problems at this scale.
+
+TREND 4 -- Champion circuits are TINY
+  Champion gate counts: iris 3, wine 5, seeds 2, breast_cancer 2.
+  None of the best circuits have more than 5 enabled gates. The
+  ansatz is doing very little work once the encoder is strong.
+
+TREND 5 -- Evolved N has narrow but real value
+  Only valuable when the encoder has a "natural" N (amplitude
+  embedding -> log2(D)). Otherwise the manual N sweep is
+  competitive. For `learned`, evolved N actually hurts -- the
+  manual sweep gets to try 4 widths in parallel.
+
+TREND 6 -- Stage E ceiling is architectural, but Stage F lifts it
+  Stage E v2 (2.5x budget) confirmed the Stage-E ceiling isn't budget-
+  limited (mean -0.003 vs v1). Stage F v2 (same budget as Stage E v1)
+  jumps the ceiling to mean 0.904 by changing the gate vocabulary to
+  universal primitives -- enc_rot (universal 1-qubit feature-dep) and
+  enc_xx/yy/zz (feature-dep entanglers). **Confirms it was the gate
+  set that was limiting Stage E, not the search.** With universal
+  primitives, co-evolution closes most of the gap to staged designs
+  (Stage B + reupload_euler is ~0.987, F v2 is 0.904 -- about 0.08
+  apart, vs 0.20+ for Stage E).
+
+TREND 6b -- Universal 1-qubit isn't enough; entanglers need data too
+  Stage F v1 (universal-1-qubit feature-dep + SCALAR 2-qubit
+  entanglers) is only +0.014 over Stage E. Stage F v2 (same encoder +
+  FEATURE-DEP 2-qubit entanglers) is +0.114. **The +0.100 difference
+  is the data-dependence of the entanglers**, not the universality of
+  the 1-qubit gates. Surprising in retrospect -- we expected universal
+  1-qubit to be the main lever, but it's the joint feature mixing
+  through entangling gates that does most of the work.
+
+TREND 7' -- Multi-seed stability separates the encoders sharply
+  With 3 seeds on Stage C, reupload_euler has zero std on 2/4
+  datasets (wine, breast_cancer) and tight std on the rest (max
+  0.019). linear_proj has tight std too (max 0.039). `learned`
+  has the widest spread (std up to 0.080 on wine). Seed=0 results
+  for `learned` are noisy and can be misleadingly good or bad;
+  reupload_euler results are robust.
+
+TREND 8 -- `fixed_basis` is the only encoder ansatz evolution hurts
+  A->B delta is negative on most fixed_basis cells. The encoder
+  produces one of a small set of computational basis states; the
+  ansatz mostly destroys that structure rather than exploiting it.
+  Hard to imagine a useful production setting for `fixed_basis`
+  given current results.
+
+--------------------------------------------------------------------------------
+6. Recommendations / what to do next
+--------------------------------------------------------------------------------
+
+WHAT TO USE IN PRACTICE (single best recipe, multi-seed-validated)
+  Stage B + reupload_euler + N=4 (start there, optionally try N=6
+  on small-feature datasets) + CircuitGenome evolution with
+  n_genomes=50, pop_size=20. Empirically wins or ties on every
+  dataset across 3 seeds, with std typically 0.000-0.024 at the
+  champion cell. Fallback if reupload_euler param count is too
+  high: linear_proj with the same recipe (within 0.004 mean acc,
+  1/3 the encoder params).
+
+WHAT TO RUN NEXT
+  (completed 2026-05-31)
+    - Stage E v2 with n_genomes=300 -- NO catch-up. Mean -0.003.
+      Confirms Stage E ceiling is architectural.
+    - Multi-seed Stage C (3 winners, 24 cells) -- clean separation:
+      reupload_euler 0.989, linear_proj 0.976, learned 0.891.
+    - Multi-seed Stage B (3 winners, 96 cells) -- confirmed Stage B
+      ranking (reupload_euler 0.981, linear_proj 0.977, learned 0.903),
+      revealed that the iris/learned seed=0 1.000 was a lucky draw
+      (true mean 0.989 +- 0.019). reupload_euler is co-champion on
+      every dataset.
+  (completed 2026-06-07)
+    - Stage F v1 + v2 -- F v2 mean 0.904 (vs Stage E 0.790, F v1
+      0.804). Confirms hypothesis: universal-gate primitives help
+      co-evolution dramatically, BUT only when 2-qubit gates are
+      feature-dependent. v1's hybrid (scalar 2-qubit) is barely
+      better than Stage E.
+  (completed end of day 2026-06-07)
+    - Multi-seed Stage F v2 -- confirmed iris jump survives (0.989
+      +- 0.019); wine seed=0 was high tail (true mean 0.852); mean
+      across 3 seeds is 0.891 (vs single-seed 0.904).
+    - Stage F v2 budget bump (300 genomes) -- mostly saturated EXCEPT
+      breast_cancer which gained +0.035 (single-seed). Suggests
+      Stage F v2 IS search-limited on high-D datasets, opposite of
+      Stage E. The encoder vocabulary really was the Stage E
+      bottleneck; Stage F's universal primitives let evolution use
+      additional compute productively.
+
+  (still open, biggest open questions remaining)
+    - Multi-seed Stage F v2 at 300 genomes on breast_cancer
+      specifically. The +0.035 on seed=0 might be a lucky draw or a
+      real architectural gain -- 3 seeds would settle it.
+    - Stage F at depth>2 or with a richer 2-qubit pool (e.g. add
+      enc_can as a 3-param feature-dep canonical 2-qubit gate).
+      Stage F v2 is ~0.10 below the staged ceiling; that gap might
+      close with more 2-qubit expressivity.
+    - Noise studies -- all experiments are noise-free. Do any of
+      these rankings (staged > F v2 > F v1 > E) survive under IBM
+      noise models? If the universal-encoder dominance is less
+      robust under decoherence, Stage F's evolved structure might
+      catch up or even win.
+  (open)
+    - Parameter-efficiency frontier: plot test_acc vs total trainable
+      param count for every cell. Want to know whether `learned` is
+      Pareto-dominated by `reupload_euler` once param budget is
+      controlled.
+    - Fairness control for the universal encoders: re-run `learned`
+      with deeper ansatz so its total trainable params match
+      `linear_proj`/`reupload_euler`. Closes the "more params or
+      more expressive?" confound.
+    - Multi-seed Stage A on the WINNERS (4 datasets x learned at
+      best-N, ~5 min). Establishes the baseline error bar.
+    - K-fold cross-val for the universal encoders to check
+      overfitting risk given their parameter counts.
+
+WHAT TO NOT BOTHER WITH
+  - `fixed_basis` -- unrecoverably weak across all stages.
+  - Pushing Stage A further -- it's a baseline, not a contender.
+  - Wider N sweeps in Stage B -- N=4 wins for nearly every
+    champion; the extra cells don't add information.
+  - Higher reupload depth in reupload_euler -- already at depth=2
+    and saturating accuracy; more depth costs params for no gain.
+
+OPEN QUESTIONS THAT DATA HASN'T SETTLED
+  - Does the universal-encoder dominance hold under noise? All
+    sweeps are noise-free. The NaN-fix work in commit f4c23a5
+    enabled noise; should re-run the 3 winners with IBM noise model
+    to see if the gap to `learned` survives.
+  - Does Stage C beat Stage B when budget is matched? Stage C
+    spent 80 genomes per (dataset, encoder) and lost to Stage B's
+    4x 50-genome sweep on `learned`. A B-equivalent Stage C budget
+    would be 4x50 = 200 genomes per cell.
+  - Are these results reproducible on a different machine? Stage A
+    was reproducible bit-exact on this Windows machine vs the Mac
+    (matches to 1e-9 with seed=0). Stage B+C have evolution
+    randomness; multi-seed reruns will quantify.
+
+================================================================================
+END
+================================================================================

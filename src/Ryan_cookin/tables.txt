@@ -1,0 +1,194 @@
+================================================================================
+Ryan_cookin -- Stage results readme (tables + brief summaries)
+================================================================================
+
+This file is the project-level README for the stage-by-stage classification
+experiments under src/Ryan_cookin/. Each stage tests a different position on
+the "what gets evolved vs what's fixed" axis. As new stages land, append a
+section under "Future / planned stages" first, then move it up once the
+sweep has run.
+
+Last updated: 2026-06-10
+Source CSVs: src/Ryan_cookin/results/stage_*.csv
+Deeper writeup: src/Ryan_cookin/results/analysis_so_far.txt
+
+
+================================================================================
+Stage summaries (one paragraph each)
+================================================================================
+
+Stage A -- baseline. Trained encoder parameters, hand-built ansatz (per-qubit
+RY + linear CNOT chain, depth 2, identical across cells). N is swept manually.
+4 encoder classes (fixed_angle, fixed_amplitude, fixed_basis, learned) x 4 N x
+4 datasets = 64 cells. Cheapest to run; deterministic; useful as the
+"encoder-choice-only" axis. Establishes that learned > others by a lot, and
+that the best N is dataset-dependent.
+
+Stage B -- evolved ansatz, manual N. Replace Stage A's hand-built ansatz with
+a CircuitGenome searched by EXAQC. Same encoders, same N sweep. Isolates
+"does evolving the ansatz help?" relative to A. Where every dataset champion
+lives in our single-seed runs. After Stage D added two more encoders, Stage B
+also ran on linear_proj and reupload_euler (now 6 x 4 x 4 = 96 cells).
+
+Stage C -- evolved ansatz + evolved N. Stage B + register-evolution mutations
+(grow_register, shrink_register) so EXAQC decides the qubit count too. Drops
+the manual N axis: 6 encoders x 4 datasets x seed = 24 cells. Best mean
+test_acc across all stages on single-seed (0.862). Rescues fixed_amplitude
+(it wants N = log2(D), which only Stage C finds automatically).
+
+Stage D -- universal-encoder additions. Not a driver. Adds two new encoder
+classes to encoders.py:
+  - linear_proj  : RY(W*x + b) with full N x D learnable matrix; depth=2
+  - reupload_euler: per-qubit Rot(alpha, beta, gamma) where each angle is its
+                    own learnable linear function of features; depth=2
+Both feed Stage B and Stage C via the --encoders flag. Their addition was
+the single biggest accuracy improvement we've shipped -- reupload_euler at
+~0.98 mean is well above the previous best (learned at ~0.90).
+
+Stage E -- full co-evolution, weak encoder primitives. A single CircuitGenome
+contains both encoder gates (enc_ry/rx/rz, each single-axis, single-feature,
+2 params) and ansatz gates. Encoder structure + ansatz structure + N all
+evolved. v1: 120 genomes / pop 25. v2: 300 genomes / pop 30 to test "is it
+budget-limited?" Result: v2 changed mean by -0.003 -- the bottleneck was the
+gate vocabulary, not the search budget.
+
+Stage F -- universal-gate-set co-evolution. Redesign of Stage E using
+universal primitives so evolution can place ONE gate to get full SU(2) or
+universal-2q capacity, instead of having to compose them.
+  v1 (hybrid)        : enc_rot (universal-1q feature-dep, 6 params) +
+                       scalar-trained rxx/ryy/rzz + ry/rx/rz/cx/cz
+  v2 (full feat-dep) : enc_rot + enc_xx/yy/zz (feature-dep 2q Isings, 3 params
+                       each, together span the canonical 2q gate / KAK core)
+                       + ry/rx/rz/cx/cz
+v2 leaps over Stage E by +0.114 mean test_acc; v1 is only +0.014. The lever
+that mattered was making 2-qubit gates feature-dependent, not making
+1-qubit gates universal. Multi-seed and 300-genome follow-ups confirm.
+
+
+================================================================================
+What each stage does (architectural)
+================================================================================
+
+  ┌──────────┬─────────────────────────────────────────────────────┬───────────────────────┬────────────────────────────────┬───────────────────┬───────────────────┐
+  │  stage   │                       encoder                       │        ansatz         │               N                │ encoder feat-dep  │ 2-qubit feat-dep  │
+  ├──────────┼─────────────────────────────────────────────────────┼───────────────────────┼────────────────────────────────┼───────────────────┼───────────────────┤
+  │ A        │ trained params, 4 encoder classes                   │ fixed (RY-CNOT chain) │ swept manually                 │ varies by encoder │ no                │
+  ├──────────┼─────────────────────────────────────────────────────┼───────────────────────┼────────────────────────────────┼───────────────────┼───────────────────┤
+  │ B        │ trained params, 6 encoder classes                   │ evolved               │ swept manually                 │ varies            │ no                │
+  ├──────────┼─────────────────────────────────────────────────────┼───────────────────────┼────────────────────────────────┼───────────────────┼───────────────────┤
+  │ C        │ trained params, 6 encoders                          │ evolved               │ evolved (grow/shrink_register) │ varies            │ no                │
+  ├──────────┼─────────────────────────────────────────────────────┼───────────────────────┼────────────────────────────────┼───────────────────┼───────────────────┤
+  │ D        │ adds linear_proj + reupload_euler (consumed by B/C) │ —                     │ —                              │ yes (those 2)     │ no                │
+  ├──────────┼─────────────────────────────────────────────────────┼───────────────────────┼────────────────────────────────┼───────────────────┼───────────────────┤
+  │ E v1     │ evolved (enc_ry/rx/rz, single-axis single-feature)  │ evolved               │ evolved                        │ yes (weak)        │ no                │
+  ├──────────┼─────────────────────────────────────────────────────┼───────────────────────┼────────────────────────────────┼───────────────────┼───────────────────┤
+  │ E v2     │ same as E v1, 2.5x budget                           │ evolved               │ evolved                        │ yes (weak)        │ no                │
+  ├──────────┼─────────────────────────────────────────────────────┼───────────────────────┼────────────────────────────────┼───────────────────┼───────────────────┤
+  │ F v1     │ evolved (enc_rot, universal 1-qubit feat-dep)       │ evolved               │ evolved                        │ yes (universal)   │ no (scalar Ising) │
+  ├──────────┼─────────────────────────────────────────────────────┼───────────────────────┼────────────────────────────────┼───────────────────┼───────────────────┤
+  │ F v2     │ enc_rot + enc_xx/yy/zz                              │ evolved               │ evolved                        │ yes (universal)   │ yes               │
+  ├──────────┼─────────────────────────────────────────────────────┼───────────────────────┼────────────────────────────────┼───────────────────┼───────────────────┤
+  │ F v2 ms  │ same as F v2, +seeds 1,2                            │ evolved               │ evolved                        │ yes               │ yes               │
+  ├──────────┼─────────────────────────────────────────────────────┼───────────────────────┼────────────────────────────────┼───────────────────┼───────────────────┤
+  │ F v2 big │ same as F v2, n_genomes=300                         │ evolved               │ evolved                        │ yes               │ yes               │
+  └──────────┴─────────────────────────────────────────────────────┴───────────────────────┴────────────────────────────────┴───────────────────┴───────────────────┘
+
+
+================================================================================
+Headline numbers (per-stage mean / best)
+================================================================================
+
+  ┌────────────────────┬─────────┬───────┬───────────────┬───────┬────────────────────────────────────────────────────────┐
+  │       stage        │ n cells │ seeds │ mean test_acc │ best  │                         notes                          │
+  ├────────────────────┼─────────┼───────┼───────────────┼───────┼────────────────────────────────────────────────────────┤
+  │ A                  │ 64      │ 1     │ 0.707         │ 0.967 │ baseline                                               │
+  ├────────────────────┼─────────┼───────┼───────────────┼───────┼────────────────────────────────────────────────────────┤
+  │ B (all 6 encoders) │ 96      │ 1     │ 0.794         │ 1.000 │                                                        │
+  ├────────────────────┼─────────┼───────┼───────────────┼───────┼────────────────────────────────────────────────────────┤
+  │ B (winners only)   │ 144     │ 3     │ 0.954         │ 1.000 │ learned 0.903, linear_proj 0.977, reupload_euler 0.981 │
+  ├────────────────────┼─────────┼───────┼───────────────┼───────┼────────────────────────────────────────────────────────┤
+  │ C (all 6 encoders) │ 24      │ 1     │ 0.862         │ 1.000 │                                                        │
+  ├────────────────────┼─────────┼───────┼───────────────┼───────┼────────────────────────────────────────────────────────┤
+  │ C (winners only)   │ 36      │ 3     │ 0.952         │ 1.000 │ learned 0.891, linear_proj 0.976, reupload_euler 0.989 │
+  ├────────────────────┼─────────┼───────┼───────────────┼───────┼────────────────────────────────────────────────────────┤
+  │ E v1               │ 4       │ 1     │ 0.790         │ 0.851 │ 120-genome, weak encoder gates                         │
+  ├────────────────────┼─────────┼───────┼───────────────┼───────┼────────────────────────────────────────────────────────┤
+  │ E v2               │ 4       │ 1     │ 0.787         │ 0.877 │ 300-genome — no improvement                            │
+  ├────────────────────┼─────────┼───────┼───────────────┼───────┼────────────────────────────────────────────────────────┤
+  │ F v1               │ 4       │ 1     │ 0.804         │ 0.842 │ hybrid: universal-1q only                              │
+  ├────────────────────┼─────────┼───────┼───────────────┼───────┼────────────────────────────────────────────────────────┤
+  │ F v2               │ 4       │ 1     │ 0.904         │ 0.967 │ universal-1q + feat-dep 2q                             │
+  ├────────────────────┼─────────┼───────┼───────────────┼───────┼────────────────────────────────────────────────────────┤
+  │ F v2 (3 seeds)     │ 12      │ 3     │ 0.891         │ 1.000 │ adds error bars to v2                                  │
+  ├────────────────────┼─────────┼───────┼───────────────┼───────┼────────────────────────────────────────────────────────┤
+  │ F v2 (300 gen)     │ 4       │ 1     │ 0.899         │ 0.967 │ breast_cancer +0.035                                   │
+  └────────────────────┴─────────┴───────┴───────────────┴───────┴────────────────────────────────────────────────────────┘
+
+
+================================================================================
+Per-dataset best result by stage (test_acc, seed=0 unless noted)
+================================================================================
+
+  ┌───────────────┬───────┬───────┬───────┬───────┬───────┬───────┬───────┬───────────────┬──────────┐
+  │    dataset    │   A   │   B   │   C   │ E v1  │ E v2  │ F v1  │ F v2  │  F v2 3-seed  │ F v2 big │
+  ├───────────────┼───────┼───────┼───────┼───────┼───────┼───────┼───────┼───────────────┼──────────┤
+  │ iris          │ 0.967 │ 1.000 │ 1.000 │ 0.700 │ 0.633 │ 0.733 │ 0.967 │ 0.989 ± 0.019 │ 0.967    │
+  ├───────────────┼───────┼───────┼───────┼───────┼───────┼───────┼───────┼───────────────┼──────────┤
+  │ wine          │ 0.833 │ 1.000 │ 1.000 │ 0.778 │ 0.806 │ 0.806 │ 0.917 │ 0.852 ± 0.058 │ 0.861    │
+  ├───────────────┼───────┼───────┼───────┼───────┼───────┼───────┼───────┼───────────────┼──────────┤
+  │ seeds         │ 0.881 │ 1.000 │ 1.000 │ 0.833 │ 0.833 │ 0.833 │ 0.857 │ 0.841 ± 0.014 │ 0.857    │
+  ├───────────────┼───────┼───────┼───────┼───────┼───────┼───────┼───────┼───────────────┼──────────┤
+  │ breast_cancer │ 0.895 │ 0.974 │ 0.974 │ 0.851 │ 0.877 │ 0.842 │ 0.877 │ 0.880 ± 0.005 │ 0.912    │
+  └───────────────┴───────┴───────┴───────┴───────┴───────┴───────┴───────┴───────────────┴──────────┘
+
+
+================================================================================
+How to read the tables
+================================================================================
+
+* Staged designs (B, C) win the headline. Winners-only multi-seed mean is
+  ~0.95 and best is 1.000 on 3/4 datasets. reupload_euler is co-champion
+  essentially everywhere.
+
+* Co-evolution stages cluster below staged. E v1/v2 and F v1 all sit at
+  0.79-0.80 mean. Stage F v2 jumps to 0.89-0.90 by making 2-qubit gates
+  feature-dependent. Still ~0.06 below the staged ceiling.
+
+* Two findings from the follow-ups:
+  (a) Stage F v2's iris jump is robust at the ceiling (3/3 seeds at
+      0.989 +- 0.019).
+  (b) Stage F v2 IS search-limited on big datasets -- breast_cancer
+      gained +0.035 from 2.5x budget. Stage E v2 (same budget bump on
+      the weaker gate vocabulary) gained nothing. The architecture
+      really was the bottleneck.
+
+* Single-seed champions can mislead. The iris seed=0 Stage B/learned 1.000
+  is a lucky draw; true 3-seed mean is 0.989 +- 0.019. Always look at
+  multi-seed before trusting a perfect-score cell.
+
+
+================================================================================
+Future / planned stages
+================================================================================
+
+Stage F v3 (open) -- KAK macro-gate. Add enc_can or enc_kak as a single
+3-param (canonical-core only) or 15-param (full SU(4)) primitive. Tests
+"evolve placement of universal 2-qubit unitaries" vs "evolve the internal
+structure of one." Stage F v2 has the building blocks but no template;
+v3 would supply the template as a single primitive.
+
+Noise studies (open) -- All current sweeps are noise-free. Stage A's
+NaN-fix work enabled noise; worth re-running the 3 winning encoders
+(learned, linear_proj, reupload_euler) under an IBM noise model to see
+whether the staged ranking holds when decoherence is in the picture.
+If the universal-encoder dominance is less robust under noise, evolved
+structure (Stage F) might catch up or win.
+
+Multi-seed Stage A (open) -- The full 64-cell Stage A rerun across 3
+seeds was estimated at ~17 hr. Not done. Stage A still single-seed
+in all tables above.
+
+Parameter-efficiency frontier (open) -- Champions all use tiny gate
+counts (1-5 enabled) but encoders have very different param costs
+(learned: 4N vs reupload_euler: 6*N*(D+1)). Worth a Pareto plot for the
+paper writeup.
