@@ -38,6 +38,7 @@ from src.datasets.classification import (
 )
 from src.Ryan_cookin.encoders import (
     ENCODERS,
+    fit_basis_thresholds,
     initial_encoder_params,
     make_encoder,
 )
@@ -107,6 +108,7 @@ def train_one(
     lr: float,
     batch_size: int,
     ansatz_depth: int,
+    weights_dir: str | None = None,
 ) -> dict:
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -115,7 +117,17 @@ def train_one(
     train_ds = dataset_cls(split="train")
     test_ds = dataset_cls(split="test")
 
-    encoder = make_encoder(encoder_name, n_qubits=n_qubits, n_features=n_features)
+    # The basis encoder needs thresholds fitted on training data (per-feature
+    # median by default). For other encoders this is a no-op.
+    encoder_extras: dict = {}
+    if encoder_name == "fixed_basis":
+        encoder_extras["thresholds"] = fit_basis_thresholds(
+            train_ds, n_qubits=n_qubits, n_features=n_features,
+        )
+
+    encoder = make_encoder(
+        encoder_name, n_qubits=n_qubits, n_features=n_features, **encoder_extras,
+    )
 
     qnode, n_output_qubits = build_qnode(
         encoder,
@@ -127,7 +139,7 @@ def train_one(
     n_enc = encoder.n_params
     n_ans = ansatz_n_params(n_qubits, ansatz_depth)
 
-    theta_enc = torch.nn.Parameter(initial_encoder_params(n_enc, seed=seed))
+    theta_enc = torch.nn.Parameter(initial_encoder_params(encoder, seed=seed))
     theta_ansatz = torch.nn.Parameter(
         0.1 * torch.randn(n_ans, dtype=torch.float64,
                           generator=torch.Generator().manual_seed(seed + 1))
@@ -200,6 +212,34 @@ def train_one(
     train_loss, train_acc = evaluate(train_ds)
     test_loss, test_acc = evaluate(test_ds)
 
+    # Save trained weights so the rendered circuit PNGs reflect the
+    # final solutions found by the optimizer rather than init values.
+    if weights_dir is not None:
+        os.makedirs(weights_dir, exist_ok=True)
+        weights_path = os.path.join(
+            weights_dir,
+            f"{dataset_name}_N{n_qubits}_{encoder_name}_seed{seed}.pt",
+        )
+        torch.save(
+            {
+                "dataset": dataset_name,
+                "encoder": encoder_name,
+                "n_qubits": n_qubits,
+                "n_features": n_features,
+                "n_classes": n_classes,
+                "ansatz_depth": ansatz_depth,
+                "seed": seed,
+                "epochs": epochs,
+                "theta_enc": theta_enc.detach().clone(),
+                "theta_ansatz": theta_ansatz.detach().clone(),
+                "train_loss": train_loss,
+                "train_acc": train_acc,
+                "test_loss": test_loss,
+                "test_acc": test_acc,
+            },
+            weights_path,
+        )
+
     return {
         "dataset": dataset_name,
         "encoder": encoder_name,
@@ -253,6 +293,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--ansatz_depth", type=int, default=2)
     p.add_argument("--out", type=str,
                    default="src/Ryan_cookin/results/stage_a.csv")
+    p.add_argument("--weights_dir", type=str, default=None,
+                   help="If set, save per-cell trained theta_enc/theta_ansatz "
+                        "as .pt files under this directory. Used by the circuit "
+                        "renderer to draw final-trained PNGs.")
     return p.parse_args(argv)
 
 
@@ -282,6 +326,7 @@ def main(argv: list[str] | None = None) -> int:
                         lr=args.lr,
                         batch_size=args.batch_size,
                         ansatz_depth=args.ansatz_depth,
+                        weights_dir=args.weights_dir,
                     )
                     print(
                         f"test_acc={row['test_acc']:.3f} "
