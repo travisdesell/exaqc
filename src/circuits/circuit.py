@@ -108,6 +108,14 @@ class CircuitGenome:
             if not gate.enabled:
                 continue
 
+            # A gate may reference qubits that are no longer present in the
+            # circuit when register-evolution mutations (shrink_register) or
+            # crossover between parents with different registers introduce a
+            # mismatch. Treat such a genome as invalid rather than letting
+            # circuit.qubits.index(...) raise mid-iteration.
+            if any(q not in self.qubits for q in gate.qubits):
+                return False
+
             output_circuit_indexes = gate.get_output_circuit_indexes(self)
             input_circuit_indexes = gate.get_input_circuit_indexes(self)
 

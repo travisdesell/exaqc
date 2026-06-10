@@ -15,8 +15,10 @@ from src.evolution.mutation import (
     add_gate_with_selection,
     disable_gate,
     enable_gate,
+    grow_register,
     reorder_gate,
     qubit_swap,
+    shrink_register,
 )
 from src.evolution.objective import Objective
 from src.evolution.population_strategy import PopulationStrategy
@@ -35,6 +37,7 @@ class EXAQC:
         output_registers: dict[str, int] = None,
         output_qubits: list[tuple[str, int]] = None,
         target: str = "pennylane",
+        allow_register_evolution: bool = False,
     ):
         """
         Creates an instance of Evolutionary Exploration of Augmenting Quantum Circuits given a
@@ -68,6 +71,10 @@ class EXAQC:
         self.hyperparameters = hyperparameters
         self.target = target
         self.inserted_genomes = 0
+        # When True, the mutation pool includes grow_register / shrink_register
+        # so the genome's qubit count itself becomes part of the search. Used
+        # by Stage C / Stage E. Stages A/B leave this off so N stays fixed.
+        self.allow_register_evolution = allow_register_evolution
 
         if input_registers is None and input_qubits is None:
             logger.critical(
@@ -178,6 +185,13 @@ class EXAQC:
             + ["disable_gate"] * 2  # 10%
             + ["clone"] * 2  # 10%
         )
+        if self.allow_register_evolution:
+            # Add register-size mutations at a modest rate. The total pool now
+            # gets ~10% grow/shrink which is enough to explore N without
+            # dominating gate-level structure search.
+            mutation_options = mutation_options + (
+                ["grow_register"] * 2 + ["shrink_register"] * 2
+            )
 
         # only use the gates with which do not still require some validation from us to
         # ensure compatability
@@ -230,12 +244,35 @@ class EXAQC:
                 case "qubit_swap":
                     modified = qubit_swap(child)
 
+                case "grow_register":
+                    modified = grow_register(child)
+
+                case "shrink_register":
+                    modified = shrink_register(child)
+
             if modified:
                 # track the mutation that actually modified the child
                 child.metadata["generated_by"].append(mutation)
                 mutation_count += 1
 
         return child
+
+    def _child_input_qubits(self, parents):
+        """Input-qubit list for a crossover child.
+
+        Under register evolution parents can have grown/shrunk registers, so
+        constructing a child from `self.input_qubits` (the initial register)
+        would drop qubits referenced by inherited gates. Take the sorted
+        union of all parents' input_qubits instead. With register evolution
+        disabled this collapses to `self.input_qubits`.
+        """
+        if not self.allow_register_evolution:
+            return self.input_qubits.copy()
+
+        merged = set()
+        for parent in parents:
+            merged.update(parent.input_qubits)
+        return sorted(merged)
 
     def generate_genome(
         self,
@@ -302,7 +339,7 @@ class EXAQC:
                     child = CircuitGenome(
                         genome_number=None,
                         target=self.target,
-                        input_qubits=self.input_qubits.copy(),
+                        input_qubits=self._child_input_qubits(parents),
                         output_qubits=self.output_qubits.copy(),
                         metadata=metadata,
                     )
@@ -321,7 +358,7 @@ class EXAQC:
                     child = CircuitGenome(
                         genome_number=None,
                         target=self.target,
-                        input_qubits=self.input_qubits.copy(),
+                        input_qubits=self._child_input_qubits(parents),
                         output_qubits=self.output_qubits.copy(),
                         metadata=metadata,
                     )
@@ -337,7 +374,7 @@ class EXAQC:
                     child = CircuitGenome(
                         genome_number=None,
                         target=self.target,
-                        input_qubits=self.input_qubits.copy(),
+                        input_qubits=self._child_input_qubits(parents),
                         output_qubits=self.output_qubits.copy(),
                         metadata=metadata,
                     )

@@ -108,7 +108,11 @@ def qubit_swap(circuit: CircuitGenome, favor_enabled: bool = False) -> bool:
 
     # select a random gate, make a copy of it for the
     # mutation and disable the original one. Select an
-    # enabled gate if possible
+    # enabled gate if possible. Always draw from possible_gates so the
+    # selected gate is guaranteed to have at least one spare qubit to swap
+    # to (the !favor_enabled branch used to draw from circuit.gates, which
+    # under register evolution could pick a gate using every qubit in the
+    # shrunken register and leave selection_qubits empty).
     random_gate = None
     if favor_enabled:
         if len(possible_enabled_gates) > 0:
@@ -116,7 +120,7 @@ def qubit_swap(circuit: CircuitGenome, favor_enabled: bool = False) -> bool:
         else:
             random_gate = random.choice(possible_disabled_gates)
     else:
-        random_gate = random.choice(circuit.gates)
+        random_gate = random.choice(possible_gates)
 
     random_gate.enabled = False
 
@@ -135,6 +139,12 @@ def qubit_swap(circuit: CircuitGenome, favor_enabled: bool = False) -> bool:
     selection_qubits = circuit.qubits.copy()
     for qubit in new_gate.qubits:
         selection_qubits.remove(qubit)
+
+    if not selection_qubits:
+        # defensive: should be impossible given the possible_gates filter
+        # above, but keep it as a guard so a future regression downgrades
+        # to "skip this mutation" rather than crashing the whole sweep.
+        return False
 
     new_qubit = random.choice(selection_qubits)
     logger.debug(f"replacing qubit {replace_qubit} with {new_qubit}")
@@ -400,6 +410,80 @@ def add_gate(
     )
     circuit.sort_gates()
 
+    return True
+
+
+def grow_register(circuit: CircuitGenome, register_name: str = "q") -> bool:
+    """Add one qubit to the end of the named register.
+
+    The new qubit becomes a member of `circuit.qubits` and `circuit.input_qubits`
+    (so the encoder sees it on the next qnode rebuild). Output qubits are
+    unchanged — the measurement subset stays fixed by the classification task.
+    The new qubit starts unused; future mutations may place gates on it.
+
+    Args:
+        circuit: the CircuitGenome to mutate (in place).
+        register_name: which named register to grow. Defaults to "q", the
+            single register used by the Stage B / Stage C genome layout.
+
+    Returns:
+        True on success. False only if `register_name` is not present in the
+        genome (shouldn't happen for a normally-initialized genome).
+    """
+    register_indexes = [i for (name, i) in circuit.qubits if name == register_name]
+    if not register_indexes:
+        return False
+
+    new_qubit = (register_name, max(register_indexes) + 1)
+
+    circuit.qubits.append(new_qubit)
+    circuit.input_qubits.append(new_qubit)
+    # output_qubits intentionally unchanged
+
+    circuit.qubits.sort()
+    circuit.input_qubits.sort()
+    circuit.input_indexes = [circuit.qubits.index(q) for q in circuit.input_qubits]
+    circuit.output_indexes = [circuit.qubits.index(q) for q in circuit.output_qubits]
+    return True
+
+
+def shrink_register(circuit: CircuitGenome, register_name: str = "q") -> bool:
+    """Remove one qubit from the named register, preserving output qubits.
+
+    Picks a removable qubit (a qubit in the named register that is NOT in
+    `circuit.output_qubits`), removes it from `circuit.qubits` and
+    `circuit.input_qubits`, and DROPS every gate that referenced that
+    qubit.
+
+    Args:
+        circuit: the CircuitGenome to mutate (in place).
+        register_name: which named register to shrink.
+
+    Returns:
+        True if a qubit was removed. False if there's nothing safe to
+        remove (e.g., the only qubits in this register are output qubits).
+    """
+    removable = [
+        q for q in circuit.qubits
+        if q[0] == register_name and q not in circuit.output_qubits
+    ]
+    if not removable:
+        return False
+
+    victim = random.choice(removable)
+
+    # Dropping (not just disabling) is required so a later enable_gate
+    # mutation can't revive a gate that references a qubit no longer in
+    # the circuit. grow_register always allocates a fresh index (max+1),
+    # so a dropped qubit will never reappear and the gates are dead for good.
+    circuit.gates = [g for g in circuit.gates if victim not in g.qubits]
+
+    circuit.qubits.remove(victim)
+    if victim in circuit.input_qubits:
+        circuit.input_qubits.remove(victim)
+
+    circuit.input_indexes = [circuit.qubits.index(q) for q in circuit.input_qubits]
+    circuit.output_indexes = [circuit.qubits.index(q) for q in circuit.output_qubits]
     return True
 
 

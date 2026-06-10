@@ -63,6 +63,13 @@ GATE_COMPLEXITY = {
     "mcry": {"gate_count": 1, "cnot_count": 0, "rot_count": 1},
     "mcrz": {"gate_count": 1, "cnot_count": 0, "rot_count": 1},
     "cu": {"gate_count": 1, "cnot_count": 2, "rot_count": 6},
+    # Stage E encoder gates: feature-dependent R<axis>(a*x[i] + b). They cost
+    # one rotation gate apiece at the circuit level. The `a, b` are trainable
+    # scalars; the feature index is implicit (qubit_index % n_features) and
+    # not counted in rot_count.
+    "enc_ry": {"gate_count": 1, "cnot_count": 0, "rot_count": 1},
+    "enc_rx": {"gate_count": 1, "cnot_count": 0, "rot_count": 1},
+    "enc_rz": {"gate_count": 1, "cnot_count": 0, "rot_count": 1},
 }
 
 
