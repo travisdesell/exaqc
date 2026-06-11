@@ -338,7 +338,10 @@ class PennyLaneNoiseModel(BaseNoiseModel):
         - ``phase_flip``
         - ``amplitude_damping``
         - ``phase_damping``
+        - ``thermal_relaxation``
         - ``mixed``
+        - ``ibm_backend`` (routed to ``thermal_relaxation`` populated from
+          IBM backend stats)
 
         Args:
             wires:
@@ -346,9 +349,6 @@ class PennyLaneNoiseModel(BaseNoiseModel):
                 process should be inserted.
 
         Raises:
-            NotImplementedError:
-                If ``thermal_relaxation`` is requested.
-
             ValueError:
                 If an unsupported noise type is specified.
         """

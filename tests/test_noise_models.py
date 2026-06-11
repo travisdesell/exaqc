@@ -124,11 +124,28 @@ def test_pennylane_after_gate_respects_flag():
     assert probs.shape[0] == 2
 
 
-def test_pennylane_thermal_relaxation_not_implemented():
-    noise = PennyLaneNoiseModel(noise_type="thermal_relaxation", gamma=0.01)
+def test_pennylane_thermal_relaxation_applies_channel():
+    """thermal_relaxation was implemented as part of the NaN-at-measurement
+    fix (PennyLane's ThermalRelaxationError with t1/t2/gate_time clamped to
+    physical bounds). Previously this test asserted NotImplementedError;
+    now it verifies the channel applies cleanly inside a QNode."""
+    qml = pytest.importorskip("pennylane")
 
-    with pytest.raises(NotImplementedError):
+    noise = PennyLaneNoiseModel(noise_type="thermal_relaxation")
+
+    dev = qml.device("default.mixed", wires=1)
+
+    @qml.qnode(dev)
+    def circuit():
+        qml.Hadamard(wires=0)
         noise.apply_to_wires([0])
+        return qml.probs(wires=[0])
+
+    probs = circuit()
+
+    assert probs.shape[0] == 2
+    assert float(probs.sum()) == pytest.approx(1.0, abs=1e-6)
+    assert all(float(p) >= 0.0 for p in probs)
 
 
 @pytest.mark.skip(reason="Qiskit not yet implemented")
