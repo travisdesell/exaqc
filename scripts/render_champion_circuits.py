@@ -406,7 +406,9 @@ def render_one(stage: StageSpec, row: dict, out_dir: str) -> bool:
     title = "\n".join(t for t in _title(stage, row, n_features, n_classes, {}) if t)
     fig.suptitle(title, fontsize=9)
 
-    out_path = os.path.join(out_dir, f"{stage.name}_{dataset}.png")
+    stage_dir = os.path.join(out_dir, stage.name)
+    os.makedirs(stage_dir, exist_ok=True)
+    out_path = os.path.join(stage_dir, f"{dataset}.png")
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(
