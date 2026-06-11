@@ -240,10 +240,10 @@ if __name__ == "__main__":
     p.add_argument("--input_mode", default="angle", choices=["angle", "basis"])
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument(
-        "--epoch_strategy", 
-        type=str, 
-        default="const", 
-        choices=["const", "scaled", "rand"]
+        "--epoch_strategy",
+        type=str,
+        default="const",
+        choices=["const", "scaled", "rand"],
     )
     p.add_argument("--slope", type=float, default=1.0)
     p.add_argument("--exponent", type=float, default=1.0)

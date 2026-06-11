@@ -4,8 +4,6 @@ from __future__ import annotations
 from math import floor
 from unittest.mock import patch
 
-import pytest
-
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
 from src.circuits.registers import expand_registers
 from src.evolution.exaqc import EXAQC
@@ -36,7 +34,9 @@ def test_epoch_strategy_const():
 
 
 def test_epoch_strategy_scaled():
-    ex = _make_exaqc(epoch_strategy="scaled", slope=1.0, exponent=1.0, bp_min=0, bp_max=100)
+    ex = _make_exaqc(
+        epoch_strategy="scaled", slope=1.0, exponent=1.0, bp_min=0, bp_max=100
+    )
     ex.genome_number = 10
     expected = min(floor(1.0 * 10) + 0, 100)
     assert ex.get_hyperparameters()["epochs"] == expected
