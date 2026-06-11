@@ -71,10 +71,6 @@ class EXAQC:
                 will use a number of epochs that is scaled based on the number of genomes generated so far
                 and 'slope' and 'exponent' parameters to control the scaling rate and curvature of the scaling function,
                 and 'rand' which will use a random number of epochs between a minimum and maximum value.
-                options are 'const' which will use a constant number of epochs for all genomes, 'scaled' which 
-                will use a number of epochs that is scaled based on the number of genomes generated so far 
-                and 'slope' and 'exponent' parameters to control the scaling rate and curvature of the scaling function, and
-                'rand' which will use a random number of epochs between a minimum and maximum value.
             parent_strategy: specifies how many parents should be used for an n-ary crossover operation. current
                 options are 'uniform <min> <max>' which will select a number of mutations uniformly at random
                 between range(min, max), where min should be at least 2; or 'exponential <scale>' which will select the
