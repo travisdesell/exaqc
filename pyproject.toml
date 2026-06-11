@@ -29,4 +29,5 @@ dependencies = [
     "gymnasium",
     "gymnasium[mujoco]",
     "minigrid",
+    "python-dotenv",
 ]
