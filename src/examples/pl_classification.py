@@ -258,16 +258,16 @@ if __name__ == "__main__":
         required=True,
     )
     p.add_argument(
-        "--epoch_strategy", 
-        type=str, 
-        default="const", 
-        choices=["const", "scaled", "rand"]
+        "--epoch_strategy",
+        type=str,
+        default="const",
+        choices=["const", "scaled", "rand"],
     )
     p.add_argument("--slope", type=float, default=1.0)
     p.add_argument("--exponent", type=float, default=1.0)
     p.add_argument("--bp_min", type=int, default=0)
     p.add_argument("--bp_max", type=int, default=100)
-    
+
     subparsers = p.add_subparsers(
         dest="population_strategy",
         help="Specify how genomes will be handled.",

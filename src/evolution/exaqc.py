@@ -1,4 +1,3 @@
-from logging import NullHandler
 import random
 from math import floor
 
@@ -65,10 +64,10 @@ class EXAQC:
                 number of mutations using an exponential distribution with the given scale plus 1 to ensure at least
                 1 mutation happens.
             epoch_strategy: specifies how epochs are allocated to each new genomein the training process. current
-                options are 'const' which will use a constant number of epochs for all genomes, 'scaled' which 
-                will use a number of epochs that is scaled based on the number of genomes generated so far 
-                and 'slope' and 'exponent' parameters to control the scaling rate and curvature of the scaling function, and
-                'rand' which will use a random number of epochs between a minimum and maximum value.
+                options are 'const' which will use a constant number of epochs for all genomes, 'scaled' which
+                will use a number of epochs that is scaled based on the number of genomes generated so far
+                and 'slope' and 'exponent' parameters to control the scaling rate and curvature of the scaling function,
+                and 'rand' which will use a random number of epochs between a minimum and maximum value.
             input_registers: a dict of register names and sizes (the key is the qubit name, the value is its size). must
                 be specified if input_qubits is not specified.
             input_qubits: a list of qubit tuples (name, register_index) which would be the expanded form of the
@@ -212,9 +211,16 @@ class EXAQC:
         if self.epoch_strategy == "scaled":
             # scale epochs based on the number of genomes generated so far
             if self.bp_max > 0:
-                self.saved_epochs = min(floor(pow(self.slope * self.genome_number, self.exponent)) + self.bp_min, self.bp_max)
+                self.saved_epochs = min(
+                    floor(pow(self.slope * self.genome_number, self.exponent))
+                    + self.bp_min,
+                    self.bp_max,
+                )
             else:
-                self.saved_epochs = floor(pow(self.slope * self.genome_number, self.exponent)) + self.bp_min
+                self.saved_epochs = (
+                    floor(pow(self.slope * self.genome_number, self.exponent))
+                    + self.bp_min
+                )
         elif self.epoch_strategy == "rand":
             # use a random number of epochs between a minimum and maximum value
             self.saved_epochs = random.randint(self.bp_min, self.bp_max)
