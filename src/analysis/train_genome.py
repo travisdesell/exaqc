@@ -241,6 +241,16 @@ if __name__ == "__main__":
     )
 
     p.add_argument("--epochs", type=int, default=30)
+    p.add_argument(
+        "--epoch_strategy",
+        type=str,
+        default="const",
+        choices=["const", "scaled", "rand"],
+    )
+    p.add_argument("--slope", type=float, default=1.0)
+    p.add_argument("--exponent", type=float, default=1.0)
+    p.add_argument("--bp_min", type=int, default=0)
+    p.add_argument("--bp_max", type=int, default=100)
     p.add_argument("--learning_rate", "-lr", type=float, default=5e-4)
     p.add_argument(
         "--batch_size",

@@ -260,6 +260,22 @@ if __name__ == "__main__":
         nargs="+",
         required=True,
     )
+    p.add_argument(
+        "--epoch_strategy",
+        type=str,
+        default="const",
+        choices=["const", "scaled", "rand"],
+    )
+
+    subparsers = p.add_subparsers(
+        dest="population_strategy",
+        help="Specify how genomes will be handled.",
+        required=True,
+    )
+    p.add_argument("--slope", type=float, default=1.0)
+    p.add_argument("--exponent", type=float, default=1.0)
+    p.add_argument("--bp_min", type=int, default=0)
+    p.add_argument("--bp_max", type=int, default=100)
 
     p.add_argument(
         "--parent_strategy",
@@ -407,6 +423,11 @@ if __name__ == "__main__":
         objective=objective,
         hyperparameters=hyperparameters,
         mutation_strategy=args.mutation_strategy,
+        epoch_strategy=args.epoch_strategy,
+        slope=args.slope,
+        exponent=args.exponent,
+        bp_min=args.bp_min,
+        bp_max=args.bp_max,
         parent_strategy=args.parent_strategy,
         run_for=args.number_genomes,
         input_registers={"input": min(args.input_qubits, objective.input_size)},

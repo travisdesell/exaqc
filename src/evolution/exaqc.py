@@ -1,4 +1,6 @@
 import random
+from math import floor
+
 import numpy as np
 
 from loguru import logger
@@ -34,6 +36,11 @@ class EXAQC:
         objective: Objective,
         hyperparameters: dict[str, any],
         mutation_strategy: list[str] = None,
+        epoch_strategy: str = "const",
+        slope: float = 1.0,
+        exponent: float = 1.0,
+        bp_min: int = 0,
+        bp_max: int = -1,
         parent_strategy: list[str] = None,
         input_qubits: list[tuple[str, int]] = None,
         input_registers: dict[str, int] = None,
@@ -59,6 +66,11 @@ class EXAQC:
                 between range(min, max), where min should be at least 1; or 'exponential <scale>' which will select the
                 number of mutations using an exponential distribution with the given scale plus 1 to ensure at least
                 1 mutation happens.
+            epoch_strategy: specifies how epochs are allocated to each new genomein the training process. current
+                options are 'const' which will use a constant number of epochs for all genomes, 'scaled' which
+                will use a number of epochs that is scaled based on the number of genomes generated so far
+                and 'slope' and 'exponent' parameters to control the scaling rate and curvature of the scaling function,
+                and 'rand' which will use a random number of epochs between a minimum and maximum value.
             parent_strategy: specifies how many parents should be used for an n-ary crossover operation. current
                 options are 'uniform <min> <max>' which will select a number of mutations uniformly at random
                 between range(min, max), where min should be at least 2; or 'exponential <scale>' which will select the
@@ -145,6 +157,11 @@ class EXAQC:
         )
 
         self.saved_epochs = 10
+        self.epoch_strategy = epoch_strategy
+        self.slope = slope
+        self.exponent = exponent
+        self.bp_min = bp_min
+        self.bp_max = bp_max
         self.initial_genome.hyperparameters = self.get_hyperparameters()
 
     def validate_mutation_strategy(self, mutation_strategy: list[str]):
@@ -251,9 +268,30 @@ class EXAQC:
             hyperparameters for a newly created child
         """
 
-        if self.genome_number > 0 and self.genome_number % 100 == 0:
-            # increase epochs every 100 genomes
-            self.saved_epochs += 1
+        # early scaling strategy for epochs
+        # if self.genome_number > 0 and self.genome_number % 100 == 0:
+        #     # increase epochs every 100 genomes
+        #     self.saved_epochs += 1
+        # if self.genome_number > 0:
+        if self.epoch_strategy == "scaled":
+            # scale epochs based on the number of genomes generated so far
+            if self.bp_max > 0:
+                self.saved_epochs = min(
+                    floor(pow(self.slope * self.genome_number, self.exponent))
+                    + self.bp_min,
+                    self.bp_max,
+                )
+            else:
+                self.saved_epochs = (
+                    floor(pow(self.slope * self.genome_number, self.exponent))
+                    + self.bp_min
+                )
+        elif self.epoch_strategy == "rand":
+            # use a random number of epochs between a minimum and maximum value
+            self.saved_epochs = random.randint(self.bp_min, self.bp_max)
+        else:
+            # use a constant number of epochs
+            self.saved_epochs = self.bp_max
 
         # TODO: make an evolutionary strategy for handling hyperparameter options
         hyperparameters = self.hyperparameters.copy()
@@ -266,6 +304,13 @@ class EXAQC:
         """
         hyperparameters["learning_rate"] = 0.0010
         # hyperparameters["epochs"] = random.choice([5, 10])
+        hyperparameters["epochs"] = self.saved_epochs
+        print(f"saved_epochs: {self.saved_epochs}")
+        print(f"epoch_strategy: {self.epoch_strategy}")
+        print(f"slope: {self.slope}")
+        print(f"exponent: {self.exponent}")
+        print(f"bp_min: {self.bp_min}")
+        print(f"bp_max: {self.bp_max}")
         # hyperparameters["epochs"] = self.saved_epochs
         hyperparameters["epochs"] = 10
 
