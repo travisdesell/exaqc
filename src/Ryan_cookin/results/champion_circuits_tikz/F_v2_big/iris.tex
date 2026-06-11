@@ -1,0 +1,14 @@
+% stage F_v2_big, dataset iris, seed 0
+% D=4 features, N=5 qubits, K=3 classes. enc_gates=10, ansatz_gates=14, test_acc=0.967. enc_rot is a universal 1-qubit data-dependent gate (3 Euler angles, each its own affine function of one feature). enc_xx/yy/zz are 2-qubit Ising rotations whose angle is a linear combination of two feature components.
+% Compile with: pdflatex <this file>
+\documentclass[border=6pt]{standalone}
+\usepackage{quantikz}
+\begin{document}
+\begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
+\lstick{$q_{0}$} & \gate[3]{R_{XX}\!\left(a^{0}_{38} x_{0} + a^{1}_{38} x_{2} + b_{38}\right)} & \gate[2]{R_{XX}\!\left(a^{0}_{94} x_{0} + a^{1}_{94} x_{1} + b_{94}\right)} & \qw & \gate{R_x(-1.41)} & \qw & \ctrl{1} & \gate{R\!\left(\substack{a^{\alpha}_{3} x_{0} + b^{\alpha}_{3} \\ a^{\beta}_{3}  x_{0} + b^{\beta}_{3}  \\ a^{\gamma}_{3} x_{0} + b^{\gamma}_{3}}\right)} & \qw & \qw & \qw & \qw & \qw & \gate[2]{R_{YY}\!\left(a^{0}_{120} x_{1} + a^{1}_{120} x_{0} + b_{120}\right)} & \qw & \gate{R_z(-1.32)} & \gate[3]{R_{YY}\!\left(a^{0}_{57} x_{2} + a^{1}_{57} x_{0} + b_{57}\right)} & \qw & \gate{R_z(-0.55)} & \qw & \gate{R_y(+2.13)} & \gate[2]{R_{XX}\!\left(a^{0}_{145} x_{1} + a^{1}_{145} x_{0} + b_{145}\right)} & \qw & \ctrl{1} & \qw & \qw \\
+\lstick{$q_{1}$} &  &  & \gate[3]{R_{ZZ}\!\left(a^{0}_{109} x_{3} + a^{1}_{109} x_{1} + b_{109}\right)} & \qw & \qw & \control{} & \qw & \gate{R_x(+0.37)} & \ctrl{1} & \gate[3]{R_{ZZ}\!\left(a^{0}_{141} x_{3} + a^{1}_{141} x_{1} + b_{141}\right)} & \gate{R_z(+1.02)} & \gate[3]{R_{XX}\!\left(a^{0}_{70} x_{1} + a^{1}_{70} x_{3} + b_{70}\right)} &  & \gate{R_x(+2.92)} & \qw &  & \qw & \qw & \gate[2]{R_{XX}\!\left(a^{0}_{226} x_{1} + a^{1}_{226} x_{2} + b_{226}\right)} & \qw &  & \qw & \targ{} & \gate{R_y(-1.69)} & \qw \\
+\lstick{$q_{2}$} &  & \qw &  & \qw & \gate{R_y(+0.10)} & \qw & \qw & \qw & \control{} &  & \qw &  & \qw & \qw & \qw &  & \gate{R_z(+0.30)} & \qw &  & \qw & \qw & \gate{R_x(+2.30)} & \qw & \qw & \qw \\
+\lstick{$q_{3}$} & \qw & \qw &  & \qw & \qw & \qw & \qw & \qw & \qw &  & \qw &  & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{4}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw
+\end{quantikz}
+\end{document}

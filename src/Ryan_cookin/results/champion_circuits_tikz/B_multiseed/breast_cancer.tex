@@ -1,0 +1,15 @@
+% stage B_multiseed, dataset breast_cancer, seed 2
+% Encoder 'reupload_euler' (D=30, N=6) applies first; not expanded here. What follows is the evolved ansatz portion of the qnode. Enabled gates: 2, test_acc=0.974.
+% Compile with: pdflatex <this file>
+\documentclass[border=6pt]{standalone}
+\usepackage{quantikz}
+\begin{document}
+\begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
+\lstick{$q_{0}$} & \gate{\mathrm{sx}} & \gate{\mathrm{sx}} & \qw \\
+\lstick{$q_{1}$} & \qw & \qw & \qw \\
+\lstick{$q_{2}$} & \qw & \qw & \qw \\
+\lstick{$q_{3}$} & \qw & \qw & \qw \\
+\lstick{$q_{4}$} & \qw & \qw & \qw \\
+\lstick{$q_{5}$} & \qw & \qw & \qw
+\end{quantikz}
+\end{document}

@@ -1,0 +1,19 @@
+% stage B_multiseed, dataset seeds, seed 1
+% Encoder 'linear_proj' (D=7, N=10) applies first; not expanded here. What follows is the evolved ansatz portion of the qnode. Enabled gates: 1, test_acc=1.000.
+% Compile with: pdflatex <this file>
+\documentclass[border=6pt]{standalone}
+\usepackage{quantikz}
+\begin{document}
+\begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
+\lstick{$q_{0}$} & \qw & \qw \\
+\lstick{$q_{1}$} & \qw & \qw \\
+\lstick{$q_{2}$} & \qw & \qw \\
+\lstick{$q_{3}$} & \qw & \qw \\
+\lstick{$q_{4}$} & \gate{\mathrm{cswap}} & \qw \\
+\lstick{$q_{5}$} & \qw & \qw \\
+\lstick{$q_{6}$} & \qw & \qw \\
+\lstick{$q_{7}$} & \qw & \qw \\
+\lstick{$q_{8}$} & \qw & \qw \\
+\lstick{$q_{9}$} & \qw & \qw
+\end{quantikz}
+\end{document}

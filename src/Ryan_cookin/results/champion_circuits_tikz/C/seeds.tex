@@ -1,0 +1,13 @@
+% stage C, dataset seeds, seed 0
+% Encoder 'reupload_euler' (D=7, N=4) applies first; not expanded here. What follows is the evolved ansatz portion of the qnode. Enabled gates: 3, test_acc=1.000.
+% Compile with: pdflatex <this file>
+\documentclass[border=6pt]{standalone}
+\usepackage{quantikz}
+\begin{document}
+\begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
+\lstick{$q_{0}$} & \qw & \qw & \qw & \qw \\
+\lstick{$q_{1}$} & \gate{\mathrm{ccx}} & \qw & \qw & \qw \\
+\lstick{$q_{2}$} & \qw & \gate{\mathrm{iswap}} & \gate{\mathrm{iswap}} & \qw \\
+\lstick{$q_{3}$} & \qw & \qw & \qw & \qw
+\end{quantikz}
+\end{document}

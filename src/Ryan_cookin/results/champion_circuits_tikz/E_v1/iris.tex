@@ -1,0 +1,15 @@
+% stage E_v1, dataset iris, seed 0
+% D=4 features, N=6 qubits, K=3 classes. enc_gates=4, ansatz_gates=4, test_acc=0.700. enc_ry/rx/rz angles are learned linear functions of one feature (slope a, bias b per gate).
+% Compile with: pdflatex <this file>
+\documentclass[border=6pt]{standalone}
+\usepackage{quantikz}
+\begin{document}
+\begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
+\lstick{$q_{0}$} & \qw & \qw & \qw & \gate{R_x(a_{27}\, x_{0} + b_{27})} & \targ{} & \gate{R_x(a_{104}\, x_{0} + b_{104})} & \qw & \gate{R_y(+0.18)} & \qw \\
+\lstick{$q_{1}$} & \gate{R_y(a_{57}\, x_{1} + b_{57})} & \gate{R_x(a_{110}\, x_{1} + b_{110})} & \gate{R_y(+1.13)} & \qw & \ctrl{-1} & \qw & \gate{R_z(+3.08)} & \qw & \qw \\
+\lstick{$q_{2}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{3}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{4}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{5}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw
+\end{quantikz}
+\end{document}

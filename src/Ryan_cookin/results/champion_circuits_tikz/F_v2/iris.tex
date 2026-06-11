@@ -1,0 +1,16 @@
+% stage F_v2, dataset iris, seed 0
+% D=4 features, N=7 qubits, K=3 classes. enc_gates=7, ansatz_gates=7, test_acc=0.967. enc_rot is a universal 1-qubit data-dependent gate (3 Euler angles, each its own affine function of one feature). enc_xx/yy/zz are 2-qubit Ising rotations whose angle is a linear combination of two feature components.
+% Compile with: pdflatex <this file>
+\documentclass[border=6pt]{standalone}
+\usepackage{quantikz}
+\begin{document}
+\begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
+\lstick{$q_{0}$} & \gate[2]{R_{XX}\!\left(a^{0}_{85} x_{0} + a^{1}_{85} x_{1} + b_{85}\right)} & \qw & \qw & \ctrl{1} & \gate{R\!\left(\substack{a^{\alpha}_{37} x_{0} + b^{\alpha}_{37} \\ a^{\beta}_{37}  x_{0} + b^{\beta}_{37}  \\ a^{\gamma}_{37} x_{0} + b^{\gamma}_{37}}\right)} & \gate[3]{R_{ZZ}\!\left(a^{0}_{95} x_{2} + a^{1}_{95} x_{0} + b_{95}\right)} & \qw & \ctrl{1} & \gate[2]{R_{YY}\!\left(a^{0}_{64} x_{0} + a^{1}_{64} x_{1} + b_{64}\right)} & \gate{R_x(+4.44)} & \gate[4]{R_{ZZ}\!\left(a^{0}_{79} x_{0} + a^{1}_{79} x_{3} + b_{79}\right)} & \qw & \gate{R\!\left(\substack{a^{\alpha}_{32} x_{0} + b^{\alpha}_{32} \\ a^{\beta}_{32}  x_{0} + b^{\beta}_{32}  \\ a^{\gamma}_{32} x_{0} + b^{\gamma}_{32}}\right)} & \qw & \qw \\
+\lstick{$q_{1}$} &  & \gate[3]{R_{XX}\!\left(a^{0}_{63} x_{1} + a^{1}_{63} x_{3} + b_{63}\right)} & \qw & \targ{} & \qw &  & \gate{R_y(-2.98)} & \targ{} &  & \qw &  & \gate{R_y(+0.10)} & \qw & \gate{R_x(-0.13)} & \qw \\
+\lstick{$q_{2}$} & \qw &  & \qw & \qw & \qw &  & \qw & \qw & \qw & \qw &  & \qw & \qw & \qw & \qw \\
+\lstick{$q_{3}$} & \qw &  & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw &  & \qw & \qw & \qw & \qw \\
+\lstick{$q_{4}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{5}$} & \qw & \qw & \gate{R_y(+3.14)} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{6}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw
+\end{quantikz}
+\end{document}

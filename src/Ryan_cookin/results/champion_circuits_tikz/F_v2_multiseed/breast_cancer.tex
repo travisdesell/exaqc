@@ -1,0 +1,16 @@
+% stage F_v2_multiseed, dataset breast_cancer, seed 2
+% D=30 features, N=7 qubits, K=2 classes. enc_gates=4, ansatz_gates=0, test_acc=0.886. enc_rot is a universal 1-qubit data-dependent gate (3 Euler angles, each its own affine function of one feature). enc_xx/yy/zz are 2-qubit Ising rotations whose angle is a linear combination of two feature components.
+% Compile with: pdflatex <this file>
+\documentclass[border=6pt]{standalone}
+\usepackage{quantikz}
+\begin{document}
+\begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
+\lstick{$q_{0}$} & \qw & \gate{R\!\left(\substack{a^{\alpha}_{895} x_{0} + b^{\alpha}_{895} \\ a^{\beta}_{895}  x_{0} + b^{\beta}_{895}  \\ a^{\gamma}_{895} x_{0} + b^{\gamma}_{895}}\right)} & \gate[6]{R_{ZZ}\!\left(a^{0}_{918} x_{0} + a^{1}_{918} x_{5} + b_{918}\right)} & \gate{R\!\left(\substack{a^{\alpha}_{858} x_{0} + b^{\alpha}_{858} \\ a^{\beta}_{858}  x_{0} + b^{\beta}_{858}  \\ a^{\gamma}_{858} x_{0} + b^{\gamma}_{858}}\right)} & \qw \\
+\lstick{$q_{1}$} & \qw & \qw &  & \qw & \qw \\
+\lstick{$q_{2}$} & \qw & \qw &  & \qw & \qw \\
+\lstick{$q_{3}$} & \qw & \qw &  & \qw & \qw \\
+\lstick{$q_{4}$} & \qw & \qw &  & \qw & \qw \\
+\lstick{$q_{5}$} & \gate[2]{R_{YY}\!\left(a^{0}_{961} x_{5} + a^{1}_{961} x_{6} + b_{961}\right)} & \qw &  & \qw & \qw \\
+\lstick{$q_{6}$} &  & \qw & \qw & \qw & \qw
+\end{quantikz}
+\end{document}

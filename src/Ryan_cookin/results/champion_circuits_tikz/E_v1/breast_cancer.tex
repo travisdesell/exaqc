@@ -1,0 +1,15 @@
+% stage E_v1, dataset breast_cancer, seed 0
+% D=30 features, N=6 qubits, K=2 classes. enc_gates=5, ansatz_gates=2, test_acc=0.851. enc_ry/rx/rz angles are learned linear functions of one feature (slope a, bias b per gate).
+% Compile with: pdflatex <this file>
+\documentclass[border=6pt]{standalone}
+\usepackage{quantikz}
+\begin{document}
+\begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
+\lstick{$q_{0}$} & \gate{R_z(a_{425}\, x_{0} + b_{425})} & \gate{R_y(a_{404}\, x_{0} + b_{404})} & \gate{R_x(+0.67)} & \gate{R_y(a_{392}\, x_{0} + b_{392})} & \gate{R_z(+2.94)} & \gate{R_x(a_{407}\, x_{0} + b_{407})} & \gate{R_x(a_{406}\, x_{0} + b_{406})} & \qw \\
+\lstick{$q_{1}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{2}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{3}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{4}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{5}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw
+\end{quantikz}
+\end{document}

@@ -1,0 +1,15 @@
+% stage F_v2_multiseed, dataset iris, seed 2
+% D=4 features, N=6 qubits, K=3 classes. enc_gates=5, ansatz_gates=5, test_acc=1.000. enc_rot is a universal 1-qubit data-dependent gate (3 Euler angles, each its own affine function of one feature). enc_xx/yy/zz are 2-qubit Ising rotations whose angle is a linear combination of two feature components.
+% Compile with: pdflatex <this file>
+\documentclass[border=6pt]{standalone}
+\usepackage{quantikz}
+\begin{document}
+\begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
+\lstick{$q_{0}$} & \gate{R\!\left(\substack{a^{\alpha}_{174} x_{0} + b^{\alpha}_{174} \\ a^{\beta}_{174}  x_{0} + b^{\beta}_{174}  \\ a^{\gamma}_{174} x_{0} + b^{\gamma}_{174}}\right)} & \qw & \qw & \gate[2]{R_{XX}\!\left(a^{0}_{169} x_{1} + a^{1}_{169} x_{0} + b_{169}\right)} & \targ{} & \qw & \gate[3]{R_{XX}\!\left(a^{0}_{152} x_{0} + a^{1}_{152} x_{2} + b_{152}\right)} & \qw & \qw & \qw & \qw \\
+\lstick{$q_{1}$} & \qw & \gate{R_x(+2.82)} & \gate[2]{R_{XX}\!\left(a^{0}_{176} x_{2} + a^{1}_{176} x_{1} + b_{176}\right)} &  & \qw & \gate{R_x(+3.48)} &  & \gate{R_y(-0.01)} & \qw & \gate[3]{R_{XX}\!\left(a^{0}_{216} x_{3} + a^{1}_{216} x_{1} + b_{216}\right)} & \qw \\
+\lstick{$q_{2}$} & \qw & \qw &  & \qw & \qw & \qw &  & \qw & \gate{R_y(-1.68)} &  & \qw \\
+\lstick{$q_{3}$} & \qw & \qw & \qw & \qw & \ctrl{-3} & \qw & \qw & \qw & \qw &  & \qw \\
+\lstick{$q_{4}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{5}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw
+\end{quantikz}
+\end{document}

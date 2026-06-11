@@ -1,0 +1,14 @@
+% stage F_v2_multiseed, dataset wine, seed 1
+% D=13 features, N=5 qubits, K=3 classes. enc_gates=4, ansatz_gates=2, test_acc=0.833. enc_rot is a universal 1-qubit data-dependent gate (3 Euler angles, each its own affine function of one feature). enc_xx/yy/zz are 2-qubit Ising rotations whose angle is a linear combination of two feature components.
+% Compile with: pdflatex <this file>
+\documentclass[border=6pt]{standalone}
+\usepackage{quantikz}
+\begin{document}
+\begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
+\lstick{$q_{0}$} & \qw & \gate[2]{R_{XX}\!\left(a^{0}_{262} x_{0} + a^{1}_{262} x_{1} + b_{262}\right)} & \qw & \qw & \qw \\
+\lstick{$q_{1}$} & \qw &  & \qw & \gate{R_y(-0.05)} & \qw \\
+\lstick{$q_{2}$} & \qw & \qw & \gate[2]{R_{ZZ}\!\left(a^{0}_{292} x_{2} + a^{1}_{292} x_{3} + b_{292}\right)} & \qw & \qw \\
+\lstick{$q_{3}$} & \gate{R\!\left(\substack{a^{\alpha}_{341} x_{3} + b^{\alpha}_{341} \\ a^{\beta}_{341}  x_{3} + b^{\beta}_{341}  \\ a^{\gamma}_{341} x_{3} + b^{\gamma}_{341}}\right)} & \qw &  & \qw & \qw \\
+\lstick{$q_{4}$} & \qw & \qw & \qw & \qw & \qw
+\end{quantikz}
+\end{document}

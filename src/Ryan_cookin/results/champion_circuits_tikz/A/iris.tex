@@ -1,0 +1,17 @@
+% stage A, dataset iris, seed 0
+% Encoder 'learned' (D=4, N=8) applies first; not expanded here. Ansatz: per-qubit R_y + linear CNOT chain, depth=2. test_acc=0.967.
+% Compile with: pdflatex <this file>
+\documentclass[border=6pt]{standalone}
+\usepackage{quantikz}
+\begin{document}
+\begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
+\lstick{$q_{0}$} & \gate{R_y(\phi)} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \ctrl{1} & \qw & \qw & \qw & \qw & \qw & \qw & \gate{R_y(\phi)} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \ctrl{1} & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{1}$} & \qw & \gate{R_y(\phi)} & \qw & \qw & \qw & \qw & \qw & \qw & \targ{} & \ctrl{1} & \qw & \qw & \qw & \qw & \qw & \qw & \gate{R_y(\phi)} & \qw & \qw & \qw & \qw & \qw & \qw & \targ{} & \ctrl{1} & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{2}$} & \qw & \qw & \gate{R_y(\phi)} & \qw & \qw & \qw & \qw & \qw & \qw & \targ{} & \ctrl{1} & \qw & \qw & \qw & \qw & \qw & \qw & \gate{R_y(\phi)} & \qw & \qw & \qw & \qw & \qw & \qw & \targ{} & \ctrl{1} & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{3}$} & \qw & \qw & \qw & \gate{R_y(\phi)} & \qw & \qw & \qw & \qw & \qw & \qw & \targ{} & \ctrl{1} & \qw & \qw & \qw & \qw & \qw & \qw & \gate{R_y(\phi)} & \qw & \qw & \qw & \qw & \qw & \qw & \targ{} & \ctrl{1} & \qw & \qw & \qw & \qw \\
+\lstick{$q_{4}$} & \qw & \qw & \qw & \qw & \gate{R_y(\phi)} & \qw & \qw & \qw & \qw & \qw & \qw & \targ{} & \ctrl{1} & \qw & \qw & \qw & \qw & \qw & \qw & \gate{R_y(\phi)} & \qw & \qw & \qw & \qw & \qw & \qw & \targ{} & \ctrl{1} & \qw & \qw & \qw \\
+\lstick{$q_{5}$} & \qw & \qw & \qw & \qw & \qw & \gate{R_y(\phi)} & \qw & \qw & \qw & \qw & \qw & \qw & \targ{} & \ctrl{1} & \qw & \qw & \qw & \qw & \qw & \qw & \gate{R_y(\phi)} & \qw & \qw & \qw & \qw & \qw & \qw & \targ{} & \ctrl{1} & \qw & \qw \\
+\lstick{$q_{6}$} & \qw & \qw & \qw & \qw & \qw & \qw & \gate{R_y(\phi)} & \qw & \qw & \qw & \qw & \qw & \qw & \targ{} & \ctrl{1} & \qw & \qw & \qw & \qw & \qw & \qw & \gate{R_y(\phi)} & \qw & \qw & \qw & \qw & \qw & \qw & \targ{} & \ctrl{1} & \qw \\
+\lstick{$q_{7}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \gate{R_y(\phi)} & \qw & \qw & \qw & \qw & \qw & \qw & \targ{} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \gate{R_y(\phi)} & \qw & \qw & \qw & \qw & \qw & \qw & \targ{} & \qw
+\end{quantikz}
+\end{document}

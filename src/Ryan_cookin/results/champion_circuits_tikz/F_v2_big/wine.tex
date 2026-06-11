@@ -1,0 +1,16 @@
+% stage F_v2_big, dataset wine, seed 0
+% D=13 features, N=7 qubits, K=3 classes. enc_gates=9, ansatz_gates=8, test_acc=0.861. enc_rot is a universal 1-qubit data-dependent gate (3 Euler angles, each its own affine function of one feature). enc_xx/yy/zz are 2-qubit Ising rotations whose angle is a linear combination of two feature components.
+% Compile with: pdflatex <this file>
+\documentclass[border=6pt]{standalone}
+\usepackage{quantikz}
+\begin{document}
+\begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
+\lstick{$q_{0}$} & \qw & \qw & \gate{R\!\left(\substack{a^{\alpha}_{544} x_{0} + b^{\alpha}_{544} \\ a^{\beta}_{544}  x_{0} + b^{\beta}_{544}  \\ a^{\gamma}_{544} x_{0} + b^{\gamma}_{544}}\right)} & \qw & \gate{R_y(-5.75)} & \gate[4]{R_{YY}\!\left(a^{0}_{326} x_{3} + a^{1}_{326} x_{0} + b_{326}\right)} & \qw & \gate{R\!\left(\substack{a^{\alpha}_{567} x_{0} + b^{\alpha}_{567} \\ a^{\beta}_{567}  x_{0} + b^{\beta}_{567}  \\ a^{\gamma}_{567} x_{0} + b^{\gamma}_{567}}\right)} & \qw & \gate[2]{R_{XX}\!\left(a^{0}_{330} x_{0} + a^{1}_{330} x_{1} + b_{330}\right)} & \qw & \gate{R_y(-6.40)} & \gate{R_y(-3.91)} & \qw & \qw & \qw & \ctrl{1} & \qw \\
+\lstick{$q_{1}$} & \gate{R_y(+7.01)} & \gate[3]{R_{YY}\!\left(a^{0}_{343} x_{3} + a^{1}_{343} x_{1} + b_{343}\right)} & \qw & \qw & \qw &  & \qw & \qw & \gate[2]{R_{YY}\!\left(a^{0}_{568} x_{2} + a^{1}_{568} x_{1} + b_{568}\right)} &  & \gate[3]{R_{ZZ}\!\left(a^{0}_{360} x_{1} + a^{1}_{360} x_{3} + b_{360}\right)} & \qw & \qw & \ctrl{4} & \gate[2]{R_{XX}\!\left(a^{0}_{321} x_{2} + a^{1}_{321} x_{1} + b_{321}\right)} & \gate{R\!\left(\substack{a^{\alpha}_{543} x_{1} + b^{\alpha}_{543} \\ a^{\beta}_{543}  x_{1} + b^{\beta}_{543}  \\ a^{\gamma}_{543} x_{1} + b^{\gamma}_{543}}\right)} & \control{} & \qw \\
+\lstick{$q_{2}$} & \qw &  & \qw & \gate{R_y(-4.73)} & \qw &  & \qw & \qw &  & \qw &  & \qw & \qw & \qw &  & \qw & \qw & \qw \\
+\lstick{$q_{3}$} & \qw &  & \qw & \qw & \qw &  & \qw & \qw & \qw & \qw &  & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{4}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{5}$} & \qw & \qw & \qw & \qw & \qw & \qw & \gate{R_z(+1.40)} & \qw & \qw & \qw & \qw & \qw & \qw & \control{} & \qw & \qw & \qw & \qw \\
+\lstick{$q_{6}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw
+\end{quantikz}
+\end{document}

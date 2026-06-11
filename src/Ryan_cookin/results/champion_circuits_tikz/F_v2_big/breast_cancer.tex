@@ -1,0 +1,18 @@
+% stage F_v2_big, dataset breast_cancer, seed 0
+% D=30 features, N=9 qubits, K=2 classes. enc_gates=10, ansatz_gates=9, test_acc=0.912. enc_rot is a universal 1-qubit data-dependent gate (3 Euler angles, each its own affine function of one feature). enc_xx/yy/zz are 2-qubit Ising rotations whose angle is a linear combination of two feature components.
+% Compile with: pdflatex <this file>
+\documentclass[border=6pt]{standalone}
+\usepackage{quantikz}
+\begin{document}
+\begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
+\lstick{$q_{0}$} & \gate{R_x(+1.65)} & \qw & \qw & \gate{R_x(+2.40)} & \qw & \qw & \gate{R_y(-1.10)} & \gate{R\!\left(\substack{a^{\alpha}_{1063} x_{0} + b^{\alpha}_{1063} \\ a^{\beta}_{1063}  x_{0} + b^{\beta}_{1063}  \\ a^{\gamma}_{1063} x_{0} + b^{\gamma}_{1063}}\right)} & \gate{R\!\left(\substack{a^{\alpha}_{885} x_{0} + b^{\alpha}_{885} \\ a^{\beta}_{885}  x_{0} + b^{\beta}_{885}  \\ a^{\gamma}_{885} x_{0} + b^{\gamma}_{885}}\right)} & \gate[2]{R_{YY}\!\left(a^{0}_{1041} x_{1} + a^{1}_{1041} x_{0} + b_{1041}\right)} & \gate{R\!\left(\substack{a^{\alpha}_{1075} x_{0} + b^{\alpha}_{1075} \\ a^{\beta}_{1075}  x_{0} + b^{\beta}_{1075}  \\ a^{\gamma}_{1075} x_{0} + b^{\gamma}_{1075}}\right)} & \gate{R\!\left(\substack{a^{\alpha}_{967} x_{0} + b^{\alpha}_{967} \\ a^{\beta}_{967}  x_{0} + b^{\beta}_{967}  \\ a^{\gamma}_{967} x_{0} + b^{\gamma}_{967}}\right)} & \gate[4]{R_{ZZ}\!\left(a^{0}_{886} x_{3} + a^{1}_{886} x_{0} + b_{886}\right)} & \qw \\
+\lstick{$q_{1}$} & \qw & \qw & \qw & \qw & \gate{R\!\left(\substack{a^{\alpha}_{1064} x_{1} + b^{\alpha}_{1064} \\ a^{\beta}_{1064}  x_{1} + b^{\beta}_{1064}  \\ a^{\gamma}_{1064} x_{1} + b^{\gamma}_{1064}}\right)} & \targ{} & \qw & \qw & \qw &  & \qw & \qw &  & \qw \\
+\lstick{$q_{2}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw &  & \qw \\
+\lstick{$q_{3}$} & \qw & \gate{R_x(+3.05)} & \gate{R_x(-3.24)} & \qw & \qw & \ctrl{-2} & \qw & \qw & \qw & \qw & \qw & \qw &  & \qw \\
+\lstick{$q_{4}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{5}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{6}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{7}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{8}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw
+\end{quantikz}
+\end{document}

@@ -1,0 +1,13 @@
+% stage C_multiseed, dataset iris, seed 1
+% Encoder 'reupload_euler' (D=4, N=4) applies first; not expanded here. What follows is the evolved ansatz portion of the qnode. Enabled gates: 4, test_acc=1.000.
+% Compile with: pdflatex <this file>
+\documentclass[border=6pt]{standalone}
+\usepackage{quantikz}
+\begin{document}
+\begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
+\lstick{$q_{0}$} & \qw & \qw & \qw & \gate{\mathrm{sx}} & \qw \\
+\lstick{$q_{1}$} & \qw & \qw & \gate{\mathrm{ccx}} & \qw & \qw \\
+\lstick{$q_{2}$} & \gate{\mathrm{iswap}} & \qw & \qw & \qw & \qw \\
+\lstick{$q_{3}$} & \qw & \gate{\mathrm{cswap}} & \qw & \qw & \qw
+\end{quantikz}
+\end{document}

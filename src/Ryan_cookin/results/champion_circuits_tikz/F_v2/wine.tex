@@ -1,0 +1,16 @@
+% stage F_v2, dataset wine, seed 0
+% D=13 features, N=7 qubits, K=3 classes. enc_gates=7, ansatz_gates=4, test_acc=0.917. enc_rot is a universal 1-qubit data-dependent gate (3 Euler angles, each its own affine function of one feature). enc_xx/yy/zz are 2-qubit Ising rotations whose angle is a linear combination of two feature components.
+% Compile with: pdflatex <this file>
+\documentclass[border=6pt]{standalone}
+\usepackage{quantikz}
+\begin{document}
+\begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
+\lstick{$q_{0}$} & \ctrl{1} & \qw & \gate[2]{R_{XX}\!\left(a^{0}_{156} x_{1} + a^{1}_{156} x_{0} + b_{156}\right)} & \gate[4]{R_{YY}\!\left(a^{0}_{140} x_{3} + a^{1}_{140} x_{0} + b_{140}\right)} & \qw & \gate[2]{R_{YY}\!\left(a^{0}_{190} x_{1} + a^{1}_{190} x_{0} + b_{190}\right)} & \gate{R_x(+1.96)} & \gate{R\!\left(\substack{a^{\alpha}_{239} x_{0} + b^{\alpha}_{239} \\ a^{\beta}_{239}  x_{0} + b^{\beta}_{239}  \\ a^{\gamma}_{239} x_{0} + b^{\gamma}_{239}}\right)} & \gate[4]{R_{YY}\!\left(a^{0}_{235} x_{0} + a^{1}_{235} x_{3} + b_{235}\right)} & \gate{R_x(+1.54)} & \ctrl{1} & \qw \\
+\lstick{$q_{1}$} & \targ{} & \qw &  &  & \gate{R\!\left(\substack{a^{\alpha}_{147} x_{1} + b^{\alpha}_{147} \\ a^{\beta}_{147}  x_{1} + b^{\beta}_{147}  \\ a^{\gamma}_{147} x_{1} + b^{\gamma}_{147}}\right)} &  & \qw & \qw &  & \qw & \control{} & \qw \\
+\lstick{$q_{2}$} & \qw & \qw & \qw &  & \qw & \qw & \qw & \qw &  & \qw & \qw & \qw \\
+\lstick{$q_{3}$} & \qw & \gate{R\!\left(\substack{a^{\alpha}_{203} x_{3} + b^{\alpha}_{203} \\ a^{\beta}_{203}  x_{3} + b^{\beta}_{203}  \\ a^{\gamma}_{203} x_{3} + b^{\gamma}_{203}}\right)} & \qw &  & \qw & \qw & \qw & \qw &  & \qw & \qw & \qw \\
+\lstick{$q_{4}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{5}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{6}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw
+\end{quantikz}
+\end{document}
