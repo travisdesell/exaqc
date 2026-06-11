@@ -1,9 +1,23 @@
+"""
+This generates tables for mutation and crossover insertion rates and was used
+for the 2026 PPSN paper and GPTP book chapter, e.g.:
+
+```
+python3 -m src.analysis.analyze_genome_generation \
+    --input_directories ~/Data/2026_gptp_exaqc/breast_norepop/breast_cancer_i* \
+    --groups i1_p64 i2_p32 i4_p16 i8_p8 i16_p4 i32_p2 i64_p1
+```
+
+"""
+
 from __future__ import annotations
 
 import argparse
 import numpy as np
 import json
 import sys
+
+import matplotlib.pyplot as plt
 
 from loguru import logger
 from pathlib import Path
@@ -120,8 +134,22 @@ def get_group_metrics(
                 insert_type = metadata["insert_type"]
 
                 for gen_type in metadata["generated_by"]:
+                    """
+                    if gen_type == "n_ary_crossover":
+                        n_parents = len(metadata["parent_genomes"])
+
+                        gen_type = f"{n_parents}-ary crossover"
+
+                    if "crossover_type" in metadata.keys():
+                        gen_type = metadata["crossover_type"] + " " + gen_type
+                    """
+
                     if gen_type not in insert_counts:
                         insert_counts[gen_type] = {}
+                        insert_counts[gen_type]["inserted"] = 0
+                        insert_counts[gen_type]["discarded"] = 0
+                        insert_counts[gen_type]["global_best"] = 0
+                        insert_counts[gen_type]["local_best"] = 0
 
                     if "total" not in insert_counts[gen_type]:
                         insert_counts[gen_type]["total"] = 1
@@ -240,6 +268,8 @@ if __name__ == "__main__":
         input_counts = get_group_metrics(args.input_directories, metric)
     else:
 
+        all_bests = {}
+
         group_counts = {}
         for group in args.groups:
             (
@@ -248,8 +278,10 @@ if __name__ == "__main__":
                 overall_best_n_gates,
                 overall_best_n_parameters,
             ) = get_group_metrics(args.input_directories, metric, group)
+
             print(f"insert counts for '{group}' were: {insert_counts}")
             group_counts[group] = insert_counts
+            all_bests[group] = best_lists
 
         # create the summary table
 
@@ -277,33 +309,67 @@ if __name__ == "__main__":
         print("\\toprule")
         print(" &")
         for group in args.groups:
-            print(f" & {{\\bf {group} }}", end="")
+            cleaned_group = group.replace("_", "\\_")
+            print(f" & {{\\bf {cleaned_group} }}", end="")
         print("\\\\")
         print("\\midrule")
 
-        for operator in operators:
+        for operator in sorted(operators):
             cleaned_operator = operator.replace("n_ary", "n-ary").replace("_", "\\\\")
             global_best_line = (
-                f"\\multirowcell{{3}}{{{cleaned_operator}}} & global best"
+                f"\\multirowcell{{4}}{{{cleaned_operator}}} & global best"
             )
+            local_best_line = "& local best"
             inserted_line = "& inserted"
             discarded_line = "& discarded"
 
             for group in args.groups:
-                total_count = float(group_counts[group][operator]["total"])
-                global_best_p = (
-                    group_counts[group][operator]["global_best"] / total_count
-                )
-                inserted_p = group_counts[group][operator]["inserted"] / total_count
-                discarded_p = group_counts[group][operator]["discarded"] / total_count
 
-                global_best_line += f" & {global_best_p:.3f}"
-                inserted_line += f" & {inserted_p:.3f}"
-                discarded_line += f" & {discarded_p:.3f}"
+                if operator in group_counts[group]:
+                    total_count = float(group_counts[group][operator]["total"])
+                    global_best_p = (
+                        group_counts[group][operator]["global_best"] / total_count
+                    )
+                    local_best_p = (
+                        group_counts[group][operator]["local_best"] / total_count
+                    )
+                    inserted_p = group_counts[group][operator]["inserted"] / total_count
+                    discarded_p = (
+                        group_counts[group][operator]["discarded"] / total_count
+                    )
+
+                    global_best_line += f" & {global_best_p:.3f}"
+                    local_best_line += f" & {local_best_p:.3f}"
+                    inserted_line += f" & {inserted_p:.3f}"
+                    discarded_line += f" & {discarded_p:.3f}"
+
+                else:
+                    global_best_line += " & -"
+                    local_best_line += " & -"
+                    inserted_line += " & -"
+                    discarded_line += " & -"
 
             print(f"{global_best_line} \\\\")
+            print(f"{local_best_line} \\\\")
             print(f"{inserted_line}\\\\")
             print(f"{discarded_line} \\\\")
             print("\\hline")
 
         print("\\end{tabular}")
+
+        group_points = []
+
+        print("\n\n")
+        print("all_best lists:")
+        for group in args.groups:
+            print(f"{group} -- {all_bests[group]['test_acc']}")
+            group_points.append(all_bests[group]["test_acc"])
+
+        fig, ax = plt.subplots()
+        ax.set_ylabel("Accuracy (%)")
+
+        bplot = ax.boxplot(
+            group_points, patch_artist=True, tick_labels=args.groups  # fill with color
+        )  # will be used to label x-ticks
+
+        plt.show()
