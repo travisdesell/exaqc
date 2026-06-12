@@ -1,12 +1,16 @@
 % stage F_v1, dataset iris, seed 0
-% D=4 features, N=7 qubits, K=3 classes. enc_gates=3, ansatz_gates=11, test_acc=0.733. enc_rot is a universal 1-qubit data-dependent gate (3 Euler angles, each its own affine function of one feature). enc_xx/yy/zz are 2-qubit Ising rotations whose angle is a linear combination of two feature components.
+% D=4 features, N=7 qubits, K=3 classes. enc_gates=3, ansatz_gates=11, test_acc=0.733. enc_rot is a universal 1-qubit data-dependent gate (3 Euler angles, each its own affine function of one input component). enc_xx/yy/zz are 2-qubit Ising rotations whose angle is a linear combination of two input components. x_i (and x_j for 2-qubit gates) in the formulas below are generic input symbols; the legend states which components they resolve to per gate.
+% Feature mapping per encoder gate (x_i / x_j -> concrete component of x):
+%   gate 47 (enc_rot, q1): x_i = x_1
+%   gate 41 (enc_rot, q1): x_i = x_1
+%   gate 43 (enc_rot, q0): x_i = x_0
 % Compile with: pdflatex <this file>
 \documentclass[border=6pt]{standalone}
 \usepackage{quantikz}
 \begin{document}
 \begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
-\lstick{$q_{0}$} & \ctrl{1} & \qw & \gate[2]{R_{XX}(-2.05)} & \qw & \qw & \qw & \qw & \qw & \ctrl{1} & \qw & \gate[2]{R_{YY}(+0.13)} & \gate[2]{R_{YY}(+1.07)} & \gate[2]{R_{XX}(-2.41)} & \gate{R\!\left(\substack{a^{\alpha}_{43} x_{0} + b^{\alpha}_{43} \\ a^{\beta}_{43}  x_{0} + b^{\beta}_{43}  \\ a^{\gamma}_{43} x_{0} + b^{\gamma}_{43}}\right)} & \qw \\
-\lstick{$q_{1}$} & \targ{} & \gate{R\!\left(\substack{a^{\alpha}_{47} x_{1} + b^{\alpha}_{47} \\ a^{\beta}_{47}  x_{1} + b^{\beta}_{47}  \\ a^{\gamma}_{47} x_{1} + b^{\gamma}_{47}}\right)} &  & \gate{R_x(+1.26)} & \qw & \gate{R\!\left(\substack{a^{\alpha}_{41} x_{1} + b^{\alpha}_{41} \\ a^{\beta}_{41}  x_{1} + b^{\beta}_{41}  \\ a^{\gamma}_{41} x_{1} + b^{\gamma}_{41}}\right)} & \gate{R_z(-1.88)} & \gate{R_z(+2.40)} & \control{} & \gate{R_y(-0.66)} &  &  &  & \qw & \qw \\
+\lstick{$q_{0}$} & \ctrl{1} & \qw & \gate[2]{R_{XX}(-2.05)} & \qw & \qw & \qw & \qw & \qw & \ctrl{1} & \qw & \gate[2]{R_{YY}(+0.13)} & \gate[2]{R_{YY}(+1.07)} & \gate[2]{R_{XX}(-2.41)} & \gate{R\!\left(\substack{a^{\alpha}_{43} x_i + b^{\alpha}_{43} \\ a^{\beta}_{43}  x_i + b^{\beta}_{43}  \\ a^{\gamma}_{43} x_i + b^{\gamma}_{43}}\right)} & \qw \\
+\lstick{$q_{1}$} & \targ{} & \gate{R\!\left(\substack{a^{\alpha}_{47} x_i + b^{\alpha}_{47} \\ a^{\beta}_{47}  x_i + b^{\beta}_{47}  \\ a^{\gamma}_{47} x_i + b^{\gamma}_{47}}\right)} &  & \gate{R_x(+1.26)} & \qw & \gate{R\!\left(\substack{a^{\alpha}_{41} x_i + b^{\alpha}_{41} \\ a^{\beta}_{41}  x_i + b^{\beta}_{41}  \\ a^{\gamma}_{41} x_i + b^{\gamma}_{41}}\right)} & \gate{R_z(-1.88)} & \gate{R_z(+2.40)} & \control{} & \gate{R_y(-0.66)} &  &  &  & \qw & \qw \\
 \lstick{$q_{2}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
 \lstick{$q_{3}$} & \qw & \qw & \qw & \qw & \gate{R_y(-0.34)} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
 \lstick{$q_{4}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\

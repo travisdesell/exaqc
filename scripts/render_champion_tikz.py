@@ -105,25 +105,30 @@ STAGES: list[StageSpec] = [
 
 # ---------- Gate -> LaTeX label --------------------------------------------
 
-def _label_enc_ry(inn, fi): return rf"R_y(a_{{{inn}}}\, x_{{{fi}}} + b_{{{inn}}})"
-def _label_enc_rx(inn, fi): return rf"R_x(a_{{{inn}}}\, x_{{{fi}}} + b_{{{inn}}})"
-def _label_enc_rz(inn, fi): return rf"R_z(a_{{{inn}}}\, x_{{{fi}}} + b_{{{inn}}})"
+# Encoder gate labels use the abstract symbol x_i (generic input variable);
+# the concrete feature index that each gate reads is recorded in the header
+# legend instead so the formulas in the figure stay general.
+
+def _label_enc_ry(inn, fi): return rf"R_y(a_{{{inn}}}\, x_i + b_{{{inn}}})"
+def _label_enc_rx(inn, fi): return rf"R_x(a_{{{inn}}}\, x_i + b_{{{inn}}})"
+def _label_enc_rz(inn, fi): return rf"R_z(a_{{{inn}}}\, x_i + b_{{{inn}}})"
 
 def _label_enc_rot(inn, fi):
-    # Three Euler angles, each a learned linear function of x[fi].
+    # Three Euler angles, each a learned linear function of x_i.
     return (
         rf"R\!\left(\substack{{"
-        rf"a^{{\alpha}}_{{{inn}}} x_{{{fi}}} + b^{{\alpha}}_{{{inn}}} \\ "
-        rf"a^{{\beta}}_{{{inn}}}  x_{{{fi}}} + b^{{\beta}}_{{{inn}}}  \\ "
-        rf"a^{{\gamma}}_{{{inn}}} x_{{{fi}}} + b^{{\gamma}}_{{{inn}}}"
+        rf"a^{{\alpha}}_{{{inn}}} x_i + b^{{\alpha}}_{{{inn}}} \\ "
+        rf"a^{{\beta}}_{{{inn}}}  x_i + b^{{\beta}}_{{{inn}}}  \\ "
+        rf"a^{{\gamma}}_{{{inn}}} x_i + b^{{\gamma}}_{{{inn}}}"
         rf"}}\right)"
     )
 
 def _label_enc_2q(axis, inn, fi0, fi1):
+    # x_i, x_j are two distinct feature components; mapping in the header legend.
     return (
         rf"R_{{{axis}}}\!\left("
-        rf"a^{{0}}_{{{inn}}} x_{{{fi0}}} + "
-        rf"a^{{1}}_{{{inn}}} x_{{{fi1}}} + "
+        rf"a^{{0}}_{{{inn}}} x_i + "
+        rf"a^{{1}}_{{{inn}}} x_j + "
         rf"b_{{{inn}}}\right)"
     )
 
@@ -305,6 +310,29 @@ def render_stage_B_or_C(meta, n_features, n_classes) -> tuple[str, str]:
     return body, note
 
 
+def _gate_legend(genome, n_features: int) -> str:
+    """List, per encoder gate, which feature x_i / x_j actually resolves to.
+
+    enc_ry/rx/rz/rot are 1-qubit gates that read x_{q % D}.
+    enc_xx/yy/zz are 2-qubit gates that read (x_{q0 % D}, x_{q1 % D}).
+    """
+    lines = []
+    for g in [g for g in genome.gates if g.enabled]:
+        m = g.method_name
+        if m in ("enc_ry", "enc_rx", "enc_rz", "enc_rot"):
+            q = g.qubits[0][1]
+            lines.append(f"  gate {g.innovation_number} ({m}, q{q}): x_i = x_{q % n_features}")
+        elif m in ("enc_xx", "enc_yy", "enc_zz"):
+            q0 = g.qubits[0][1]; q1 = g.qubits[1][1]
+            lines.append(
+                f"  gate {g.innovation_number} ({m}, q{q0},q{q1}): "
+                f"x_i = x_{q0 % n_features}, x_j = x_{q1 % n_features}"
+            )
+    if not lines:
+        return ""
+    return "Feature mapping per encoder gate (x_i / x_j -> concrete component of x):\n" + "\n".join(lines)
+
+
 def render_stage_E(meta, n_features, n_classes) -> tuple[str, str]:
     import src.Ryan_cookin.stage_e as _s
     _s._register_encoder_gate_specs()
@@ -316,9 +344,14 @@ def render_stage_E(meta, n_features, n_classes) -> tuple[str, str]:
         f"enc_gates={meta.get('n_enc_gates','?')}, "
         f"ansatz_gates={meta.get('n_ansatz_gates','?')}, "
         f"test_acc={meta['test_acc']:.3f}. "
-        "enc_ry/rx/rz angles are learned linear functions of one feature "
-        "(slope a, bias b per gate)."
+        "enc_ry/rx/rz angles are learned linear functions of one input "
+        "component (slope a, bias b per gate). x_i in the formulas below "
+        "denotes a single component of the scaled input vector x; the legend "
+        "below states which component for each gate."
     )
+    legend = _gate_legend(genome, n_features)
+    if legend:
+        note = note + "\n" + legend
     return body, note
 
 
@@ -334,10 +367,15 @@ def render_stage_F(meta, n_features, n_classes) -> tuple[str, str]:
         f"ansatz_gates={meta.get('n_ansatz_gates','?')}, "
         f"test_acc={meta['test_acc']:.3f}. "
         "enc_rot is a universal 1-qubit data-dependent gate (3 Euler angles, "
-        "each its own affine function of one feature). enc_xx/yy/zz are "
-        "2-qubit Ising rotations whose angle is a linear combination of two "
-        "feature components."
+        "each its own affine function of one input component). enc_xx/yy/zz "
+        "are 2-qubit Ising rotations whose angle is a linear combination of "
+        "two input components. x_i (and x_j for 2-qubit gates) in the "
+        "formulas below are generic input symbols; the legend states which "
+        "components they resolve to per gate."
     )
+    legend = _gate_legend(genome, n_features)
+    if legend:
+        note = note + "\n" + legend
     return body, note
 
 

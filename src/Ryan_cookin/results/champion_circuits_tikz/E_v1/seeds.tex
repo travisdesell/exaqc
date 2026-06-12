@@ -1,12 +1,17 @@
 % stage E_v1, dataset seeds, seed 0
-% D=7 features, N=5 qubits, K=3 classes. enc_gates=5, ansatz_gates=3, test_acc=0.833. enc_ry/rx/rz angles are learned linear functions of one feature (slope a, bias b per gate).
+% D=7 features, N=5 qubits, K=3 classes. enc_gates=5, ansatz_gates=3, test_acc=0.833. enc_ry/rx/rz angles are learned linear functions of one input component (slope a, bias b per gate). x_i in the formulas below denotes a single component of the scaled input vector x; the legend below states which component for each gate.
+% Feature mapping per encoder gate (x_i / x_j -> concrete component of x):
+%   gate 312 (enc_rz, q0): x_i = x_0
+%   gate 257 (enc_rx, q1): x_i = x_1
+%   gate 287 (enc_rx, q0): x_i = x_0
+%   gate 260 (enc_rx, q1): x_i = x_1
 % Compile with: pdflatex <this file>
 \documentclass[border=6pt]{standalone}
 \usepackage{quantikz}
 \begin{document}
 \begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
-\lstick{$q_{0}$} & \gate{R_z(a_{312}\, x_{0} + b_{312})} & \qw & \ctrl{1} & \gate{R_x(a_{287}\, x_{0} + b_{287})} & \gate{R_y(+2.91)} & \qw & \gate{R_y(+3.42)} & \qw \\
-\lstick{$q_{1}$} & \qw & \gate{R_x(a_{257}\, x_{1} + b_{257})} & \control{} & \qw & \qw & \gate{R_x(a_{260}\, x_{1} + b_{260})} & \qw & \qw \\
+\lstick{$q_{0}$} & \gate{R_z(a_{312}\, x_i + b_{312})} & \qw & \ctrl{1} & \gate{R_x(a_{287}\, x_i + b_{287})} & \gate{R_y(+2.91)} & \qw & \gate{R_y(+3.42)} & \qw \\
+\lstick{$q_{1}$} & \qw & \gate{R_x(a_{257}\, x_i + b_{257})} & \control{} & \qw & \qw & \gate{R_x(a_{260}\, x_i + b_{260})} & \qw & \qw \\
 \lstick{$q_{2}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
 \lstick{$q_{3}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
 \lstick{$q_{4}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw

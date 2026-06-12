@@ -1,11 +1,13 @@
 % stage F_v1, dataset breast_cancer, seed 0
-% D=30 features, N=5 qubits, K=2 classes. enc_gates=3, ansatz_gates=4, test_acc=0.842. enc_rot is a universal 1-qubit data-dependent gate (3 Euler angles, each its own affine function of one feature). enc_xx/yy/zz are 2-qubit Ising rotations whose angle is a linear combination of two feature components.
+% D=30 features, N=5 qubits, K=2 classes. enc_gates=3, ansatz_gates=4, test_acc=0.842. enc_rot is a universal 1-qubit data-dependent gate (3 Euler angles, each its own affine function of one input component). enc_xx/yy/zz are 2-qubit Ising rotations whose angle is a linear combination of two input components. x_i (and x_j for 2-qubit gates) in the formulas below are generic input symbols; the legend states which components they resolve to per gate.
+% Feature mapping per encoder gate (x_i / x_j -> concrete component of x):
+%   gate 399 (enc_rot, q0): x_i = x_0
 % Compile with: pdflatex <this file>
 \documentclass[border=6pt]{standalone}
 \usepackage{quantikz}
 \begin{document}
 \begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
-\lstick{$q_{0}$} & \gate{R_x(-1.67)} & \gate{R_x(-3.74)} & \gate{R\!\left(\substack{a^{\alpha}_{399} x_{0} + b^{\alpha}_{399} \\ a^{\beta}_{399}  x_{0} + b^{\beta}_{399}  \\ a^{\gamma}_{399} x_{0} + b^{\gamma}_{399}}\right)} & \qw \\
+\lstick{$q_{0}$} & \gate{R_x(-1.67)} & \gate{R_x(-3.74)} & \gate{R\!\left(\substack{a^{\alpha}_{399} x_i + b^{\alpha}_{399} \\ a^{\beta}_{399}  x_i + b^{\beta}_{399}  \\ a^{\gamma}_{399} x_i + b^{\gamma}_{399}}\right)} & \qw \\
 \lstick{$q_{1}$} & \qw & \qw & \qw & \qw \\
 \lstick{$q_{2}$} & \qw & \qw & \qw & \qw \\
 \lstick{$q_{3}$} & \qw & \qw & \qw & \qw \\

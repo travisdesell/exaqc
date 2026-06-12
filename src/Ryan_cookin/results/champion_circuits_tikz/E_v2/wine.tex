@@ -1,12 +1,22 @@
 % stage E_v2, dataset wine, seed 0
-% D=13 features, N=7 qubits, K=3 classes. enc_gates=10, ansatz_gates=8, test_acc=0.806. enc_ry/rx/rz angles are learned linear functions of one feature (slope a, bias b per gate).
+% D=13 features, N=7 qubits, K=3 classes. enc_gates=10, ansatz_gates=8, test_acc=0.806. enc_ry/rx/rz angles are learned linear functions of one input component (slope a, bias b per gate). x_i in the formulas below denotes a single component of the scaled input vector x; the legend below states which component for each gate.
+% Feature mapping per encoder gate (x_i / x_j -> concrete component of x):
+%   gate 406 (enc_rx, q1): x_i = x_1
+%   gate 389 (enc_ry, q1): x_i = x_1
+%   gate 296 (enc_rx, q0): x_i = x_0
+%   gate 558 (enc_rz, q1): x_i = x_1
+%   gate 348 (enc_rz, q1): x_i = x_1
+%   gate 403 (enc_ry, q1): x_i = x_1
+%   gate 402 (enc_rx, q0): x_i = x_0
+%   gate 414 (enc_rx, q1): x_i = x_1
+%   gate 311 (enc_rx, q1): x_i = x_1
 % Compile with: pdflatex <this file>
 \documentclass[border=6pt]{standalone}
 \usepackage{quantikz}
 \begin{document}
 \begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
-\lstick{$q_{0}$} & \qw & \qw & \qw & \ctrl{1} & \gate{R_x(a_{296}\, x_{0} + b_{296})} & \qw & \ctrl{1} & \qw & \qw & \gate{R_x(a_{402}\, x_{0} + b_{402})} & \qw & \ctrl{1} & \qw & \gate{R_y(+3.60)} & \qw & \qw & \qw \\
-\lstick{$q_{1}$} & \gate{R_y(-1.21)} & \gate{R_x(a_{406}\, x_{1} + b_{406})} & \gate{R_y(a_{389}\, x_{1} + b_{389})} & \control{} & \qw & \gate{R_z(a_{558}\, x_{1} + b_{558})} & \targ{} & \gate{R_z(a_{348}\, x_{1} + b_{348})} & \gate{R_y(a_{403}\, x_{1} + b_{403})} & \qw & \gate{R_x(a_{414}\, x_{1} + b_{414})} & \control{} & \gate{R_x(a_{311}\, x_{1} + b_{311})} & \qw & \qw & \gate{R_y(+0.98)} & \qw \\
+\lstick{$q_{0}$} & \qw & \qw & \qw & \ctrl{1} & \gate{R_x(a_{296}\, x_i + b_{296})} & \qw & \ctrl{1} & \qw & \qw & \gate{R_x(a_{402}\, x_i + b_{402})} & \qw & \ctrl{1} & \qw & \gate{R_y(+3.60)} & \qw & \qw & \qw \\
+\lstick{$q_{1}$} & \gate{R_y(-1.21)} & \gate{R_x(a_{406}\, x_i + b_{406})} & \gate{R_y(a_{389}\, x_i + b_{389})} & \control{} & \qw & \gate{R_z(a_{558}\, x_i + b_{558})} & \targ{} & \gate{R_z(a_{348}\, x_i + b_{348})} & \gate{R_y(a_{403}\, x_i + b_{403})} & \qw & \gate{R_x(a_{414}\, x_i + b_{414})} & \control{} & \gate{R_x(a_{311}\, x_i + b_{311})} & \qw & \qw & \gate{R_y(+0.98)} & \qw \\
 \lstick{$q_{2}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \gate{R_y(-1.51)} & \qw & \qw \\
 \lstick{$q_{3}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
 \lstick{$q_{4}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\

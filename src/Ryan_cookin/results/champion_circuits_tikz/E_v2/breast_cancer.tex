@@ -1,15 +1,21 @@
 % stage E_v2, dataset breast_cancer, seed 0
-% D=30 features, N=6 qubits, K=2 classes. enc_gates=5, ansatz_gates=5, test_acc=0.877. enc_ry/rx/rz angles are learned linear functions of one feature (slope a, bias b per gate).
+% D=30 features, N=6 qubits, K=2 classes. enc_gates=5, ansatz_gates=5, test_acc=0.877. enc_ry/rx/rz angles are learned linear functions of one input component (slope a, bias b per gate). x_i in the formulas below denotes a single component of the scaled input vector x; the legend below states which component for each gate.
+% Feature mapping per encoder gate (x_i / x_j -> concrete component of x):
+%   gate 1023 (enc_ry, q0): x_i = x_0
+%   gate 894 (enc_rx, q0): x_i = x_0
+%   gate 908 (enc_ry, q0): x_i = x_0
+%   gate 1187 (enc_rx, q4): x_i = x_4
+%   gate 909 (enc_rx, q0): x_i = x_0
 % Compile with: pdflatex <this file>
 \documentclass[border=6pt]{standalone}
 \usepackage{quantikz}
 \begin{document}
 \begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
-\lstick{$q_{0}$} & \gate{R_y(+0.69)} & \gate{R_y(a_{1023}\, x_{0} + b_{1023})} & \gate{R_z(+1.98)} & \gate{R_x(a_{894}\, x_{0} + b_{894})} & \gate{R_y(a_{908}\, x_{0} + b_{908})} & \qw & \qw & \gate{R_x(a_{909}\, x_{0} + b_{909})} & \qw & \gate{R_y(+2.25)} & \qw \\
+\lstick{$q_{0}$} & \gate{R_y(+0.69)} & \gate{R_y(a_{1023}\, x_i + b_{1023})} & \gate{R_z(+1.98)} & \gate{R_x(a_{894}\, x_i + b_{894})} & \gate{R_y(a_{908}\, x_i + b_{908})} & \qw & \qw & \gate{R_x(a_{909}\, x_i + b_{909})} & \qw & \gate{R_y(+2.25)} & \qw \\
 \lstick{$q_{1}$} & \qw & \qw & \qw & \qw & \qw & \qw & \ctrl{2} & \qw & \qw & \qw & \qw \\
 \lstick{$q_{2}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
 \lstick{$q_{3}$} & \qw & \qw & \qw & \qw & \qw & \qw & \control{} & \qw & \qw & \qw & \qw \\
-\lstick{$q_{4}$} & \qw & \qw & \qw & \qw & \qw & \gate{R_x(a_{1187}\, x_{4} + b_{1187})} & \qw & \qw & \gate{R_y(+2.24)} & \qw & \qw \\
+\lstick{$q_{4}$} & \qw & \qw & \qw & \qw & \qw & \gate{R_x(a_{1187}\, x_i + b_{1187})} & \qw & \qw & \gate{R_y(+2.24)} & \qw & \qw \\
 \lstick{$q_{5}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw
 \end{quantikz}
 \end{document}

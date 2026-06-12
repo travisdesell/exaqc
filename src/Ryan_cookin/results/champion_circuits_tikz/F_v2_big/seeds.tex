@@ -1,16 +1,25 @@
 % stage F_v2_big, dataset seeds, seed 0
-% D=7 features, N=9 qubits, K=3 classes. enc_gates=8, ansatz_gates=9, test_acc=0.857. enc_rot is a universal 1-qubit data-dependent gate (3 Euler angles, each its own affine function of one feature). enc_xx/yy/zz are 2-qubit Ising rotations whose angle is a linear combination of two feature components.
+% D=7 features, N=9 qubits, K=3 classes. enc_gates=8, ansatz_gates=9, test_acc=0.857. enc_rot is a universal 1-qubit data-dependent gate (3 Euler angles, each its own affine function of one input component). enc_xx/yy/zz are 2-qubit Ising rotations whose angle is a linear combination of two input components. x_i (and x_j for 2-qubit gates) in the formulas below are generic input symbols; the legend states which components they resolve to per gate.
+% Feature mapping per encoder gate (x_i / x_j -> concrete component of x):
+%   gate 695 (enc_xx, q3,q4): x_i = x_3, x_j = x_4
+%   gate 637 (enc_xx, q3,q1): x_i = x_3, x_j = x_1
+%   gate 613 (enc_xx, q0,q2): x_i = x_0, x_j = x_2
+%   gate 582 (enc_xx, q0,q1): x_i = x_0, x_j = x_1
+%   gate 639 (enc_xx, q3,q1): x_i = x_3, x_j = x_1
+%   gate 783 (enc_xx, q5,q6): x_i = x_5, x_j = x_6
+%   gate 636 (enc_xx, q2,q1): x_i = x_2, x_j = x_1
+%   gate 632 (enc_yy, q2,q0): x_i = x_2, x_j = x_0
 % Compile with: pdflatex <this file>
 \documentclass[border=6pt]{standalone}
 \usepackage{quantikz}
 \begin{document}
 \begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
-\lstick{$q_{0}$} & \qw & \qw & \qw & \gate[3]{R_{XX}\!\left(a^{0}_{613} x_{0} + a^{1}_{613} x_{2} + b_{613}\right)} & \gate[2]{R_{XX}\!\left(a^{0}_{582} x_{0} + a^{1}_{582} x_{1} + b_{582}\right)} & \qw & \qw & \qw & \qw & \gate{R_x(+0.03)} & \gate[3]{R_{YY}\!\left(a^{0}_{632} x_{2} + a^{1}_{632} x_{0} + b_{632}\right)} & \targ{} & \gate{R_y(-1.56)} & \targ{} & \targ{} & \gate{R_y(+1.55)} & \qw & \qw \\
-\lstick{$q_{1}$} & \qw & \qw & \gate[3]{R_{XX}\!\left(a^{0}_{637} x_{3} + a^{1}_{637} x_{1} + b_{637}\right)} &  &  & \gate[3]{R_{XX}\!\left(a^{0}_{639} x_{3} + a^{1}_{639} x_{1} + b_{639}\right)} & \qw & \gate[2]{R_{XX}\!\left(a^{0}_{636} x_{2} + a^{1}_{636} x_{1} + b_{636}\right)} & \qw & \qw &  & \qw & \qw & \qw & \ctrl{-1} & \qw & \gate{R_x(-0.01)} & \qw \\
+\lstick{$q_{0}$} & \qw & \qw & \qw & \gate[3]{R_{XX}\!\left(a^{0}_{613} x_i + a^{1}_{613} x_j + b_{613}\right)} & \gate[2]{R_{XX}\!\left(a^{0}_{582} x_i + a^{1}_{582} x_j + b_{582}\right)} & \qw & \qw & \qw & \qw & \gate{R_x(+0.03)} & \gate[3]{R_{YY}\!\left(a^{0}_{632} x_i + a^{1}_{632} x_j + b_{632}\right)} & \targ{} & \gate{R_y(-1.56)} & \targ{} & \targ{} & \gate{R_y(+1.55)} & \qw & \qw \\
+\lstick{$q_{1}$} & \qw & \qw & \gate[3]{R_{XX}\!\left(a^{0}_{637} x_i + a^{1}_{637} x_j + b_{637}\right)} &  &  & \gate[3]{R_{XX}\!\left(a^{0}_{639} x_i + a^{1}_{639} x_j + b_{639}\right)} & \qw & \gate[2]{R_{XX}\!\left(a^{0}_{636} x_i + a^{1}_{636} x_j + b_{636}\right)} & \qw & \qw &  & \qw & \qw & \qw & \ctrl{-1} & \qw & \gate{R_x(-0.01)} & \qw \\
 \lstick{$q_{2}$} & \qw & \qw &  &  & \qw &  & \qw &  & \qw & \qw &  & \qw & \qw & \ctrl{-2} & \qw & \qw & \qw & \qw \\
-\lstick{$q_{3}$} & \gate{R_z(+2.80)} & \gate[2]{R_{XX}\!\left(a^{0}_{695} x_{3} + a^{1}_{695} x_{4} + b_{695}\right)} &  & \qw & \qw &  & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{3}$} & \gate{R_z(+2.80)} & \gate[2]{R_{XX}\!\left(a^{0}_{695} x_i + a^{1}_{695} x_j + b_{695}\right)} &  & \qw & \qw &  & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
 \lstick{$q_{4}$} & \qw &  & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
-\lstick{$q_{5}$} & \qw & \qw & \qw & \qw & \qw & \qw & \gate[2]{R_{XX}\!\left(a^{0}_{783} x_{5} + a^{1}_{783} x_{6} + b_{783}\right)} & \qw & \gate{R_y(+0.01)} & \qw & \qw & \ctrl{-5} & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{5}$} & \qw & \qw & \qw & \qw & \qw & \qw & \gate[2]{R_{XX}\!\left(a^{0}_{783} x_i + a^{1}_{783} x_j + b_{783}\right)} & \qw & \gate{R_y(+0.01)} & \qw & \qw & \ctrl{-5} & \qw & \qw & \qw & \qw & \qw & \qw \\
 \lstick{$q_{6}$} & \qw & \qw & \qw & \qw & \qw & \qw &  & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
 \lstick{$q_{7}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
 \lstick{$q_{8}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw

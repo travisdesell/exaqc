@@ -1,14 +1,18 @@
 % stage F_v2_multiseed, dataset wine, seed 1
-% D=13 features, N=5 qubits, K=3 classes. enc_gates=4, ansatz_gates=2, test_acc=0.833. enc_rot is a universal 1-qubit data-dependent gate (3 Euler angles, each its own affine function of one feature). enc_xx/yy/zz are 2-qubit Ising rotations whose angle is a linear combination of two feature components.
+% D=13 features, N=5 qubits, K=3 classes. enc_gates=4, ansatz_gates=2, test_acc=0.833. enc_rot is a universal 1-qubit data-dependent gate (3 Euler angles, each its own affine function of one input component). enc_xx/yy/zz are 2-qubit Ising rotations whose angle is a linear combination of two input components. x_i (and x_j for 2-qubit gates) in the formulas below are generic input symbols; the legend states which components they resolve to per gate.
+% Feature mapping per encoder gate (x_i / x_j -> concrete component of x):
+%   gate 341 (enc_rot, q3): x_i = x_3
+%   gate 262 (enc_xx, q0,q1): x_i = x_0, x_j = x_1
+%   gate 292 (enc_zz, q2,q3): x_i = x_2, x_j = x_3
 % Compile with: pdflatex <this file>
 \documentclass[border=6pt]{standalone}
 \usepackage{quantikz}
 \begin{document}
 \begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
-\lstick{$q_{0}$} & \qw & \gate[2]{R_{XX}\!\left(a^{0}_{262} x_{0} + a^{1}_{262} x_{1} + b_{262}\right)} & \qw & \qw & \qw \\
+\lstick{$q_{0}$} & \qw & \gate[2]{R_{XX}\!\left(a^{0}_{262} x_i + a^{1}_{262} x_j + b_{262}\right)} & \qw & \qw & \qw \\
 \lstick{$q_{1}$} & \qw &  & \qw & \gate{R_y(-0.05)} & \qw \\
-\lstick{$q_{2}$} & \qw & \qw & \gate[2]{R_{ZZ}\!\left(a^{0}_{292} x_{2} + a^{1}_{292} x_{3} + b_{292}\right)} & \qw & \qw \\
-\lstick{$q_{3}$} & \gate{R\!\left(\substack{a^{\alpha}_{341} x_{3} + b^{\alpha}_{341} \\ a^{\beta}_{341}  x_{3} + b^{\beta}_{341}  \\ a^{\gamma}_{341} x_{3} + b^{\gamma}_{341}}\right)} & \qw &  & \qw & \qw \\
+\lstick{$q_{2}$} & \qw & \qw & \gate[2]{R_{ZZ}\!\left(a^{0}_{292} x_i + a^{1}_{292} x_j + b_{292}\right)} & \qw & \qw \\
+\lstick{$q_{3}$} & \gate{R\!\left(\substack{a^{\alpha}_{341} x_i + b^{\alpha}_{341} \\ a^{\beta}_{341}  x_i + b^{\beta}_{341}  \\ a^{\gamma}_{341} x_i + b^{\gamma}_{341}}\right)} & \qw &  & \qw & \qw \\
 \lstick{$q_{4}$} & \qw & \qw & \qw & \qw & \qw
 \end{quantikz}
 \end{document}
