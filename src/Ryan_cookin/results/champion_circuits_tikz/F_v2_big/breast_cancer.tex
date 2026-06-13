@@ -9,18 +9,26 @@
 %   gate 967 (enc_rot, q0): x_i = x_0
 %   gate 886 (enc_zz, q3,q0): x_i = x_3, x_j = x_0
 % Compile with: pdflatex <this file>
-\documentclass[border=6pt]{standalone}
+\documentclass[border=6pt,varwidth=40cm]{standalone}
 \usepackage{quantikz}
+\usepackage{xcolor}
 \begin{document}
 \begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
-\lstick{$q_{0}$} & \gate{R_x(+1.65)} & \qw & \qw & \gate{R_x(+2.40)} & \qw & \qw & \gate{R_y(-1.10)} & \gate{R\!\left(\substack{a^{\alpha}_{1063} x_i + b^{\alpha}_{1063} \\ a^{\beta}_{1063}  x_i + b^{\beta}_{1063}  \\ a^{\gamma}_{1063} x_i + b^{\gamma}_{1063}}\right)} & \gate{R\!\left(\substack{a^{\alpha}_{885} x_i + b^{\alpha}_{885} \\ a^{\beta}_{885}  x_i + b^{\beta}_{885}  \\ a^{\gamma}_{885} x_i + b^{\gamma}_{885}}\right)} & \gate[2]{R_{YY}\!\left(a^{0}_{1041} x_i + a^{1}_{1041} x_j + b_{1041}\right)} & \gate{R\!\left(\substack{a^{\alpha}_{1075} x_i + b^{\alpha}_{1075} \\ a^{\beta}_{1075}  x_i + b^{\beta}_{1075}  \\ a^{\gamma}_{1075} x_i + b^{\gamma}_{1075}}\right)} & \gate{R\!\left(\substack{a^{\alpha}_{967} x_i + b^{\alpha}_{967} \\ a^{\beta}_{967}  x_i + b^{\beta}_{967}  \\ a^{\gamma}_{967} x_i + b^{\gamma}_{967}}\right)} & \gate[4]{R_{ZZ}\!\left(a^{0}_{886} x_i + a^{1}_{886} x_j + b_{886}\right)} & \qw \\
-\lstick{$q_{1}$} & \qw & \qw & \qw & \qw & \gate{R\!\left(\substack{a^{\alpha}_{1064} x_i + b^{\alpha}_{1064} \\ a^{\beta}_{1064}  x_i + b^{\beta}_{1064}  \\ a^{\gamma}_{1064} x_i + b^{\gamma}_{1064}}\right)} & \targ{} & \qw & \qw & \qw &  & \qw & \qw &  & \qw \\
+\lstick{$q_{0}$} & \gate[style={fill=orange!15}]{R_x(+1.65)} & \qw & \qw & \gate[style={fill=orange!15}]{R_x(+2.40)} & \qw & \qw & \gate[style={fill=orange!15}]{R_y(-1.10)} & \gate[style={fill=blue!15}]{R\!\left(\substack{a^{\alpha}_{1063} x_i + b^{\alpha}_{1063} \\ a^{\beta}_{1063}  x_i + b^{\beta}_{1063}  \\ a^{\gamma}_{1063} x_i + b^{\gamma}_{1063}}\right)} & \gate[style={fill=blue!15}]{R\!\left(\substack{a^{\alpha}_{885} x_i + b^{\alpha}_{885} \\ a^{\beta}_{885}  x_i + b^{\beta}_{885}  \\ a^{\gamma}_{885} x_i + b^{\gamma}_{885}}\right)} & \gate[2,style={fill=blue!15}]{R_{YY}\!\left(a^{0}_{1041} x_i + a^{1}_{1041} x_j + b_{1041}\right)} & \gate[style={fill=blue!15}]{R\!\left(\substack{a^{\alpha}_{1075} x_i + b^{\alpha}_{1075} \\ a^{\beta}_{1075}  x_i + b^{\beta}_{1075}  \\ a^{\gamma}_{1075} x_i + b^{\gamma}_{1075}}\right)} & \gate[style={fill=blue!15}]{R\!\left(\substack{a^{\alpha}_{967} x_i + b^{\alpha}_{967} \\ a^{\beta}_{967}  x_i + b^{\beta}_{967}  \\ a^{\gamma}_{967} x_i + b^{\gamma}_{967}}\right)} & \gate[4,style={fill=blue!15}]{R_{ZZ}\!\left(a^{0}_{886} x_i + a^{1}_{886} x_j + b_{886}\right)} & \qw \\
+\lstick{$q_{1}$} & \qw & \qw & \qw & \qw & \gate[style={fill=blue!15}]{R\!\left(\substack{a^{\alpha}_{1064} x_i + b^{\alpha}_{1064} \\ a^{\beta}_{1064}  x_i + b^{\beta}_{1064}  \\ a^{\gamma}_{1064} x_i + b^{\gamma}_{1064}}\right)} & \targ{} & \qw & \qw & \qw &  & \qw & \qw &  & \qw \\
 \lstick{$q_{2}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw &  & \qw \\
-\lstick{$q_{3}$} & \qw & \gate{R_x(+3.05)} & \gate{R_x(-3.24)} & \qw & \qw & \ctrl{-2} & \qw & \qw & \qw & \qw & \qw & \qw &  & \qw \\
+\lstick{$q_{3}$} & \qw & \gate[style={fill=orange!15}]{R_x(+3.05)} & \gate[style={fill=orange!15}]{R_x(-3.24)} & \qw & \qw & \ctrl{-2} & \qw & \qw & \qw & \qw & \qw & \qw &  & \qw \\
 \lstick{$q_{4}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
 \lstick{$q_{5}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
 \lstick{$q_{6}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
 \lstick{$q_{7}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
 \lstick{$q_{8}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw
 \end{quantikz}
+
+\vspace{1.5ex}
+
+{\small
+\fcolorbox{black!50}{blue!15}{\rule{0pt}{1em}\hspace{1.6em}}~Encoding gates (data-dependent: $a\,x_i + b$) \quad
+\fcolorbox{black!50}{orange!15}{\rule{0pt}{1em}\hspace{1.6em}}~Ansatz / learning gates (trained scalar) \quad
+controlled gates (cx/cz) keep their native ctrl/target look.\par}
 \end{document}

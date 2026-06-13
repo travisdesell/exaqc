@@ -4,14 +4,22 @@
 %   gate 272 (enc_rot, q1): x_i = x_1
 %   gate 305 (enc_rot, q0): x_i = x_0
 % Compile with: pdflatex <this file>
-\documentclass[border=6pt]{standalone}
+\documentclass[border=6pt,varwidth=40cm]{standalone}
 \usepackage{quantikz}
+\usepackage{xcolor}
 \begin{document}
 \begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
-\lstick{$q_{0}$} & \gate[2]{R_{XX}(-0.41)} & \ctrl{1} & \qw & \gate{R\!\left(\substack{a^{\alpha}_{305} x_i + b^{\alpha}_{305} \\ a^{\beta}_{305}  x_i + b^{\beta}_{305}  \\ a^{\gamma}_{305} x_i + b^{\gamma}_{305}}\right)} & \gate[2]{R_{XX}(-0.59)} & \gate{R_y(+1.77)} & \qw & \qw \\
-\lstick{$q_{1}$} &  & \control{} & \gate{R\!\left(\substack{a^{\alpha}_{272} x_i + b^{\alpha}_{272} \\ a^{\beta}_{272}  x_i + b^{\beta}_{272}  \\ a^{\gamma}_{272} x_i + b^{\gamma}_{272}}\right)} & \qw &  & \qw & \gate{R_x(+0.50)} & \qw \\
+\lstick{$q_{0}$} & \gate[2,style={fill=orange!15}]{R_{XX}(-0.41)} & \ctrl{1} & \qw & \gate[style={fill=blue!15}]{R\!\left(\substack{a^{\alpha}_{305} x_i + b^{\alpha}_{305} \\ a^{\beta}_{305}  x_i + b^{\beta}_{305}  \\ a^{\gamma}_{305} x_i + b^{\gamma}_{305}}\right)} & \gate[2,style={fill=orange!15}]{R_{XX}(-0.59)} & \gate[style={fill=orange!15}]{R_y(+1.77)} & \qw & \qw \\
+\lstick{$q_{1}$} &  & \control{} & \gate[style={fill=blue!15}]{R\!\left(\substack{a^{\alpha}_{272} x_i + b^{\alpha}_{272} \\ a^{\beta}_{272}  x_i + b^{\beta}_{272}  \\ a^{\gamma}_{272} x_i + b^{\gamma}_{272}}\right)} & \qw &  & \qw & \gate[style={fill=orange!15}]{R_x(+0.50)} & \qw \\
 \lstick{$q_{2}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
 \lstick{$q_{3}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
 \lstick{$q_{4}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw
 \end{quantikz}
+
+\vspace{1.5ex}
+
+{\small
+\fcolorbox{black!50}{blue!15}{\rule{0pt}{1em}\hspace{1.6em}}~Encoding gates (data-dependent: $a\,x_i + b$) \quad
+\fcolorbox{black!50}{orange!15}{\rule{0pt}{1em}\hspace{1.6em}}~Ansatz / learning gates (trained scalar) \quad
+controlled gates (cx/cz) keep their native ctrl/target look.\par}
 \end{document}

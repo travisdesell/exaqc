@@ -11,16 +11,24 @@
 %   gate 56 (enc_rx, q1): x_i = x_1
 %   gate 120 (enc_rx, q0): x_i = x_0
 % Compile with: pdflatex <this file>
-\documentclass[border=6pt]{standalone}
+\documentclass[border=6pt,varwidth=40cm]{standalone}
 \usepackage{quantikz}
+\usepackage{xcolor}
 \begin{document}
 \begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
-\lstick{$q_{0}$} & \qw & \qw & \gate{R_y(a_{74}\, x_i + b_{74})} & \qw & \qw & \gate{R_y(+2.90)} & \gate{R_z(-2.92)} & \gate{R_y(a_{168}\, x_i + b_{168})} & \gate{R_y(+2.50)} & \gate{R_x(a_{63}\, x_i + b_{63})} & \gate{R_y(a_{23}\, x_i + b_{23})} & \gate{R_x(a_{27}\, x_i + b_{27})} & \gate{R_x(-1.43)} & \qw & \qw & \ctrl{4} & \gate{R_x(a_{120}\, x_i + b_{120})} & \gate{R_y(-3.57)} & \qw \\
-\lstick{$q_{1}$} & \gate{R_y(+1.62)} & \gate{R_z(a_{241}\, x_i + b_{241})} & \qw & \gate{R_z(a_{154}\, x_i + b_{154})} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \gate{R_z(+2.40)} & \gate{R_x(a_{56}\, x_i + b_{56})} & \qw & \qw & \qw & \qw \\
+\lstick{$q_{0}$} & \qw & \qw & \gate[style={fill=blue!15}]{R_y(a_{74}\, x_i + b_{74})} & \qw & \qw & \gate[style={fill=orange!15}]{R_y(+2.90)} & \gate[style={fill=orange!15}]{R_z(-2.92)} & \gate[style={fill=blue!15}]{R_y(a_{168}\, x_i + b_{168})} & \gate[style={fill=orange!15}]{R_y(+2.50)} & \gate[style={fill=blue!15}]{R_x(a_{63}\, x_i + b_{63})} & \gate[style={fill=blue!15}]{R_y(a_{23}\, x_i + b_{23})} & \gate[style={fill=blue!15}]{R_x(a_{27}\, x_i + b_{27})} & \gate[style={fill=orange!15}]{R_x(-1.43)} & \qw & \qw & \ctrl{4} & \gate[style={fill=blue!15}]{R_x(a_{120}\, x_i + b_{120})} & \gate[style={fill=orange!15}]{R_y(-3.57)} & \qw \\
+\lstick{$q_{1}$} & \gate[style={fill=orange!15}]{R_y(+1.62)} & \gate[style={fill=blue!15}]{R_z(a_{241}\, x_i + b_{241})} & \qw & \gate[style={fill=blue!15}]{R_z(a_{154}\, x_i + b_{154})} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \gate[style={fill=orange!15}]{R_z(+2.40)} & \gate[style={fill=blue!15}]{R_x(a_{56}\, x_i + b_{56})} & \qw & \qw & \qw & \qw \\
 \lstick{$q_{2}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
 \lstick{$q_{3}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
-\lstick{$q_{4}$} & \qw & \qw & \qw & \qw & \gate{R_z(-3.07)} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \control{} & \qw & \qw & \qw \\
+\lstick{$q_{4}$} & \qw & \qw & \qw & \qw & \gate[style={fill=orange!15}]{R_z(-3.07)} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \control{} & \qw & \qw & \qw \\
 \lstick{$q_{5}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
 \lstick{$q_{6}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw
 \end{quantikz}
+
+\vspace{1.5ex}
+
+{\small
+\fcolorbox{black!50}{blue!15}{\rule{0pt}{1em}\hspace{1.6em}}~Encoding gates (data-dependent: $a\,x_i + b$) \quad
+\fcolorbox{black!50}{orange!15}{\rule{0pt}{1em}\hspace{1.6em}}~Ansatz / learning gates (trained scalar) \quad
+controlled gates (cx/cz) keep their native ctrl/target look.\par}
 \end{document}

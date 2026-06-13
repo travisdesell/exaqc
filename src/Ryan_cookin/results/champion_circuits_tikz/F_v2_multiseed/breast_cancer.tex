@@ -6,16 +6,24 @@
 %   gate 918 (enc_zz, q0,q5): x_i = x_0, x_j = x_5
 %   gate 858 (enc_rot, q0): x_i = x_0
 % Compile with: pdflatex <this file>
-\documentclass[border=6pt]{standalone}
+\documentclass[border=6pt,varwidth=40cm]{standalone}
 \usepackage{quantikz}
+\usepackage{xcolor}
 \begin{document}
 \begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
-\lstick{$q_{0}$} & \qw & \gate{R\!\left(\substack{a^{\alpha}_{895} x_i + b^{\alpha}_{895} \\ a^{\beta}_{895}  x_i + b^{\beta}_{895}  \\ a^{\gamma}_{895} x_i + b^{\gamma}_{895}}\right)} & \gate[6]{R_{ZZ}\!\left(a^{0}_{918} x_i + a^{1}_{918} x_j + b_{918}\right)} & \gate{R\!\left(\substack{a^{\alpha}_{858} x_i + b^{\alpha}_{858} \\ a^{\beta}_{858}  x_i + b^{\beta}_{858}  \\ a^{\gamma}_{858} x_i + b^{\gamma}_{858}}\right)} & \qw \\
+\lstick{$q_{0}$} & \qw & \gate[style={fill=blue!15}]{R\!\left(\substack{a^{\alpha}_{895} x_i + b^{\alpha}_{895} \\ a^{\beta}_{895}  x_i + b^{\beta}_{895}  \\ a^{\gamma}_{895} x_i + b^{\gamma}_{895}}\right)} & \gate[6,style={fill=blue!15}]{R_{ZZ}\!\left(a^{0}_{918} x_i + a^{1}_{918} x_j + b_{918}\right)} & \gate[style={fill=blue!15}]{R\!\left(\substack{a^{\alpha}_{858} x_i + b^{\alpha}_{858} \\ a^{\beta}_{858}  x_i + b^{\beta}_{858}  \\ a^{\gamma}_{858} x_i + b^{\gamma}_{858}}\right)} & \qw \\
 \lstick{$q_{1}$} & \qw & \qw &  & \qw & \qw \\
 \lstick{$q_{2}$} & \qw & \qw &  & \qw & \qw \\
 \lstick{$q_{3}$} & \qw & \qw &  & \qw & \qw \\
 \lstick{$q_{4}$} & \qw & \qw &  & \qw & \qw \\
-\lstick{$q_{5}$} & \gate[2]{R_{YY}\!\left(a^{0}_{961} x_i + a^{1}_{961} x_j + b_{961}\right)} & \qw &  & \qw & \qw \\
+\lstick{$q_{5}$} & \gate[2,style={fill=blue!15}]{R_{YY}\!\left(a^{0}_{961} x_i + a^{1}_{961} x_j + b_{961}\right)} & \qw &  & \qw & \qw \\
 \lstick{$q_{6}$} &  & \qw & \qw & \qw & \qw
 \end{quantikz}
+
+\vspace{1.5ex}
+
+{\small
+\fcolorbox{black!50}{blue!15}{\rule{0pt}{1em}\hspace{1.6em}}~Encoding gates (data-dependent: $a\,x_i + b$) \quad
+\fcolorbox{black!50}{orange!15}{\rule{0pt}{1em}\hspace{1.6em}}~Ansatz / learning gates (trained scalar) \quad
+controlled gates (cx/cz) keep their native ctrl/target look.\par}
 \end{document}

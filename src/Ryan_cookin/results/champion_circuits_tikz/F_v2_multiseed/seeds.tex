@@ -10,14 +10,22 @@
 %   gate 658 (enc_yy, q2,q1): x_i = x_2, x_j = x_1
 %   gate 672 (enc_rot, q1): x_i = x_1
 % Compile with: pdflatex <this file>
-\documentclass[border=6pt]{standalone}
+\documentclass[border=6pt,varwidth=40cm]{standalone}
 \usepackage{quantikz}
+\usepackage{xcolor}
 \begin{document}
 \begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
-\lstick{$q_{0}$} & \qw & \gate[2]{R_{XX}\!\left(a^{0}_{692} x_i + a^{1}_{692} x_j + b_{692}\right)} & \qw & \gate{R_y(-0.57)} & \gate{R\!\left(\substack{a^{\alpha}_{662} x_i + b^{\alpha}_{662} \\ a^{\beta}_{662}  x_i + b^{\beta}_{662}  \\ a^{\gamma}_{662} x_i + b^{\gamma}_{662}}\right)} & \gate[2]{R_{XX}\!\left(a^{0}_{691} x_i + a^{1}_{691} x_j + b_{691}\right)} & \qw & \gate[2]{R_{XX}\!\left(a^{0}_{690} x_i + a^{1}_{690} x_j + b_{690}\right)} & \qw & \qw & \qw & \qw \\
-\lstick{$q_{1}$} & \qw &  & \qw & \qw & \qw &  & \gate[2]{R_{ZZ}\!\left(a^{0}_{620} x_i + a^{1}_{620} x_j + b_{620}\right)} &  & \gate[2]{R_{XX}\!\left(a^{0}_{616} x_i + a^{1}_{616} x_j + b_{616}\right)} & \gate[2]{R_{YY}\!\left(a^{0}_{658} x_i + a^{1}_{658} x_j + b_{658}\right)} & \gate{R\!\left(\substack{a^{\alpha}_{672} x_i + b^{\alpha}_{672} \\ a^{\beta}_{672}  x_i + b^{\beta}_{672}  \\ a^{\gamma}_{672} x_i + b^{\gamma}_{672}}\right)} & \qw \\
-\lstick{$q_{2}$} & \gate{R_y(+4.70)} & \qw & \gate{R_y(-1.48)} & \qw & \qw & \qw &  & \qw &  &  & \qw & \qw \\
+\lstick{$q_{0}$} & \qw & \gate[2,style={fill=blue!15}]{R_{XX}\!\left(a^{0}_{692} x_i + a^{1}_{692} x_j + b_{692}\right)} & \qw & \gate[style={fill=orange!15}]{R_y(-0.57)} & \gate[style={fill=blue!15}]{R\!\left(\substack{a^{\alpha}_{662} x_i + b^{\alpha}_{662} \\ a^{\beta}_{662}  x_i + b^{\beta}_{662}  \\ a^{\gamma}_{662} x_i + b^{\gamma}_{662}}\right)} & \gate[2,style={fill=blue!15}]{R_{XX}\!\left(a^{0}_{691} x_i + a^{1}_{691} x_j + b_{691}\right)} & \qw & \gate[2,style={fill=blue!15}]{R_{XX}\!\left(a^{0}_{690} x_i + a^{1}_{690} x_j + b_{690}\right)} & \qw & \qw & \qw & \qw \\
+\lstick{$q_{1}$} & \qw &  & \qw & \qw & \qw &  & \gate[2,style={fill=blue!15}]{R_{ZZ}\!\left(a^{0}_{620} x_i + a^{1}_{620} x_j + b_{620}\right)} &  & \gate[2,style={fill=blue!15}]{R_{XX}\!\left(a^{0}_{616} x_i + a^{1}_{616} x_j + b_{616}\right)} & \gate[2,style={fill=blue!15}]{R_{YY}\!\left(a^{0}_{658} x_i + a^{1}_{658} x_j + b_{658}\right)} & \gate[style={fill=blue!15}]{R\!\left(\substack{a^{\alpha}_{672} x_i + b^{\alpha}_{672} \\ a^{\beta}_{672}  x_i + b^{\beta}_{672}  \\ a^{\gamma}_{672} x_i + b^{\gamma}_{672}}\right)} & \qw \\
+\lstick{$q_{2}$} & \gate[style={fill=orange!15}]{R_y(+4.70)} & \qw & \gate[style={fill=orange!15}]{R_y(-1.48)} & \qw & \qw & \qw &  & \qw &  &  & \qw & \qw \\
 \lstick{$q_{3}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
 \lstick{$q_{4}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw
 \end{quantikz}
+
+\vspace{1.5ex}
+
+{\small
+\fcolorbox{black!50}{blue!15}{\rule{0pt}{1em}\hspace{1.6em}}~Encoding gates (data-dependent: $a\,x_i + b$) \quad
+\fcolorbox{black!50}{orange!15}{\rule{0pt}{1em}\hspace{1.6em}}~Ansatz / learning gates (trained scalar) \quad
+controlled gates (cx/cz) keep their native ctrl/target look.\par}
 \end{document}

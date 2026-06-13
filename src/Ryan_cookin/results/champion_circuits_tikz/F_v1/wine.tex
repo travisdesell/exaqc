@@ -3,12 +3,20 @@
 % Feature mapping per encoder gate (x_i / x_j -> concrete component of x):
 %   gate 226 (enc_rot, q0): x_i = x_0
 % Compile with: pdflatex <this file>
-\documentclass[border=6pt]{standalone}
+\documentclass[border=6pt,varwidth=40cm]{standalone}
 \usepackage{quantikz}
+\usepackage{xcolor}
 \begin{document}
 \begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
-\lstick{$q_{0}$} & \gate{R_y(-1.11)} & \gate{R_y(+1.51)} & \gate{R\!\left(\substack{a^{\alpha}_{226} x_i + b^{\alpha}_{226} \\ a^{\beta}_{226}  x_i + b^{\beta}_{226}  \\ a^{\gamma}_{226} x_i + b^{\gamma}_{226}}\right)} & \qw \\
+\lstick{$q_{0}$} & \gate[style={fill=orange!15}]{R_y(-1.11)} & \gate[style={fill=orange!15}]{R_y(+1.51)} & \gate[style={fill=blue!15}]{R\!\left(\substack{a^{\alpha}_{226} x_i + b^{\alpha}_{226} \\ a^{\beta}_{226}  x_i + b^{\beta}_{226}  \\ a^{\gamma}_{226} x_i + b^{\gamma}_{226}}\right)} & \qw \\
 \lstick{$q_{1}$} & \qw & \qw & \qw & \qw \\
 \lstick{$q_{2}$} & \qw & \qw & \qw & \qw
 \end{quantikz}
+
+\vspace{1.5ex}
+
+{\small
+\fcolorbox{black!50}{blue!15}{\rule{0pt}{1em}\hspace{1.6em}}~Encoding gates (data-dependent: $a\,x_i + b$) \quad
+\fcolorbox{black!50}{orange!15}{\rule{0pt}{1em}\hspace{1.6em}}~Ansatz / learning gates (trained scalar) \quad
+controlled gates (cx/cz) keep their native ctrl/target look.\par}
 \end{document}

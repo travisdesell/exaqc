@@ -7,14 +7,22 @@
 %   gate 300 (enc_rot, q0): x_i = x_0
 %   gate 274 (enc_rot, q0): x_i = x_0
 % Compile with: pdflatex <this file>
-\documentclass[border=6pt]{standalone}
+\documentclass[border=6pt,varwidth=40cm]{standalone}
 \usepackage{quantikz}
+\usepackage{xcolor}
 \begin{document}
 \begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
-\lstick{$q_{0}$} & \gate{R\!\left(\substack{a^{\alpha}_{318} x_i + b^{\alpha}_{318} \\ a^{\beta}_{318}  x_i + b^{\beta}_{318}  \\ a^{\gamma}_{318} x_i + b^{\gamma}_{318}}\right)} & \gate[2]{R_{XX}\!\left(a^{0}_{272} x_i + a^{1}_{272} x_j + b_{272}\right)} & \qw & \qw & \qw & \gate{R\!\left(\substack{a^{\alpha}_{301} x_i + b^{\alpha}_{301} \\ a^{\beta}_{301}  x_i + b^{\beta}_{301}  \\ a^{\gamma}_{301} x_i + b^{\gamma}_{301}}\right)} & \gate{R\!\left(\substack{a^{\alpha}_{300} x_i + b^{\alpha}_{300} \\ a^{\beta}_{300}  x_i + b^{\beta}_{300}  \\ a^{\gamma}_{300} x_i + b^{\gamma}_{300}}\right)} & \gate{R\!\left(\substack{a^{\alpha}_{274} x_i + b^{\alpha}_{274} \\ a^{\beta}_{274}  x_i + b^{\beta}_{274}  \\ a^{\gamma}_{274} x_i + b^{\gamma}_{274}}\right)} & \qw \\
-\lstick{$q_{1}$} & \qw &  & \ctrl{1} & \gate{R_y(+0.71)} & \gate{R_y(+2.54)} & \qw & \qw & \qw & \qw \\
+\lstick{$q_{0}$} & \gate[style={fill=blue!15}]{R\!\left(\substack{a^{\alpha}_{318} x_i + b^{\alpha}_{318} \\ a^{\beta}_{318}  x_i + b^{\beta}_{318}  \\ a^{\gamma}_{318} x_i + b^{\gamma}_{318}}\right)} & \gate[2,style={fill=blue!15}]{R_{XX}\!\left(a^{0}_{272} x_i + a^{1}_{272} x_j + b_{272}\right)} & \qw & \qw & \qw & \gate[style={fill=blue!15}]{R\!\left(\substack{a^{\alpha}_{301} x_i + b^{\alpha}_{301} \\ a^{\beta}_{301}  x_i + b^{\beta}_{301}  \\ a^{\gamma}_{301} x_i + b^{\gamma}_{301}}\right)} & \gate[style={fill=blue!15}]{R\!\left(\substack{a^{\alpha}_{300} x_i + b^{\alpha}_{300} \\ a^{\beta}_{300}  x_i + b^{\beta}_{300}  \\ a^{\gamma}_{300} x_i + b^{\gamma}_{300}}\right)} & \gate[style={fill=blue!15}]{R\!\left(\substack{a^{\alpha}_{274} x_i + b^{\alpha}_{274} \\ a^{\beta}_{274}  x_i + b^{\beta}_{274}  \\ a^{\gamma}_{274} x_i + b^{\gamma}_{274}}\right)} & \qw \\
+\lstick{$q_{1}$} & \qw &  & \ctrl{1} & \gate[style={fill=orange!15}]{R_y(+0.71)} & \gate[style={fill=orange!15}]{R_y(+2.54)} & \qw & \qw & \qw & \qw \\
 \lstick{$q_{2}$} & \qw & \qw & \control{} & \qw & \qw & \qw & \qw & \qw & \qw \\
 \lstick{$q_{3}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
 \lstick{$q_{4}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw
 \end{quantikz}
+
+\vspace{1.5ex}
+
+{\small
+\fcolorbox{black!50}{blue!15}{\rule{0pt}{1em}\hspace{1.6em}}~Encoding gates (data-dependent: $a\,x_i + b$) \quad
+\fcolorbox{black!50}{orange!15}{\rule{0pt}{1em}\hspace{1.6em}}~Ansatz / learning gates (trained scalar) \quad
+controlled gates (cx/cz) keep their native ctrl/target look.\par}
 \end{document}

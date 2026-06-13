@@ -1,8 +1,9 @@
 % stage B_multiseed, dataset iris, seed 1
 % Encoder 'reupload_euler' (D=4, N=10) applies first; not expanded here. What follows is the evolved ansatz portion of the qnode. Enabled gates: 3, test_acc=1.000.
 % Compile with: pdflatex <this file>
-\documentclass[border=6pt]{standalone}
+\documentclass[border=6pt,varwidth=40cm]{standalone}
 \usepackage{quantikz}
+\usepackage{xcolor}
 \begin{document}
 \begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
 \lstick{$q_{0}$} & \qw & \qw & \qw & \qw \\
@@ -16,4 +17,11 @@
 \lstick{$q_{8}$} & \qw & \qw & \qw & \qw \\
 \lstick{$q_{9}$} & \qw & \qw & \qw & \qw
 \end{quantikz}
+
+\vspace{1.5ex}
+
+{\small
+\fcolorbox{black!50}{blue!15}{\rule{0pt}{1em}\hspace{1.6em}}~Encoding gates (data-dependent: $a\,x_i + b$) \quad
+\fcolorbox{black!50}{orange!15}{\rule{0pt}{1em}\hspace{1.6em}}~Ansatz / learning gates (trained scalar) \quad
+controlled gates (cx/cz) keep their native ctrl/target look.\par}
 \end{document}

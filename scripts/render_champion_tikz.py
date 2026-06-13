@@ -139,6 +139,33 @@ def _label_constant_2q(axis, val):
     return rf"R_{{{axis}}}({val:+.2f})"
 
 
+# ---------- Color-coding by gate role -------------------------------------
+# Encoder gates (data-dependent) get a light blue fill, ansatz rotation
+# gates (trained scalars) get a light orange fill. Structural cx/cz keep
+# their native ctrl/targ look.
+
+ENC_METHODS = {"enc_ry", "enc_rx", "enc_rz", "enc_rot",
+               "enc_xx", "enc_yy", "enc_zz"}
+ANSATZ_ROT_METHODS = {"ry", "rx", "rz", "rxx", "ryy", "rzz"}
+
+
+def _gate_options(method: str, span: int = 1) -> str:
+    """Build the `[...]` options block for \\gate.
+
+    Combines an optional wire span (for 2-qubit gates) with a fill style
+    that signals the gate's role (encoder vs ansatz). Returns the full
+    `[...]` string including brackets, or "" if no options.
+    """
+    opts: list[str] = []
+    if span > 1:
+        opts.append(str(span))
+    if method in ENC_METHODS:
+        opts.append(r"style={fill=blue!15}")
+    elif method in ANSATZ_ROT_METHODS:
+        opts.append(r"style={fill=orange!15}")
+    return ("[" + ",".join(opts) + "]") if opts else ""
+
+
 def _wire_idx(qubit_tuple) -> int:
     return qubit_tuple[1]
 
@@ -172,13 +199,13 @@ def gate_to_column(gate, n_qubits: int, n_features: int) -> list[str]:
         w = _wire_idx(gate.qubits[0])
         fi = w % n_features
         labels = {"enc_ry": _label_enc_ry, "enc_rx": _label_enc_rx, "enc_rz": _label_enc_rz}
-        col[w] = rf"\gate{{{labels[method](inn, fi)}}}"
+        col[w] = rf"\gate{_gate_options(method)}{{{labels[method](inn, fi)}}}"
         return col
 
     if method == "enc_rot":
         w = _wire_idx(gate.qubits[0])
         fi = w % n_features
-        col[w] = rf"\gate{{{_label_enc_rot(inn, fi)}}}"
+        col[w] = rf"\gate{_gate_options(method)}{{{_label_enc_rot(inn, fi)}}}"
         return col
 
     if method in ("enc_xx", "enc_yy", "enc_zz"):
@@ -188,7 +215,7 @@ def gate_to_column(gate, n_qubits: int, n_features: int) -> list[str]:
         axis = method[-2:].upper()
         fi0, fi1 = w0 % n_features, w1 % n_features
         span = hi - lo + 1
-        col[lo] = rf"\gate[{span}]{{{_label_enc_2q(axis, inn, fi0, fi1)}}}"
+        col[lo] = rf"\gate{_gate_options(method, span)}{{{_label_enc_2q(axis, inn, fi0, fi1)}}}"
         for w in range(lo + 1, hi + 1):
             col[w] = ""
         return col
@@ -196,7 +223,7 @@ def gate_to_column(gate, n_qubits: int, n_features: int) -> list[str]:
     if method in ("ry", "rx", "rz"):
         w = _wire_idx(gate.qubits[0])
         val = float(next(iter(gate.parameters.values())))
-        col[w] = rf"\gate{{{_label_constant_1q(method[-1], val)}}}"
+        col[w] = rf"\gate{_gate_options(method)}{{{_label_constant_1q(method[-1], val)}}}"
         return col
 
     if method in ("rxx", "ryy", "rzz"):
@@ -206,7 +233,7 @@ def gate_to_column(gate, n_qubits: int, n_features: int) -> list[str]:
         axis = method.upper()[-2:]
         val = float(next(iter(gate.parameters.values())))
         span = hi - lo + 1
-        col[lo] = rf"\gate[{span}]{{{_label_constant_2q(axis, val)}}}"
+        col[lo] = rf"\gate{_gate_options(method, span)}{{{_label_constant_2q(axis, val)}}}"
         for w in range(lo + 1, hi + 1):
             col[w] = ""
         return col
@@ -244,12 +271,15 @@ def columns_to_body(columns: list[list[str]], n_qubits: int) -> str:
 def stage_a_columns(n_qubits: int, ansatz_depth: int) -> list[list[str]]:
     """Stage A's ansatz is fixed: per-qubit RY then a linear CNOT chain,
     repeated `ansatz_depth` times. The encoder is rendered separately as an
-    annotation rather than expanded into columns."""
+    annotation rather than expanded into columns. The RY layers get the
+    orange ansatz fill so the colour-coding stays consistent with the other
+    stages."""
+    ry_opts = _gate_options("ry")  # orange fill
     cols: list[list[str]] = []
     for _ in range(ansatz_depth):
         for q in range(n_qubits):
             col = [r"\qw"] * n_qubits
-            col[q] = r"\gate{R_y(\phi)}"
+            col[q] = rf"\gate{ry_opts}{{R_y(\phi)}}"
             cols.append(col)
         for q in range(n_qubits - 1):
             col = [r"\qw"] * n_qubits
@@ -261,14 +291,22 @@ def stage_a_columns(n_qubits: int, ansatz_depth: int) -> list[list[str]]:
 
 # ---------- Document wrappers ---------------------------------------------
 
-PREAMBLE = r"""\documentclass[border=6pt]{standalone}
+PREAMBLE = r"""\documentclass[border=6pt,varwidth=40cm]{standalone}
 \usepackage{quantikz}
+\usepackage{xcolor}
 \begin{document}
 \begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
 """
 
 POSTAMBLE = r"""
 \end{quantikz}
+
+\vspace{1.5ex}
+
+{\small
+\fcolorbox{black!50}{blue!15}{\rule{0pt}{1em}\hspace{1.6em}}~Encoding gates (data-dependent: $a\,x_i + b$) \quad
+\fcolorbox{black!50}{orange!15}{\rule{0pt}{1em}\hspace{1.6em}}~Ansatz / learning gates (trained scalar) \quad
+controlled gates (cx/cz) keep their native ctrl/target look.\par}
 \end{document}
 """
 

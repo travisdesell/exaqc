@@ -5,14 +5,22 @@
 %   gate 368 (enc_rot, q0): x_i = x_0
 %   gate 385 (enc_yy, q1,q0): x_i = x_1, x_j = x_0
 % Compile with: pdflatex <this file>
-\documentclass[border=6pt]{standalone}
+\documentclass[border=6pt,varwidth=40cm]{standalone}
 \usepackage{quantikz}
+\usepackage{xcolor}
 \begin{document}
 \begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
-\lstick{$q_{0}$} & \gate{R\!\left(\substack{a^{\alpha}_{381} x_i + b^{\alpha}_{381} \\ a^{\beta}_{381}  x_i + b^{\beta}_{381}  \\ a^{\gamma}_{381} x_i + b^{\gamma}_{381}}\right)} & \gate{R\!\left(\substack{a^{\alpha}_{368} x_i + b^{\alpha}_{368} \\ a^{\beta}_{368}  x_i + b^{\beta}_{368}  \\ a^{\gamma}_{368} x_i + b^{\gamma}_{368}}\right)} & \gate{R_x(+0.58)} & \qw & \gate[2]{R_{YY}\!\left(a^{0}_{385} x_i + a^{1}_{385} x_j + b_{385}\right)} & \qw \\
-\lstick{$q_{1}$} & \qw & \qw & \qw & \gate{R_x(+1.41)} &  & \qw \\
+\lstick{$q_{0}$} & \gate[style={fill=blue!15}]{R\!\left(\substack{a^{\alpha}_{381} x_i + b^{\alpha}_{381} \\ a^{\beta}_{381}  x_i + b^{\beta}_{381}  \\ a^{\gamma}_{381} x_i + b^{\gamma}_{381}}\right)} & \gate[style={fill=blue!15}]{R\!\left(\substack{a^{\alpha}_{368} x_i + b^{\alpha}_{368} \\ a^{\beta}_{368}  x_i + b^{\beta}_{368}  \\ a^{\gamma}_{368} x_i + b^{\gamma}_{368}}\right)} & \gate[style={fill=orange!15}]{R_x(+0.58)} & \qw & \gate[2,style={fill=blue!15}]{R_{YY}\!\left(a^{0}_{385} x_i + a^{1}_{385} x_j + b_{385}\right)} & \qw \\
+\lstick{$q_{1}$} & \qw & \qw & \qw & \gate[style={fill=orange!15}]{R_x(+1.41)} &  & \qw \\
 \lstick{$q_{2}$} & \qw & \qw & \qw & \qw & \qw & \qw \\
 \lstick{$q_{3}$} & \qw & \qw & \qw & \qw & \qw & \qw \\
 \lstick{$q_{4}$} & \qw & \qw & \qw & \qw & \qw & \qw
 \end{quantikz}
+
+\vspace{1.5ex}
+
+{\small
+\fcolorbox{black!50}{blue!15}{\rule{0pt}{1em}\hspace{1.6em}}~Encoding gates (data-dependent: $a\,x_i + b$) \quad
+\fcolorbox{black!50}{orange!15}{\rule{0pt}{1em}\hspace{1.6em}}~Ansatz / learning gates (trained scalar) \quad
+controlled gates (cx/cz) keep their native ctrl/target look.\par}
 \end{document}

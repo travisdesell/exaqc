@@ -4,15 +4,23 @@
 %   gate 625 (enc_ry, q0): x_i = x_0
 %   gate 696 (enc_rx, q1): x_i = x_1
 % Compile with: pdflatex <this file>
-\documentclass[border=6pt]{standalone}
+\documentclass[border=6pt,varwidth=40cm]{standalone}
 \usepackage{quantikz}
+\usepackage{xcolor}
 \begin{document}
 \begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
-\lstick{$q_{0}$} & \qw & \gate{R_y(a_{625}\, x_i + b_{625})} & \qw & \qw & \gate{R_y(+0.10)} & \gate{R_y(+1.68)} & \targ{} & \qw \\
-\lstick{$q_{1}$} & \ctrl{2} & \qw & \gate{R_x(a_{696}\, x_i + b_{696})} & \gate{R_y(-0.02)} & \qw & \qw & \ctrl{-1} & \qw \\
+\lstick{$q_{0}$} & \qw & \gate[style={fill=blue!15}]{R_y(a_{625}\, x_i + b_{625})} & \qw & \qw & \gate[style={fill=orange!15}]{R_y(+0.10)} & \gate[style={fill=orange!15}]{R_y(+1.68)} & \targ{} & \qw \\
+\lstick{$q_{1}$} & \ctrl{2} & \qw & \gate[style={fill=blue!15}]{R_x(a_{696}\, x_i + b_{696})} & \gate[style={fill=orange!15}]{R_y(-0.02)} & \qw & \qw & \ctrl{-1} & \qw \\
 \lstick{$q_{2}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
 \lstick{$q_{3}$} & \control{} & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
 \lstick{$q_{4}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
 \lstick{$q_{5}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw
 \end{quantikz}
+
+\vspace{1.5ex}
+
+{\small
+\fcolorbox{black!50}{blue!15}{\rule{0pt}{1em}\hspace{1.6em}}~Encoding gates (data-dependent: $a\,x_i + b$) \quad
+\fcolorbox{black!50}{orange!15}{\rule{0pt}{1em}\hspace{1.6em}}~Ansatz / learning gates (trained scalar) \quad
+controlled gates (cx/cz) keep their native ctrl/target look.\par}
 \end{document}
