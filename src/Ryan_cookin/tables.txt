@@ -143,6 +143,100 @@ Per-dataset best result by stage (test_acc, seed=0 unless noted)
 
 
 ================================================================================
+Champion circuit composition (qubits, depth, 1q / 2q gate counts)
+================================================================================
+
+For each (stage, dataset) champion we rebuild the same qnode the stage
+driver ran in production -- external encoder (where applicable) plus the
+evolved genome -- then walk the tape and report:
+
+  N        : full register size (genome's input qubits, including any wires
+             that never get touched -- so this is the search-space size, not
+             the wires-actually-used count).
+  depth    : greedy parallel depth -- ops on disjoint wires share a layer.
+  n_1q     : 1-qubit ops in the executed tape.
+  n_2q     : 2-qubit ops (cx, cz, rxx/yy/zz, IsingXX/YY/ZZ, ...).
+  n_multi  : ops with >=3 wires (chiefly AmplitudeEmbedding when the
+             fixed_amplitude encoder is in play -- it stays as one
+             multi-qubit op rather than decomposing).
+  test_acc : same number reported in the headline tables above.
+
+Source CSV: src/Ryan_cookin/results/champion_composition.csv
+Generator:  scripts/compute_champion_composition.py
+
+  ┌────────────────┬───────────────┬────┬───────┬──────┬──────┬─────────┬──────────┐
+  │ stage          │ dataset       │ N  │ depth │ n_1q │ n_2q │ n_multi │ test_acc │
+  ├────────────────┼───────────────┼────┼───────┼──────┼──────┼─────────┼──────────┤
+  │ A              │ iris          │ 8  │ 17    │ 32   │ 28   │ 0       │ 0.967    │
+  │ A              │ wine          │ 6  │ 15    │ 24   │ 20   │ 0       │ 0.833    │
+  │ A              │ seeds         │ 8  │ 17    │ 32   │ 28   │ 0       │ 0.881    │
+  │ A              │ breast_cancer │ 6  │ 15    │ 24   │ 20   │ 0       │ 0.895    │
+  │ B              │ iris          │ 8  │ 12    │ 17   │ 14   │ 1       │ 1.000    │
+  │ B              │ wine          │ 4  │ 7     │ 9    │ 6    │ 0       │ 1.000    │
+  │ B              │ seeds         │ 6  │ 9     │ 14   │ 10   │ 0       │ 1.000    │
+  │ B              │ breast_cancer │ 8  │ 11    │ 18   │ 14   │ 0       │ 0.974    │
+  │ B_multiseed    │ iris          │ 10 │ 15    │ 21   │ 19   │ 1       │ 1.000    │
+  │ B_multiseed    │ wine          │ 8  │ 12    │ 16   │ 15   │ 1       │ 1.000    │
+  │ B_multiseed    │ seeds         │ 10 │ 13    │ 20   │ 18   │ 1       │ 1.000    │
+  │ B_multiseed    │ breast_cancer │ 6  │ 9     │ 14   │ 10   │ 0       │ 0.974    │
+  │ C              │ iris          │ 4  │ 12    │ 9    │ 10   │ 0       │ 1.000    │
+  │ C              │ wine          │ 4  │ 9     │ 9    │ 7    │ 0       │ 1.000    │
+  │ C              │ seeds         │ 4  │ 10    │ 8    │ 8    │ 1       │ 1.000    │
+  │ C              │ breast_cancer │ 6  │ 9     │ 13   │ 10   │ 0       │ 0.974    │
+  │ C_multiseed    │ iris          │ 4  │ 11    │ 9    │ 7    │ 2       │ 1.000    │
+  │ C_multiseed    │ wine          │ 4  │ 7     │ 8    │ 6    │ 0       │ 1.000    │
+  │ C_multiseed    │ seeds         │ 8  │ 11    │ 17   │ 15   │ 1       │ 1.000    │
+  │ C_multiseed    │ breast_cancer │ 5  │ 8     │ 11   │ 9    │ 0       │ 0.974    │
+  │ E_v1           │ iris          │ 6  │ 6     │ 7    │ 1    │ 0       │ 0.700    │
+  │ E_v1           │ wine          │ 6  │ 4     │ 3    │ 2    │ 0       │ 0.778    │
+  │ E_v1           │ seeds         │ 5  │ 5     │ 6    │ 1    │ 0       │ 0.833    │
+  │ E_v1           │ breast_cancer │ 6  │ 7     │ 7    │ 0    │ 0       │ 0.851    │
+  │ E_v2           │ iris          │ 7  │ 12    │ 17   │ 1    │ 0       │ 0.633    │
+  │ E_v2           │ wine          │ 7  │ 12    │ 13   │ 3    │ 0       │ 0.806    │
+  │ E_v2           │ seeds         │ 6  │ 4     │ 5    │ 2    │ 0       │ 0.833    │
+  │ E_v2           │ breast_cancer │ 6  │ 7     │ 9    │ 1    │ 0       │ 0.877    │
+  │ F_v1           │ iris          │ 7  │ 13    │ 8    │ 6    │ 0       │ 0.733    │
+  │ F_v1           │ wine          │ 3  │ 3     │ 3    │ 0    │ 0       │ 0.806    │
+  │ F_v1           │ seeds         │ 5  │ 5     │ 4    │ 3    │ 0       │ 0.833    │
+  │ F_v1           │ breast_cancer │ 5  │ 3     │ 3    │ 0    │ 0       │ 0.842    │
+  │ F_v2           │ iris          │ 7  │ 10    │ 7    │ 7    │ 0       │ 0.967    │
+  │ F_v2           │ wine          │ 7  │ 9     │ 5    │ 6    │ 0       │ 0.917    │
+  │ F_v2           │ seeds         │ 5  │ 5     │ 6    │ 2    │ 0       │ 0.857    │
+  │ F_v2           │ breast_cancer │ 5  │ 4     │ 4    │ 1    │ 0       │ 0.877    │
+  │ F_v2_multiseed │ iris          │ 6  │ 6     │ 5    │ 5    │ 0       │ 1.000    │
+  │ F_v2_multiseed │ wine          │ 5  │ 2     │ 2    │ 2    │ 0       │ 0.833    │
+  │ F_v2_multiseed │ seeds         │ 5  │ 9     │ 5    │ 6    │ 0       │ 0.833    │
+  │ F_v2_multiseed │ breast_cancer │ 7  │ 3     │ 2    │ 2    │ 0       │ 0.886    │
+  │ F_v2_big       │ iris          │ 5  │ 17    │ 12   │ 12   │ 0       │ 0.967    │
+  │ F_v2_big       │ wine          │ 7  │ 10    │ 9    │ 8    │ 0       │ 0.861    │
+  │ F_v2_big       │ seeds         │ 9  │ 12    │ 6    │ 11   │ 0       │ 0.857    │
+  │ F_v2_big       │ breast_cancer │ 9  │ 9     │ 10   │ 3    │ 0       │ 0.912    │
+  └────────────────┴───────────────┴────┴───────┴──────┴──────┴─────────┴──────────┘
+
+Things this composition table makes visible that the headline numbers
+don't:
+
+* Stage A circuits are the heaviest by far (n_1q + n_2q = 52-60). Every
+  cell is the same shape: external encoder + 2-layer RY/CNOT ansatz.
+* Stage B keeps the encoder but the ansatz shrinks (evolved CircuitGenome
+  added 6-19 ops). Champion B cells use 7-21 n_1q and 6-19 n_2q.
+* Stage C shrinks further because evolved-N often picks small registers
+  (N=4 on 3/4 datasets) -- depth drops to 7-12.
+* Stage E v1 circuits are EXTREMELY 1q-heavy and 2q-light (e.g. breast_cancer
+  N=6 with 7 single-qubit gates and 0 two-qubit gates -- a literally
+  classical single-wire classifier dressed in a 6-qubit shell).
+* Stage F v2 champions look balanced (n_1q ~ n_2q), matching the design
+  intent that universal 2-qubit gates show up alongside the universal
+  1-qubit encoder gates.
+* Multi-seed cells are NOT a strict subset structurally -- different
+  seeds find different gate counts even when test_acc matches. e.g.
+  F_v2_multiseed iris champion is N=6, 5 1q + 5 2q gates, where the seed=0
+  F_v2 iris champion was N=7, 7 1q + 7 2q. Same accuracy ceiling (1.000
+  vs 0.967), very different circuits.
+* n_multi > 0 only happens when fixed_amplitude is the champion -- the
+  AmplitudeEmbedding op stays as one multi-wire op.
+
+================================================================================
 How to read the tables
 ================================================================================
 
