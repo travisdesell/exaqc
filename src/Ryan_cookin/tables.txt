@@ -64,6 +64,23 @@ v2 leaps over Stage E by +0.114 mean test_acc; v1 is only +0.014. The lever
 that mattered was making 2-qubit gates feature-dependent, not making
 1-qubit gates universal. Multi-seed and 300-genome follow-ups confirm.
 
+Stage G -- two-block enforced (encoder block + ansatz block, co-trained).
+Same universal gate vocabulary as Stage F v2 (enc_rot + enc_xx/yy/zz +
+ry/rx/rz/cx/cz), same EXAQC mutation logic, same register evolution.
+The ONLY change is the qnode body: pass 1 runs every enabled encoder
+gate first (depth-sorted), pass 2 runs every enabled ansatz gate. So
+the rendered circuit always has the textbook "encoder block | ansatz
+block" structure. All parameters in both blocks live in a single Adam
+optimiser and gradients flow through both passes -- so the encoder
+learns a projection that's good for the ansatz to classify on, and the
+ansatz learns to classify what the encoder produces. Stage G is the
+controlled experiment for "does interleaving (Stage F v2) actually
+help, or is the textbook block structure just as good?" Result on
+seed=0: F v2 mean 0.904, G mean 0.873 -- Stage F v2 wins by +0.031 on
+average, but Stage G WINS on breast_cancer (0.921 vs 0.877). So
+interleaving (data re-uploading) helps on three of four datasets, and
+hurts on the highest-D one.
+
 
 ================================================================================
 What each stage does (architectural)
@@ -91,6 +108,9 @@ What each stage does (architectural)
   │ F v2 ms  │ same as F v2, +seeds 1,2                            │ evolved               │ evolved                        │ yes               │ yes               │
   ├──────────┼─────────────────────────────────────────────────────┼───────────────────────┼────────────────────────────────┼───────────────────┼───────────────────┤
   │ F v2 big │ same as F v2, n_genomes=300                         │ evolved               │ evolved                        │ yes               │ yes               │
+  ├──────────┼─────────────────────────────────────────────────────┼───────────────────────┼────────────────────────────────┼───────────────────┼───────────────────┤
+  │ G        │ same vocabulary as F v2, ENCODER BLOCK first        │ evolved               │ evolved                        │ yes               │ yes               │
+  │          │ THEN ANSATZ BLOCK (enforced at qnode level)         │                       │                                │                   │                   │
   └──────────┴─────────────────────────────────────────────────────┴───────────────────────┴────────────────────────────────┴───────────────────┴───────────────────┘
 
 
@@ -122,6 +142,8 @@ Headline numbers (per-stage mean / best)
   │ F v2 (3 seeds)     │ 12      │ 3     │ 0.891         │ 1.000 │ adds error bars to v2                                  │
   ├────────────────────┼─────────┼───────┼───────────────┼───────┼────────────────────────────────────────────────────────┤
   │ F v2 (300 gen)     │ 4       │ 1     │ 0.899         │ 0.967 │ breast_cancer +0.035                                   │
+  ├────────────────────┼─────────┼───────┼───────────────┼───────┼────────────────────────────────────────────────────────┤
+  │ G                  │ 4       │ 1     │ 0.873         │ 0.921 │ encoder block then ansatz block (no interleaving)      │
   └────────────────────┴─────────┴───────┴───────────────┴───────┴────────────────────────────────────────────────────────┘
 
 
@@ -129,17 +151,17 @@ Headline numbers (per-stage mean / best)
 Per-dataset best result by stage (test_acc, seed=0 unless noted)
 ================================================================================
 
-  ┌───────────────┬───────┬───────┬───────┬───────┬───────┬───────┬───────┬───────────────┬──────────┐
-  │    dataset    │   A   │   B   │   C   │ E v1  │ E v2  │ F v1  │ F v2  │  F v2 3-seed  │ F v2 big │
-  ├───────────────┼───────┼───────┼───────┼───────┼───────┼───────┼───────┼───────────────┼──────────┤
-  │ iris          │ 0.967 │ 1.000 │ 1.000 │ 0.700 │ 0.633 │ 0.733 │ 0.967 │ 0.989 ± 0.019 │ 0.967    │
-  ├───────────────┼───────┼───────┼───────┼───────┼───────┼───────┼───────┼───────────────┼──────────┤
-  │ wine          │ 0.833 │ 1.000 │ 1.000 │ 0.778 │ 0.806 │ 0.806 │ 0.917 │ 0.852 ± 0.058 │ 0.861    │
-  ├───────────────┼───────┼───────┼───────┼───────┼───────┼───────┼───────┼───────────────┼──────────┤
-  │ seeds         │ 0.881 │ 1.000 │ 1.000 │ 0.833 │ 0.833 │ 0.833 │ 0.857 │ 0.841 ± 0.014 │ 0.857    │
-  ├───────────────┼───────┼───────┼───────┼───────┼───────┼───────┼───────┼───────────────┼──────────┤
-  │ breast_cancer │ 0.895 │ 0.974 │ 0.974 │ 0.851 │ 0.877 │ 0.842 │ 0.877 │ 0.880 ± 0.005 │ 0.912    │
-  └───────────────┴───────┴───────┴───────┴───────┴───────┴───────┴───────┴───────────────┴──────────┘
+  ┌───────────────┬───────┬───────┬───────┬───────┬───────┬───────┬───────┬───────────────┬──────────┬───────┐
+  │    dataset    │   A   │   B   │   C   │ E v1  │ E v2  │ F v1  │ F v2  │  F v2 3-seed  │ F v2 big │   G   │
+  ├───────────────┼───────┼───────┼───────┼───────┼───────┼───────┼───────┼───────────────┼──────────┼───────┤
+  │ iris          │ 0.967 │ 1.000 │ 1.000 │ 0.700 │ 0.633 │ 0.733 │ 0.967 │ 0.989 ± 0.019 │ 0.967    │ 0.900 │
+  ├───────────────┼───────┼───────┼───────┼───────┼───────┼───────┼───────┼───────────────┼──────────┼───────┤
+  │ wine          │ 0.833 │ 1.000 │ 1.000 │ 0.778 │ 0.806 │ 0.806 │ 0.917 │ 0.852 ± 0.058 │ 0.861    │ 0.861 │
+  ├───────────────┼───────┼───────┼───────┼───────┼───────┼───────┼───────┼───────────────┼──────────┼───────┤
+  │ seeds         │ 0.881 │ 1.000 │ 1.000 │ 0.833 │ 0.833 │ 0.833 │ 0.857 │ 0.841 ± 0.014 │ 0.857    │ 0.810 │
+  ├───────────────┼───────┼───────┼───────┼───────┼───────┼───────┼───────┼───────────────┼──────────┼───────┤
+  │ breast_cancer │ 0.895 │ 0.974 │ 0.974 │ 0.851 │ 0.877 │ 0.842 │ 0.877 │ 0.880 ± 0.005 │ 0.912    │ 0.921 │
+  └───────────────┴───────┴───────┴───────┴───────┴───────┴───────┴───────┴───────────────┴──────────┴───────┘
 
 
 ================================================================================
@@ -211,6 +233,10 @@ Generator:  scripts/compute_champion_composition.py
   │ F_v2_big       │ wine          │ 7  │ 10    │ 9    │ 8    │ 0       │ 0.861    │
   │ F_v2_big       │ seeds         │ 9  │ 12    │ 6    │ 11   │ 0       │ 0.857    │
   │ F_v2_big       │ breast_cancer │ 9  │ 9     │ 10   │ 3    │ 0       │ 0.912    │
+  │ G              │ iris          │ 5  │ 5     │ 4    │ 3    │ 0       │ 0.900    │
+  │ G              │ wine          │ 6  │ 9     │ 4    │ 6    │ 0       │ 0.861    │
+  │ G              │ seeds         │ 7  │ 4     │ 1    │ 4    │ 0       │ 0.810    │
+  │ G              │ breast_cancer │ 6  │ 6     │ 2    │ 5    │ 0       │ 0.921    │
   └────────────────┴───────────────┴────┴───────┴──────┴──────┴─────────┴──────────┘
 
 Things this composition table makes visible that the headline numbers
@@ -235,6 +261,45 @@ don't:
   vs 0.967), very different circuits.
 * n_multi > 0 only happens when fixed_amplitude is the champion -- the
   AmplitudeEmbedding op stays as one multi-wire op.
+* Stage G champion circuits are STRUCTURALLY balanced: 1-5 1q gates and
+  3-6 2q gates per cell. Far fewer total ops than Stage F v2_big at the
+  same vocabulary -- the block constraint seems to discourage runaway
+  growth, possibly because mutating across the encoder/ansatz block
+  boundary is harder for evolution to exploit.
+
+================================================================================
+Stage F v2 vs Stage G: does data re-uploading help? (a controlled
+experiment)
+================================================================================
+
+Stage G is the controlled experiment for the data re-uploading
+question. F v2 and G have IDENTICAL gate vocabulary, mutation logic,
+register evolution, budget (n_genomes=120, pop_size=25), and inner
+training (5 epochs Adam, lr=0.05, batch 8). The ONLY difference is
+the qnode body: F v2 executes all gates in depth order (so encoder
+and ansatz interleave whenever evolution puts them at adjacent
+depths), G runs all encoder gates first then all ansatz gates.
+
+  dataset         F v2 (interleaved)   G (block)   delta (F v2 - G)
+  iris            0.967                0.900       +0.067
+  wine            0.917                0.861       +0.056
+  seeds           0.857                0.810       +0.047
+  breast_cancer   0.877                0.921       -0.044
+  mean            0.904                0.873       +0.031
+
+Net: F v2 wins by +0.031 mean, but G wins by +0.044 on breast_cancer.
+
+Interpretation:
+* Data re-uploading helps when evolution can put data-dependent
+  primitives at multiple depths (Perez-Salinas et al. 2020 showed this
+  raises the Fourier order the circuit can represent per layer).
+* The breast_cancer reversal is suggestive but a single-seed result.
+  D=30 features have a LOT of variance to project; concentrating all
+  encoder capacity into a clean block before any ansatz processing
+  might preserve more of that variance than letting re-uploading
+  spread it out. Multi-seed Stage G on breast_cancer would settle
+  whether this is a real architectural preference or just one lucky
+  draw.
 
 ================================================================================
 How to read the tables

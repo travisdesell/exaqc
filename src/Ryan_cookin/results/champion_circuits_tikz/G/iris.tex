@@ -1,0 +1,25 @@
+% stage G, dataset iris, seed 0
+% D=4 features, N=5 qubits, K=3 classes. enc_gates=2, ansatz_gates=5, test_acc=0.900. Stage G enforces a two-block structure at qnode level: every encoder gate (blue, left) fires before any ansatz gate (orange, right). All parameters in both blocks are co-trained in a single Adam loop with backprop through the whole circuit, so the encoder learns a projection that helps the ansatz classify, and the ansatz learns to classify what the encoder produces. Same gate vocabulary as Stage F v2; the only thing that changed is the execution order.
+% Feature mapping per encoder gate (x_i / x_j -> concrete component of x):
+%   gate 81 (enc_yy, q1,q0): x_i = x_1, x_j = x_0
+%   gate 63 (enc_xx, q2,q1): x_i = x_2, x_j = x_1
+% Compile with: pdflatex <this file>
+\documentclass[border=6pt,varwidth=40cm]{standalone}
+\usepackage{quantikz}
+\usepackage{xcolor}
+\begin{document}
+\begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
+\lstick{$q_{0}$} & \gate[2,style={fill=blue!15}]{R_{YY}\!\left(a^{0}_{81} x_i + a^{1}_{81} x_j + b_{81}\right)} & \qw & \gate[style={fill=orange!15}]{R_y(-1.59)} & \qw & \targ{} & \gate[style={fill=orange!15}]{R_z(+2.19)} & \qw & \qw \\
+\lstick{$q_{1}$} &  & \gate[2,style={fill=blue!15}]{R_{XX}\!\left(a^{0}_{63} x_i + a^{1}_{63} x_j + b_{63}\right)} & \qw & \gate[style={fill=orange!15}]{R_y(-3.14)} & \ctrl{-1} & \qw & \gate[style={fill=orange!15}]{R_x(-0.97)} & \qw \\
+\lstick{$q_{2}$} & \qw &  & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{3}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{4}$} & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw
+\end{quantikz}
+
+\vspace{1.5ex}
+
+{\small
+\fcolorbox{black!50}{blue!15}{\rule{0pt}{1em}\hspace{1.6em}}~Encoding gates (data-dependent: $a\,x_i + b$) \quad
+\fcolorbox{black!50}{orange!15}{\rule{0pt}{1em}\hspace{1.6em}}~Ansatz / learning gates (trained scalar) \quad
+controlled gates (cx/cz) keep their native ctrl/target look.\par}
+\end{document}

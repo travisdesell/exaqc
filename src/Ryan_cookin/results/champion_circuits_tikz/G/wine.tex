@@ -1,0 +1,30 @@
+% stage G, dataset wine, seed 0
+% D=13 features, N=6 qubits, K=3 classes. enc_gates=6, ansatz_gates=4, test_acc=0.861. Stage G enforces a two-block structure at qnode level: every encoder gate (blue, left) fires before any ansatz gate (orange, right). All parameters in both blocks are co-trained in a single Adam loop with backprop through the whole circuit, so the encoder learns a projection that helps the ansatz classify, and the ansatz learns to classify what the encoder produces. Same gate vocabulary as Stage F v2; the only thing that changed is the execution order.
+% Feature mapping per encoder gate (x_i / x_j -> concrete component of x):
+%   gate 156 (enc_xx, q0,q2): x_i = x_0, x_j = x_2
+%   gate 195 (enc_xx, q5,q0): x_i = x_5, x_j = x_0
+%   gate 160 (enc_xx, q1,q0): x_i = x_1, x_j = x_0
+%   gate 176 (enc_xx, q1,q0): x_i = x_1, x_j = x_0
+%   gate 180 (enc_zz, q1,q0): x_i = x_1, x_j = x_0
+%   gate 194 (enc_xx, q1,q0): x_i = x_1, x_j = x_0
+% Compile with: pdflatex <this file>
+\documentclass[border=6pt,varwidth=40cm]{standalone}
+\usepackage{quantikz}
+\usepackage{xcolor}
+\begin{document}
+\begin{quantikz}[row sep={1cm,between origins}, column sep=0.6cm]
+\lstick{$q_{0}$} & \gate[3,style={fill=blue!15}]{R_{XX}\!\left(a^{0}_{156} x_i + a^{1}_{156} x_j + b_{156}\right)} & \gate[6,style={fill=blue!15}]{R_{XX}\!\left(a^{0}_{195} x_i + a^{1}_{195} x_j + b_{195}\right)} & \gate[2,style={fill=blue!15}]{R_{XX}\!\left(a^{0}_{160} x_i + a^{1}_{160} x_j + b_{160}\right)} & \gate[2,style={fill=blue!15}]{R_{XX}\!\left(a^{0}_{176} x_i + a^{1}_{176} x_j + b_{176}\right)} & \gate[2,style={fill=blue!15}]{R_{ZZ}\!\left(a^{0}_{180} x_i + a^{1}_{180} x_j + b_{180}\right)} & \gate[2,style={fill=blue!15}]{R_{XX}\!\left(a^{0}_{194} x_i + a^{1}_{194} x_j + b_{194}\right)} & \qw & \qw & \qw & \gate[style={fill=orange!15}]{R_x(+0.00)} & \qw \\
+\lstick{$q_{1}$} &  &  &  &  &  &  & \gate[style={fill=orange!15}]{R_x(+0.34)} & \gate[style={fill=orange!15}]{R_x(-3.59)} & \gate[style={fill=orange!15}]{R_y(+0.00)} & \qw & \qw \\
+\lstick{$q_{2}$} &  &  & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{3}$} & \qw &  & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{4}$} & \qw &  & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw \\
+\lstick{$q_{5}$} & \qw &  & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw & \qw
+\end{quantikz}
+
+\vspace{1.5ex}
+
+{\small
+\fcolorbox{black!50}{blue!15}{\rule{0pt}{1em}\hspace{1.6em}}~Encoding gates (data-dependent: $a\,x_i + b$) \quad
+\fcolorbox{black!50}{orange!15}{\rule{0pt}{1em}\hspace{1.6em}}~Ansatz / learning gates (trained scalar) \quad
+controlled gates (cx/cz) keep their native ctrl/target look.\par}
+\end{document}

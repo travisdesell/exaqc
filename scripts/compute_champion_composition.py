@@ -77,6 +77,7 @@ STAGES = [
     StageSpec("F_v2",           f"{RESULTS_DIR}/stage_f_v2.csv",           f"{RESULTS_DIR}/weights_stage_f_v2",            "{dataset}_seed{seed}.pt",                       "F"),
     StageSpec("F_v2_multiseed", f"{RESULTS_DIR}/stage_f_v2_multiseed.csv", f"{RESULTS_DIR}/weights_stage_f_v2_multiseed",  "{dataset}_seed{seed}.pt",                       "F"),
     StageSpec("F_v2_big",       f"{RESULTS_DIR}/stage_f_v2_big.csv",       f"{RESULTS_DIR}/weights_stage_f_v2_big",        "{dataset}_seed{seed}.pt",                       "F"),
+    StageSpec("G",              f"{RESULTS_DIR}/stage_g.csv",              f"{RESULTS_DIR}/weights_stage_g",               "{dataset}_seed{seed}.pt",                       "G"),
 ]
 
 
@@ -254,11 +255,66 @@ def build_qnode_F(meta, n_features, n_classes):
     return circ, x
 
 
+def build_qnode_G(meta, n_features, n_classes):
+    """Stage G: Stage F v2 vocabulary, but encoder block then ansatz block."""
+    import src.Ryan_cookin.stage_f as _s
+    _s._register_stage_f_specs()
+    genome = CircuitGenome.from_dict(meta["best_genome_dict"])
+    n_qubits = len(genome.qubits)
+    genome.sort_gates()
+    gates_snapshot = list(genome.gates)
+    qubits = genome.qubits
+    params_dict = _params_from_genome(genome)
+    dev = qml.device("default.qubit", wires=n_qubits)
+    output_wires = _output_wires(n_qubits, n_classes)
+    enc_methods = {"enc_rot"} | set(_ENC_2Q_F.keys())
+    encoder_gates = [g for g in gates_snapshot if g.enabled and g.method_name in enc_methods]
+    ansatz_gates  = [g for g in gates_snapshot if g.enabled and g.method_name not in enc_methods]
+    enc1_meta = {}
+    enc2_meta = {}
+    for g in encoder_gates:
+        if g.method_name == "enc_rot":
+            w0 = qubits.index(g.qubits[0])
+            enc1_meta[id(g)] = (w0, w0 % n_features)
+        elif g.method_name in _ENC_2Q_F:
+            w0 = qubits.index(g.qubits[0])
+            w1 = qubits.index(g.qubits[1])
+            enc2_meta[id(g)] = (w0, w1, w0 % n_features, w1 % n_features, _ENC_2Q_F[g.method_name])
+
+    @qml.qnode(dev, interface="torch")
+    def circ(x):
+        for g in encoder_gates:
+            inn = g.innovation_number
+            m1 = enc1_meta.get(id(g))
+            if m1 is not None:
+                wire, fi = m1
+                aa = params_dict[f"{inn}:a_alpha"]; ba = params_dict[f"{inn}:b_alpha"]
+                ab = params_dict[f"{inn}:a_beta"];  bb = params_dict[f"{inn}:b_beta"]
+                ag = params_dict[f"{inn}:a_gamma"]; bg = params_dict[f"{inn}:b_gamma"]
+                xi = x[fi]
+                qml.Rot(aa*xi + ba, ab*xi + bb, ag*xi + bg, wires=wire)
+                continue
+            m2 = enc2_meta.get(id(g))
+            if m2 is not None:
+                w0, w1, f0, f1, axis = m2
+                a0 = params_dict[f"{inn}:a_q0"]
+                a1 = params_dict[f"{inn}:a_q1"]
+                b  = params_dict[f"{inn}:b"]
+                axis(a0*x[f0] + a1*x[f1] + b, wires=[w0, w1])
+        for g in ansatz_gates:
+            g.add_to_pennylane_circuit(qubits, params=params_dict)
+        return qml.probs(wires=output_wires)
+
+    x = torch.tensor(np.linspace(0.1, 0.9, n_features), dtype=torch.float64)
+    return circ, x
+
+
 BUILDERS = {
     "A":      build_qnode_A,
     "B_or_C": build_qnode_BC,
     "E":      build_qnode_E,
     "F":      build_qnode_F,
+    "G":      build_qnode_G,
 }
 
 

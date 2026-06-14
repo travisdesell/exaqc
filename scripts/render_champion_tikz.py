@@ -100,6 +100,7 @@ STAGES: list[StageSpec] = [
     StageSpec("F_v2",             f"{RESULTS_DIR}/stage_f_v2.csv",          f"{RESULTS_DIR}/weights_stage_f_v2",            "{dataset}_seed{seed}.pt",                       "F"),
     StageSpec("F_v2_multiseed",   f"{RESULTS_DIR}/stage_f_v2_multiseed.csv",f"{RESULTS_DIR}/weights_stage_f_v2_multiseed",  "{dataset}_seed{seed}.pt",                       "F"),
     StageSpec("F_v2_big",         f"{RESULTS_DIR}/stage_f_v2_big.csv",      f"{RESULTS_DIR}/weights_stage_f_v2_big",        "{dataset}_seed{seed}.pt",                       "F"),
+    StageSpec("G",                f"{RESULTS_DIR}/stage_g.csv",             f"{RESULTS_DIR}/weights_stage_g",               "{dataset}_seed{seed}.pt",                       "G"),
 ]
 
 
@@ -417,11 +418,48 @@ def render_stage_F(meta, n_features, n_classes) -> tuple[str, str]:
     return body, note
 
 
+def render_stage_G(meta, n_features, n_classes) -> tuple[str, str]:
+    """Stage G uses Stage F v2's gate vocabulary, but the qnode runs
+    encoder gates first and ansatz gates second. We mirror that ordering
+    here so the rendered diagram shows a clean encoder block on the
+    left and an ansatz block on the right."""
+    import src.Ryan_cookin.stage_f as _s
+    _s._register_stage_f_specs()
+    genome = CircuitGenome.from_dict(meta["best_genome_dict"])
+    genome.sort_gates()
+    n_qubits = len(genome.qubits)
+    enc_methods = {"enc_rot", "enc_xx", "enc_yy", "enc_zz"}
+    encoder_gates = [g for g in genome.gates if g.enabled and g.method_name in enc_methods]
+    ansatz_gates  = [g for g in genome.gates if g.enabled and g.method_name not in enc_methods]
+    enc_cols = [gate_to_column(g, n_qubits, n_features) for g in encoder_gates]
+    ans_cols = [gate_to_column(g, n_qubits, n_features) for g in ansatz_gates]
+    body = columns_to_body(enc_cols + ans_cols, n_qubits)
+    note = (
+        f"D={n_features} features, N={n_qubits} qubits, K={n_classes} classes. "
+        f"enc_gates={meta.get('n_enc_gates','?')}, "
+        f"ansatz_gates={meta.get('n_ansatz_gates','?')}, "
+        f"test_acc={meta['test_acc']:.3f}. "
+        "Stage G enforces a two-block structure at qnode level: every "
+        "encoder gate (blue, left) fires before any ansatz gate (orange, "
+        "right). All parameters in both blocks are co-trained in a single "
+        "Adam loop with backprop through the whole circuit, so the encoder "
+        "learns a projection that helps the ansatz classify, and the ansatz "
+        "learns to classify what the encoder produces. Same gate "
+        "vocabulary as Stage F v2; the only thing that changed is the "
+        "execution order."
+    )
+    legend = _gate_legend(genome, n_features)
+    if legend:
+        note = note + "\n" + legend
+    return body, note
+
+
 KIND_DISPATCH = {
     "A": render_stage_A,
     "B_or_C": render_stage_B_or_C,
     "E": render_stage_E,
     "F": render_stage_F,
+    "G": render_stage_G,
 }
 
 
