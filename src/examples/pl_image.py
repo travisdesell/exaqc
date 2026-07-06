@@ -24,7 +24,7 @@ from src.evolution.master_worker import master_worker
 from src.evolution.objective import Objective
 from src.evolution.steady_state_islands import SteadyStateIslands
 from src.evolution.steady_state_population import SteadyStatePopulation
-from src.models import LinearImageEncoder
+from src.models import LinearImageEncoder, CNNImageEncoder, ResNetImageEncoder
 from src.objectives.genome_objectives import train_genome_objective
 from src.utils.helpers import genome_to_torch_params
 from src.utils.losses import LOSS_REGISTRY, ce_onehot_on_probs
@@ -56,19 +56,32 @@ def eval_probs_ce_and_acc(
     loss: Optional[str] = None,
     encoding: str = "angle",
     embedding_model: torch.nn.Module | None = None,
+    pl_device: str = "default.qubit",
+    diff_method: str | None = None,
+    device: str = "cpu",
 ) -> dict[str, float]:
     """Evaluate loss and accuracy from quantum probability outputs."""
+    device = torch.device(device)
+
     if embedding_model is not None:
+        embedding_model.to(device)
         embedding_model.eval()
 
     if getattr(genome, "circuit", None) is None or not callable(genome.circuit):
         genome.generate_pennylane_circuit(
             return_probs=True,
             input_mode=encoding,
+            device_name=pl_device,
+            diff_method=diff_method,
+            n_classes=n_classes,
         )
 
     loss_fn = LOSS_REGISTRY[loss]
-    params = genome_to_torch_params(genome)
+    # params = genome_to_torch_params(genome)
+    params = {
+        k: torch.nn.Parameter(v.detach().to(device).clone(), requires_grad=False)
+        for k, v in genome_to_torch_params(genome).items()
+    }
 
     losses: list[torch.Tensor] = []
     probas: list[torch.Tensor] = []
@@ -82,16 +95,21 @@ def eval_probs_ce_and_acc(
     alpha = (1.0 - beta) / (
         1.0 - np.power(beta, np.array(dataset.counts, dtype=np.float32))
     )
-    alpha = torch.as_tensor(alpha / alpha.mean(), dtype=torch.float32)
+    alpha = torch.as_tensor(alpha / alpha.mean(), dtype=torch.float32, device=device)
 
     for x, y, cls in dataset:
         per_class_correct.setdefault(cls, 0)
+
+        x = x.to(device)
+        y = y.to(device)
 
         if embedding_model is not None:
             x = embedding_model(x)
 
         probs_full = genome.circuit(x, params)
         pred, probs = predict_from_probs(probs_full, n_classes=n_classes)
+
+        probs = probs.to(device)
 
         if loss == "per_class":
             loss_value = ce_onehot_on_probs(probs, y, alpha_per_class=alpha)
@@ -151,6 +169,13 @@ class SupervisedClassificationObjective(Objective):
         hidden_dims: list[int],
         loss: str = "ce",
         activation: str = "tanh",
+        dataset_name: str = "",
+        encoder_type: str = "linear",
+        conv_channels: list[int] | None = None,
+        resnet_model: str = "resnet18",
+        resnet_pretrained: bool = True,
+        freeze_resnet: bool = True,
+        target: str = "pennylane",
     ) -> None:
         self.train_data = train_data
         self.test_data = test_data
@@ -159,17 +184,58 @@ class SupervisedClassificationObjective(Objective):
         self.n_classes = n_classes
         self.hidden_dims = hidden_dims
         self.loss = loss
-        self.target = "pennylane"
+        self.target = target
         self.activation = activation
+        self.dataset_name = dataset_name
+        self.encoder_type = encoder_type
+        self.conv_channels = conv_channels or [16, 32]
+
+        self.resnet_model = resnet_model
+        self.resnet_pretrained = resnet_pretrained
+        self.freeze_resnet = freeze_resnet
 
     def build_embedding_model(self) -> torch.nn.Module:
         """Create a fresh encoder for one genome evaluation."""
-        return LinearImageEncoder(
-            input_dim=self.raw_input_dim,
-            embedding_dim=self.input_size,
-            hidden_dims=self.hidden_dims,
-            activation=self.activation,
-        )
+        if self.encoder_type == "linear":
+            return LinearImageEncoder(
+                input_dim=self.raw_input_dim,
+                embedding_dim=self.input_size,
+                hidden_dims=self.hidden_dims,
+                activation=self.activation,
+            )
+
+        if self.encoder_type == "cnn":
+            if self.dataset_name == "cifar10":
+                in_channels = 3
+                image_size = 32
+            elif self.dataset_name in {"mnist", "fashion_mnist"}:
+                in_channels = 1
+                image_size = 28
+            else:
+                raise ValueError("CNN encoder is only supported for image datasets.")
+
+            return CNNImageEncoder(
+                in_channels=in_channels,
+                image_size=image_size,
+                embedding_dim=self.input_size,
+                conv_channels=self.conv_channels,
+                hidden_dims=self.hidden_dims,
+                activation=self.activation,
+            )
+
+        if self.encoder_type == "resnet":
+            if self.dataset_name not in {"mnist", "fashion_mnist", "cifar10"}:
+                raise ValueError("ResNet encoder is only supported for image datasets.")
+
+            return ResNetImageEncoder(
+                embedding_dim=self.input_size,
+                model_name=self.resnet_model,
+                pretrained=self.resnet_pretrained,
+                freeze_backbone=self.freeze_resnet,
+                activation=self.activation,
+            )
+
+        raise ValueError(self.encoder_type)
 
     def __call__(self, genome: CircuitGenome) -> None:
         """Train and evaluate one genome."""
@@ -189,6 +255,9 @@ class SupervisedClassificationObjective(Objective):
             log_every=hp["log_every"],
             batch_size=hp["batch_size"],
             embedding_model=embedding_model,
+            pl_device=hp.get("pl_device", "default.qubit"),
+            diff_method=hp.get("diff_method", None),
+            device=hp.get("device", "cpu"),
         )
 
         train_metrics = eval_probs_ce_and_acc(
@@ -198,6 +267,9 @@ class SupervisedClassificationObjective(Objective):
             loss=self.loss,
             encoding=hp["encoding"],
             embedding_model=embedding_model,
+            pl_device=hp.get("pl_device", "default.qubit"),
+            diff_method=hp.get("diff_method", None),
+            device=hp.get("device", "cpu"),
         )
 
         test_metrics = eval_probs_ce_and_acc(
@@ -207,6 +279,9 @@ class SupervisedClassificationObjective(Objective):
             loss=self.loss,
             encoding=hp["encoding"],
             embedding_model=embedding_model,
+            pl_device=hp.get("pl_device", "default.qubit"),
+            diff_method=hp.get("diff_method", None),
+            device=hp.get("device", "cpu"),
         )
 
         genome.fitness = {
@@ -229,16 +304,21 @@ class SupervisedClassificationObjective(Objective):
 
 
 def build_objective(
-    *,
     dataset_name: str,
     data_root: str,
     input_qubits: int,
     hidden_dims: list[int],
+    conv_channels: list[int],
+    encoder_type: str,
     loss: str,
     max_train_samples: int | None,
     max_test_samples: int | None,
     encoding: str = "angle",
     activation: str = "tanh",
+    target: str = "pennylane",
+    resnet_model: str = "resnet50",
+    resnet_pretrained: bool = False,
+    freeze_resnet: bool = False,
 ) -> SupervisedClassificationObjective:
     """Construct objective for image or tabular datasets."""
 
@@ -290,6 +370,14 @@ def build_objective(
     else:
         raise ValueError(f"Unsupported dataset: {dataset_name}")
 
+    image_datasets = {"mnist", "fashion_mnist", "cifar10"}
+
+    if encoder_type == "cnn" and dataset_name not in image_datasets:
+        raise ValueError(
+            "--encoder_type cnn is only supported for image datasets. "
+            "Use --encoder_type linear for iris/wine/seeds/breast_cancer."
+        )
+
     encoder_output_dim = 3 * input_qubits if encoding == "u3" else input_qubits
 
     logger.info(
@@ -311,11 +399,25 @@ def build_objective(
         hidden_dims=hidden_dims,
         loss=loss,
         activation=activation,
+        dataset_name=dataset_name,
+        encoder_type=encoder_type,
+        conv_channels=conv_channels,
+        target=target,
+        resnet_model=resnet_model,
+        resnet_pretrained=resnet_pretrained,
+        freeze_resnet=freeze_resnet,
     )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--target",
+        choices=["pennylane", "qiskit"],
+        type=str,
+        default="pennylane",
+    )
 
     parser.add_argument(
         "--dataset",
@@ -360,6 +462,46 @@ if __name__ == "__main__":
     parser.add_argument("--input_qubits", type=int, default=15)
 
     parser.add_argument(
+        "--encoder_type",
+        choices=["linear", "cnn", "resnet"],
+        default="linear",
+    )
+
+    parser.add_argument(
+        "--resnet_model",
+        choices=["resnet18", "resnet34", "resnet50"],
+        default="resnet18",
+    )
+
+    parser.add_argument(
+        "--resnet_pretrained",
+        action="store_true",
+    )
+
+    parser.add_argument(
+        "--freeze_resnet",
+        action="store_true",
+    )
+
+    parser.add_argument(
+        "--conv_channels",
+        type=int,
+        nargs="*",
+        default=[16, 32],
+        help=(
+            "CNN convolution channel widths. "
+            "Only used when --encoder_type cnn."
+        ),
+    )
+
+    parser.add_argument(
+        "--activation",
+        choices=["tanh", "sigmoid"],
+        type=str,
+        default="tanh",
+    )
+
+    parser.add_argument(
         "--hidden_dims",
         type=int,
         nargs="*",
@@ -387,10 +529,10 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--activation",
-        choices=["tanh", "sigmoid"],
+        "--device",
+        choices=["cpu", "gpu"],
         type=str,
-        default="tanh",
+        default="cpu",
     )
 
     parser.add_argument("--batch_size", type=int, required=True)
@@ -423,15 +565,36 @@ if __name__ == "__main__":
     logger.add(sys.stdout, level=args.logging_level)
     logger.add(os.path.join(args.out_dir, "run.log"), level="DEBUG")
 
+    diff_method = "parameter-shift" # "adjoint" if args.device == "gpu" else "backprop"
+    if args.device == "gpu":
+        if not torch.cuda.is_available():
+            raise RuntimeError("Requested --device gpu but torch.cuda.is_available() is False.")
+        device = "cuda"
+        pl_device = "lightning.gpu"
+    else:
+        device = "cpu"
+        pl_device = "default.qubit"
+
     hyperparameters = {
         "epochs": args.epochs,
         "learning_rate": args.learning_rate,
         "log_every": 15,
         "batch_size": args.batch_size,
         "encoding": args.encoding,
+        "conv_channels": args.conv_channels,
+        
+        "encoder_type": args.encoder_type,
+        "resnet_model": args.resnet_model,
+        "resnet_pretrained": args.resnet_pretrained,
+        "freeze_resnet": args.freeze_resnet,
+
         "hidden_dims": args.hidden_dims,
         "activation": args.activation,
         "use_input_u3_layer": args.use_input_u3_layer,
+
+        "device": device,
+        "pl_device": pl_device,
+        "diff_method": diff_method,
     }
 
     objective = build_objective(
@@ -439,11 +602,17 @@ if __name__ == "__main__":
         data_root=args.data_root,
         input_qubits=args.input_qubits,
         hidden_dims=args.hidden_dims,
+        conv_channels=args.conv_channels,
+        encoder_type=args.encoder_type,
         loss=args.loss,
         max_train_samples=args.max_train_samples,
         max_test_samples=args.max_test_samples,
         encoding=args.encoding,
         activation=args.activation,
+        target=args.target,
+        resnet_model=args.resnet_model,
+        resnet_pretrained=args.resnet_pretrained,
+        freeze_resnet=args.freeze_resnet,
     )
 
     if args.population_strategy == "steady_state":
@@ -474,8 +643,13 @@ if __name__ == "__main__":
         f"encoding={args.encoding} | "
         f"use_input_u3_layer={args.use_input_u3_layer} | "
         f"hidden_dims={args.hidden_dims} | "
-        f"n_classes={objective.n_classes}"
+        f"n_classes={objective.n_classes} | "
+        f"device={args.device} | "
+        f"pl_device={pl_device} | "
+        f"diff_method={diff_method} | "
     )
+
+    hyperparameters["n_classes"] = objective.n_classes
 
     master_worker(
         gate_specifications=pennylane_gate_specifications,
@@ -486,5 +660,5 @@ if __name__ == "__main__":
         run_for=args.number_genomes,
         input_registers={"input": args.input_qubits},
         output_registers={"output": math.ceil(math.log(objective.n_classes, 2))},
-        target="pennylane",
+        target=args.target,
     )

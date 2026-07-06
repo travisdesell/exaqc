@@ -6,6 +6,7 @@ import os
 import json
 
 import matplotlib.pyplot as plt
+import numpy as np
 
 from qiskit import QuantumCircuit
 from qiskit import QuantumRegister, ClassicalRegister
@@ -526,7 +527,9 @@ class CircuitGenome:
         measure_registers: bool = False,
         shots: Optional[int] = None,
         input_mode: str = "basis",
+        n_classes: Optional[int] = None,
         return_probs: bool = False,
+        diff_method: str | None = None,
     ):
         """
         Converts this genome into a PennyLane QNode-ready function.
@@ -556,8 +559,18 @@ class CircuitGenome:
             shots=shots,
         )
 
+        if diff_method is None:
+            diff_method = "adjoint" if device_name == "lightning.gpu" else "backprop"
+
+        if device_name == "lightning.gpu":
+            # Basis States
+            self.basis_states = [
+                np.array([int(x) for x in format(i, f'0{len(self.output_indexes)}b')]) 
+                for i in range(n_classes)
+            ]
+
         # Define the QNode function
-        @qml.qnode(dev, interface="torch", diff_method="backprop")
+        @qml.qnode(dev, interface="torch", diff_method=diff_method)
         def qnode_fn(
             input_bits: torch.Tensor,
             params: Dict[str, torch.Tensor],
@@ -616,7 +629,14 @@ class CircuitGenome:
 
             # 4️⃣ Measurement
             if return_probs:
+                if device_name == "lightning.gpu":
+                    return [
+                        qml.expval(qml.Projector(state, wires=self.output_indexes)) 
+                        for state in self.basis_states
+                    ]
+
                 return qml.probs(wires=self.output_indexes)
+
             elif measure_registers:
                 # fallback if you want expvals
                 expvals = [

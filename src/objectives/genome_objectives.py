@@ -145,6 +145,7 @@ def _eval_supervised_split(
     class_counts: Optional[dict] = None,
     alpha=None,
     embedding_model: torch.nn.Module | None = None,
+    device: str = "cpu",
 ):
     """Evaluate supervised classification metrics on a dataset split.
 
@@ -162,8 +163,14 @@ def _eval_supervised_split(
     """
     if data is None:
         return None
+    device = torch.device(device)
+
     if embedding_model is not None:
+        embedding_model.to(device)
         embedding_model.eval()
+
+    if alpha is not None:
+        alpha = alpha.to(device)
 
     losses = []
     probas = []
@@ -171,11 +178,14 @@ def _eval_supervised_split(
     correct = 0
     total = 0
     for x, y, cls in data:
+        x = x.to(device)
+        y = y.to(device)
+
         if embedding_model is not None:
             x = embedding_model(x)
 
         probs = genome.circuit(x, params)
-        probs = torch.as_tensor(probs, dtype=torch.float32)
+        probs = torch.as_tensor(probs, dtype=torch.float32, device=device)
         probs = probs[:n_classes]
         probs = probs / (probs.sum() + 1e-12)
         L = ce_onehot_on_probs(probs, y, alpha_per_class=alpha)
@@ -187,12 +197,14 @@ def _eval_supervised_split(
         probas.append(probs)
         y_onehots.append(y)
 
+    probs = torch.stack([p.to(device=device, dtype=torch.float32) for p in probas], dim=0)
+    y_onehots = torch.stack([p.to(device=device, dtype=torch.float32) for p in y_onehots], dim=0)
+
     if loss_fn.__name__ != "class_avg_ce_onehot_on_probs":
-        loss = float(torch.stack(losses).mean().item()) if losses else 0.0
+        loss = float(torch.stack(losses).mean().detach().cpu().item()) if losses else 0.0
+
     else:
-        probs = torch.stack([p.to(torch.float32) for p in probas], dim=0)
-        y_onehots = torch.stack([p.to(torch.float32) for p in y_onehots], dim=0)
-        loss = float(loss_fn(probs, y_onehots))
+        loss = float(loss_fn(probs, y_onehots).detach().cpu().item())
 
     return {
         "loss": loss,
@@ -211,6 +223,7 @@ def eval_forward_only(
     class_counts: Optional[tuple] = None,
     alpha: Optional[torch.Tensor] = None,
     embedding_model: torch.nn.Module | None = None,
+    device: str = "cpu",
 ):
     """Evaluate a genome without gradient updates.
 
@@ -229,8 +242,15 @@ def eval_forward_only(
     Returns:
         dict[str, float]: Evaluation metrics.
     """
+    device = torch.device(device)
+
+    # params = genome_to_torch_params(genome)
+    params = {
+        k: torch.nn.Parameter(v.detach().to(device).clone(), requires_grad=False)
+        for k, v in genome_to_torch_params(genome).items()
+    }
+
     mode = "teacher" if teacher_qnode is not None else "supervised"
-    params = genome_to_torch_params(genome)
 
     if mode == "teacher":
         tr = _eval_teacher_split(
@@ -253,6 +273,7 @@ def eval_forward_only(
             class_counts=class_counts[0],
             alpha=alpha,
             embedding_model=embedding_model,
+            device=device,
         )
         te = (
             _eval_supervised_split(
@@ -264,6 +285,7 @@ def eval_forward_only(
                 class_counts=class_counts[1],
                 alpha=alpha,
                 embedding_model=embedding_model,
+                device=device,
             )
             if test_list is not None
             else None
@@ -291,6 +313,9 @@ def _train_with_pennylane(
     target_qnode: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
     encoding: str = "angle",
     embedding_model: torch.nn.Module | None = None,
+    device: str = "cpu",
+    pl_device: str = "default.qubit",
+    diff_method: Optional[str] = None,
 ):
     """Train a CircuitGenome using PennyLane-based differentiable execution.
 
@@ -328,6 +353,11 @@ def _train_with_pennylane(
     Returns:
         None. The genome is updated in-place, and `genome.fitness` is set.
     """
+    device = torch.device(device)
+
+    if embedding_model is not None:
+        embedding_model.to(device)
+
     train_list = list(train_data)
     test_list = list(test_data) if test_data is not None else None
 
@@ -346,7 +376,7 @@ def _train_with_pennylane(
     # alpha = alpha / alpha.mean()
     # alpha = alpha ** 0.5
 
-    alpha = torch.as_tensor(alpha / alpha.mean(), dtype=torch.float32)
+    alpha = torch.as_tensor(alpha / alpha.mean(), dtype=torch.float32, device=device)
     logger.info(f"Selected alphas: {alpha}")
 
     n = len(train_list)
@@ -364,17 +394,31 @@ def _train_with_pennylane(
 
     if use_state:
         genome.generate_pennylane_circuit(
-            input_mode=encoding, return_probs=False, measure_registers=False
+            input_mode=encoding, 
+            return_probs=False, 
+            measure_registers=False,
+            device_name=pl_device,
+            diff_method=diff_method,
         )
         if target_qnode is None:
             raise ValueError(
                 "target_qnode is required for teacher training with statevector losses."
             )
     else:
-        genome.generate_pennylane_circuit(input_mode=encoding, return_probs=True)
+        genome.generate_pennylane_circuit(
+                input_mode=encoding, 
+                return_probs=True,
+                device_name=pl_device,
+                diff_method=diff_method,
+                n_classes=n_classes,
+            )
 
     # Get all the parameters
     torch_params = genome_to_torch_params(genome)  # Genome
+    torch_params = {
+        k: torch.nn.Parameter(v.detach().to(device).clone())
+        for k, v in torch_params.items()
+    }
 
     optim_params = list(torch_params.values())
     if embedding_model is not None:
@@ -422,10 +466,11 @@ def _train_with_pennylane(
         Returns:
             torch.Tensor: Probability vector of shape `[n_classes]`.
         """
+        # x = x.to(device)
         if embedding_model is not None:
             x = embedding_model(x)
         probs = genome.circuit(x, torch_params)
-        probs = torch.as_tensor(probs, dtype=torch.float32)
+        probs = torch.as_tensor(probs, dtype=torch.float32, device=device)
         probs = probs[:n_classes]
         probs = probs / (probs.sum() + 1e-12)
         return probs
@@ -476,7 +521,11 @@ def _train_with_pennylane(
             dict[str, float]: Mean loss and classification accuracy.
         """
         if embedding_model is not None:
+            embedding_model.to(device)
             embedding_model.eval()
+
+        if alpha is not None:
+            alpha = alpha.to(device)
 
         losses = []
         probs = []
@@ -485,6 +534,8 @@ def _train_with_pennylane(
         correct = 0
         total = 0
         for x, y, cls in data_list:
+            x = x.to(device)
+            y = y.to(device)
             # if cls not in per_class_pred:
             #     per_class_pred[cls] = 0
             p = forward_probs(x)
@@ -507,8 +558,8 @@ def _train_with_pennylane(
         # for k, v in class_counts.items():
         #     log += f"[{k}] Accuracy: {per_class_pred[k]/v:.4f} ({per_class_pred[k]}/{v}) | "
         # logger.info(f"{log}")
-        probs = torch.stack([p.to(torch.float32) for p in probs], dim=0)
-        y_onehots = torch.stack([p.to(torch.float32) for p in y_onehots], dim=0)
+        probs = torch.stack([p.to(device=device, dtype=torch.float32) for p in probs], dim=0)
+        y_onehots = torch.stack([p.to(device=device, dtype=torch.float32) for p in y_onehots], dim=0)
 
         loss = (
             torch.stack(losses).mean()
@@ -555,6 +606,9 @@ def _train_with_pennylane(
                     losses.append(L)
             else:
                 for x, y, _ in batch:
+                    x = x.to(device)
+                    y = y.to(device)
+
                     p = forward_probs(x)
                     if loss_name != "per_class":
                         L = (
@@ -586,15 +640,18 @@ def _train_with_pennylane(
                     teacher_qnode=target_qnode,
                     n_classes=n_classes,
                     loss_fn=loss_fn,
+                    class_counts=(train_data.class_counts, test_data.class_counts),
                     alpha=alpha,
                     embedding_model=embedding_model,
+                    device=device,
                 )
                 genome.fitness = metrics
                 return
 
             opt.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(list(torch_params.values()), max_norm=1.0)
+            # torch.nn.utils.clip_grad_norm_(list(torch_params.values()), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(optim_params, max_norm=1.0)
             opt.step()
 
         if epoch % log_every == 0 or epoch == epochs - 1:
@@ -623,7 +680,11 @@ def _train_with_pennylane(
                         f"[{epoch:04d}] loss={tr['loss']:.6f} acc={tr['acc']:.3f}"
                     )
 
-        torch_params_to_genome(genome, torch_params)
+        cpu_params = {
+            k: torch.nn.Parameter(v.detach().cpu().clone())
+            for k, v in torch_params.items()
+        }
+        torch_params_to_genome(genome, cpu_params)
 
         # return final metrics
         metrics = eval_forward_only(
@@ -636,11 +697,15 @@ def _train_with_pennylane(
             class_counts=(train_data.class_counts, test_data.class_counts),
             alpha=alpha,
             embedding_model=embedding_model,
+            device=device,
         )
 
         if metrics["test_loss"] < loss_global:
             loss_global = metrics["test_loss"]
-            best_params = copy.deepcopy(torch_params)
+            best_params = best_params = {
+                k: torch.nn.Parameter(v.detach().cpu().clone())
+                for k, v in torch_params.items()
+            }
             best_metrics = copy.deepcopy(metrics)
             logger.info(f"Saved best model to genome:{genome.genome_number}")
 
@@ -832,6 +897,9 @@ def train_genome_objective(
     log_every: int = 50,
     batch_size: int = None,
     embedding_model: torch.nn.Module | None = None,
+    device: str = "cpu",
+    pl_device: str = "default.qubit",
+    diff_method: Optional[str] = None,
     qiskit_config: Optional[dict[str, Any]] = None,
 ) -> CircuitGenome:
     """
@@ -856,6 +924,9 @@ def train_genome_objective(
             target_qnode=teacher_qnode,
             encoding=encoding,
             embedding_model=embedding_model,
+            device = device,
+            pl_device=pl_device,
+            diff_method=diff_method,
         )
         return
 

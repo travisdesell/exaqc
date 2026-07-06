@@ -17,6 +17,7 @@ dependencies = [
     "qiskit",
     "pennylane",
     "pennylane-qiskit",
+    "pennylane-lightning-gpu",
     "torch",
     "torchvision",
     "matplotlib",
