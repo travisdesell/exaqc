@@ -630,10 +630,10 @@ class CircuitGenome:
             # 4️⃣ Measurement
             if return_probs:
                 if device_name == "lightning.gpu":
-                    return [
+                    return tuple([
                         qml.expval(qml.Projector(state, wires=self.output_indexes)) 
                         for state in self.basis_states
-                    ]
+                    ])
 
                 return qml.probs(wires=self.output_indexes)
 

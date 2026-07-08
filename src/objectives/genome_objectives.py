@@ -19,6 +19,7 @@ from src.utils.losses import (  # noqa: F401
     loss_state_angle,
     loss_obs_mse,
     ce_onehot_on_probs,
+    entropy_regularizer,
     class_avg_ce_onehot_on_probs,
     LOSS_REGISTRY,
 )
@@ -30,6 +31,8 @@ from src.utils.helpers import (
 )
 
 STATEVECTOR_LOSSES = {"fidelity", "angle", "kl", "ce"}
+
+entropy_coef = 0.01
 
 
 def _ensure_complex(x: torch.Tensor) -> torch.Tensor:
@@ -145,6 +148,7 @@ def _eval_supervised_split(
     class_counts: Optional[dict] = None,
     alpha=None,
     embedding_model: torch.nn.Module | None = None,
+    readout_head: torch.nn.Module | None = None,
     device: str = "cpu",
 ):
     """Evaluate supervised classification metrics on a dataset split.
@@ -169,6 +173,10 @@ def _eval_supervised_split(
         embedding_model.to(device)
         embedding_model.eval()
 
+    if readout_head is not None:
+        readout_head.to(device)
+        readout_head.eval()
+
     if alpha is not None:
         alpha = alpha.to(device)
 
@@ -185,10 +193,22 @@ def _eval_supervised_split(
             x = embedding_model(x)
 
         probs = genome.circuit(x, params)
-        probs = torch.as_tensor(probs, dtype=torch.float32, device=device)
-        probs = probs[:n_classes]
-        probs = probs / (probs.sum() + 1e-12)
-        L = ce_onehot_on_probs(probs, y, alpha_per_class=alpha)
+
+        if readout_head is not None:
+            logits = readout_head(probs)
+            probs = torch.softmax(logits, dim=-1)
+            target = torch.argmax(y).long().unsqueeze(0)
+            L = torch.nn.functional.cross_entropy(
+                logits.unsqueeze(0),
+                target,
+                weight=alpha,
+            )
+        else:
+            probs = torch.as_tensor(probs, dtype=torch.float32, device=device)
+            probs = probs[:n_classes]
+            probs = probs / (probs.sum() + 1e-12)
+            L = ce_onehot_on_probs(probs, y, alpha_per_class=alpha)
+
         losses.append(L)
         pred = int(torch.argmax(probs).item())
         true = int(torch.argmax(y).item())
@@ -223,6 +243,7 @@ def eval_forward_only(
     class_counts: Optional[tuple] = None,
     alpha: Optional[torch.Tensor] = None,
     embedding_model: torch.nn.Module | None = None,
+    readout_head: torch.nn.Module | None = None,
     device: str = "cpu",
 ):
     """Evaluate a genome without gradient updates.
@@ -285,6 +306,7 @@ def eval_forward_only(
                 class_counts=class_counts[1],
                 alpha=alpha,
                 embedding_model=embedding_model,
+                readout_head=readout_head,
                 device=device,
             )
             if test_list is not None
@@ -313,6 +335,7 @@ def _train_with_pennylane(
     target_qnode: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
     encoding: str = "angle",
     embedding_model: torch.nn.Module | None = None,
+    readout_head: torch.nn.Module | None = None,
     device: str = "cpu",
     pl_device: str = "default.qubit",
     diff_method: Optional[str] = None,
@@ -357,6 +380,9 @@ def _train_with_pennylane(
 
     if embedding_model is not None:
         embedding_model.to(device)
+
+    if readout_head is not None:
+        readout_head.to(device)
 
     train_list = list(train_data)
     test_list = list(test_data) if test_data is not None else None
@@ -423,6 +449,8 @@ def _train_with_pennylane(
     optim_params = list(torch_params.values())
     if embedding_model is not None:
         optim_params += list(embedding_model.parameters())
+    if readout_head is not None:
+        optim_params += list(readout_head.parameters())
 
     # no params: forward-only eval
     if len(optim_params) == 0:
@@ -436,6 +464,7 @@ def _train_with_pennylane(
             class_counts=(train_data.class_counts, test_data.class_counts),
             alpha=alpha,
             embedding_model=embedding_model,
+            readout_head=readout_head,
         )
         genome.fitness = metrics
         return
@@ -469,11 +498,36 @@ def _train_with_pennylane(
         # x = x.to(device)
         if embedding_model is not None:
             x = embedding_model(x)
-        probs = genome.circuit(x, torch_params)
-        probs = torch.as_tensor(probs, dtype=torch.float32, device=device)
-        probs = probs[:n_classes]
-        probs = probs / (probs.sum() + 1e-12)
-        return probs
+            # logger.debug(
+            #             f"Forwarding qnode "
+            #             f"encoder_out_requires_grad={x.requires_grad} "
+            #             f"encoder_out_grad_fn={x.grad_fn}"
+            #         )
+            
+        q_out = genome.circuit(x, torch_params)
+        if isinstance(q_out, torch.Tensor):
+            probs = q_out.to(device=device, dtype=torch.float32)
+        else:
+            probs = torch.stack([
+                v.to(device=device, dtype=torch.float32)
+                if isinstance(v, torch.Tensor)
+                else torch.as_tensor(v, dtype=torch.float32, device=device)
+                for v in q_out
+            ])
+        # logger.debug(
+        #     f"after_stack_requires_grad={probs.requires_grad} "
+        #     f"after_stack_grad_fn={probs.grad_fn}"
+        # )
+
+        if readout_head is None:
+            probs = probs[:n_classes]
+            probs = probs / (probs.sum() + 1e-12)
+            logits = torch.log(probs.clamp_min(1e-8))
+            return logits, probs
+
+        logits = readout_head(probs)
+        probs = torch.softmax(logits, dim=-1)
+        return logits, probs
 
     # --- eval teacher loss/metrics ---
     @torch.no_grad()
@@ -538,15 +592,21 @@ def _train_with_pennylane(
             y = y.to(device)
             # if cls not in per_class_pred:
             #     per_class_pred[cls] = 0
-            p = forward_probs(x)
-            eval_loss = ce_onehot_on_probs(
-                p,
-                y,
-                alpha_per_class=alpha,
-            )
-            losses.append(eval_loss)
+            logits, p = forward_probs(x)
             pred = int(torch.argmax(p).item())
             true = int(torch.argmax(y).item())
+            if readout_head is not None:
+                eval_loss = torch.nn.functional.cross_entropy(
+                    logits.unsqueeze(0),
+                    true=torch.tensor([true], device=device, dtype=torch.long),
+                )
+            else:
+                eval_loss = ce_onehot_on_probs(
+                    p,
+                    y,
+                    alpha_per_class=alpha,
+                )
+            losses.append(eval_loss)
             correct += int(pred == true)
             total += 1
             probs.append(p)
@@ -577,6 +637,8 @@ def _train_with_pennylane(
     # ---- training loop ----
     for epoch in range(epochs):
         opt.zero_grad()
+
+        embedding_model.train()
 
         batches_per_epoch = math.ceil(sampler.n_samples / sampler.batch_size)
         logger.debug(
@@ -609,13 +671,25 @@ def _train_with_pennylane(
                     x = x.to(device)
                     y = y.to(device)
 
-                    p = forward_probs(x)
+                    logits, p = forward_probs(x)
+
+                    target = torch.argmax(y).long()
+
+
                     if loss_name != "per_class":
-                        L = (
-                            ce_onehot_on_probs(p, y, alpha_per_class=alpha)
-                            if loss_fn is None
-                            else loss_fn(p, y, alpha_per_class=alpha)
-                        )
+                        if readout_head is not None:
+                            L = torch.nn.functional.cross_entropy(
+                                logits.unsqueeze(0),
+                                target.unsqueeze(0),
+                                weight=alpha,
+                            )
+                        else:
+                            L = (
+                                ce_onehot_on_probs(p, y, alpha_per_class=alpha)
+                                if loss_fn is None
+                                else loss_fn(p, y, alpha_per_class=alpha)
+                            )
+                        L = L - entropy_coef * entropy_regularizer(p)
                         losses.append(L)
                     probs.append(p)
                     y_onehots.append(y)
@@ -629,56 +703,76 @@ def _train_with_pennylane(
                 else loss_fn(probs, y_onehots)
             )
 
-            if not loss.requires_grad:
-                logger.warning(
-                    "Loss has no grad path. Are parameters actually used inside the QNode?"
-                )
-                metrics = eval_forward_only(
-                    genome,
-                    train_list,
-                    test_list,
-                    teacher_qnode=target_qnode,
-                    n_classes=n_classes,
-                    loss_fn=loss_fn,
-                    class_counts=(train_data.class_counts, test_data.class_counts),
-                    alpha=alpha,
-                    embedding_model=embedding_model,
-                    device=device,
-                )
-                genome.fitness = metrics
-                return
+            # if not loss.requires_grad:
+            #     logger.warning(
+            #         "Loss has no grad path. Are parameters actually used inside the QNode?"
+            #     )
+            #     metrics = eval_forward_only(
+            #         genome,
+            #         train_list,
+            #         test_list,
+            #         teacher_qnode=target_qnode,
+            #         n_classes=n_classes,
+            #         loss_fn=loss_fn,
+            #         class_counts=(train_data.class_counts, test_data.class_counts),
+            #         alpha=alpha,
+            #         embedding_model=embedding_model,
+            #         device=device,
+            #     )
+            #     genome.fitness = metrics
+            #     return
 
             opt.zero_grad()
             loss.backward()
+
+            enc_grad_norm = 0.0
+            if embedding_model is not None:
+                for p in embedding_model.parameters():
+                    if p.grad is not None:
+                        enc_grad_norm += p.grad.detach().norm().item()
+
+            q_grad_norm = 0.0
+            for p in torch_params.values():
+                if p.grad is not None:
+                    q_grad_norm += p.grad.detach().norm().item()
+
+            logger.debug(
+                f"loss_grad={loss.requires_grad} "
+                f"encoder_grad_norm={enc_grad_norm:.6f} "
+                f"n_encoder_params={len(list(embedding_model.parameters()))}"
+                f"quantum_grad_norm={q_grad_norm:.6f} "
+                f"n_quantum_params={len(torch_params)}"
+            )
+
             # torch.nn.utils.clip_grad_norm_(list(torch_params.values()), max_norm=1.0)
             torch.nn.utils.clip_grad_norm_(optim_params, max_norm=1.0)
             opt.step()
 
-        if epoch % log_every == 0 or epoch == epochs - 1:
-            if use_state:
-                tr = eval_teacher(train_list)
-                if test_list is not None:
-                    te = eval_teacher(test_list)
-                    logger.info(
-                        f"[{epoch:04d}] fid_loss={tr['fidelity_loss']:.6f} angle_loss={tr['angle_loss']:.6f} "
-                        f"| test_fid_loss={te['fidelity_loss']:.6f}"
-                    )
-                else:
-                    logger.info(
-                        f"[{epoch:04d}] fid_loss={tr['fidelity_loss']:.6f} angle_loss={tr['angle_loss']:.6f}"
-                    )
-            else:
-                tr = eval_supervised(train_list, train_data.class_counts, alpha=alpha)
-                if test_list is not None:
-                    te = eval_supervised(test_list, test_data.class_counts, alpha=alpha)
-                    logger.info(
-                        f"[{epoch:04d}] loss={tr['loss']:.6f} acc={tr['acc']:.3f} | "
-                        f"test_loss={te['loss']:.3f} test_acc={te['acc']:.3f}"
-                    )
-                else:
-                    logger.info(
-                        f"[{epoch:04d}] loss={tr['loss']:.6f} acc={tr['acc']:.3f}"
-                    )
+        # if epoch % log_every == 0 or epoch == epochs - 1:
+        #     if use_state:
+        #         tr = eval_teacher(train_list)
+        #         if test_list is not None:
+        #             te = eval_teacher(test_list)
+        #             logger.info(
+        #                 f"[{epoch:04d}] fid_loss={tr['fidelity_loss']:.6f} angle_loss={tr['angle_loss']:.6f} "
+        #                 f"| test_fid_loss={te['fidelity_loss']:.6f}"
+        #             )
+        #         else:
+        #             logger.info(
+        #                 f"[{epoch:04d}] fid_loss={tr['fidelity_loss']:.6f} angle_loss={tr['angle_loss']:.6f}"
+        #             )
+        #     else:
+        #         tr = eval_supervised(train_list, train_data.class_counts, alpha=alpha)
+        #         if test_list is not None:
+        #             te = eval_supervised(test_list, test_data.class_counts, alpha=alpha)
+        #             logger.info(
+        #                 f"[{epoch:04d}] loss={tr['loss']:.6f} acc={tr['acc']:.3f} | "
+        #                 f"test_loss={te['loss']:.3f} test_acc={te['acc']:.3f}"
+        #             )
+        #         else:
+        #             logger.info(
+        #                 f"[{epoch:04d}] loss={tr['loss']:.6f} acc={tr['acc']:.3f}"
+        #             )
 
         cpu_params = {
             k: torch.nn.Parameter(v.detach().cpu().clone())
@@ -697,6 +791,7 @@ def _train_with_pennylane(
             class_counts=(train_data.class_counts, test_data.class_counts),
             alpha=alpha,
             embedding_model=embedding_model,
+            readout_head=readout_head,
             device=device,
         )
 
@@ -897,6 +992,7 @@ def train_genome_objective(
     log_every: int = 50,
     batch_size: int = None,
     embedding_model: torch.nn.Module | None = None,
+    readout_head: torch.nn.Module | None = None,
     device: str = "cpu",
     pl_device: str = "default.qubit",
     diff_method: Optional[str] = None,
@@ -924,6 +1020,7 @@ def train_genome_objective(
             target_qnode=teacher_qnode,
             encoding=encoding,
             embedding_model=embedding_model,
+            readout_head=readout_head,
             device = device,
             pl_device=pl_device,
             diff_method=diff_method,

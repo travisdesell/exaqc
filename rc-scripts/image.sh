@@ -1,8 +1,8 @@
 #!/bin/bash -l
-#SBATCH -J exaqc_mnist_angle
+#SBATCH -J exaqc_mnist_u3
 #SBATCH -t 2-00:00:00
-#SBATCH -o ./outs/mnist/output_angle.o
-#SBATCH -e ./logs/mnist/error_angle.e
+#SBATCH -o ./outs/mnist/output_u3.o
+#SBATCH -e ./logs/mnist/error_u3.e
 #SBATCH -A cps -p tier3
 #SBATCH --nodes=1
 #SBATCH --ntasks=12
@@ -14,6 +14,10 @@
 spack env activate default-ml-x86_64-25052701
 
 source .venv/bin/activate
+
+QUBITS=8
+ENCODING="u3"
+ACTIVATION="tanh"
 
 # srun python -m src.examples.pl_image \
 #   --dataset mnist \
@@ -52,18 +56,20 @@ source .venv/bin/activate
 srun python3.11 -m src.examples.pl_image \
   --dataset mnist \
   --loss ce \
-  --epochs 100 \
+  --epochs 50 \
   --learning_rate 1e-3 \
   --number_genomes 1000 \
-  --input_qubits 15 \
+  --input_qubits $QUBITS \
   --batch_size 32 \
   --device gpu \
   --encoder_type cnn \
   --conv_channels 8 16 \
-  --hidden_dims 128 64 \
-  --activation tanh \
+  --hidden_dims 64 \
+  --activation $ACTIVATION \
   --mutation_strategy uniform 1 3 \
-  --out_dir artifacts/mnist_cnn_encoder/enc_angle \
-  --encoding angle \
+  --out_dir artifacts/mnist_cnn_encoder/enc_u3_1 \
+  --max_train_samples 2000 \
+  --max_test_samples 500 \
+  --encoding $ENCODING \
   steady_state \
   --max_population_size 30

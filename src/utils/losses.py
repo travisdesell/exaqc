@@ -214,6 +214,9 @@ def loss_ce(
     phi = phi.to(dtype=psi.dtype, device=psi.device)
     return -(phi * torch.log(psi.clamp_min(eps))).sum()
 
+def entropy_regularizer(probs: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    probs = probs.clamp_min(eps)
+    return -(probs * torch.log(probs)).sum()
 
 def ce_onehot_on_probs(
     probs: torch.Tensor, y_onehot: torch.Tensor, eps: float = 1e-12, **kwargs
@@ -228,6 +231,7 @@ def ce_onehot_on_probs(
     Returns:
         A scalar tensor denoting the cross-entropy loss
     """
+    entropy_coef = 0.01
     probs = probs.clamp_min(eps)
     probs = probs / probs.sum()
     y_onehot = y_onehot.to(dtype=probs.dtype, device=probs.device)

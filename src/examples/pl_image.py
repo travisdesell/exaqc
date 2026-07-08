@@ -12,6 +12,7 @@ from loguru import logger
 
 from src.circuits.circuit import CircuitGenome
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
+from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
 from src.datasets import QuantumDataset
 from src.datasets.classification import (
     ImageDataset,
@@ -56,6 +57,7 @@ def eval_probs_ce_and_acc(
     loss: Optional[str] = None,
     encoding: str = "angle",
     embedding_model: torch.nn.Module | None = None,
+    readout_head: torch.nn.Module | None = None,
     pl_device: str = "default.qubit",
     diff_method: str | None = None,
     device: str = "cpu",
@@ -107,17 +109,32 @@ def eval_probs_ce_and_acc(
             x = embedding_model(x)
 
         probs_full = genome.circuit(x, params)
-        pred, probs = predict_from_probs(probs_full, n_classes=n_classes)
+        logits = None
+        if readout_head is not None:
+            logits = readout_head(probs_full)
+            probs = torch.softmax(logits, dim=-1)
+            pred = int(torch.argmax(probs).item())
+            
+        else:
+            pred, probs = predict_from_probs(probs_full, n_classes=n_classes)
 
         probs = probs.to(device)
 
         if loss == "per_class":
             loss_value = ce_onehot_on_probs(probs, y, alpha_per_class=alpha)
         else:
-            try:
-                loss_value = loss_fn(probs, y, alpha_per_class=alpha)
-            except TypeError:
-                loss_value = loss_fn(probs, y)
+            if readout_head is None:
+                try:
+                    loss_value = loss_fn(probs, y, alpha_per_class=alpha)
+                except TypeError:
+                    loss_value = loss_fn(probs, y)
+            else:
+                target = torch.argmax(y).long().unsqueeze(0)
+                loss_value = torch.nn.functional.cross_entropy(
+                    logits.unsqueeze(0),
+                    target,
+                    weight=alpha,
+                )
 
         losses.append(loss_value)
         probas.append(probs)
@@ -243,6 +260,13 @@ class SupervisedClassificationObjective(Objective):
 
         embedding_model = self.build_embedding_model()
 
+        q_out_dim = 2 ** math.ceil(math.log2(self.n_classes))
+
+        readout_head = torch.nn.Linear(
+            q_out_dim,
+            self.n_classes,
+        )
+
         train_genome_objective(
             genome,
             dataset=[self.train_data, self.test_data],
@@ -255,6 +279,7 @@ class SupervisedClassificationObjective(Objective):
             log_every=hp["log_every"],
             batch_size=hp["batch_size"],
             embedding_model=embedding_model,
+            readout_head=readout_head,
             pl_device=hp.get("pl_device", "default.qubit"),
             diff_method=hp.get("diff_method", None),
             device=hp.get("device", "cpu"),
@@ -267,6 +292,7 @@ class SupervisedClassificationObjective(Objective):
             loss=self.loss,
             encoding=hp["encoding"],
             embedding_model=embedding_model,
+            readout_head=readout_head,
             pl_device=hp.get("pl_device", "default.qubit"),
             diff_method=hp.get("diff_method", None),
             device=hp.get("device", "cpu"),
@@ -279,6 +305,7 @@ class SupervisedClassificationObjective(Objective):
             loss=self.loss,
             encoding=hp["encoding"],
             embedding_model=embedding_model,
+            readout_head=readout_head,
             pl_device=hp.get("pl_device", "default.qubit"),
             diff_method=hp.get("diff_method", None),
             device=hp.get("device", "cpu"),
@@ -456,6 +483,13 @@ if __name__ == "__main__":
         required=True,
     )
 
+    parser.add_argument(
+        "--use_only",
+        default=None,
+        nargs="*",
+        help="List all the required gates",
+    )
+
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--learning_rate", "-lr", type=float, default=1e-3)
     parser.add_argument("--number_genomes", type=int, default=500)
@@ -512,14 +546,14 @@ if __name__ == "__main__":
         ),
     )
 
-    parser.add_argument(
-        "--use_input_u3_layer",
-        action="store_true",
-        help=(
-            "If set, add an innovation-tracked trainable U3 layer on all input "
-            "qubits after encoding and before evolved genome gates."
-        ),
-    )
+    # parser.add_argument(
+    #     "--use_input_u3_layer",
+    #     action="store_true",
+    #     help=(
+    #         "If set, add an innovation-tracked trainable U3 layer on all input "
+    #         "qubits after encoding and before evolved genome gates."
+    #     ),
+    # )
 
     parser.add_argument(
         "--encoding",
@@ -565,15 +599,22 @@ if __name__ == "__main__":
     logger.add(sys.stdout, level=args.logging_level)
     logger.add(os.path.join(args.out_dir, "run.log"), level="DEBUG")
 
-    diff_method = "parameter-shift" # "adjoint" if args.device == "gpu" else "backprop"
+    pl_device = "default.qubit"
+    diff_method = "backprop" # "adjoint" if args.device == "gpu" else "backprop"
     if args.device == "gpu":
         if not torch.cuda.is_available():
             raise RuntimeError("Requested --device gpu but torch.cuda.is_available() is False.")
-        device = "cuda"
-        pl_device = "lightning.gpu"
+        
+        local_rank = int(
+            os.environ.get("SLURM_LOCALID", os.environ.get("OMPI_COMM_WORLD_LOCAL_RANK", 0))
+        )
+        gpu_id = local_rank % torch.cuda.device_count()
+        torch.cuda.set_device(gpu_id)
+
+        device = f"cuda:{gpu_id}"
+        # pl_device = "lightning.gpu"
     else:
         device = "cpu"
-        pl_device = "default.qubit"
 
     hyperparameters = {
         "epochs": args.epochs,
@@ -590,7 +631,7 @@ if __name__ == "__main__":
 
         "hidden_dims": args.hidden_dims,
         "activation": args.activation,
-        "use_input_u3_layer": args.use_input_u3_layer,
+        # "use_input_u3_layer": args.use_input_u3_layer,
 
         "device": device,
         "pl_device": pl_device,
@@ -641,7 +682,7 @@ if __name__ == "__main__":
         f"population_strategy={args.population_strategy} | "
         f"input_qubits={args.input_qubits} | "
         f"encoding={args.encoding} | "
-        f"use_input_u3_layer={args.use_input_u3_layer} | "
+        # f"use_input_u3_layer={args.use_input_u3_layer} | "
         f"hidden_dims={args.hidden_dims} | "
         f"n_classes={objective.n_classes} | "
         f"device={args.device} | "
@@ -649,10 +690,25 @@ if __name__ == "__main__":
         f"diff_method={diff_method} | "
     )
 
+    gate_spec_map = {
+        "pennylane": pennylane_gate_specifications,
+        "qiskit": qiskit_gate_specifications,
+    }
+
+    if args.target not in gate_spec_map:
+        raise ValueError(
+            f"Unsupported target backend: {args.target}. "
+            "Supported backends are: pennylane, qiskit."
+        )
+
+    gate_specs = gate_spec_map[args.target]
+    if args.use_only is not None:
+        gate_specs = gate_specs.use_only(args.use_only)
+
     hyperparameters["n_classes"] = objective.n_classes
 
     master_worker(
-        gate_specifications=pennylane_gate_specifications,
+        gate_specifications=gate_specs,
         population=population,
         objective=objective,
         hyperparameters=hyperparameters,

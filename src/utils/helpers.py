@@ -182,6 +182,9 @@ class BalancedBatchSampler:
         batch = []
         for cls in self.classes:
             indices = self._draw(cls, self.samples_per_class)
+            logger.debug(
+                f"Adding indices: {indices} for class: {cls} in batch"
+            )
             batch.extend(self.data[i] for i in indices)
         return batch
 
