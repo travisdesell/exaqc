@@ -229,6 +229,7 @@ class SteadyStateIslands(PopulationStrategy):
         genomes_before_extinction: int = 50,
         genomes_for_next_extinction: int = 200,
         islands_to_extinct: int = 2,
+        primary_parent: str = "best",
         out_dir: str = None,
         profiler: Optional[EXAQCProfiler] = None,
     ):
@@ -241,13 +242,17 @@ class SteadyStateIslands(PopulationStrategy):
         max population size, the least fit genome will be removed to keep it under the max size.
 
         Args:
+            compare: a compare function used for sorting genomes. this should return 0 if both
+                genomes should be ranked the same, a negative value if the first genome should
+                come before the second genome, and a positive number otherwise
             max_population_size: is the maximum number of genomes that the population will hold.
             genomes_before_extinction: is how many genomes are inserted into islands before an
                 extinction event happens, which clears out the worst islands and repopulates them
             island_to_extinct: is how many islands to clear out in an extinction event
-            compare: a compare function used for sorting genomes. this should return 0 if both
-                genomes should be ranked the same, a negative value if the first genome should
-                come before the second genome, and a positive number otherwise
+            primary_parent: can be `best` or `island`, and it determines how the primary parent
+                is selected when get_parents is called. If `best`, then the parent genomes are
+                sorted such that the first (primary) parent has the best fitness. if `island`
+                then the first genome is the one from the target island for the child.
             out_dir: is the directory to write out the best found genomes and log files, if not
                 specified log files will not be written.
         """
@@ -272,6 +277,15 @@ class SteadyStateIslands(PopulationStrategy):
 
         self.global_best_genome = None
         self.accuracy_best_genome = None
+
+        if primary_parent not in ("best", "island"):
+            logger.error(
+                f"Error initializing island strategy. Primary parent was {primary_parent} "
+                "and possible options are either `best` or `island`."
+            )
+            exit(1)
+
+        self.primary_parent = primary_parent
 
         self.profiler = profiler
         if self.profiler is None and out_dir:
@@ -392,12 +406,21 @@ class SteadyStateIslands(PopulationStrategy):
 
         parents = None
 
-        if random.uniform(0.0, 1.0) < self.intra_island_crossover_rate:
-            # do intra island crossover
+        # check to see if we have enough genomes on the target or best
+        # island to do intra-island crossover.  if there is only one
+        # island always do intra-island crossover.
+
+        if (
+            len(self.islands) == 1
+            or random.uniform(0.0, 1.0) < self.intra_island_crossover_rate
+        ):
+            # try to do intra island crossover
             logger.info(
                 f"intra island crossover on {target_island.status} island: potential parent "
                 f"length: {len(target_island.population)}, n_parents: {n_parents}"
             )
+
+            metadata["crossover_type"] = "intra-island"
 
             if target_island.status == "full":
                 parents = target_island.get_parents(n_parents)
@@ -416,11 +439,15 @@ class SteadyStateIslands(PopulationStrategy):
                 )
                 exit(1)
 
-        else:
+        # there weren't enough parents at the target (or best) island to get
+        # intra-island parents so fall back to inter-island parents
+        if parents is None:
             # do inter island crossover
 
             # potential other parents can come from all other islands
             potential_parents = []
+
+            metadata["crossover_type"] = "inter-island"
 
             for island in self.islands:
                 if island != target_island:
@@ -463,6 +490,15 @@ class SteadyStateIslands(PopulationStrategy):
         if parents is None:
             return None, None
         else:
+            if self.primary_parent == "best":
+                # sort the parents so that the most fit is the primary parent, otherwise
+                # it will be from the target island
+                parents.sort(key=cmp_to_key(self.compare))
+                logger.debug(
+                    f"sorted parents for best primary parent strategy, primary parent fitness: {parents[0].fitness}, "
+                    f"worst parent fitness: {parents[-1].fitness}"
+                )
+
             return parents, metadata
 
     def insert_genome(self, genome: CircuitGenome, **kwargs) -> bool:

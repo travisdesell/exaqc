@@ -631,6 +631,7 @@ def _train_with_pennylane(
         # per_class_pred = {}
         correct = 0
         total = 0
+
         for x, y, cls in data_list:
             x = x.to(device)
             y = y.to(device)
