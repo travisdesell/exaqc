@@ -125,6 +125,7 @@ def master_worker(
     objective: Objective,
     hyperparameters: dict[str, any],
     mutation_strategy: list[str],
+    parent_strategy: list[str],
     run_for: int,
     input_qubits: list[tuple[str, int]] = None,
     input_registers: dict[str, int] = None,
@@ -152,6 +153,11 @@ def master_worker(
             between range(min, max), where min should be at least 1; or 'exponential <scale>' which will select the
             number of mutations using an exponential distribution with the given scale plus 1 to ensure at least
             1 mutation happens.
+        parent_strategy: specifies how many parents should be selected for n-ary crossover. current
+            options are 'uniform <min> <max>' which will select a number of mutations uniformly at random
+            between range(min, max), where min should be at least 2; or 'exponential <scale>' which will select the
+            number of mutations using an exponential distribution with the given scale plus 2 to ensure at least
+            2 mutation happens.
         run_for: how many genomes to generate in the search process.
         input_registers: a dict of register names and sizes (the key is the qubit name, the value is its size). must
             be specified if input_qubits is not specified.
@@ -176,6 +182,7 @@ def master_worker(
             objective=objective,
             hyperparameters=hyperparameters,
             mutation_strategy=mutation_strategy,
+            parent_strategy=parent_strategy,
             input_registers=input_registers,
             input_qubits=input_qubits,
             output_registers=output_registers,

@@ -165,7 +165,7 @@ class CircuitGenome:
         self_gates = self.get_gate_innovations()
         other_gates = other.get_gate_innovations()
 
-        logger.info(
+        logger.debug(
             f"comparing self gates {self_gates} to other gates {other_gates}, equal? {self_gates == other_gates}"
         )
 
@@ -586,6 +586,10 @@ class CircuitGenome:
             elif input_mode == "angle":
                 # expects float tensor on "input" register wires
                 # encode x_i in [0,1] -> RY(pi*x_i) (common, stable)
+
+                # logger.info(f"input_indexes length: {len(self.input_indexes)} -- {self.input_indexes}")
+                # logger.info(f"input_bits length: {len(input_bits)} -- {input_bits}")
+
                 for i, w in enumerate(self.input_indexes):
                     angle = input_bits[:, i] if is_batched else input_bits[i]
                     qml.RY(torch.pi * angle, wires=w)

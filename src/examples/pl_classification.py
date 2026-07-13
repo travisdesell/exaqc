@@ -54,6 +54,7 @@ def eval_probs_ce_and_acc(
     dataset: Iterable[tuple[torch.Tensor, torch.Tensor, str]],
     *,
     n_classes: int,
+    encoding: str,
     loss: Optional[str] = None,
     alpha: torch.Tensor = None,
 ) -> dict[str, float]:
@@ -64,7 +65,7 @@ def eval_probs_ce_and_acc(
     # Ensure qnode exists
     if getattr(genome, "circuit", None) is None or not callable(genome.circuit):
         # IMPORTANT: we want probs readout for classification
-        genome.generate_pennylane_circuit(return_probs=True, input_mode="angle")
+        genome.generate_pennylane_circuit(return_probs=True, input_mode=encoding)
 
     loss_fn = LOSS_REGISTRY[loss]
 
@@ -202,6 +203,7 @@ class ClassificationObjective(Objective):
             n_classes=self.n_classes,
             loss=self.loss,
             alpha=alpha,
+            encoding=encoding,
         )
         test_metrics = eval_probs_ce_and_acc(
             genome,
@@ -209,6 +211,7 @@ class ClassificationObjective(Objective):
             n_classes=self.n_classes,
             loss=self.loss,
             alpha=alpha,
+            encoding=encoding,
         )
 
         genome.fitness = {
@@ -258,6 +261,14 @@ if __name__ == "__main__":
         required=True,
     )
 
+    p.add_argument(
+        "--parent_strategy",
+        "-ps",
+        type=str,
+        nargs="+",
+        required=True,
+    )
+
     subparsers = p.add_subparsers(
         dest="population_strategy",
         help="Specify how genomes will be handled.",
@@ -277,6 +288,7 @@ if __name__ == "__main__":
     islands_parser.add_argument("--genomes_before_extinction", type=int, default=100)
     islands_parser.add_argument("--genomes_for_next_extinction", type=int, default=200)
     islands_parser.add_argument("--islands_to_extinct", type=int, default=2)
+    islands_parser.add_argument("--primary_parent", type=str, default="best")
     islands_parser.add_argument(
         "--intra_island_crossover_rate", type=float, default=0.5
     )
@@ -384,6 +396,7 @@ if __name__ == "__main__":
             genomes_before_extinction=args.genomes_before_extinction,
             genomes_for_next_extinction=args.genomes_for_next_extinction,
             islands_to_extinct=args.islands_to_extinct,
+            primary_parent=args.primary_parent,
             compare=compare,
             out_dir=args.out_dir,
         )
@@ -394,8 +407,9 @@ if __name__ == "__main__":
         objective=objective,
         hyperparameters=hyperparameters,
         mutation_strategy=args.mutation_strategy,
+        parent_strategy=args.parent_strategy,
         run_for=args.number_genomes,
         input_registers={"input": min(args.input_qubits, objective.input_size)},
-        output_registers={"output": math.ceil(math.log(objective.n_classes, 2))},
+        output_registers={"input": math.ceil(math.log(objective.n_classes, 2))},
         target="pennylane",
     )
