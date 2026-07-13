@@ -119,7 +119,7 @@ def eval_probs_ce_and_acc(
             logits = readout_head(probs_full)
             probs = torch.softmax(logits, dim=-1)
             pred = int(torch.argmax(probs).item())
-            
+
         else:
             pred, probs = predict_from_probs(probs_full, n_classes=n_classes)
 
@@ -551,10 +551,7 @@ if __name__ == "__main__":
         type=int,
         nargs="*",
         default=[16, 32],
-        help=(
-            "CNN convolution channel widths. "
-            "Only used when --encoder_type cnn."
-        ),
+        help=("CNN convolution channel widths. " "Only used when --encoder_type cnn."),
     )
 
     parser.add_argument(
@@ -618,7 +615,9 @@ if __name__ == "__main__":
     islands_parser.add_argument("--genomes_before_extinction", type=int, default=100)
     islands_parser.add_argument("--genomes_for_next_extinction", type=int, default=200)
     islands_parser.add_argument("--islands_to_extinct", type=int, default=2)
-    islands_parser.add_argument("--intra_island_crossover_rate", type=float, default=0.5)
+    islands_parser.add_argument(
+        "--intra_island_crossover_rate", type=float, default=0.5
+    )
 
     args = parser.parse_args()
 
@@ -629,13 +628,17 @@ if __name__ == "__main__":
     logger.add(os.path.join(args.out_dir, "run.log"), level="DEBUG")
 
     pl_device = "default.qubit"
-    diff_method = "backprop" # "adjoint" if args.device == "gpu" else "backprop"
+    diff_method = "backprop"  # "adjoint" if args.device == "gpu" else "backprop"
     if args.device == "gpu":
         if not torch.cuda.is_available():
-            raise RuntimeError("Requested --device gpu but torch.cuda.is_available() is False.")
-        
+            raise RuntimeError(
+                "Requested --device gpu but torch.cuda.is_available() is False."
+            )
+
         local_rank = int(
-            os.environ.get("SLURM_LOCALID", os.environ.get("OMPI_COMM_WORLD_LOCAL_RANK", 0))
+            os.environ.get(
+                "SLURM_LOCALID", os.environ.get("OMPI_COMM_WORLD_LOCAL_RANK", 0)
+            )
         )
         gpu_id = local_rank % torch.cuda.device_count()
         torch.cuda.set_device(gpu_id)
@@ -652,20 +655,16 @@ if __name__ == "__main__":
         "batch_size": args.batch_size,
         "encoding": args.encoding,
         "conv_channels": args.conv_channels,
-        
         "encoder_type": args.encoder_type,
         "resnet_model": args.resnet_model,
         "resnet_pretrained": args.resnet_pretrained,
         "freeze_resnet": args.freeze_resnet,
-
         "hidden_dims": args.hidden_dims,
         "activation": args.activation,
         # "use_input_u3_layer": args.use_input_u3_layer,
-
         "device": device,
         "pl_device": pl_device,
         "diff_method": diff_method,
-
         "out_dir": args.out_dir,
     }
 

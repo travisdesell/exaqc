@@ -19,6 +19,7 @@ from src.utils.losses import (  # noqa: F401
     loss_state_angle,
     loss_obs_mse,
     ce_onehot_on_probs,
+    ce_onehot_on_probs_batch,
     entropy_regularizer,
     class_avg_ce_onehot_on_probs,
     LOSS_REGISTRY,
@@ -218,11 +219,17 @@ def _eval_supervised_split(
         probas.append(probs)
         y_onehots.append(y)
 
-    probs = torch.stack([p.to(device=device, dtype=torch.float32) for p in probas], dim=0)
-    y_onehots = torch.stack([p.to(device=device, dtype=torch.float32) for p in y_onehots], dim=0)
+    probs = torch.stack(
+        [p.to(device=device, dtype=torch.float32) for p in probas], dim=0
+    )
+    y_onehots = torch.stack(
+        [p.to(device=device, dtype=torch.float32) for p in y_onehots], dim=0
+    )
 
     if loss_fn.__name__ != "class_avg_ce_onehot_on_probs":
-        loss = float(torch.stack(losses).mean().detach().cpu().item()) if losses else 0.0
+        loss = (
+            float(torch.stack(losses).mean().detach().cpu().item()) if losses else 0.0
+        )
 
     else:
         loss = float(loss_fn(probs, y_onehots).detach().cpu().item())
@@ -424,8 +431,8 @@ def _train_with_pennylane(
 
     if use_state:
         genome.generate_pennylane_circuit(
-            input_mode=encoding, 
-            return_probs=False, 
+            input_mode=encoding,
+            return_probs=False,
             measure_registers=False,
             device_name=pl_device,
             diff_method=diff_method,
@@ -436,12 +443,12 @@ def _train_with_pennylane(
             )
     else:
         genome.generate_pennylane_circuit(
-                input_mode=encoding, 
-                return_probs=True,
-                device_name=pl_device,
-                diff_method=diff_method,
-                n_classes=n_classes,
-            )
+            input_mode=encoding,
+            return_probs=True,
+            device_name=pl_device,
+            diff_method=diff_method,
+            n_classes=n_classes,
+        )
 
     # Get all the parameters
     torch_params = genome_to_torch_params(genome)  # Genome
@@ -507,17 +514,21 @@ def _train_with_pennylane(
             #             f"encoder_out_requires_grad={x.requires_grad} "
             #             f"encoder_out_grad_fn={x.grad_fn}"
             #         )
-            
+
         q_out = genome.circuit(x, torch_params)
         if isinstance(q_out, torch.Tensor):
             probs = q_out.to(device=device, dtype=torch.float32)
         else:
-            probs = torch.stack([
-                v.to(device=device, dtype=torch.float32)
-                if isinstance(v, torch.Tensor)
-                else torch.as_tensor(v, dtype=torch.float32, device=device)
-                for v in q_out
-            ])
+            probs = torch.stack(
+                [
+                    (
+                        v.to(device=device, dtype=torch.float32)
+                        if isinstance(v, torch.Tensor)
+                        else torch.as_tensor(v, dtype=torch.float32, device=device)
+                    )
+                    for v in q_out
+                ]
+            )
         # logger.debug(
         #     f"after_stack_requires_grad={probs.requires_grad} "
         #     f"after_stack_grad_fn={probs.grad_fn}"
@@ -548,9 +559,11 @@ def _train_with_pennylane(
         else:
             q_probs = torch.stack(
                 [
-                    v.to(device=device, dtype=torch.float32)
-                    if isinstance(v, torch.Tensor)
-                    else torch.as_tensor(v, dtype=torch.float32, device=device)
+                    (
+                        v.to(device=device, dtype=torch.float32)
+                        if isinstance(v, torch.Tensor)
+                        else torch.as_tensor(v, dtype=torch.float32, device=device)
+                    )
                     for v in q_out
                 ],
                 dim=1,
@@ -568,7 +581,7 @@ def _train_with_pennylane(
             probs = probs.to(device=device, dtype=torch.float32)
         else:
             probs = q_probs[:, :n_classes]
-            probs = class_probs / class_probs.sum(dim=1, keepdim=True).clamp_min(1e-12)
+            probs = probs / probs.sum(dim=1, keepdim=True).clamp_min(1e-12)
             logits = torch.log(probs.clamp_min(1e-12))
 
         return logits, probs
@@ -662,8 +675,12 @@ def _train_with_pennylane(
         # for k, v in class_counts.items():
         #     log += f"[{k}] Accuracy: {per_class_pred[k]/v:.4f} ({per_class_pred[k]}/{v}) | "
         # logger.info(f"{log}")
-        probs = torch.stack([p.to(device=device, dtype=torch.float32) for p in probs], dim=0)
-        y_onehots = torch.stack([p.to(device=device, dtype=torch.float32) for p in y_onehots], dim=0)
+        probs = torch.stack(
+            [p.to(device=device, dtype=torch.float32) for p in probs], dim=0
+        )
+        y_onehots = torch.stack(
+            [p.to(device=device, dtype=torch.float32) for p in y_onehots], dim=0
+        )
 
         loss = (
             torch.stack(losses).mean()
@@ -697,7 +714,7 @@ def _train_with_pennylane(
 
             losses = []
             probs = []
-            y_onehots = []
+            # y_onehots = []
 
             if use_state:
                 for x in batch:
@@ -732,7 +749,7 @@ def _train_with_pennylane(
                         probs,
                         ys,
                         alpha_per_class=alpha,
-                    ) # if loss_fn is None else loss_fn(probs, ys, alpha_per_class=alpha)
+                    )  # if loss_fn is None else loss_fn(probs, ys, alpha_per_class=alpha)
 
                 # Single Sample
                 # for x, y, _ in batch:
@@ -742,7 +759,6 @@ def _train_with_pennylane(
                 #     logits, p = forward_probs(x)
 
                 #     target = torch.argmax(y).long()
-
 
                 #     if loss_name != "per_class":
                 #         if readout_head is not None:
@@ -909,7 +925,7 @@ def _train_with_pennylane(
     if readout_head is not None and best_readout_state is not None:
         readout_head.load_state_dict(best_readout_state)
         readout_head.to(device=device, dtype=torch.float32)
-        
+
     genome.fitness = best_metrics
 
 
@@ -1125,7 +1141,7 @@ def train_genome_objective(
             encoding=encoding,
             embedding_model=embedding_model,
             readout_head=readout_head,
-            device = device,
+            device=device,
             pl_device=pl_device,
             diff_method=diff_method,
         )

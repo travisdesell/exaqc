@@ -565,7 +565,7 @@ class CircuitGenome:
         if device_name == "lightning.gpu":
             # Basis States
             self.basis_states = [
-                np.array([int(x) for x in format(i, f'0{len(self.output_indexes)}b')]) 
+                np.array([int(x) for x in format(i, f"0{len(self.output_indexes)}b")])
                 for i in range(n_classes)
             ]
 
@@ -659,10 +659,12 @@ class CircuitGenome:
             # 4️⃣ Measurement
             if return_probs:
                 if device_name == "lightning.gpu":
-                    return tuple([
-                        qml.expval(qml.Projector(state, wires=self.output_indexes)) 
-                        for state in self.basis_states
-                    ])
+                    return tuple(
+                        [
+                            qml.expval(qml.Projector(state, wires=self.output_indexes))
+                            for state in self.basis_states
+                        ]
+                    )
 
                 return qml.probs(wires=self.output_indexes)
 
