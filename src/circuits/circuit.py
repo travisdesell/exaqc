@@ -576,6 +576,8 @@ class CircuitGenome:
             params: Dict[str, torch.Tensor],
         ):
 
+            is_batched = input_bits.dim() == 2
+
             # --- Input preparation ---
             if input_mode == "basis":
                 # expects int tensor length == total_qubits
@@ -585,39 +587,66 @@ class CircuitGenome:
                 # expects float tensor on "input" register wires
                 # encode x_i in [0,1] -> RY(pi*x_i) (common, stable)
                 for i, w in enumerate(self.input_indexes):
-                    qml.RY(torch.pi * input_bits[i], wires=w)
+                    angle = input_bits[:, i] if is_batched else input_bits[i]
+                    qml.RY(torch.pi * angle, wires=w)
 
             elif input_mode == "amplitude":
                 # expects float tensor of length 2**len(in_wires)
-                qml.AmplitudeEmbedding(
-                    features=input_bits,
-                    wires=self.input_indexes,
-                    normalize=False,
-                    pad_with=0.0,
-                )
+                if is_batched:
+                    qml.AmplitudeEmbedding(
+                        features=input_bits,
+                        wires=self.input_indexes,
+                        normalize=False,
+                        pad_with=0.0,
+                        batch_size=input_bits.shape[0],
+                    )
+                else:
+                    qml.AmplitudeEmbedding(
+                        features=input_bits,
+                        wires=self.input_indexes,
+                        normalize=False,
+                        pad_with=0.0,
+                    )
 
             elif input_mode == "u3":
                 expected_dim = 3 * len(self.input_indexes)
 
-                input_bits = input_bits.flatten()
+                if is_batched:
+                    if input_bits.shape[1] != expected_dim:
+                        raise ValueError(
+                            f"u3 encoding expects [B, {expected_dim}], "
+                            f"but got {tuple(input_bits.shape)}."
+                        )
 
-                if input_bits.shape[0] != expected_dim:
-                    raise ValueError(
-                        f"learned_u3 encoding expects {expected_dim} values "
-                        f"for {len(self.input_indexes)} input qubits, "
-                        f"but got {input_bits.shape[0]}."
-                    )
+                    angles = torch.pi * input_bits
 
-                # Map raw encoder outputs into valid angle range (-pi, pi).
-                # angles = torch.pi * torch.tanh(input_bits)
-                angles = torch.pi * input_bits
+                    for i, w in enumerate(self.input_indexes):
+                        theta = angles[:, 3 * i + 0]
+                        phi = angles[:, 3 * i + 1]
+                        delta = angles[:, 3 * i + 2]
 
-                for i, w in enumerate(self.input_indexes):
-                    theta = angles[3 * i + 0]
-                    phi = angles[3 * i + 1]
-                    delta = angles[3 * i + 2]
+                        qml.U3(theta, phi, delta, wires=w)
 
-                    qml.U3(theta, phi, delta, wires=w)
+                else:
+                    input_bits = input_bits.flatten()
+
+                    if input_bits.shape[0] != expected_dim:
+                        raise ValueError(
+                            f"learned_u3 encoding expects {expected_dim} values "
+                            f"for {len(self.input_indexes)} input qubits, "
+                            f"but got {input_bits.shape[0]}."
+                        )
+
+                    # Map raw encoder outputs into valid angle range (-pi, pi).
+                    # angles = torch.pi * torch.tanh(input_bits)
+                    angles = torch.pi * input_bits
+
+                    for i, w in enumerate(self.input_indexes):
+                        theta = angles[3 * i + 0]
+                        phi = angles[3 * i + 1]
+                        delta = angles[3 * i + 2]
+
+                        qml.U3(theta, phi, delta, wires=w)
 
             else:
                 raise ValueError(f"Unknown input_mode={input_mode}")
@@ -669,6 +698,7 @@ class CircuitGenome:
             insert_type: a tag to put at the beginning of the filename, e.g.
                 'best' for global_best genomes.
             out_dir: where to write the genome files.
+            checkpoint: a dictionary with all assiciated components
         """
         os.makedirs(out_dir, exist_ok=True)
 

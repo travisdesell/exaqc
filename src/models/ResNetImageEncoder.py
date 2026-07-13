@@ -13,7 +13,7 @@ from torchvision.models import (
 
 
 class ResNetImageEncoder(nn.Module):
-    """Pretrained ResNet encoder for quantum angle encoding."""
+    """Pretrained ResNet encoder for quantum encoding."""
 
     def __init__(
         self,

@@ -69,6 +69,10 @@ def eval_probs_ce_and_acc(
         embedding_model.to(device)
         embedding_model.eval()
 
+    if readout_head is not None:
+        readout_head.to(device)
+        readout_head.eval()
+
     if getattr(genome, "circuit", None) is None or not callable(genome.circuit):
         genome.generate_pennylane_circuit(
             return_probs=True,
@@ -109,6 +113,7 @@ def eval_probs_ce_and_acc(
             x = embedding_model(x)
 
         probs_full = genome.circuit(x, params)
+        probs_full = probs_full.to(dtype=torch.float32)
         logits = None
         if readout_head is not None:
             logits = readout_head(probs_full)
@@ -320,6 +325,30 @@ class SupervisedClassificationObjective(Objective):
             "raw_input_dim": self.raw_input_dim,
             "encoder_output_dim": self.input_size,
         }
+
+        # checkpoint = {
+        #     "genome": genome.to_dict(),
+        #     "embedding_model_state_dict": (
+        #         embedding_model.state_dict()
+        #         if embedding_model is not None
+        #         else None
+        #     ),
+        #     "readout_head_state_dict": (
+        #         readout_head.state_dict()
+        #         if readout_head is not None
+        #         else None
+        #     ),
+        #     "fitness": genome.fitness,
+        #     "hyperparameters": hp,
+        # }
+
+        # torch.save(
+        #     checkpoint,
+        #     os.path.join(
+        #         hp["out_dir"],
+        #         f"genome{genome.genome_number}_model_checkpoint.pt",
+        #     ),
+        # )
 
         logger.info(
             f"[{genome.genome_number:04d}] "
@@ -636,6 +665,8 @@ if __name__ == "__main__":
         "device": device,
         "pl_device": pl_device,
         "diff_method": diff_method,
+
+        "out_dir": args.out_dir,
     }
 
     objective = build_objective(

@@ -1,8 +1,8 @@
 #!/bin/bash -l
-#SBATCH -J exaqc_mnist_u3
+#SBATCH -J exaqc_fmnist_u3
 #SBATCH -t 2-00:00:00
-#SBATCH -o ./outs/mnist/output_u3.o
-#SBATCH -e ./logs/mnist/error_u3.e
+#SBATCH -o ./outs/fmnist/output_u3.o
+#SBATCH -e ./logs/fmnist/error_u3.e
 #SBATCH -A cps -p tier3
 #SBATCH --nodes=1
 #SBATCH --ntasks=12
@@ -54,11 +54,11 @@ ACTIVATION="tanh"
 # --max_train_samples 2000 \
 # --max_test_samples 500 \
 srun python3.11 -m src.examples.pl_image \
-  --dataset mnist \
+  --dataset fashion_mnist \
   --loss ce \
   --epochs 50 \
   --learning_rate 1e-3 \
-  --number_genomes 1000 \
+  --number_genomes 2000 \
   --input_qubits $QUBITS \
   --batch_size 32 \
   --device gpu \
@@ -67,7 +67,7 @@ srun python3.11 -m src.examples.pl_image \
   --hidden_dims 64 \
   --activation $ACTIVATION \
   --mutation_strategy uniform 1 3 \
-  --out_dir artifacts/mnist_cnn_encoder/enc_u3_1 \
+  --out_dir artifacts/fmnist_cnn_encoder/enc_u3 \
   --max_train_samples 2000 \
   --max_test_samples 500 \
   --encoding $ENCODING \

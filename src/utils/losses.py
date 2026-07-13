@@ -237,6 +237,30 @@ def ce_onehot_on_probs(
     y_onehot = y_onehot.to(dtype=probs.dtype, device=probs.device)
     return -(y_onehot * torch.log(probs)).sum()
 
+def ce_onehot_on_probs_batch(
+    probs: torch.Tensor,
+    y_onehot: torch.Tensor,
+    alpha_per_class: torch.Tensor | None = None,
+    eps: float = 1e-12,
+    reduction: str = "mean",
+) -> torch.Tensor:
+    """Compute weighted batched cross-entropy loss on probability outputs."""
+    probs = probs.clamp_min(eps)
+    probs = probs / probs.sum(dim=1, keepdim=True).clamp_min(eps)
+
+    y_onehot = y_onehot.to(dtype=probs.dtype, device=probs.device)
+
+    losses = -(y_onehot * torch.log(probs)).sum(dim=1)
+
+    if reduction == "mean":
+        return losses.mean()
+    elif reduction == "sum":
+        return losses.sum()
+    elif reduction == "none":
+        return losses
+    else:
+        raise ValueError(f"Unknown reduction='{reduction}'.")
+
 
 def balanced_ce_onehot_on_probs(
     probs: torch.Tensor,
@@ -261,6 +285,39 @@ def balanced_ce_onehot_on_probs(
     y_onehot = y_onehot.to(dtype=probs.dtype, device=probs.device)
 
     return -(alpha_per_class * y_onehot * torch.log(probs)).sum()
+
+def balanced_ce_onehot_on_probs_batch(
+    probs: torch.Tensor,
+    y_onehot: torch.Tensor,
+    alpha_per_class: torch.Tensor | None = None,
+    eps: float = 1e-12,
+    reduction: str = "mean",
+) -> torch.Tensor:
+    """Compute weighted batched cross-entropy loss on probability outputs."""
+    probs = probs.clamp_min(eps)
+    probs = probs / probs.sum(dim=1, keepdim=True).clamp_min(eps)
+
+    y_onehot = y_onehot.to(dtype=probs.dtype, device=probs.device)
+
+    losses = -(y_onehot * torch.log(probs)).sum(dim=1)
+
+    if alpha_per_class is not None:
+        alpha_per_class = alpha_per_class.to(
+            device=probs.device,
+            dtype=probs.dtype,
+        )
+
+        sample_weights = (y_onehot * alpha_per_class).sum(dim=1)
+        losses = losses * sample_weights
+
+    if reduction == "mean":
+        return losses.mean()
+    elif reduction == "sum":
+        return losses.sum()
+    elif reduction == "none":
+        return losses
+    else:
+        raise ValueError(f"Unknown reduction='{reduction}'.")
 
 
 def class_avg_ce_onehot_on_probs(
@@ -382,7 +439,7 @@ LOSS_REGISTRY: dict[str, Callable[..., torch.Tensor]] = {
     "angle": loss_state_angle,
     "kl": loss_kl_divergence,
     "mse": loss_obs_mse,
-    "ce": ce_onehot_on_probs,
+    "ce": ce_onehot_on_probs_batch,
     "bce": balanced_ce_onehot_on_probs,
     "focal": focal_onehot_on_probs,
     "per_class": class_avg_ce_onehot_on_probs,
