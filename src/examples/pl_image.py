@@ -512,7 +512,7 @@ if __name__ == "__main__":
         required=True,
     )
 
-    p.add_argument(
+    parser.add_argument(
         "--parent_strategy",
         "-ps",
         type=str,
