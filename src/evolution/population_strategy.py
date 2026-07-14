@@ -17,6 +17,7 @@ class PopulationStrategy(ABC):
         """
         pass
 
+    @abstractmethod
     def get_best_genome(self) -> CircuitGenome:
         """
         Returns:

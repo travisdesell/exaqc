@@ -164,7 +164,8 @@ class SteadyStatePopulation(PopulationStrategy):
                 else:
                     # discard the new genome
                     self.insertions += 1
-                    return
+                    genome.metadata["insert_type"] = "discarded_duplicate"
+                    return False
 
         bisect.insort(
             self.population,
@@ -227,3 +228,5 @@ class SteadyStatePopulation(PopulationStrategy):
                 insert_type="genome", out_dir=self.out_dir + "/all_genomes/"
             )
             self.profiler.plot_single_run()
+
+        return genome.metadata["insert_type"] != "discarded"
