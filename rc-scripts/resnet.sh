@@ -1,8 +1,8 @@
 #!/bin/bash -l
-#SBATCH -J exaqc_resnet_fmnist_u3
+#SBATCH -J exaqc_resnet_cifar10_u3
 #SBATCH -t 3-00:00:00
-#SBATCH -o ./outs/resnet_fmnist/output_u3.o
-#SBATCH -e ./logs/resnet_fmnist/error_u3.e
+#SBATCH -o ./outs/resnet_cifar10/output_u3.o
+#SBATCH -e ./logs/resnet_cifar10/error_u3.e
 #SBATCH -A cps -p tier3
 #SBATCH --nodes=1
 #SBATCH --ntasks=4
@@ -15,7 +15,7 @@ spack env activate default-ml-x86_64-25052701
 
 source .venv/bin/activate
 
-DATASET="fashion_mnist"
+DATASET="cifar10"
 QUBITS=8
 ENCODING="u3"
 ACTIVATION="tanh"
@@ -23,8 +23,8 @@ BATCH_SIZE=64
 
 if [[ "$DATASET" == "mnist" || "$DATASET" == "fashion_mnist" ]]; then
     HIDDEN_DIMS=64
-    TRAIN_SAMPLES=6000
-    TEST_SAMPLES=1000
+    TRAIN_SAMPLES=3000
+    TEST_SAMPLES=500
 else
     HIDDEN_DIMS=128
     TRAIN_SAMPLES=2500
@@ -35,7 +35,7 @@ fi
 srun python3.11 -m src.examples.pl_image \
   --dataset $DATASET \
   --loss ce \
-  --epochs 50 \
+  --epochs 100 \
   --learning_rate 1e-3 \
   --number_genomes 2000 \
   --input_qubits $QUBITS \
@@ -47,7 +47,8 @@ srun python3.11 -m src.examples.pl_image \
   --hidden_dims $HIDDEN_DIMS \
   --activation $ACTIVATION \
   --mutation_strategy uniform 1 3 \
-  --out_dir artifacts/${DATASET}_resnet_encoder/e2e/enc_u3 \
+  --parent_strategy uniform 1 3 \
+  --out_dir artifacts/${DATASET}_resnet_encoder/e2e/enc_u3_1 \
   --max_train_samples $TRAIN_SAMPLES \
   --max_test_samples $TEST_SAMPLES \
   --encoding $ENCODING \
