@@ -1,7 +1,15 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from loguru import logger
 
-from mpi4py import MPI
-from mpi4py.MPI import Intracomm
+# mpi4py loads the MPI shared library at import time, which fails on machines
+# without an MPI runtime (e.g. the CI runners). Import it inside the functions
+# below so simply importing this module (or anything that imports it, like
+# src.examples.reinforcement_learning) doesn't require MPI to be installed.
+if TYPE_CHECKING:
+    from mpi4py.MPI import Intracomm
 
 from src.circuits.circuit import CircuitGenome
 from src.circuits.decoder import Decoder
@@ -35,6 +43,8 @@ def master(comm: Intracomm, rank: int, exaqc: EXAQC, run_for: int):
         exaqc: is an initialized EXAQC search object
         run_for: is how many genomes to generate
     """
+    from mpi4py import MPI
+
     n_workers = comm.Get_size() - 1
 
     evaluated_genomes = 0
@@ -98,6 +108,7 @@ def worker(
         rank: is the rank of the master process (should be 0)
         objective: is the objective function used to evaluate genomes
     """
+    from mpi4py import MPI
 
     while True:
         # request a genome from the main process
@@ -179,6 +190,7 @@ def master_worker(
             and output_qubits are None, they are set to the input_registers/qubits.
         target: qiskit or pennylane
     """
+    from mpi4py import MPI
 
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
