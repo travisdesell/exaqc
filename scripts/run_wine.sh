@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 MIN_COUNT=$1
 MAX_COUNT=$2
 OUT_DIR=$3
@@ -5,7 +7,7 @@ OUT_DIR=$3
 arguments=(
     --oversubscribe 
     -n 12 
-    python3 -m src.examples.pl_classification
+    python3 -m src.examples.classification
     --logging_level INFO
     --dataset wine
     --number_genomes 1000

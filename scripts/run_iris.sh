@@ -7,7 +7,7 @@ OUT_DIR=$3
 arguments=(
     --oversubscribe 
     -n 12 
-    python3 -m src.examples.pl_classification
+    python3 -m src.examples.classification
     --logging_level INFO
     --dataset iris
     --number_genomes 1000
