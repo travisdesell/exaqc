@@ -1,8 +1,8 @@
 #!/bin/bash -l
-#SBATCH -J exaqc_mnist_fc
+#SBATCH -J exaqc_mnist_amp
 #SBATCH -t 3-00:00:00
-#SBATCH -o ./outs/mnist/output_fc.o
-#SBATCH -e ./logs/mnist/error_fc.e
+#SBATCH -o ./outs/mnist/runs/5/output_amp.o
+#SBATCH -e ./logs/mnist/runs/5/error_amp.e
 #SBATCH -A cps -p tier3
 #SBATCH --nodes=1
 #SBATCH --ntasks=6
@@ -16,10 +16,11 @@ spack env activate default-ml-x86_64-25052701
 source .venv/bin/activate
 
 DATASET="mnist"
-QUBITS=6
-ENCODING="cnn"
+QUBITS=10
+ENCODING="identity"
 QUANTUM_ENC="amplitude"
 BATCH_SIZE=32
+N_GENOMES=800
 
 # if [[ "$DATASET" == "mnist" || "$DATASET" == "fashion_mnist" ]]; then
 #     HIDDEN_DIMS=64
@@ -34,25 +35,31 @@ BATCH_SIZE=32
 # --training_samples $TRAIN_SAMPLES \
 # --validation_samples $TEST_SAMPLES \
 # --encoder_config configs/mnist_cnn_2.json \
-srun python3.11 -m src.examples.classification \
-    --dataset $DATASET \
-    --target pennylane \
-    --encoding $ENCODING \
-    --decoding linear \
-    --encoder_config configs/mnist_fc.json \
-    --input_qubits $QUBITS \
-    --output_qubits $QUBITS \
-    --quantum_input_mode $QUANTUM_ENC \
-    --quantum_output_mode probs \
-    --device cuda \
-    --batch_size $BATCH_SIZE \
-    --validation_batch_size $BATCH_SIZE \
-    --epochs 20 \
-    --learning_rate 0.001 \
-    --number_genomes 1000 \
-    --mutation_strategy uniform 1 5 \
-    --parent_strategy uniform 2 5 \
-    --seed 42 \
-    --out_dir artifacts/${DATASET}_${ENCODING}_${QUANTUM_ENC}_q${QUBITS}_b${BATCH_SIZE} \
-    steady_state \
-    --max_population_size 30
+
+MIN_COUNT=$1
+MAX_COUNT=$2
+
+for i in $(seq $MIN_COUNT $MAX_COUNT); do
+    srun python3.11 -m src.examples.classification \
+        --dataset $DATASET \
+        --target pennylane \
+        --encoding $ENCODING \
+        --decoding linear \
+        --encoder_config configs/mnist_fc.json \
+        --input_qubits $QUBITS \
+        --output_qubits $QUBITS \
+        --quantum_input_mode $QUANTUM_ENC \
+        --quantum_output_mode probs \
+        --device cuda \
+        --batch_size $BATCH_SIZE \
+        --validation_batch_size $BATCH_SIZE \
+        --epochs 20 \
+        --learning_rate 0.001 \
+        --number_genomes $N_GENOMES \
+        --mutation_strategy uniform 1 5 \
+        --parent_strategy uniform 2 5 \
+        --seed 42 \
+        --out_dir artifacts/${DATASET}_${ENCODING}_${QUANTUM_ENC}_g${N_GENOMES}_q${QUBITS}_b${BATCH_SIZE}/runs/${i} \
+        steady_state \
+        --max_population_size 30
+done

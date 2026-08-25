@@ -18,7 +18,9 @@ source .venv/bin/activate
 DATASET="fashion_mnist"
 QUBITS=4
 ENCODING="cnn"
+QUANTUM_ENC="ry"
 BATCH_SIZE=32
+N_GENOMES=800
 
 # if [[ "$DATASET" == "mnist" || "$DATASET" == "fashion_mnist" ]]; then
 #     HIDDEN_DIMS=64
@@ -33,26 +35,31 @@ BATCH_SIZE=32
 # --training_samples $TRAIN_SAMPLES \
 # --validation_samples $TEST_SAMPLES \
 # --encoder_config configs/mnist_cnn_2.json \
-srun python3.11 -m src.examples.classification \
-    --dataset $DATASET \
-    --target pennylane \
-    --encoding $ENCODING \
-    --decoding linear \
-    --encoder_config configs/mnist_cnn_1.json \
-    --input_qubits $QUBITS \
-    --output_qubits $QUBITS \
-    --quantum_input_mode ry \
-    --quantum_output_mode probs \
-    --device cuda \
-    --batch_size $BATCH_SIZE \
-    --validation_batch_size $BATCH_SIZE \
-    --epochs 20 \
-    --learning_rate 0.001 \
-    --weight_decay 0.0005 \
-    --number_genomes 1000 \
-    --mutation_strategy uniform 1 5 \
-    --parent_strategy uniform 2 5 \
-    --seed 42 \
-    --out_dir artifacts/${DATASET}_${ENCODING}_2 \
-    steady_state \
-    --max_population_size 30
+
+MIN_COUNT=$1
+MAX_COUNT=$2
+
+for i in $(seq $MIN_COUNT $MAX_COUNT); do
+    srun python3.11 -m src.examples.classification \
+        --dataset $DATASET \
+        --target pennylane \
+        --encoding $ENCODING \
+        --decoding linear \
+        --encoder_config configs/mnist_fc.json \
+        --input_qubits $QUBITS \
+        --output_qubits $QUBITS \
+        --quantum_input_mode $QUANTUM_ENC \
+        --quantum_output_mode probs \
+        --device cuda \
+        --batch_size $BATCH_SIZE \
+        --validation_batch_size $BATCH_SIZE \
+        --epochs 20 \
+        --learning_rate 0.001 \
+        --number_genomes $N_GENOMES \
+        --mutation_strategy uniform 1 5 \
+        --parent_strategy uniform 2 5 \
+        --seed 42 \
+        --out_dir artifacts/${DATASET}_${ENCODING}_${QUANTUM_ENC}_g${N_GENOMES}_q${QUBITS}_b${BATCH_SIZE}/runs/${i} \
+        steady_state \
+        --max_population_size 30
+done

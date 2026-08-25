@@ -251,6 +251,12 @@ class IdentityEncoder(Encoder):
             genome: the circuit genome whose quantum circuit
                 inputs are being set
         """
+        if inputs.ndim > 2:
+            inputs = torch.flatten(
+                inputs,
+                start_dim=1,
+            )
+            
         return inputs
 
     def copy(self) -> Encoder:
