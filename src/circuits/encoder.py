@@ -256,7 +256,7 @@ class IdentityEncoder(Encoder):
                 inputs,
                 start_dim=1,
             )
-            
+
         return inputs
 
     def copy(self) -> Encoder:
