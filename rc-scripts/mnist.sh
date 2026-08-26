@@ -1,8 +1,8 @@
 #!/bin/bash -l
-#SBATCH -J exaqc_mnist_amp
+#SBATCH -J exaqc_mnist_angle
 #SBATCH -t 3-00:00:00
-#SBATCH -o ./outs/mnist/runs/5/output_amp.o
-#SBATCH -e ./logs/mnist/runs/5/error_amp.e
+#SBATCH -o ./outs/mnist/runs/5/output_angle.o
+#SBATCH -e ./logs/mnist/runs/5/error_angle.e
 #SBATCH -A cps -p tier3
 #SBATCH --nodes=1
 #SBATCH --ntasks=6
@@ -16,9 +16,9 @@ spack env activate default-ml-x86_64-25052701
 source .venv/bin/activate
 
 DATASET="mnist"
-QUBITS=10
-ENCODING="identity"
-QUANTUM_ENC="amplitude"
+QUBITS=5
+ENCODING="linear"
+QUANTUM_ENC="ry"
 BATCH_SIZE=32
 N_GENOMES=800
 
@@ -58,7 +58,7 @@ for i in $(seq $MIN_COUNT $MAX_COUNT); do
         --number_genomes $N_GENOMES \
         --mutation_strategy uniform 1 5 \
         --parent_strategy uniform 2 5 \
-        --seed 42 \
+        --seed $((i + 40)) \
         --out_dir artifacts/${DATASET}_${ENCODING}_${QUANTUM_ENC}_g${N_GENOMES}_q${QUBITS}_b${BATCH_SIZE}/runs/${i} \
         steady_state \
         --max_population_size 30
