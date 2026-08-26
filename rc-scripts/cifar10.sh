@@ -8,7 +8,7 @@
 #SBATCH --ntasks=6
 #SBATCH --ntasks-per-node=6
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=64GB
+#SBATCH --mem=32GB
 #SBATCH --gres=gpu:a100:1
 
 spack env activate default-ml-x86_64-25052701
@@ -58,7 +58,7 @@ for i in $(seq $MIN_COUNT $MAX_COUNT); do
         --number_genomes $N_GENOMES \
         --mutation_strategy uniform 1 5 \
         --parent_strategy uniform 2 5 \
-        --seed ${i} \
+        --seed $((i + 40)) \
         --out_dir artifacts/${DATASET}_${ENCODING}_${QUANTUM_ENC}_g${N_GENOMES}_q${QUBITS}_b${BATCH_SIZE}/runs/${i} \
         steady_state \
         --max_population_size 30
