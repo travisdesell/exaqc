@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
+import os
 
 import torch
 from loguru import logger
@@ -38,7 +40,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    out_dir = '/'.join(args.genome.split("/")[:-1])
+    out_dir = "/".join(args.genome.split("/")[:-1])
 
     logger.remove()
     logger.add(sys.stdout, level=args.logging_level)
