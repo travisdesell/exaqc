@@ -30,7 +30,19 @@ def main() -> None:
         action=argparse.BooleanOptionalAction,
         default=True,
     )
+    parser.add_argument(
+        "--logging_level",
+        type=str,
+        default="INFO",
+        help="""One of the 5 default logging levels for showing on terminal. Pick DEBUG to show everything.""",
+    )
     args = parser.parse_args()
+
+    out_dir = '/'.join(args.genome.split("/")[:-1])
+
+    logger.remove()
+    logger.add(sys.stdout, level=args.logging_level)
+    logger.add(os.path.join(out_dir, "test.log"))
 
     with open(args.genome, "r", encoding="utf-8") as file:
         serialized = json.load(file)

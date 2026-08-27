@@ -1,8 +1,8 @@
 #!/bin/bash -l
-#SBATCH -J exaqc_fmnist_angle
+#SBATCH -J exaqc_fmnist_u3
 #SBATCH -t 3-00:00:00
-#SBATCH -o ./outs/fmnist/runs/5/output_angle.o
-#SBATCH -e ./logs/fmnist/runs/5/error_angle.e
+#SBATCH -o ./outs/fmnist/runs/5/output_u3.o
+#SBATCH -e ./logs/fmnist/runs/5/error_u3.e
 #SBATCH -A cps -p tier3
 #SBATCH --nodes=1
 #SBATCH --ntasks=6
@@ -18,7 +18,7 @@ source .venv/bin/activate
 DATASET="fashion_mnist"
 QUBITS=5
 ENCODING="linear"
-QUANTUM_ENC="ry"
+QUANTUM_ENC="u3"
 BATCH_SIZE=32
 N_GENOMES=800
 
