@@ -3,8 +3,9 @@ from __future__ import annotations
 from loguru import logger
 
 from qiskit import QuantumCircuit, QuantumRegister
+from qiskit.circuit import ParameterVector
+
 import pennylane as qml
-import torch
 
 from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
@@ -207,6 +208,8 @@ class Gate:
         self,
         register_dict: dict[tuple[str, int], QuantumRegister],
         circuit: QuantumCircuit,
+        weight_vector: ParameterVector,
+        offset: int,
     ):
         """
         Adds this gate to the qiskit QuantumCircuit using reflection
@@ -215,6 +218,9 @@ class Gate:
         Args:
             register_dict: is a dict of qubit tuples to the appropriate quantum register
             circuit: is the qiskit QuantumCircuit to add this gate to
+            weight_vector: is the qiskit ParameterVector tracking all the weights of
+                the quantum circuit so it can be trained.
+            offset: is the starting offset to set parameters of this gate from
         """
 
         logger.debug(
@@ -224,6 +230,14 @@ class Gate:
         gate_method = getattr(circuit, self.method_name)
 
         qubit_args = {}
+
+        if not hasattr(self, "qiskit_parameters"):
+            # set up the parameters within the qiskit weight parameter vector
+            self.qiskit_parameters = {}
+
+            for name, value in self.parameters.items():
+                self.qiskit_parameters[name] = weight_vector[offset]
+                offset += 1
 
         for i, qubit in enumerate(self.qubits):
             qubit_name = qubit[0]
@@ -237,12 +251,13 @@ class Gate:
             # name
             qubit_args[argument_name] = register_dict[qubit]
 
-        gate_method(**self.parameters, **qubit_args)
+        gate_method(**self.qiskit_parameters, **qubit_args)
 
     def add_to_pennylane_circuit(
         self,
         circuit_qubits: list[tuple[str, int]],
-        params: dict[str, torch.Tensor] = None,
+        weights: list[float],
+        offset: int,
     ):
         """
         Adds this gate to a PennyLane circuit using the provided wire registers.
@@ -254,8 +269,9 @@ class Gate:
             circuit_qubits: the list of all qubits in the circuit so we can map the qubit names
                 to wire indexes (ints).
             registers: a dictionary mapping register names to PennyLane wires (lists of ints).
-            params: optional dictionary mapping "{innovation_number}:{param_name}" to
-                    trainable torch.Tensor values. If None, uses self.parameters values.
+            weights: the list of parameters to set the gate values from, this is in the ordering
+                provided by CircuitGenome.get_parameters_as_list()
+            offset: is the starting point to pull parameters from in the parameter list
         """
         if not self.enabled:
             # logger.debug(f"Gate {self.method_name} is disabled; skipping.")
@@ -269,6 +285,9 @@ class Gate:
         for i in range(n_qubits):
             qubit_wires.append(circuit_qubits.index(self.qubits[i]))
 
+        param_values = weights[offset : offset + len(self.parameters)]
+
+        """
         # Resolve parameters
         if params is not None:
             param_values = [
@@ -276,6 +295,7 @@ class Gate:
             ]
         else:
             param_values = list(self.parameters.values())
+        """
 
         pennylane_op_name = getattr(spec, "pennylane_op", None)
 

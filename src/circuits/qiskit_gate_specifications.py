@@ -181,6 +181,13 @@ qiskit_gate_specifications["rv"] = GateSpecification(
     name="RV",
     parameters=["vx", "vy", "vz"],
     qubits=["qubit"],
+    # qiskit's RVGate cannot be decomposed/transpiled while its parameters are
+    # symbolic (unbound). Because this framework represents every trainable
+    # gate parameter as an unbound ParameterVector weight, the parameter-shift
+    # gradient during training fails with "The rv gate cannot be decomposed
+    # with unbound parameters". Mark it as needing validation so it is excluded
+    # from the usable gate set (matching the pennylane rv specification).
+    needs_validation=True,
 )
 
 qiskit_gate_specifications["rx"] = GateSpecification(

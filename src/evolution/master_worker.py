@@ -4,6 +4,8 @@ from mpi4py import MPI
 from mpi4py.MPI import Intracomm
 
 from src.circuits.circuit import CircuitGenome
+from src.circuits.decoder import Decoder
+from src.circuits.encoder import Encoder
 from src.circuits.gate_specifications import GateSpecifications
 from src.evolution.exaqc import EXAQC
 from src.evolution.objective import Objective
@@ -123,6 +125,8 @@ def master_worker(
     gate_specifications: GateSpecifications,
     population: PopulationStrategy,
     objective: Objective,
+    initial_encoder: Encoder,
+    initial_decoder: Decoder,
     hyperparameters: dict[str, any],
     mutation_strategy: list[str],
     parent_strategy: list[str],
@@ -146,6 +150,10 @@ def master_worker(
             parents for mutation or crossover and insert children back into the population.
         objective: an instantiated Objective which can be called with a CircuitGenome as an argument
             to be trained and have its fitness evaluated.
+        initial_encoder: the initial encoder to use when initializing genomes, which may be later mutated
+            or have crossover performed on when generating new children.
+        initial_decoder: the initial decoder to use when initializing genomes, which may be later mutated
+            values before being passed into a loss function for training.
         hyperparameters: a dict specifying which hyperparameters to use in the training process, and if
             this is an additional search space to search over.
         mutation_strategy: specifies how many mutations should be performed if mutation is selected. current
@@ -180,6 +188,8 @@ def master_worker(
             gate_specifications=gate_specifications,
             population=population,
             objective=objective,
+            initial_encoder=initial_encoder,
+            initial_decoder=initial_decoder,
             hyperparameters=hyperparameters,
             mutation_strategy=mutation_strategy,
             parent_strategy=parent_strategy,

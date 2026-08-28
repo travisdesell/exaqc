@@ -6,20 +6,57 @@ readme = "README.md"
 requires-python = ">=3.11"
 keywords = []
 classifiers = [
-    "Programming Language :: Python",
-    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python"
 ]
 dependencies = [
     "black",
     "flake8",
-    "numpy<2",
+    # --- NumPy 2 vs. the last Intel-mac PyTorch wheel -----------------------
+    # qiskit-machine-learning >= 0.9 (the qiskit 2.x API using BaseEstimatorV1/V2)
+    # and modern pennylane both hard-require numpy >= 2. On most platforms that
+    # is fine because a numpy-2-aware torch wheel is available. But PyTorch
+    # dropped x86-64 macOS builds after 2.2.2, and torch 2.2.2 is compiled
+    # against NumPy 1.x -> importing torch under numpy 2 breaks the torch<->numpy
+    # bridge ("_ARRAY_API not found"). So on Intel macs numpy >= 2 and torch are
+    # mutually exclusive.
+    #
+    # Resolution: keep the modern qiskit-2.x / numpy-2 stack everywhere except
+    # Intel macOS, and fall back to a numpy < 2 / qiskit-1.x stack there so the
+    # only available torch wheel (2.2.2) works. Markers below use:
+    #   Intel macOS  ==  sys_platform == "darwin" and platform_machine == "x86_64"
+    # Keep each pair's bounds in sync when bumping versions.
+
+    # NumPy: 2.x everywhere, 1.x on Intel macOS (torch 2.2.2 constraint).
+    "numpy>=2; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+    "numpy<2; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+
+    # Qiskit core: 2.x everywhere, 1.x on Intel macOS (numpy < 2 compatible).
+    "qiskit>=2.0; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+    "qiskit<2.0; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+
+    # qiskit-machine-learning: 0.9+ uses the qiskit 2.x primitives API; the 0.8.x
+    # line is the numpy<2 / qiskit-1.x compatible fallback for Intel macOS.
+    "qiskit_machine_learning>=0.9.0; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+    "qiskit_machine_learning>=0.8,<0.9; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+
+    # PennyLane: modern releases require numpy>=2; pin < 0.42 on Intel macOS.
+    "pennylane; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+    "pennylane<0.42; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+    "pennylane-qiskit; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+    "pennylane-qiskit<0.42; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+    # pennylane 0.41 predates autoray's NumpyMimic move; newer autoray breaks its
+    # import. Only cap it on the Intel-mac (old-pennylane) path.
+    "autoray<0.7; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+
+    # qiskit-algorithms 0.4+ needs the qiskit 2.x circuit-library API; the 0.3.x
+    # line is the qiskit-1.x compatible fallback for Intel macOS.
+    "qiskit_algorithms>=0.4.0; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+    "qiskit_algorithms>=0.3,<0.4; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+    # qiskit-aer resolves to a compatible version on both stacks (unpinned).
     "qiskit-aer",
-    "qiskit",
-    "pennylane",
-    "pennylane-qiskit",
-    "pennylane-lightning-gpu",
     "torch",
     "torchvision",
+    "visualtorch==1.4.1",
     "matplotlib",
     "seaborn",
     "pytest",

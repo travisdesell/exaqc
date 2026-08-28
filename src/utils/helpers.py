@@ -3,6 +3,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
+import visualtorch
+import os
 
 from collections import deque
 from typing import Optional
@@ -257,3 +259,24 @@ def torch_params_to_genome(
                 key = f"{gate.innovation_number}:{name}"
                 if key in trained_params:
                     gate.parameters[name] = _extract_param_value(trained_params[key])
+
+
+def draw_network(out_dir: str, model: torch.nn.Module, genome_number: int):
+    """Draw an end-to-end-architecture view of the entire model.
+
+    Args:
+        out_dir (str): The file path to the save directory
+        model (torch.nn.Module): The entire hybrid model.
+        genome_number (int): The genome identifier.
+    """
+    visualtorch.layered_view(
+        model,
+        legend=True,
+        to_file=os.path.join(out_dir, f"genome_{genome_number}_layout.png"),
+    )
+    # img.save(
+    #     os.path.join(
+    #         out_dir,
+    #         f"genome_{genome_number}_layout.png"
+    #     )
+    # )

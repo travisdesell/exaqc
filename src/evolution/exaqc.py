@@ -4,6 +4,8 @@ import numpy as np
 from loguru import logger
 
 from src.circuits.circuit import CircuitGenome
+from src.circuits.decoder import Decoder
+from src.circuits.encoder import Encoder
 from src.circuits.gate_specifications import GateSpecifications
 from src.circuits.registers import expand_registers
 
@@ -32,6 +34,8 @@ class EXAQC:
         gate_specifications: GateSpecifications,
         population: PopulationStrategy,
         objective: Objective,
+        initial_encoder: Encoder,
+        initial_decoder: Decoder,
         hyperparameters: dict[str, any],
         mutation_strategy: list[str] = None,
         parent_strategy: list[str] = None,
@@ -52,6 +56,10 @@ class EXAQC:
                 parents for mutation or crossover and insert children back into the population.
             objective: a method which takes a CircuitGenome, evaluates it and sets it's fitness
                 value.
+            initial_encoder: the initial encoder to use when initializing genomes, which may be later mutated
+                or have crossover performed on when generating new children.
+            initial_decoder: the initial decoder to use when initializing genomes, which may be later mutated
+                or have crossover performed on when generating new children.
             hyperparameters: a dict specifying which hyperparameters to use in the training process, and if
                 this is an additional search space to search over.
             mutation_strategy: specifies how many mutations should be performed if mutation is selected. current
@@ -83,6 +91,9 @@ class EXAQC:
         self.hyperparameters = hyperparameters
         self.target = target
         self.inserted_genomes = 0
+
+        self.initial_encoder = initial_encoder
+        self.initial_decoder = initial_decoder
 
         # make sure the mutation count and parent count strategies are
         # ones we currently support
@@ -270,7 +281,7 @@ class EXAQC:
         hyperparameters["learning_rate"] = 0.0010
         # hyperparameters["epochs"] = random.choice([5, 10])
         # hyperparameters["epochs"] = self.saved_epochs
-        hyperparameters["epochs"] = 10
+        # hyperparameters["epochs"] = 10
 
         return hyperparameters
 
@@ -459,6 +470,11 @@ class EXAQC:
 
             child.genome_number = self.next_genome_number()
             child.hyperparameters = self.get_hyperparameters()
+            child.encoder = self.initial_encoder.copy()
+            child.decoder = self.initial_decoder.copy()
+            logger.info(
+                f"set child encoder and decoder: {type(child.encoder)}, {type(child.decoder)}"
+            )
 
             return child
 
@@ -536,8 +552,9 @@ class EXAQC:
                         f"generating a child via {mutation_count + 1} mutations."
                     )
 
-                    metadata = {}
                     child = self.mutate(parent, metadata, mutation_count)
+                    child.encoder = parent.encoder.copy()
+                    child.decoder = parent.decoder.copy()
 
                 if not child.is_valid():
                     logger.warning(
@@ -548,6 +565,10 @@ class EXAQC:
             # successfully generated a child
             child.genome_number = self.next_genome_number()
             child.hyperparameters = self.get_hyperparameters()
+
+            assert child.encoder is not None
+            assert child.decoder is not None
+
             return child
 
     def insert_genome(self, genome: CircuitGenome):

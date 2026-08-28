@@ -276,7 +276,7 @@ class SteadyStateIslands(PopulationStrategy):
         self.current_island = 0
 
         self.global_best_genome = None
-        self.accuracy_best_genome = None
+        self.metric_best_genome = None
 
         if primary_parent not in ("best", "island"):
             logger.error(
@@ -558,34 +558,22 @@ class SteadyStateIslands(PopulationStrategy):
                 population=merged_population,
             )
 
-        if (
-            self.accuracy_best_genome is None
-            or (
-                "test_acc" in genome.fitness
-                and self.accuracy_best_genome.fitness["test_acc"]
-                < genome.fitness["test_acc"]
-            )
-            or (
-                "eval_return_mean" in genome.fitness
-                and self.accuracy_best_genome.fitness["eval_return_mean"]
-                < genome.fitness["eval_return_mean"]
-            )
+        if self.metric_best_genome is None or (
+            "target_metric" in genome.fitness
+            and self.metric_best_genome.fitness["target_metric"]
+            <= genome.fitness["target_metric"]
         ):
-            self.accuracy_best_genome = genome
+            self.metric_best_genome = genome
 
             # this was a new genome with a best accuracy
             logger.success(
-                f"[global insertion {self.insertions}] Population found new ACCURACY best genome "
+                f"[global insertion {self.insertions}] Population found new best genome for target_metric"
                 f"with fitness: {genome.fitness}"
             )
 
             if self.out_dir is not None:
                 genome.save_circuit(insert_type="best_accuracy", out_dir=self.out_dir)
                 self.profiler.plot_single_run()
-
-            if genome.fitness.get("test_acc", -1.0) == 100.0:
-                # found a perfect solution, can quit
-                exit(1)
 
         if (
             self.global_best_genome is None

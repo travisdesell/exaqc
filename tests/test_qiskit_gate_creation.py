@@ -1,8 +1,11 @@
 import pytest
 import random
+import torch
 import warnings
 
 from src.circuits.circuit import CircuitGenome
+from src.circuits.encoder import initialize_encoder
+from src.circuits.decoder import initialize_decoder
 from src.circuits.registers import expand_registers
 from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
 
@@ -43,6 +46,26 @@ def test_gate_creation(gate_method_name: str):
         target="qiskit",
     )
 
+    # set up default hyperparameters for output generation
+    qc.hyperparameters = {
+        "quantum_input_mode": "rz",
+        "quantum_output_mode": "probs",
+    }
+
+    print(f"qubit_args: {qubit_args}")
+    print(f"n_qubits: {n_qubits}")
+
+    # create a basic encoder and decoder
+    qc.encoder = initialize_encoder(
+        target="pennylane", encoding_str="linear", n_inputs=n_qubits, n_outputs=n_qubits
+    )
+    qc.decoder = initialize_decoder(
+        target="pennylane",
+        decoding_str="linear",
+        n_inputs=2**n_qubits,
+        n_outputs=n_qubits,
+    )
+
     # make the lost of qubit tuples for the add_gate method
     qc_qubits = []
     for i in range(len(qubit_args)):
@@ -64,10 +87,27 @@ def test_gate_creation(gate_method_name: str):
 
     validate_innovation_numbers(qc)
 
+    input_bits = torch.zeros(n_qubits, dtype=torch.int64)
+    print(f"input bits: {input_bits}")
+
     try:
         print("generating qiskit circuit")
-        qc.generate_qiskit_circuit()
+        qc.initialize_model()
     except Exception as e:
         pytest.fail(f"Execution failed for gate {gate_method_name}: {e}")
 
+    # Run the circuit to ensure execution works
+    try:
+        output = qc.forward(input_bits)
+    except Exception as e:
+        pytest.fail(f"Execution failed for gate {gate_method_name}: {e}")
+
+    # Basic sanity check for output
+    assert output is not None
+    assert hasattr(output, "shape"), "Output output has no 'shape' attribute"
+
+    print(
+        f"Gate {gate_method_name} executed successfully. "
+        f"Output output shape: {output.shape}"
+    )
     print()
