@@ -1,4 +1,5 @@
 import random
+import numpy as np
 
 from loguru import logger
 
@@ -15,6 +16,8 @@ from src.evolution.mutation import (
     add_gate_with_selection,
     disable_gate,
     enable_gate,
+    mutate_all_weights,
+    mutate_some_weights,
     reorder_gate,
     qubit_swap,
 )
@@ -30,6 +33,8 @@ class EXAQC:
         population: PopulationStrategy,
         objective: Objective,
         hyperparameters: dict[str, any],
+        mutation_strategy: list[str] = None,
+        parent_strategy: list[str] = None,
         input_qubits: list[tuple[str, int]] = None,
         input_registers: dict[str, int] = None,
         output_registers: dict[str, int] = None,
@@ -49,6 +54,16 @@ class EXAQC:
                 value.
             hyperparameters: a dict specifying which hyperparameters to use in the training process, and if
                 this is an additional search space to search over.
+            mutation_strategy: specifies how many mutations should be performed if mutation is selected. current
+                options are 'uniform <min> <max>' which will select a number of mutations uniformly at random
+                between range(min, max), where min should be at least 1; or 'exponential <scale>' which will select the
+                number of mutations using an exponential distribution with the given scale plus 1 to ensure at least
+                1 mutation happens.
+            parent_strategy: specifies how many parents should be used for an n-ary crossover operation. current
+                options are 'uniform <min> <max>' which will select a number of mutations uniformly at random
+                between range(min, max), where min should be at least 2; or 'exponential <scale>' which will select the
+                number of mutations using an exponential distribution with the given scale plus 2 to ensure at least
+                2 mutation happens.
             input_registers: a dict of register names and sizes (the key is the qubit name, the value is its size). must
                 be specified if input_qubits is not specified.
             input_qubits: a list of qubit tuples (name, register_index) which would be the expanded form of the
@@ -67,6 +82,15 @@ class EXAQC:
         self.objective = objective
         self.hyperparameters = hyperparameters
         self.target = target
+        self.inserted_genomes = 0
+
+        # make sure the mutation count and parent count strategies are
+        # ones we currently support
+        self.validate_mutation_strategy(mutation_strategy)
+        self.validate_parent_strategy(parent_strategy)
+
+        self.mutation_strategy = mutation_strategy
+        self.parent_strategy = parent_strategy
 
         if input_registers is None and input_qubits is None:
             logger.critical(
@@ -86,6 +110,9 @@ class EXAQC:
             )
             exit(1)
 
+        logger.info(f"initial input qubits: {input_qubits}")
+        logger.info(f"initial output qubits: {output_qubits}")
+
         self.input_qubits: list[tuple[str, int]] = input_qubits
         if self.input_qubits is None:
             self.input_qubits = expand_registers(input_registers)
@@ -96,6 +123,9 @@ class EXAQC:
                 self.output_qubits = self.input_qubits.copy()
             else:
                 self.output_qubits = expand_registers(output_registers)
+
+        logger.info(f"input qubits: {self.input_qubits}")
+        logger.info(f"output qubits: {self.output_qubits}")
 
         logger.info("Starting EXAQC with the following allowed gates:")
         for gate in sorted(
@@ -114,7 +144,109 @@ class EXAQC:
             output_qubits=self.output_qubits.copy(),
         )
 
+        # if self.hyperparameters.get("use_input_u3_layer", False):
+        #     self.initial_genome.add_input_u3_layer()
+
+        self.saved_epochs = 10
         self.initial_genome.hyperparameters = self.get_hyperparameters()
+
+    def validate_mutation_strategy(self, mutation_strategy: list[str]):
+        """
+        Validates that the mutation count strategy provided on the command line is
+        correctly formatted and specifies. Will report an error and quit if not.
+        """
+
+        if mutation_strategy[0] == "uniform":
+            if len(mutation_strategy) != 3:
+                logger.error(
+                    "'uniform' mutation strategy requires two additional arguments, which are the "
+                    "min and max range of potential number of mutations, which need to be integers."
+                )
+                exit(1)
+
+            if not mutation_strategy[1].isdigit() or int(mutation_strategy[1]) < 1:
+                logger.error(
+                    "<min> value for uniform strategy must be an int and at least 1, but value "
+                    f"provided was {mutation_strategy[1]}"
+                )
+                exit(1)
+
+            if not mutation_strategy[1].isdigit() or (
+                int(mutation_strategy[1]) > int(mutation_strategy[2])
+            ):
+                logger.error(
+                    "<max> value for uniform strategy must be an int and at least the <min> value, "
+                    f"value provided was {mutation_strategy[1]}"
+                )
+                exit(1)
+
+        elif mutation_strategy[0] == "exponential":
+            if len(mutation_strategy) != 2:
+                logger.error(
+                    "'exponential' mutation strategy requires one additional argument, which is "
+                    "the scale for the exponential distribution, which needs to be a float."
+                )
+                exit(1)
+
+            try:
+                float(mutation_strategy[1])
+            except ValueError:
+                logger.error(
+                    f"'scale' value was {mutation_strategy[1]} was not a float."
+                )
+                exit(1)
+
+        else:
+            logger.error(f"Unknown mutation strategy was provided: {mutation_strategy}")
+            exit(1)
+
+    def validate_parent_strategy(self, parent_strategy: list[str]):
+        """
+        Validates that the parent count strategy provided on the command line is
+        correctly formatted and specifies. Will report an error and quit if not.
+        """
+
+        if parent_strategy[0] == "uniform":
+            if len(parent_strategy) != 3:
+                logger.error(
+                    "'uniform' parent strategy requires two additional arguments, which are the "
+                    "min and max range of potential number of parents, which need to be integers."
+                )
+                exit(1)
+
+            if not parent_strategy[1].isdigit() or int(parent_strategy[1]) < 2:
+                logger.error(
+                    "<min> value for uniform strategy must be an int and at least 2, but value "
+                    f"provided was {parent_strategy[1]}"
+                )
+                exit(1)
+
+            if not parent_strategy[1].isdigit() or (
+                int(parent_strategy[1]) > int(parent_strategy[2])
+            ):
+                logger.error(
+                    "<max> value for uniform strategy must be an int and at least the <min> value, "
+                    f"value provided was {parent_strategy[1]}"
+                )
+                exit(1)
+
+        elif parent_strategy[0] == "exponential":
+            if len(parent_strategy) != 2:
+                logger.error(
+                    "'exponential' parent strategy requires one additional argument, which is "
+                    "the scale for the exponential distribution, which needs to be a float."
+                )
+                exit(1)
+
+            try:
+                float(parent_strategy[1])
+            except ValueError:
+                logger.error(f"'scale' value was {parent_strategy[1]} was not a float.")
+                exit(1)
+
+        else:
+            logger.error(f"Unknown parent strategy was provided: {parent_strategy}")
+            exit(1)
 
     def get_hyperparameters(self):
         """
@@ -122,15 +254,69 @@ class EXAQC:
             hyperparameters for a newly created child
         """
 
+        if self.genome_number > 0 and self.genome_number % 100 == 0:
+            # increase epochs every 100 genomes
+            self.saved_epochs += 1
+
         # TODO: make an evolutionary strategy for handling hyperparameter options
         hyperparameters = self.hyperparameters.copy()
 
+        """
         hyperparameters["learning_rate"] = random.choice(
             [0.001, 0.0005, 0.0001, 0.00005]
         )
-        hyperparameters["steps"] = random.choice([5, 10, 15, 20, 25, 30, 35, 40])
+        hyperparameters["epochs"] = random.choice([5, 10, 15, 20, 25, 30, 35, 40])
+        """
+        hyperparameters["learning_rate"] = 0.0010
+        # hyperparameters["epochs"] = random.choice([5, 10])
+        # hyperparameters["epochs"] = self.saved_epochs
+        hyperparameters["epochs"] = 10
 
         return hyperparameters
+
+    def get_mutation_count(self) -> int:
+        """
+        Given the provided mutation strategy this will determine how many mutations
+        to perform for the current time mutation was selected.
+
+        Returns:
+            How many mutations to perform for the next child.
+        """
+
+        if self.mutation_strategy[0] == "uniform":
+            min_value = int(self.mutation_strategy[1])
+            max_value = int(self.mutation_strategy[2])
+            n_mutations = random.choice(range(min_value, max_value))
+            logger.info(f"uniform mutation count generated: {n_mutations}")
+            return n_mutations
+
+        elif self.mutation_strategy[0] == "exponential":
+            scale = float(self.mutation_strategy[1])
+            n_mutations = min(round(np.random.exponential(scale=scale)) + 1, 10)
+            logger.info(f"exponential mutation count generated: {n_mutations}")
+            return n_mutations
+
+    def get_parent_count(self) -> int:
+        """
+        Given the provided parent strategy this will determine how many parents
+        are selected to perform n-ary crossover or other multi-parent operations
+
+        Returns:
+            How many parents to perform for the next child.
+        """
+
+        if self.parent_strategy[0] == "uniform":
+            min_value = int(self.parent_strategy[1])
+            max_value = int(self.parent_strategy[2])
+            n_parents = random.choice(range(min_value, max_value))
+            logger.info(f"uniform parent count generated: {n_parents}")
+            return n_parents
+
+        elif self.parent_strategy[0] == "exponential":
+            scale = float(self.parent_strategy[1])
+            n_parents = min(round(np.random.exponential(scale=scale)) + 2, 10)
+            logger.info(f"exponential parent count generated: {n_parents}")
+            return n_parents
 
     def next_genome_number(self) -> int:
         """
@@ -143,7 +329,9 @@ class EXAQC:
         self.genome_number += 1
         return self.genome_number
 
-    def mutate(self, parent: CircuitGenome) -> CircuitGenome:
+    def mutate(
+        self, parent: CircuitGenome, metadata: dict[str, any], n_mutations: int = 1
+    ) -> CircuitGenome:
         """
         Takes a given parent genome, makes a copy of it (with a new genome number) and
         then applies a random mutation to it.
@@ -155,19 +343,17 @@ class EXAQC:
             A mutated copy of the parent genome as a child.
         """
 
-        child = parent.copy(genome_number=self.next_genome_number())
-
         # mutation_options = ["add_gate", "disable_gate", "enable_gate", "reorder_gate"]
         mutation_options = (
-            ["add_gate"] * 11  # 65%
+            ["add_gate"] * 11  # 55%
             + ["reorder_gate"] * 2  # 10%
             + ["qubit_swap"] * 2  # 10%
             + ["enable_gate"]  # 5%
             + ["disable_gate"] * 2  # 10%
             + ["clone"] * 2  # 10%
+            # + ["mutate_some_weights"] * 2
+            # + ["mutate_all_weights"] * 2
         )
-
-        modified = False
 
         # only use the gates with which do not still require some validation from us to
         # ensure compatability
@@ -175,13 +361,25 @@ class EXAQC:
             v for v in self.gate_specifications.values() if v.needs_validation is False
         ]
 
-        logger.info("starting mutation process")
-        while not modified:
+        logger.info(f"starting mutation process, n_mutations: {n_mutations}")
+
+        child = parent.copy(genome_number=None)
+        child.metadata = metadata
+        child.metadata["parent_genomes"] = [parent.genome_number]
+        child.metadata["generated_by"] = []
+
+        mutation = ""
+        mutation_count = 0
+
+        while mutation_count < n_mutations:
             # keep trying to mutate until successful
 
+            modified = False
             mutation = random.choice(mutation_options)
 
-            logger.info(f"\tattempting to mutate with {mutation}")
+            logger.info(
+                f"\tattempting to mutate with {mutation}, mutation_count: {mutation_count}"
+            )
             match mutation:
                 case "add_gate":
                     modified = add_gate_with_selection(
@@ -208,14 +406,25 @@ class EXAQC:
                 case "qubit_swap":
                     modified = qubit_swap(child)
 
+                case "mutate_some_weights":
+                    modified = mutate_some_weights(child)
+
+                case "mutate_all_weights":
+                    modified = mutate_all_weights(child)
+
+            if modified:
+                # track the mutation that actually modified the child
+                child.metadata["generated_by"].append(mutation)
+                mutation_count += 1
+
         return child
 
     def generate_genome(
         self,
-        binary_crossover_rate: float = 0.10,
-        n_ary_crossover_rate: float = 0.10,
+        binary_crossover_rate: float = 0.00,
+        n_ary_crossover_rate: float = 0.20,
         exponential_crossover_rate: float = 0.10,
-        n_ary_parents: int = 4,
+        n_ary_parents: int = 5,
     ) -> CircuitGenome:
         """
         Generates a single genome for EXAQC.
@@ -230,23 +439,27 @@ class EXAQC:
             A new child to evaluate for EXAQC.
         """
 
-        if len(self.population.population) < self.population.max_population_size:
+        if self.population.is_initializing():
             # still need to populate the initial population
+
+            mutation_count = self.get_mutation_count()
+
+            # keep retrying until we have a valid child
+            child = None
             valid = False
-
-            mutation_count = random.choice([0, 1, 2, 3, 4])
-
-            logger.info(f"generating a child via {mutation_count + 1} mutations.")
             while not valid:
-                # keep trying to create a child from the initial
-                # genome until we get a valid one, then send it out
-                child = self.mutate(self.initial_genome)
+                metadata = {}
+                child = self.mutate(self.initial_genome, metadata, mutation_count)
 
-                for i in range(mutation_count):
-                    child = self.mutate(child)
                 valid = child.is_valid()
+                if not valid:
+                    logger.warning(
+                        "child was invalid (inputs did not connect to outputs), trying again."
+                    )
 
+            child.genome_number = self.next_genome_number()
             child.hyperparameters = self.get_hyperparameters()
+
             return child
 
         else:
@@ -261,16 +474,18 @@ class EXAQC:
             while child is None:
                 r = random.uniform(0, 1.0)
 
-                if (
-                    self.genome_number > self.population.max_population_size
-                    and r < binary_crossover_rate
-                ):
-                    parents = self.population.get_parents(2)
+                if r < binary_crossover_rate:
+                    parents, metadata = self.population.get_parents(2)
+
+                    if parents is None:
+                        continue
+
                     child = CircuitGenome(
-                        genome_number=self.next_genome_number(),
+                        genome_number=None,
                         target=self.target,
                         input_qubits=self.input_qubits.copy(),
                         output_qubits=self.output_qubits.copy(),
+                        metadata=metadata,
                     )
 
                     if not binary_crossover(child, parents[0], parents[1]):
@@ -278,38 +493,51 @@ class EXAQC:
                         # to generate a new child
                         continue
 
-                elif (
-                    self.genome_number > self.population.max_population_size
-                    and r < n_ary_cutoff
-                ):
-                    parents = self.population.get_parents(n_ary_parents)
+                elif r < n_ary_cutoff:
+                    n_ary_parents = self.get_parent_count()
+                    logger.info(f"selected {n_ary_parents} parents for crossover")
+                    parents, metadata = self.population.get_parents(n_ary_parents)
+
+                    if parents is None:
+                        continue
+
                     child = CircuitGenome(
-                        genome_number=self.next_genome_number(),
+                        genome_number=None,
                         target=self.target,
                         input_qubits=self.input_qubits.copy(),
                         output_qubits=self.output_qubits.copy(),
+                        metadata=metadata,
                     )
 
                     n_ary_crossover(child, parents)
 
-                elif (
-                    self.genome_number > self.population.max_population_size
-                    and r < exponential_cutoff
-                ):
-                    parents = self.population.get_parents(2)
+                elif r < exponential_cutoff:
+                    parents, metadata = self.population.get_parents(2)
+
+                    if parents is None:
+                        continue
+
                     child = CircuitGenome(
-                        genome_number=self.next_genome_number(),
+                        genome_number=None,
                         target=self.target,
                         input_qubits=self.input_qubits.copy(),
                         output_qubits=self.output_qubits.copy(),
+                        metadata=metadata,
                     )
 
                     exponential_crossover(child, parents[0], parents[1])
 
                 else:
-                    parent = self.population.get_parent()
-                    child = self.mutate(parent)
-                    child = self.mutate(child)
+                    parent, metadata = self.population.get_parent()
+
+                    mutation_count = self.get_mutation_count()
+
+                    logger.info(
+                        f"generating a child via {mutation_count + 1} mutations."
+                    )
+
+                    metadata = {}
+                    child = self.mutate(parent, metadata, mutation_count)
 
                 if not child.is_valid():
                     logger.warning(
@@ -318,6 +546,7 @@ class EXAQC:
                     child = None
 
             # successfully generated a child
+            child.genome_number = self.next_genome_number()
             child.hyperparameters = self.get_hyperparameters()
             return child
 
@@ -328,7 +557,8 @@ class EXAQC:
         Args:
             genome: is the evaluated genome to insert
         """
-        self.population.insert_genome(genome)
+        self.population.insert_genome(genome, current_genome_number=self.genome_number)
+        self.inserted_genomes += 1
 
     def run_for(
         self,

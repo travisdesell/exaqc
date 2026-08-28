@@ -2,6 +2,11 @@ from __future__ import annotations
 from loguru import logger
 from typing import Dict, Optional
 import bisect
+import os
+import json
+
+import matplotlib.pyplot as plt
+import numpy as np
 
 from qiskit import QuantumCircuit
 from qiskit import QuantumRegister, ClassicalRegister
@@ -9,6 +14,9 @@ import pennylane as qml
 import torch
 
 from src.circuits.gate import Gate
+from src.objectives.genome_objectives import (
+    genome_to_torch_params,
+)
 
 
 class CircuitGenome:
@@ -19,6 +27,7 @@ class CircuitGenome:
         target: str,
         input_qubits: list[tuple[str, int]],
         output_qubits: list[tuple[str, int]] = None,
+        metadata: dict[str, any] = {},
     ):
         """
         Initializes an empty quantum circuit.
@@ -30,8 +39,11 @@ class CircuitGenome:
             input_qubits: a list of qubit names and indexes (e.g., (a, 0)).
             output_qubits: a list of qubit names and indexes (e.g., (a, 0)), if None then output_qubits are
                 the same as the input qubits.
+            metadata: is metadata about the genome used by things like the population strategy, etc. or to
+                track other information about the genome.
         """
         self.genome_number = genome_number
+        self.metadata = metadata
 
         # these should be specified by EXAQC
 
@@ -88,7 +100,7 @@ class CircuitGenome:
         self.sort_gates()
 
         reached_indexes = set(self.input_indexes)
-        logger.info(f"inital reached indexes now: {reached_indexes}")
+        logger.debug(f"inital reached indexes now: {reached_indexes}")
 
         for gate in self.gates:
             if not gate.enabled:
@@ -104,10 +116,10 @@ class CircuitGenome:
             if not set(input_circuit_indexes).isdisjoint(reached_indexes):
                 reached_indexes.update(output_circuit_indexes)
 
-            logger.info(f"\treached indexes now: {reached_indexes}")
+            logger.debug(f"\treached indexes now: {reached_indexes}")
 
         valid = not reached_indexes.isdisjoint(self.output_indexes)
-        logger.info(
+        logger.debug(
             f"output indexes are: {self.output_indexes}, circuit valid? {valid}"
         )
 
@@ -129,6 +141,35 @@ class CircuitGenome:
         # TODO: update for multi objectives, but for now just use the given
         # loss key
         return self.fitness[loss] < other.fitness[loss]
+
+    def get_gate_innovations(self) -> list[int]:
+        """
+        Returns:
+            A sorted list of all the enabled gate innovation numbers in this
+            genome.
+        """
+        gates = [gate.innovation_number for gate in self.gates if gate.enabled]
+        gates.sort()
+        return gates
+
+    def has_same_gates(self, other: CircuitGenome) -> bool:
+        """
+        This checks to see if this genome has the exact same enabled
+        gates as the other genome.
+
+        Returns:
+            True if both genomes have the same enabled gates innovation nubmers (but
+            gates can potentially have different trained parameters).
+        """
+
+        self_gates = self.get_gate_innovations()
+        other_gates = other.get_gate_innovations()
+
+        logger.debug(
+            f"comparing self gates {self_gates} to other gates {other_gates}, equal? {self_gates == other_gates}"
+        )
+
+        return self.get_gate_innovations() == other.get_gate_innovations()
 
     def copy(self, genome_number: int = None) -> CircuitGenome:
         """
@@ -157,6 +198,7 @@ class CircuitGenome:
             input_qubits=self.input_qubits.copy(),
             output_qubits=self.output_qubits.copy(),
         )
+        new_genome.metadata = self.metadata.copy()
         new_genome.fitness = fitness
         new_genome.hyperparameters = self.hyperparameters.copy()
 
@@ -179,6 +221,7 @@ class CircuitGenome:
         serialized = {}
         serialized["fitness"] = self.fitness
         serialized["genome_number"] = self.genome_number
+        serialized["metadata"] = self.metadata
         serialized["target"] = self.target
         serialized["input_qubits"] = self.input_qubits.copy()
         serialized["output_qubits"] = self.output_qubits.copy()
@@ -205,6 +248,7 @@ class CircuitGenome:
             target=serialized["target"],
             input_qubits=serialized["input_qubits"],
             output_qubits=serialized["output_qubits"],
+            metadata=serialized["metadata"],
         )
         new_genome.fitness = serialized["fitness"]
         new_genome.hyperparameters = serialized["hyperparameters"]
@@ -233,6 +277,7 @@ class CircuitGenome:
         method_name: str,
         qubits: list[tuple[str, int]] = [],
         parameters: dict[str, float] = {},
+        innovation_number: int = None,
     ):
         """
         Adds a new already created gate to this quantum circuit, keeping the
@@ -390,13 +435,101 @@ class CircuitGenome:
 
         return circuit
 
+    def _has_input_u3_layer(self) -> bool:
+        """Check whether the genome already contains a trainable input U3 layer.
+
+        The input U3 layer is identified by enabled ``"u"`` gates that contain
+        the ``"input_u3_layer"`` metadata flag. These gates are inserted at the
+        beginning of the circuit and act as trainable preprocessing layers
+        applied after classical input encoding.
+
+        Returns:
+            bool: ``True`` if the genome already contains at least one enabled
+            input U3 layer gate, otherwise ``False``.
+        """
+        return any(
+            gate.enabled
+            and gate.method_name == "u"
+            and getattr(gate, "metadata", {}).get("input_u3_layer", False)
+            for gate in self.gates
+        )
+
+    def add_input_u3_layer(
+        self,
+        base_depth: float = 1e-6,
+        depth_eps: float = 1e-9,
+        init_scale: float = 0.01,
+    ) -> None:
+        """Add a trainable U3 preprocessing layer to all input qubits.
+
+        This method inserts one parametric ``U3`` gate per input qubit near the
+        beginning of the circuit. The added gates are standard innovation-tracked
+        genome gates, meaning their parameters participate naturally in mutation,
+        crossover, serialization, and gradient-based optimization.
+
+        Each inserted gate contains three trainable parameters:
+
+        - ``theta``
+        - ``phi``
+        - ``delta``
+
+        These parameters are automatically exposed through the genome parameter
+        helpers using keys of the form:
+
+            <innovation_number>:theta
+            <innovation_number>:phi
+            <innovation_number>:delta
+
+        The layer is inserted only once. If the genome already contains an input
+        U3 layer, the method returns immediately without modification.
+
+        Args:
+            base_depth (float, optional): Base circuit depth used for the first
+                inserted U3 gate. This should be close to zero so the layer is
+                applied immediately after input encoding. Defaults to ``1e-6``.
+
+            depth_eps (float, optional): Small depth offset added between adjacent
+                U3 gates to preserve deterministic ordering during sorting.
+                Defaults to ``1e-9``.
+
+            init_scale (float, optional): Initial parameter value assigned to all
+                U3 gate parameters. Defaults to ``0.01``.
+
+        Returns:
+            None
+        """
+
+        if self._has_input_u3_layer():
+            return
+
+        for i, qubit in enumerate(self.input_qubits):
+            self.add_gate(
+                depth=base_depth + i * depth_eps,
+                method_name="u",
+                qubits=[qubit],
+                parameters={
+                    "theta": init_scale,
+                    "phi": init_scale,
+                    "delta": init_scale,
+                },
+            )
+
+            self.gates[-1].metadata = {
+                "input_u3_layer": True,
+                "input_index": i,
+            }
+
+        self.sort_gates()
+
     def generate_pennylane_circuit(
         self,
         device_name: str = "default.qubit",
         measure_registers: bool = False,
         shots: Optional[int] = None,
         input_mode: str = "basis",
+        n_classes: Optional[int] = None,
         return_probs: bool = False,
+        diff_method: str | None = None,
     ):
         """
         Converts this genome into a PennyLane QNode-ready function.
@@ -426,12 +559,24 @@ class CircuitGenome:
             shots=shots,
         )
 
+        if diff_method is None:
+            diff_method = "adjoint" if device_name == "lightning.gpu" else "backprop"
+
+        if device_name == "lightning.gpu":
+            # Basis States
+            self.basis_states = [
+                np.array([int(x) for x in format(i, f"0{len(self.output_indexes)}b")])
+                for i in range(n_classes)
+            ]
+
         # Define the QNode function
-        @qml.qnode(dev, interface="torch", diff_method="backprop")
+        @qml.qnode(dev, interface="torch", diff_method=diff_method)
         def qnode_fn(
             input_bits: torch.Tensor,
             params: Dict[str, torch.Tensor],
         ):
+
+            is_batched = input_bits.dim() == 2
 
             # --- Input preparation ---
             if input_mode == "basis":
@@ -441,17 +586,72 @@ class CircuitGenome:
             elif input_mode == "angle":
                 # expects float tensor on "input" register wires
                 # encode x_i in [0,1] -> RY(pi*x_i) (common, stable)
+
+                # logger.info(f"input_indexes length: {len(self.input_indexes)} -- {self.input_indexes}")
+                # logger.info(f"input_bits length: {len(input_bits)} -- {input_bits}")
+
                 for i, w in enumerate(self.input_indexes):
-                    qml.RY(torch.pi * input_bits[i], wires=w)
+                    angle = input_bits[:, i] if is_batched else input_bits[i]
+                    qml.RY(torch.pi * angle, wires=w)
 
             elif input_mode == "amplitude":
                 # expects float tensor of length 2**len(in_wires)
-                qml.AmplitudeEmbedding(
-                    features=input_bits,
-                    wires=self.input_indexes,
-                    normalize=True,
-                    pad_with=0.0,
-                )
+                if is_batched:
+                    qml.AmplitudeEmbedding(
+                        features=input_bits,
+                        wires=self.input_indexes,
+                        normalize=False,
+                        pad_with=0.0,
+                        batch_size=input_bits.shape[0],
+                    )
+                else:
+                    qml.AmplitudeEmbedding(
+                        features=input_bits,
+                        wires=self.input_indexes,
+                        normalize=False,
+                        pad_with=0.0,
+                    )
+
+            elif input_mode == "u3":
+                expected_dim = 3 * len(self.input_indexes)
+
+                if is_batched:
+                    if input_bits.shape[1] != expected_dim:
+                        raise ValueError(
+                            f"u3 encoding expects [B, {expected_dim}], "
+                            f"but got {tuple(input_bits.shape)}."
+                        )
+
+                    angles = torch.pi * input_bits
+
+                    for i, w in enumerate(self.input_indexes):
+                        theta = angles[:, 3 * i + 0]
+                        phi = angles[:, 3 * i + 1]
+                        delta = angles[:, 3 * i + 2]
+
+                        qml.U3(theta, phi, delta, wires=w)
+
+                else:
+                    input_bits = input_bits.flatten()
+
+                    if input_bits.shape[0] != expected_dim:
+                        raise ValueError(
+                            f"learned_u3 encoding expects {expected_dim} values "
+                            f"for {len(self.input_indexes)} input qubits, "
+                            f"but got {input_bits.shape[0]}."
+                        )
+
+                    # Map raw encoder outputs into valid angle range (-pi, pi).
+                    # angles = torch.pi * torch.tanh(input_bits)
+                    angles = torch.pi * input_bits
+
+                    for i, w in enumerate(self.input_indexes):
+                        theta = angles[3 * i + 0]
+                        phi = angles[3 * i + 1]
+                        delta = angles[3 * i + 2]
+
+                        qml.U3(theta, phi, delta, wires=w)
+
             else:
                 raise ValueError(f"Unknown input_mode={input_mode}")
 
@@ -462,7 +662,16 @@ class CircuitGenome:
 
             # 4️⃣ Measurement
             if return_probs:
+                if device_name == "lightning.gpu":
+                    return tuple(
+                        [
+                            qml.expval(qml.Projector(state, wires=self.output_indexes))
+                            for state in self.basis_states
+                        ]
+                    )
+
                 return qml.probs(wires=self.output_indexes)
+
             elif measure_registers:
                 # fallback if you want expvals
                 expvals = [
@@ -481,3 +690,69 @@ class CircuitGenome:
             gate.describe_pennylane_circuit(self.qubits)
 
         return dev, qnode_fn
+
+    def save_circuit(
+        self,
+        insert_type: str,
+        out_dir: str = "artifacts/",
+    ):
+        """
+        Saves this genome into the specified output directory in JSON and
+        txt format.
+
+        Args:
+            insert_type: a tag to put at the beginning of the filename, e.g.
+                'best' for global_best genomes.
+            out_dir: where to write the genome files.
+            checkpoint: a dictionary with all assiciated components
+        """
+        os.makedirs(out_dir, exist_ok=True)
+
+        json_path = os.path.join(out_dir, f"genome_{self.genome_number}.json")
+        logger.info(f"writing NEW BEST gnome to {json_path}")
+        with open(json_path, "w") as fp:
+            json.dump(self.to_dict(), fp, ensure_ascii=False, indent=4)
+
+        # --- Text gate list ---
+        txt_path = os.path.join(out_dir, f"genome_{self.genome_number}.txt")
+        with open(txt_path, "w") as f:
+            self.sort_gates()
+            f.write(f"Genome {self.genome_number}\n")
+            f.write(f"Qubits: {self.qubits}\n\n")
+            for g in self.gates:
+                if getattr(g, "enabled", True):
+                    f.write(
+                        f"{g.depth:.3f}  {g.method_name}  {g.qubits}  {g.parameters}\n"
+                    )
+
+        # --- PennyLane draw ---
+        self.generate_pennylane_circuit(return_probs=True, input_mode="angle")
+        # logger.info(f"genome circuit: {self.circuit}")
+
+        test_metric = self.fitness.get("test_acc", None)
+        if test_metric is None:
+            test_metric = self.fitness.get("test_fidelity")
+
+        try:
+            tag = (
+                f"trainloss_{self.fitness['train_loss']:.4f}_testloss_"
+                f"{self.fitness['test_loss']:.4f}_testacc_{test_metric:.3f}"
+            )
+        except Exception:
+            tag = (
+                f"best_ep_return_{self.fitness['best_episode_return']:.4f}_"
+                f"eval_return_mean_{self.fitness['eval_return_mean']:.4f}"
+            )
+
+        try:
+            params = genome_to_torch_params(self)
+            x0 = torch.zeros(len(self.input_indexes))
+            fig, ax = qml.draw_mpl(self.circuit)(x0, params)
+            ax.set_title(f"Genome {self.genome_number}")
+            path = os.path.join(
+                out_dir, f"{insert_type}_genome_{self.genome_number}_{tag}.png"
+            )
+            fig.savefig(path, dpi=200, bbox_inches="tight")
+            plt.close(fig)
+        except Exception as e:
+            logger.warning(f"Could not draw circuit: {e}")

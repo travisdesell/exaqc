@@ -209,5 +209,11 @@ __marimo__/
 
 # Results
 plots/
-data/
 artifacts/
+outs/
+logs/
+
+# Data
+data/
+src/data/
+outputs/

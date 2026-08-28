@@ -12,9 +12,9 @@ def expand_registers(registers: dict[str, int]) -> list[tuple[str, int]]:
     """
 
     qubits = []
-    for gate_name, gate_size in registers.items():
-        for index in range(gate_size):
-            qubit = (gate_name, index)
+    for register_name, register_size in registers.items():
+        for index in range(register_size):
+            qubit = (register_name, index)
             qubits.append(qubit)
 
     return qubits

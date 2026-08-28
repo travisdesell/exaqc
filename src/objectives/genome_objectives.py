@@ -1,25 +1,39 @@
 from __future__ import annotations
+from typing import TYPE_CHECKING
+
+import math
+import numpy as np
+import torch
+import copy
 
 from typing import Optional, Iterable, Callable, Any
-import torch
 from loguru import logger
-import numpy as np
-from src.circuits.circuit import CircuitGenome
-from src.utils.losses import (
+
+if TYPE_CHECKING:
+    from src.circuits.circuit import CircuitGenome
+
+from src.utils.losses import (  # noqa: F401
+    loss_ce,
+    loss_kl_divergence,
     loss_one_minus_fidelity,
     loss_state_angle,
     loss_obs_mse,
     ce_onehot_on_probs,
+    ce_onehot_on_probs_batch,
+    entropy_regularizer,
+    class_avg_ce_onehot_on_probs,
     LOSS_REGISTRY,
 )
 
 from src.utils.helpers import (
-    sample_batch,
+    BalancedBatchSampler,
     torch_params_to_genome,
     genome_to_torch_params,
 )
 
 STATEVECTOR_LOSSES = {"fidelity", "angle", "kl", "ce"}
+
+entropy_coef = 0.01
 
 
 def _ensure_complex(x: torch.Tensor) -> torch.Tensor:
@@ -134,6 +148,9 @@ def _eval_supervised_split(
     loss_fn: Optional[Callable] = None,
     class_counts: Optional[dict] = None,
     alpha=None,
+    embedding_model: torch.nn.Module | None = None,
+    readout_head: torch.nn.Module | None = None,
+    device: str = "cpu",
 ):
     """Evaluate supervised classification metrics on a dataset split.
 
@@ -151,23 +168,74 @@ def _eval_supervised_split(
     """
     if data is None:
         return None
+    device = torch.device(device)
+
+    if embedding_model is not None:
+        embedding_model.to(device)
+        embedding_model.eval()
+
+    if readout_head is not None:
+        readout_head.to(device=device, dtype=torch.float32)
+        readout_head.eval()
+
+    if alpha is not None:
+        alpha = alpha.to(device)
+
     losses = []
+    probas = []
+    y_onehots = []
     correct = 0
     total = 0
     for x, y, cls in data:
+        x = x.to(device)
+        y = y.to(device)
+
+        if embedding_model is not None:
+            x = embedding_model(x)
+
         probs = genome.circuit(x, params)
-        probs = torch.as_tensor(probs, dtype=torch.float32)
-        probs = probs[:n_classes]
-        probs = probs / (probs.sum() + 1e-12)
-        L = loss_fn(probs, y, alpha_per_class=alpha)
+
+        if readout_head is not None:
+            probs = probs.to(device=device, dtype=torch.float32)
+            logits = readout_head(probs)
+            probs = torch.softmax(logits, dim=-1)
+            target = torch.argmax(y).long().unsqueeze(0)
+            L = torch.nn.functional.cross_entropy(
+                logits.unsqueeze(0),
+                target,
+                weight=alpha,
+            )
+        else:
+            probs = torch.as_tensor(probs, dtype=torch.float32, device=device)
+            probs = probs[:n_classes]
+            probs = probs / (probs.sum() + 1e-12)
+            L = ce_onehot_on_probs(probs, y, alpha_per_class=alpha)
+
         losses.append(L)
         pred = int(torch.argmax(probs).item())
         true = int(torch.argmax(y).item())
         correct += int(pred == true)
         total += 1
+        probas.append(probs)
+        y_onehots.append(y)
+
+    probs = torch.stack(
+        [p.to(device=device, dtype=torch.float32) for p in probas], dim=0
+    )
+    y_onehots = torch.stack(
+        [p.to(device=device, dtype=torch.float32) for p in y_onehots], dim=0
+    )
+
+    if loss_fn.__name__ != "class_avg_ce_onehot_on_probs":
+        loss = (
+            float(torch.stack(losses).mean().detach().cpu().item()) if losses else 0.0
+        )
+
+    else:
+        loss = float(loss_fn(probs, y_onehots).detach().cpu().item())
 
     return {
-        "loss": float(torch.stack(losses).mean().item()) if losses else 0.0,
+        "loss": loss,
         "acc": float(correct / max(total, 1)),
     }
 
@@ -182,6 +250,9 @@ def eval_forward_only(
     loss_fn: Optional[Callable] = None,
     class_counts: Optional[tuple] = None,
     alpha: Optional[torch.Tensor] = None,
+    embedding_model: torch.nn.Module | None = None,
+    readout_head: torch.nn.Module | None = None,
+    device: str = "cpu",
 ):
     """Evaluate a genome without gradient updates.
 
@@ -200,8 +271,15 @@ def eval_forward_only(
     Returns:
         dict[str, float]: Evaluation metrics.
     """
+    device = torch.device(device)
+
+    # params = genome_to_torch_params(genome)
+    params = {
+        k: torch.nn.Parameter(v.detach().to(device).clone(), requires_grad=False)
+        for k, v in genome_to_torch_params(genome).items()
+    }
+
     mode = "teacher" if teacher_qnode is not None else "supervised"
-    params = genome_to_torch_params(genome)
 
     if mode == "teacher":
         tr = _eval_teacher_split(
@@ -223,6 +301,8 @@ def eval_forward_only(
             loss_fn=loss_fn,
             class_counts=class_counts[0],
             alpha=alpha,
+            embedding_model=embedding_model,
+            device=device,
         )
         te = (
             _eval_supervised_split(
@@ -230,9 +310,12 @@ def eval_forward_only(
                 genome,
                 params,
                 n_classes,
-                loss_fn=loss_fn,
+                loss_fn=ce_onehot_on_probs,
                 class_counts=class_counts[1],
                 alpha=alpha,
+                embedding_model=embedding_model,
+                readout_head=readout_head,
+                device=device,
             )
             if test_list is not None
             else None
@@ -249,15 +332,21 @@ def _train_with_pennylane(
     genome: CircuitGenome,
     train_data: Iterable[tuple[torch.Tensor, torch.Tensor]] = None,
     test_data: Iterable[tuple[torch.Tensor, torch.Tensor]] = None,
-    steps: int = 200,
+    epochs: int = 200,
     lr: float = 0.05,
-    log_every: int = 25,
+    log_every: int = 1,
     n_classes: int = 3,
     batch_size: int = None,
     loss_name: str = "ce",
-    shuffle_each_step: bool = True,
+    shuffle_each_epoch: bool = True,
     # NEW:
     target_qnode: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
+    encoding: str = "angle",
+    embedding_model: torch.nn.Module | None = None,
+    readout_head: torch.nn.Module | None = None,
+    device: str = "cpu",
+    pl_device: str = "default.qubit",
+    diff_method: Optional[str] = None,
 ):
     """Train a CircuitGenome using PennyLane-based differentiable execution.
 
@@ -282,22 +371,36 @@ def _train_with_pennylane(
             - Teacher mode: iterable of inputs `x`
             - Supervised mode: iterable of `(x, y, class_id)`
         test_data (Iterable, optional): Optional test dataset.
-        steps (int): Number of optimization steps.
+        epochs (int): Number of optimization epochs.
         lr (float): Learning rate for Adam optimizer.
-        log_every (int): Logging frequency (in steps).
+        log_every (int): Logging frequency (in epochs).
         n_classes (int): Number of output classes for supervised learning.
         batch_size (int, optional): Mini-batch size. If None, uses full dataset.
         loss_name (str): Name of loss function from `LOSS_REGISTRY`.
-        shuffle_each_step (bool): Whether to reshuffle data each step.
+        shuffle_each_epoch (bool): Whether to reshuffle data each epoch.
         target_qnode (Callable, optional): Reference QNode producing target
             quantum states (required for teacher mode).
 
     Returns:
         None. The genome is updated in-place, and `genome.fitness` is set.
     """
+    device = torch.device(device)
+
+    if embedding_model is not None:
+        embedding_model.to(device)
+
+    if readout_head is not None:
+        readout_head.to(device)
+
     train_list = list(train_data)
     test_list = list(test_data) if test_data is not None else None
 
+    best_params = None
+    best_metrics = None
+    best_embedding_state = None
+    best_readout_state = None
+
+    logger.info(f"getting loss function for '{loss_name}'")
     loss_fn = LOSS_REGISTRY[loss_name]
 
     # For balanced loss setting Alpha from https://arxiv.org/pdf/1901.05555
@@ -306,9 +409,20 @@ def _train_with_pennylane(
         1.0 - np.power(beta, np.array(train_data.counts, dtype=np.float32))
     )
 
-    alpha = alpha / alpha.mean()
-    alpha = torch.as_tensor(alpha, dtype=torch.float32)
+    # soft weighting
+    # alpha = alpha / alpha.mean()
+    # alpha = alpha ** 0.5
+
+    alpha = torch.as_tensor(alpha / alpha.mean(), dtype=torch.float32, device=device)
     logger.info(f"Selected alphas: {alpha}")
+
+    n = len(train_list)
+    if batch_size is not None:
+        batch_size = max(1, min(batch_size, n))
+
+    sampler = BalancedBatchSampler(
+        data=train_list, batch_size=batch_size, shuffle=shuffle_each_epoch
+    )
 
     # ----- choose output type -----
     use_state = (
@@ -317,19 +431,40 @@ def _train_with_pennylane(
 
     if use_state:
         genome.generate_pennylane_circuit(
-            input_mode="angle", return_probs=False, measure_registers=False
+            input_mode=encoding,
+            return_probs=False,
+            measure_registers=False,
+            device_name=pl_device,
+            diff_method=diff_method,
         )
         if target_qnode is None:
             raise ValueError(
                 "target_qnode is required for teacher training with statevector losses."
             )
     else:
-        genome.generate_pennylane_circuit(input_mode="angle", return_probs=True)
+        genome.generate_pennylane_circuit(
+            input_mode=encoding,
+            return_probs=True,
+            device_name=pl_device,
+            diff_method=diff_method,
+            n_classes=n_classes,
+        )
 
-    torch_params = genome_to_torch_params(genome)
+    # Get all the parameters
+    torch_params = genome_to_torch_params(genome)  # Genome
+    torch_params = {
+        k: torch.nn.Parameter(v.detach().to(device).clone())
+        for k, v in torch_params.items()
+    }
+
+    optim_params = list(torch_params.values())
+    if embedding_model is not None:
+        optim_params += list(embedding_model.parameters())
+    if readout_head is not None:
+        optim_params += list(readout_head.parameters())
 
     # no params: forward-only eval
-    if len(torch_params) == 0:
+    if len(optim_params) == 0:
         metrics = eval_forward_only(
             genome,
             train_list,
@@ -339,15 +474,13 @@ def _train_with_pennylane(
             loss_fn=loss_fn,
             class_counts=(train_data.class_counts, test_data.class_counts),
             alpha=alpha,
+            embedding_model=embedding_model,
+            readout_head=readout_head,
         )
         genome.fitness = metrics
         return
 
-    opt = torch.optim.Adam(torch_params.values(), lr=lr, weight_decay=0.00000)
-
-    n = len(train_list)
-    if batch_size is not None:
-        batch_size = max(1, min(batch_size, n))
+    opt = torch.optim.Adam(optim_params, lr=lr, weight_decay=0.00000)
 
     # --- state forward ---
     def forward_state(x: torch.Tensor) -> torch.Tensor:
@@ -373,11 +506,85 @@ def _train_with_pennylane(
         Returns:
             torch.Tensor: Probability vector of shape `[n_classes]`.
         """
-        probs = genome.circuit(x, torch_params)
-        probs = torch.as_tensor(probs, dtype=torch.float32)
-        probs = probs[:n_classes]
-        probs = probs / probs.sum()
-        return probs
+        # x = x.to(device)
+        if embedding_model is not None:
+            x = embedding_model(x)
+            # logger.debug(
+            #             f"Forwarding qnode "
+            #             f"encoder_out_requires_grad={x.requires_grad} "
+            #             f"encoder_out_grad_fn={x.grad_fn}"
+            #         )
+
+        q_out = genome.circuit(x, torch_params)
+        if isinstance(q_out, torch.Tensor):
+            probs = q_out.to(device=device, dtype=torch.float32)
+        else:
+            probs = torch.stack(
+                [
+                    (
+                        v.to(device=device, dtype=torch.float32)
+                        if isinstance(v, torch.Tensor)
+                        else torch.as_tensor(v, dtype=torch.float32, device=device)
+                    )
+                    for v in q_out
+                ]
+            )
+        # logger.debug(
+        #     f"after_stack_requires_grad={probs.requires_grad} "
+        #     f"after_stack_grad_fn={probs.grad_fn}"
+        # )
+
+        if readout_head is None:
+            probs = probs[:n_classes]
+            probs = probs / (probs.sum() + 1e-12)
+            logits = torch.log(probs.clamp_min(1e-8))
+            return logits, probs
+
+        logits = readout_head(probs)
+        probs = probs.to(device=device, dtype=torch.float32)
+        probs = torch.softmax(logits, dim=-1)
+        return logits, probs
+
+    def forward_logits_probs_batch(xs: torch.Tensor):
+        """Forward pass for batched quantum classification."""
+        xs = xs.to(device)
+
+        if embedding_model is not None:
+            xs = embedding_model(xs)
+
+        q_out = genome.circuit(xs, torch_params)
+
+        if isinstance(q_out, torch.Tensor):
+            q_probs = q_out.to(device=device, dtype=torch.float32)
+        else:
+            q_probs = torch.stack(
+                [
+                    (
+                        v.to(device=device, dtype=torch.float32)
+                        if isinstance(v, torch.Tensor)
+                        else torch.as_tensor(v, dtype=torch.float32, device=device)
+                    )
+                    for v in q_out
+                ],
+                dim=1,
+            )
+
+        if q_probs.dim() == 1:
+            q_probs = q_probs.unsqueeze(0)
+
+        q_probs = q_probs.clamp_min(1e-12)
+        q_probs = q_probs / q_probs.sum(dim=1, keepdim=True).clamp_min(1e-12)
+
+        if readout_head is not None:
+            logits = readout_head(q_probs)
+            probs = torch.softmax(logits, dim=1)
+            probs = probs.to(device=device, dtype=torch.float32)
+        else:
+            probs = q_probs[:, :n_classes]
+            probs = probs / probs.sum(dim=1, keepdim=True).clamp_min(1e-12)
+            logits = torch.log(probs.clamp_min(1e-12))
+
+        return logits, probs
 
     # --- eval teacher loss/metrics ---
     @torch.no_grad()
@@ -396,7 +603,6 @@ def _train_with_pennylane(
         for x in data_list:
             phi = _normalize_state(_ensure_complex(target_qnode(x)))
             psi = forward_state(x)
-            # fid_loss = loss_one_minus_fidelity(phi, psi)
             fid_loss = loss_fn(phi, psi)
             losses.append(fid_loss)
             fidelities.append(1.0 - fid_loss)
@@ -425,76 +631,242 @@ def _train_with_pennylane(
         Returns:
             dict[str, float]: Mean loss and classification accuracy.
         """
+        if embedding_model is not None:
+            embedding_model.to(device)
+            embedding_model.eval()
+
+        if alpha is not None:
+            alpha = alpha.to(device)
+
         losses = []
+        probs = []
+        y_onehots = []
         # per_class_pred = {}
         correct = 0
         total = 0
+
         for x, y, cls in data_list:
+            x = x.to(device)
+            y = y.to(device)
             # if cls not in per_class_pred:
             #     per_class_pred[cls] = 0
-            p = forward_probs(x)
-            eval_loss = loss_fn(
-                p,
-                y,
-                alpha_per_class=alpha,
-            )
-            losses.append(eval_loss)
+            logits, p = forward_probs(x)
             pred = int(torch.argmax(p).item())
             true = int(torch.argmax(y).item())
+            if readout_head is not None:
+                eval_loss = torch.nn.functional.cross_entropy(
+                    logits.unsqueeze(0),
+                    true=torch.tensor([true], device=device, dtype=torch.long),
+                )
+            else:
+                eval_loss = ce_onehot_on_probs(
+                    p,
+                    y,
+                    alpha_per_class=alpha,
+                )
+            losses.append(eval_loss)
             correct += int(pred == true)
             total += 1
+            probs.append(p)
+            y_onehots.append(y)
             # if pred == true:
             #     per_class_pred[cls] += 1
 
         # log = ""
         # for k, v in class_counts.items():
-        #     log += f"[{k}] Accuracy: {per_class_pred[k]/v} | "
+        #     log += f"[{k}] Accuracy: {per_class_pred[k]/v:.4f} ({per_class_pred[k]}/{v}) | "
         # logger.info(f"{log}")
+        probs = torch.stack(
+            [p.to(device=device, dtype=torch.float32) for p in probs], dim=0
+        )
+        y_onehots = torch.stack(
+            [p.to(device=device, dtype=torch.float32) for p in y_onehots], dim=0
+        )
+
+        loss = (
+            torch.stack(losses).mean()
+            if loss_name != "per_class"
+            else loss_fn(probs, y_onehots)
+        )
+
         return {
-            "loss": float(torch.stack(losses).mean().item()),
+            "loss": float(loss.item()),
             "acc": float(correct / max(total, 1)),
         }
 
+    loss_global = float("inf")
+
     # ---- training loop ----
-    for step in range(steps):
+    for epoch in range(epochs):
         opt.zero_grad()
 
-        batch = sample_batch(
-            data=train_list,
-            batch_size=batch_size,
-            shuffle_each_step=shuffle_each_step,
-            step=step,
-        )
+        embedding_model.train()
+        readout_head.train()
 
-        losses = []
-        if use_state:
-            for x in batch:
-                # teacher state: NO grad
-                with torch.no_grad():
-                    phi = _normalize_state(_ensure_complex(target_qnode(x)))
-                psi = forward_state(x)
-                L = (
-                    loss_one_minus_fidelity(phi, psi)
-                    if loss_fn is None
-                    else loss_fn(phi, psi)
-                )
-                losses.append(L)
-        else:
-            for x, y, _ in batch:
-                p = forward_probs(x)
-                L = (
-                    ce_onehot_on_probs(p, y, alpha_per_class=alpha)
-                    if loss_fn is None
-                    else loss_fn(p, y, alpha_per_class=alpha)
-                )
-                losses.append(L)
+        batches_per_epoch = math.ceil(sampler.n_samples / sampler.batch_size)
+        # logger.debug(
+        #     f"evaluating {batches_per_epoch} batches per epoch. n_samples: {sampler.n_samples}, "
+        #     f"batch_size: {sampler.batch_size}"
+        # )
 
-        loss = torch.stack(losses).mean()
+        for i in range(batches_per_epoch):
 
-        if not loss.requires_grad:
-            logger.warning(
-                "Loss has no grad path. Are parameters actually used inside the QNode?"
-            )
+            batch = sampler.sample()
+
+            losses = []
+            probs = []
+            # y_onehots = []
+
+            if use_state:
+                for x in batch:
+                    # teacher state: NO grad
+                    with torch.no_grad():
+                        phi = _normalize_state(_ensure_complex(target_qnode(x)))
+                    psi = forward_state(x)
+                    L = (
+                        loss_one_minus_fidelity(phi, psi)
+                        if loss_fn is None
+                        else loss_fn(phi, psi)
+                    )
+                    losses.append(L)
+            else:
+
+                # Batched
+                xs = torch.stack([x for x, _, _ in batch], dim=0).to(device)
+                ys = torch.stack([y for _, y, _ in batch], dim=0).to(device)
+
+                logits, probs = forward_logits_probs_batch(xs)
+
+                targets = torch.argmax(ys, dim=1).long()
+
+                if readout_head is not None:
+                    loss = torch.nn.functional.cross_entropy(
+                        logits,
+                        targets,
+                        weight=alpha,
+                    )
+                else:
+                    loss = ce_onehot_on_probs_batch(
+                        probs,
+                        ys,
+                        alpha_per_class=alpha,
+                    )  # if loss_fn is None else loss_fn(probs, ys, alpha_per_class=alpha)
+
+                # Single Sample
+                # for x, y, _ in batch:
+                #     x = x.to(device)
+                #     y = y.to(device)
+
+                #     logits, p = forward_probs(x)
+
+                #     target = torch.argmax(y).long()
+
+                #     if loss_name != "per_class":
+                #         if readout_head is not None:
+                #             L = torch.nn.functional.cross_entropy(
+                #                 logits.unsqueeze(0),
+                #                 target.unsqueeze(0),
+                #                 weight=alpha,
+                #             )
+                #         else:
+                #             L = (
+                #                 ce_onehot_on_probs(p, y, alpha_per_class=alpha)
+                #                 if loss_fn is None
+                #                 else loss_fn(p, y, alpha_per_class=alpha)
+                #             )
+                #         L = L - entropy_coef * entropy_regularizer(p)
+                #         losses.append(L)
+                #     probs.append(p)
+                #     y_onehots.append(y)
+
+            # probs = torch.stack([p.to(torch.float32) for p in probs], dim=0)
+            # y_onehots = torch.stack([p.to(torch.float32) for p in y_onehots], dim=0)
+
+            # loss = (
+            #     torch.stack(losses).mean()
+            #     if loss_name != "per_class"
+            #     else loss_fn(probs, y_onehots)
+            # )
+
+            # if not loss.requires_grad:
+            #     logger.warning(
+            #         "Loss has no grad path. Are parameters actually used inside the QNode?"
+            #     )
+            #     metrics = eval_forward_only(
+            #         genome,
+            #         train_list,
+            #         test_list,
+            #         teacher_qnode=target_qnode,
+            #         n_classes=n_classes,
+            #         loss_fn=loss_fn,
+            #         class_counts=(train_data.class_counts, test_data.class_counts),
+            #         alpha=alpha,
+            #         embedding_model=embedding_model,
+            #         device=device,
+            #     )
+            #     genome.fitness = metrics
+            #     return
+
+            opt.zero_grad()
+            loss.backward()
+
+            # enc_grad_norm = 0.0
+            # if embedding_model is not None:
+            #     for p in embedding_model.parameters():
+            #         if p.grad is not None:
+            #             enc_grad_norm += p.grad.detach().norm().item()
+
+            # q_grad_norm = 0.0
+            # for p in torch_params.values():
+            #     if p.grad is not None:
+            #         q_grad_norm += p.grad.detach().norm().item()
+
+            # logger.debug(
+            #     f"loss_grad={loss.requires_grad} "
+            #     f"encoder_grad_norm={enc_grad_norm:.6f} "
+            #     f"n_encoder_params={len(list(embedding_model.parameters()))}"
+            #     f"quantum_grad_norm={q_grad_norm:.6f} "
+            #     f"n_quantum_params={len(torch_params)}"
+            # )
+
+            # torch.nn.utils.clip_grad_norm_(list(torch_params.values()), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(optim_params, max_norm=1.0)
+            opt.step()
+
+        # if epoch % log_every == 0 or epoch == epochs - 1:
+        #     if use_state:
+        #         tr = eval_teacher(train_list)
+        #         if test_list is not None:
+        #             te = eval_teacher(test_list)
+        #             logger.info(
+        #                 f"[{epoch:04d}] fid_loss={tr['fidelity_loss']:.6f} angle_loss={tr['angle_loss']:.6f} "
+        #                 f"| test_fid_loss={te['fidelity_loss']:.6f}"
+        #             )
+        #         else:
+        #             logger.info(
+        #                 f"[{epoch:04d}] fid_loss={tr['fidelity_loss']:.6f} angle_loss={tr['angle_loss']:.6f}"
+        #             )
+        #     else:
+        #         tr = eval_supervised(train_list, train_data.class_counts, alpha=alpha)
+        #         if test_list is not None:
+        #             te = eval_supervised(test_list, test_data.class_counts, alpha=alpha)
+        #             logger.info(
+        #                 f"[{epoch:04d}] loss={tr['loss']:.6f} acc={tr['acc']:.3f} | "
+        #                 f"test_loss={te['loss']:.3f} test_acc={te['acc']:.3f}"
+        #             )
+        #         else:
+        #             logger.info(
+        #                 f"[{epoch:04d}] loss={tr['loss']:.6f} acc={tr['acc']:.3f}"
+        #             )
+
+        cpu_params = {
+            k: torch.nn.Parameter(v.detach().cpu().clone())
+            for k, v in torch_params.items()
+        }
+        torch_params_to_genome(genome, cpu_params)
+
+        if epoch % log_every == 0 or epoch == epochs - 1:
+            # return final metrics
             metrics = eval_forward_only(
                 genome,
                 train_list,
@@ -502,54 +874,60 @@ def _train_with_pennylane(
                 teacher_qnode=target_qnode,
                 n_classes=n_classes,
                 loss_fn=loss_fn,
+                class_counts=(train_data.class_counts, test_data.class_counts),
                 alpha=alpha,
+                embedding_model=embedding_model,
+                readout_head=readout_head,
+                device=device,
             )
-            genome.fitness = metrics
-            return
 
-        loss.backward()
-        opt.step()
+            if metrics["test_loss"] < loss_global:
+                loss_global = metrics["test_loss"]
+                best_params = best_params = {
+                    k: torch.nn.Parameter(v.detach().cpu().clone())
+                    for k, v in torch_params.items()
+                }
 
-        if step % log_every == 0 or step == steps - 1:
-            if use_state:
-                tr = eval_teacher(train_list)
-                if test_list is not None:
-                    te = eval_teacher(test_list)
-                    logger.info(
-                        f"[{step:04d}] fid_loss={tr['fidelity_loss']:.6f} angle_loss={tr['angle_loss']:.6f} "
-                        f"| test_fid_loss={te['fidelity_loss']:.6f}"
-                    )
-                else:
-                    logger.info(
-                        f"[{step:04d}] fid_loss={tr['fidelity_loss']:.6f} angle_loss={tr['angle_loss']:.6f}"
-                    )
-            else:
-                tr = eval_supervised(train_list, train_data.class_counts, alpha=alpha)
-                if test_list is not None:
-                    te = eval_supervised(test_list, test_data.class_counts, alpha=alpha)
-                    logger.info(
-                        f"[{step:04d}] loss={tr['loss']:.6f} acc={tr['acc']:.3f} | "
-                        f"test_loss={te['loss']:.3f} test_acc={te['acc']:.3f}"
-                    )
-                else:
-                    logger.info(
-                        f"[{step:04d}] loss={tr['loss']:.6f} acc={tr['acc']:.3f}"
-                    )
+                best_embedding_state = (
+                    copy.deepcopy(embedding_model.state_dict())
+                    if embedding_model is not None
+                    else None
+                )
 
-    torch_params_to_genome(genome, torch_params)
+                best_readout_state = (
+                    copy.deepcopy(readout_head.state_dict())
+                    if readout_head is not None
+                    else None
+                )
 
-    # return final metrics
-    metrics = eval_forward_only(
-        genome,
-        train_list,
-        test_list,
-        teacher_qnode=target_qnode,
-        n_classes=n_classes,
-        loss_fn=loss_fn,
-        class_counts=(train_data.class_counts, test_data.class_counts),
-        alpha=alpha,
-    )
-    genome.fitness = metrics
+                # Keep checkpoint tensors CPU-side.
+                if best_embedding_state is not None:
+                    best_embedding_state = {
+                        key: value.detach().cpu().clone()
+                        for key, value in best_embedding_state.items()
+                    }
+
+                if best_readout_state is not None:
+                    best_readout_state = {
+                        key: value.detach().cpu().clone()
+                        for key, value in best_readout_state.items()
+                    }
+
+                best_metrics = copy.deepcopy(metrics)
+                logger.info(f"Saved best model to genome:{genome.genome_number}")
+
+    # Save best loss genome params and metrics
+    torch_params_to_genome(genome, best_params)
+
+    if embedding_model is not None and best_embedding_state is not None:
+        embedding_model.load_state_dict(best_embedding_state)
+        embedding_model.to(device)
+
+    if readout_head is not None and best_readout_state is not None:
+        readout_head.load_state_dict(best_readout_state)
+        readout_head.to(device=device, dtype=torch.float32)
+
+    genome.fitness = best_metrics
 
 
 # ---------- Qiskit ML route (TorchConnector + output-bit loss) ----------
@@ -564,7 +942,7 @@ def _train_with_qiskit_ml_outputs(
     output_qubits: list[int],
     x_extractor: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
     y_extractor: Optional[Callable[[Any], torch.Tensor]] = None,
-    steps: int = 300,
+    epochs: int = 300,
     lr: float = 0.05,
     loss_fn: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
 ) -> dict[str, float]:
@@ -677,7 +1055,7 @@ def _train_with_qiskit_ml_outputs(
     opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0.0001)
 
     # ----- Train -----
-    for _ in range(steps):
+    for _ in range(epochs):
         opt.zero_grad()
         losses = []
         for input_bits, target_obj in dataset:
@@ -728,11 +1106,17 @@ def train_genome_objective(
     teacher_qnode: Optional[Callable] = None,
     backend: str = "pennylane",
     loss: str = "fidelity",
-    steps: int = 200,
+    encoding: str = "angle",
+    epochs: int = 200,
     lr: float = 0.05,
     n_classes: int = 3,
     log_every: int = 50,
     batch_size: int = None,
+    embedding_model: torch.nn.Module | None = None,
+    readout_head: torch.nn.Module | None = None,
+    device: str = "cpu",
+    pl_device: str = "default.qubit",
+    diff_method: Optional[str] = None,
     qiskit_config: Optional[dict[str, Any]] = None,
 ) -> CircuitGenome:
     """
@@ -748,13 +1132,19 @@ def train_genome_objective(
             genome,
             train_data=train_data,
             test_data=test_data,
-            steps=steps,
+            epochs=epochs,
             lr=lr,
             loss_name=loss,
             n_classes=n_classes,
             log_every=log_every,
             batch_size=batch_size,
             target_qnode=teacher_qnode,
+            encoding=encoding,
+            embedding_model=embedding_model,
+            readout_head=readout_head,
+            device=device,
+            pl_device=pl_device,
+            diff_method=diff_method,
         )
         return
 
@@ -782,7 +1172,7 @@ def train_genome_objective(
             output_qubits=output_qubits,
             x_extractor=x_extractor,
             y_extractor=y_extractor,
-            steps=steps,
+            epochs=epochs,
             lr=lr,
             loss_fn=loss_fn,
         )

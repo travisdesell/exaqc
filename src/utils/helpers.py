@@ -1,8 +1,69 @@
+from __future__ import annotations
+from typing import TYPE_CHECKING
+
 import numpy as np
 import torch
 
-from collections import defaultdict
-from src.circuits.circuit import CircuitGenome
+from collections import deque
+from typing import Optional
+from loguru import logger
+
+if TYPE_CHECKING:
+    from src.circuits.circuit import CircuitGenome
+
+
+GATE_COMPLEXITY = {
+    "id": {"gate_count": 1, "cnot_count": 0, "rot_count": 0},
+    "h": {"gate_count": 1, "cnot_count": 0, "rot_count": 0},
+    "x": {"gate_count": 1, "cnot_count": 0, "rot_count": 0},
+    "y": {"gate_count": 1, "cnot_count": 0, "rot_count": 0},
+    "z": {"gate_count": 1, "cnot_count": 0, "rot_count": 0},
+    "s": {"gate_count": 1, "cnot_count": 0, "rot_count": 0},
+    "sdg": {"gate_count": 1, "cnot_count": 0, "rot_count": 0},
+    "t": {"gate_count": 1, "cnot_count": 0, "rot_count": 0},
+    "tdg": {"gate_count": 1, "cnot_count": 0, "rot_count": 0},
+    "sx": {"gate_count": 1, "cnot_count": 0, "rot_count": 0},
+    "sxdg": {"gate_count": 1, "cnot_count": 0, "rot_count": 0},
+    "rx": {"gate_count": 1, "cnot_count": 0, "rot_count": 1},
+    "ry": {"gate_count": 1, "cnot_count": 0, "rot_count": 1},
+    "rz": {"gate_count": 1, "cnot_count": 0, "rot_count": 1},
+    "p": {"gate_count": 1, "cnot_count": 0, "rot_count": 1},
+    "u": {"gate_count": 1, "cnot_count": 0, "rot_count": 1},
+    "u3": {"gate_count": 1, "cnot_count": 0, "rot_count": 1},
+    "r": {"gate_count": 1, "cnot_count": 0, "rot_count": 1},
+    "rv": {"gate_count": 1, "cnot_count": 0, "rot_count": 1},
+    "cx": {"gate_count": 1, "cnot_count": 1, "rot_count": 0},
+    "cy": {"gate_count": 1, "cnot_count": 1, "rot_count": 0},
+    "cz": {"gate_count": 1, "cnot_count": 1, "rot_count": 0},
+    "cp": {"gate_count": 1, "cnot_count": 2, "rot_count": 3},
+    "crx": {"gate_count": 1, "cnot_count": 2, "rot_count": 2},
+    "cry": {"gate_count": 1, "cnot_count": 2, "rot_count": 2},
+    "crz": {"gate_count": 1, "cnot_count": 2, "rot_count": 2},
+    "swap": {"gate_count": 1, "cnot_count": 3, "rot_count": 0},
+    "iswap": {"gate_count": 1, "cnot_count": 0, "rot_count": 0},
+    "rxx": {"gate_count": 1, "cnot_count": 2, "rot_count": 1},
+    "ryy": {"gate_count": 1, "cnot_count": 2, "rot_count": 1},
+    "rzz": {"gate_count": 1, "cnot_count": 2, "rot_count": 1},
+    "rzx": {"gate_count": 1, "cnot_count": 2, "rot_count": 1},
+    "ccx": {"gate_count": 1, "cnot_count": 0, "rot_count": 0},
+    "ccz": {"gate_count": 1, "cnot_count": 0, "rot_count": 0},
+    "ch": {"gate_count": 1, "cnot_count": 0, "rot_count": 0},
+    "cswap": {"gate_count": 1, "cnot_count": 0, "rot_count": 0},
+    "mcx": {"gate_count": 1, "cnot_count": 0, "rot_count": 0},
+    "cs": {"gate_count": 1, "cnot_count": 2, "rot_count": 3},
+    "csdg": {"gate_count": 1, "cnot_count": 2, "rot_count": 3},
+    "csx": {"gate_count": 1, "cnot_count": 0, "rot_count": 0},
+    "dcx": {"gate_count": 1, "cnot_count": 2, "rot_count": 0},
+    "ecr": {"gate_count": 1, "cnot_count": 4, "rot_count": 2},
+    "rccx": {"gate_count": 1, "cnot_count": 3, "rot_count": 0},
+    "rcccx": {"gate_count": 1, "cnot_count": 8, "rot_count": 0},
+    "ms": {"gate_count": 1, "cnot_count": 2, "rot_count": 5},
+    "mcp": {"gate_count": 1, "cnot_count": 0, "rot_count": 1},
+    "mcrx": {"gate_count": 1, "cnot_count": 0, "rot_count": 1},
+    "mcry": {"gate_count": 1, "cnot_count": 0, "rot_count": 1},
+    "mcrz": {"gate_count": 1, "cnot_count": 0, "rot_count": 1},
+    "cu": {"gate_count": 1, "cnot_count": 2, "rot_count": 6},
+}
 
 
 def register_wire_map(registers: dict[str, int]) -> dict:
@@ -15,96 +76,130 @@ def register_wire_map(registers: dict[str, int]) -> dict:
     return wire_map
 
 
-def sample_batch(
-    data: list, batch_size: int, shuffle_each_step: bool, step: int
-) -> list:
-    """Creates a mini-batch from provided data list of given size
+class BalancedBatchSampler:
+    """Draws mini-batches with equal class representation.
+
+    Each class maintains its own independent queue of indices.  When a
+    class queue is exhausted it is refilled (and optionally shuffled)
+    before sampling continues.  Because class sizes differ, queues empty
+    at different rates, so shuffles are triggered independently per class.
 
     Args:
-        data (list): The dataset list where each element is a tuple (x, y, cls)
-        batch_size (int): Size of the batch
-        shuffle_each_step (bool): If you want random shuffling or sequential
-        step (int): The current step in training
-
-    Returns:
-        list: The mini-batch of data
+        data:             List of (features, y_onehot, cls_name) tuples.
+        batch_size:       Total samples per batch.  Rounded down to the
+                          nearest multiple of the number of classes.
+        shuffle:          Whether to shuffle a class bucket when it is
+                          exhausted and refilled.
     """
-    n = len(data)
-    if batch_size is None:
-        return data
-    if shuffle_each_step:
-        idx = np.random.randint(low=0, high=n, size=(batch_size,))
-        return [data[i] for i in idx.tolist()]
-    start = (step * batch_size) % n
-    return [data[(start + i) % n] for i in range(batch_size)]
 
+    def __init__(self, data: list, batch_size: Optional[int], shuffle: bool) -> None:
+        self.data = data
+        self.shuffle = shuffle
+        self.n_samples = len(data)
 
-def sample_even_batch(
-    data, batch_size: int | None, shuffle_each_step: bool, seed: int = 42, **kwargs
-):
-    """Creates a mini-batch from provided classification data list of given size
-        Maintains equal class distrubution in batch
+        self.rng = np.random.default_rng(seed=42)
 
-    Args:
-        data (list): The dataset list where each element is a tuple (x, y, cls)
-        batch_size (int): Size of the batch
-        shuffle_each_step (bool): If you want random shuffling or sequential
-        seed (int): The seed for shuffling
+        class_indices: dict[str, list[int]] = {}
+        for i, (_, _, cls) in enumerate(data):
+            class_indices.setdefault(cls, []).append(i)
 
-    Returns:
-        list: The mini-batch of data
-    """
-    if batch_size is None:
-        return data
+        self.classes: list[str] = sorted(class_indices.keys())
+        self.num_classes: int = len(self.classes)
+        self.class_indices = class_indices
 
-    rng = np.random.default_rng(seed)
+        logger.debug(f"created a balanced batch sampler with classes: {self.classes}")
+        logger.debug(f"data size: {len(data)}")
+        logger.debug(f"num_classes: {self.num_classes}")
+        logger.debug("class_sizes:")
+        for cls, indices in class_indices.items():
+            logger.debug(f"\t'{cls}': {len(indices)}")
 
-    idx_by_class = defaultdict(list)
-    for i, (_, y_onehot, _) in enumerate(data):
-        k = int(np.array(y_onehot.cpu()).argmax().item())
-        idx_by_class[k].append(i)
+        if batch_size < self.num_classes:
+            logger.error(
+                f"ERROR: batch size {batch_size} must be at least the number of classes "
+                "in the dataset ({self.num_classes}) for the balanced class sampler."
+            )
+            exit(1)
 
-    classes = sorted(idx_by_class.keys())
-    K = len(classes)
-    if batch_size < K:
-        raise ValueError("batch_size must be >= number of classes.")
+        self.samples_per_class = batch_size // self.num_classes
 
-    per_class = batch_size // K
-    remainder = batch_size - per_class * K
+        logger.debug(f"samples_per_class: {self.samples_per_class}")
 
-    # shuffle each pool initially
-    for c in classes:
-        rng.shuffle(idx_by_class[c])
+        self.batch_size = self.samples_per_class * self.num_classes
+        logger.debug(f"batch_size: {self.batch_size}")
 
-    ptr = {c: 0 for c in classes}  # <-- persists!
+        # One deque per class — these persist across sample() calls
+        self._queues: dict[str, deque[int]] = {
+            cls: self._make_queue(cls) for cls in self.classes
+        }
 
-    batch_idx = []
+    def _make_queue(self, cls: str) -> deque[int]:
+        """Build a fresh index queue for one class, shuffling if enabled.
 
-    for c in classes:
-        pool = idx_by_class[c]
-        start = ptr[c]
-        end = start + per_class
+        Args:
+            cls: The class name whose index queue should be (re)built.
 
-        if end > len(pool):
-            # wrap-around oversampling for minority classes
-            if shuffle_each_step:
-                rng.shuffle(pool)
-            start, end = 0, per_class
+        Returns:
+            A deque of indices into ``self.data`` for the given class,
+            optionally shuffled.
+        """
+        indices = list(self.class_indices[cls])
+        if self.shuffle:
+            np.random.shuffle(indices)
+        return deque(indices)
 
-        batch_idx.extend(pool[start:end])
-        ptr[c] = end
+    def _draw(self, cls: str, n: int) -> list[int]:
+        """Pull n indices from a class queue, refilling eagerly on exhaustion.
 
-    if remainder > 0:
-        extra_classes = rng.choice(classes, size=remainder, replace=True)
-        for c in extra_classes:
-            pool = idx_by_class[c]
-            j = rng.integers(0, len(pool))
-            batch_idx.append(int(pool[j]))
+        When the last index is consumed the queue is immediately refilled so
+        that ``len(self._queues[cls])`` always reflects items remaining in the
+        current cycle rather than an ambiguous empty state.
 
-    if shuffle_each_step:
-        rng.shuffle(batch_idx)
+        Args:
+            cls: The class name to draw from.
+            n: Number of indices to draw.
 
-    return [data[i] for i in batch_idx]
+        Returns:
+            List of n indices into ``self.data``.
+        """
+        out: list[int] = []
+        queue = self._queues[cls]
+        while len(out) < n:
+            if not queue:
+                queue.extend(self._make_queue(cls))
+            out.append(queue.popleft())
+        if not queue:
+            queue.extend(self._make_queue(cls))
+        return out
+
+    def sample(self) -> list:
+        """Return one balanced batch, advancing each class queue independently.
+
+        Returns:
+            List of ``self.batch_size`` (features, y_onehot, cls_name) tuples
+            with exactly ``self.samples_per_class`` entries per class.
+        """
+        batch = []
+        for cls in self.classes:
+            indices = self._draw(cls, self.samples_per_class)
+            # logger.debug(
+            #     f"Adding indices: {indices} for class: {cls} in batch"
+            # )
+            batch.extend(self.data[i] for i in indices)
+        return batch
+
+    def sample_random(self):
+        """Return a random sample from the dataset"""
+        idx = self.rng.integers(0, self.n, size=self.batch_size)
+        return [self.data[i] for i in idx.tolist()]
+
+    def reset(self) -> None:
+        """Rebuild all class queues from scratch.
+
+        Resets the sampler to its initial state, as if no samples had been
+        drawn. Useful when starting a new epoch with a fresh ordering.
+        """
+        self._queues = {cls: self._make_queue(cls) for cls in self.classes}
 
 
 def genome_to_torch_params(genome: CircuitGenome) -> dict[str, torch.nn.Parameter]:

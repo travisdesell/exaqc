@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 from typing import Tuple
-from .base import QuantumDataset
+from src.datasets.base import QuantumDataset
 
 
 class SeedsDataset(QuantumDataset):
@@ -51,8 +51,8 @@ class SeedsDataset(QuantumDataset):
         from sklearn.model_selection import train_test_split
 
         # ---- Load raw data ----
-        # Format: 7 features + 1 class label (1, 2, 3)
-        data = np.loadtxt("src/quantum_datasets/data/seeds_dataset.txt")
+        # Format: 7 features + 1 class label (1,2,3)
+        data = np.loadtxt("src/datasets/classification/data/seeds_dataset.txt")
         target_names = ["Kama", "Rosa", "Canadian"]
 
         X = data[:, :7]  # (210, 7)

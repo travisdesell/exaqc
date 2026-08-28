@@ -189,35 +189,3 @@ def r(theta, phi, qubit):
 
 def rv(vx, vy, vz, qubit):
     qml.Rot(vx, vy, vz, wires=qubit)
-
-
-# ============================================================
-# R / RV (parameterized multi-qubit rotations)
-# ============================================================
-def rxx(theta, q1, q2):
-    """Decomposition of RXX gate into native PennyLane operations"""
-    qml.CNOT(wires=[q1, q2])
-    qml.RX(theta, wires=q2)
-    qml.CNOT(wires=[q1, q2])
-
-
-def ryy(theta, q1, q2):
-    """Decomposition of RYY(theta) into native PennyLane operations"""
-    qml.H(wires=q1)
-    qml.H(wires=q2)
-    qml.S(wires=q1)
-    qml.S(wires=q2)
-    qml.CNOT(wires=[q1, q2])
-    qml.RY(theta, wires=q2)
-    qml.CNOT(wires=[q1, q2])
-    qml.S(wires=q1).adjoint()
-    qml.S(wires=q2).adjoint()
-    qml.H(wires=q1)
-    qml.H(wires=q2)
-
-
-def rzz(theta, q1, q2):
-    """Decomposition of RZZ gate into native PennyLane operations"""
-    qml.CNOT(wires=[q1, q2])
-    qml.RZ(theta, wires=q2)
-    qml.CNOT(wires=[q1, q2])

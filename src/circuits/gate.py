@@ -77,6 +77,8 @@ class Gate:
 
         self.enabled = True
 
+        self.metadata = {}
+
     def get_input_circuit_indexes(self, circuit: CircuitGenome) -> list[int]:
         """
         Determines which qubit indexes in the circuit genome this gate uses as inputs, given
@@ -149,6 +151,7 @@ class Gate:
         serialized["innovation_number"] = self.innovation_number
         serialized["target"] = self.target
         serialized["enabled"] = self.enabled
+        serialized["metadata"] = self.metadata.copy()
         return serialized
 
     @classmethod
@@ -170,6 +173,7 @@ class Gate:
         )
 
         new_gate.enabled = serialized["enabled"]
+        new_gate.metadata = serialized.get("metadata", {})
 
         return new_gate
 

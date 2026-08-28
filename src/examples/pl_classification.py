@@ -12,7 +12,7 @@ import numpy as np
 
 from src.evolution.master_worker import master_worker
 
-# from src.evolution.exaqc import EXAQC
+from src.evolution.steady_state_islands import SteadyStateIslands
 from src.evolution.steady_state_population import SteadyStatePopulation
 from src.evolution.objective import Objective
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
@@ -21,14 +21,14 @@ from src.objectives.genome_objectives import (
     train_genome_objective,
 )
 from src.utils.helpers import genome_to_torch_params
-from src.utils.losses import LOSS_REGISTRY
-from src.quantum_datasets import (
+from src.utils.losses import LOSS_REGISTRY, ce_onehot_on_probs
+from src.datasets.classification import (
     IrisDataset,
     WineDataset,
     SeedsDataset,
     BreastCancerDataset,
-    QuantumDataset,
 )
+from src.datasets import QuantumDataset
 
 # ---------------------------------------------------------------------
 # Prediction + evaluation helpers
@@ -54,7 +54,9 @@ def eval_probs_ce_and_acc(
     dataset: Iterable[tuple[torch.Tensor, torch.Tensor, str]],
     *,
     n_classes: int,
+    encoding: str,
     loss: Optional[str] = None,
+    alpha: torch.Tensor = None,
 ) -> dict[str, float]:
     """
     Assumes genome.circuit returns qml.probs(wires=output_wires) (real-valued).
@@ -63,24 +65,17 @@ def eval_probs_ce_and_acc(
     # Ensure qnode exists
     if getattr(genome, "circuit", None) is None or not callable(genome.circuit):
         # IMPORTANT: we want probs readout for classification
-        genome.generate_pennylane_circuit(return_probs=True, input_mode="angle")
+        genome.generate_pennylane_circuit(return_probs=True, input_mode=encoding)
 
     loss_fn = LOSS_REGISTRY[loss]
 
     params = genome_to_torch_params(genome)  # empty dict if no params
     losses = []
+    probas = []
+    y_onehots = []
     correct = 0
     total = 0
     per_class_pred = {}
-
-    # setting Alpha from https://arxiv.org/pdf/1901.05555
-    beta = (len(dataset) - 1) / len(dataset)
-    alpha = (1.0 - beta) / (
-        1.0 - np.power(beta, np.array(dataset.counts, dtype=np.float32))
-    )
-
-    alpha = alpha / alpha.mean()
-    alpha = torch.as_tensor(alpha, dtype=torch.float32)
 
     for x, y, cls in dataset:
         if cls not in per_class_pred:
@@ -90,7 +85,7 @@ def eval_probs_ce_and_acc(
         probs_full = torch.as_tensor(probs_full, dtype=torch.float32)
 
         pred, probs = predict_from_probs(probs_full, n_classes=n_classes)
-        L = loss_fn(probs, y, alpha_per_class=alpha)
+        L = ce_onehot_on_probs(probs, y, alpha_per_class=alpha)
 
         losses.append(L)
         true = int(torch.argmax(y).item())
@@ -100,7 +95,16 @@ def eval_probs_ce_and_acc(
         if pred == true:
             per_class_pred[cls] += 1
 
-    avg_loss = float(torch.stack(losses).mean().item()) if losses else 0.0
+        probas.append(probs)
+        y_onehots.append(y)
+
+    if loss_fn.__name__ != "class_avg_ce_onehot_on_probs":
+        avg_loss = float(torch.stack(losses).mean().item()) if losses else 0.0
+    else:
+        probs = torch.stack([p.to(torch.float32) for p in probas], dim=0)
+        y_onehots = torch.stack([p.to(torch.float32) for p in y_onehots], dim=0)
+        avg_loss = float(loss_fn(probs, y_onehots))
+
     acc = float(correct / max(total, 1))
 
     log = ""
@@ -131,6 +135,7 @@ def compare(genome1: CircuitGenome, genome2: CircuitGenome) -> int:
     # genome2 (genome1's fitness would be lower), and positive if genome2 should be before
     # genome1 (genome2's fitness would be lower)
     return genome1.fitness["test_loss"] - genome2.fitness["test_loss"]
+    # return genome2.fitness["test_acc"] - genome1.fitness["test_acc"]
 
 
 class ClassificationObjective(Objective):
@@ -163,9 +168,10 @@ class ClassificationObjective(Objective):
 
         hyperparameters = genome.hyperparameters
         learning_rate = hyperparameters["learning_rate"]
-        steps = hyperparameters["steps"]
+        epochs = hyperparameters["epochs"]
         batch_size = hyperparameters["batch_size"]
         log_every = hyperparameters["log_every"]
+        encoding = hyperparameters["encoding"]
 
         # If there are trainable params, train. If not, just forward/eval.
         torch_params = genome_to_torch_params(genome)
@@ -174,20 +180,38 @@ class ClassificationObjective(Objective):
                 genome,
                 dataset=[self.train_data, self.test_data],  # train split only
                 backend=self.target,
+                encoding=encoding,
                 loss=self.loss,  # e.g., "ce"
-                steps=steps,
+                epochs=epochs,
                 lr=learning_rate,
                 n_classes=self.n_classes,
                 log_every=log_every,
                 batch_size=batch_size,
             )
 
+        # setting Alpha from https://arxiv.org/pdf/1901.05555
+        beta = (len(self.train_data) - 1) / len(self.train_data)
+        alpha = (1.0 - beta) / (
+            1.0 - np.power(beta, np.array(self.train_data.counts, dtype=np.float32))
+        )
+        alpha = torch.as_tensor(alpha / alpha.mean(), dtype=torch.float32)
+
         # Compute fresh train/test metrics from probs (works for both param & no-param cases)
         train_metrics = eval_probs_ce_and_acc(
-            genome, self.train_data, n_classes=self.n_classes, loss=self.loss
+            genome,
+            self.train_data,
+            n_classes=self.n_classes,
+            loss=self.loss,
+            alpha=alpha,
+            encoding=encoding,
         )
         test_metrics = eval_probs_ce_and_acc(
-            genome, self.test_data, n_classes=self.n_classes, loss=self.loss
+            genome,
+            self.test_data,
+            n_classes=self.n_classes,
+            loss=self.loss,
+            alpha=alpha,
+            encoding=encoding,
         )
 
         genome.fitness = {
@@ -215,24 +239,76 @@ if __name__ == "__main__":
     p.add_argument(
         "--dataset", choices=["iris", "wine", "seeds", "breast_cancer"], required=True
     )
+
     p.add_argument(
         "--out_dir",
         type=str,
         default="artifacts",
         help="Output directory to store results from runs",
     )
+
     p.add_argument(
-        "--loss", default="ce", choices=["bce", "focal", "ce", "mse", "kl", "fidelity"]
+        "--loss",
+        default="ce",
+        choices=["per_class", "bce", "focal", "ce", "mse", "kl", "fidelity"],
     )
-    p.add_argument("--steps", type=int, default=30)
+
+    p.add_argument(
+        "--mutation_strategy",
+        "-ms",
+        type=str,
+        nargs="+",
+        required=True,
+    )
+
+    p.add_argument(
+        "--parent_strategy",
+        "-ps",
+        type=str,
+        nargs="+",
+        required=True,
+    )
+
+    subparsers = p.add_subparsers(
+        dest="population_strategy",
+        help="Specify how genomes will be handled.",
+        required=True,
+    )
+
+    steady_state_parser = subparsers.add_parser(
+        "steady_state", help="Use a single steady state population."
+    )
+    steady_state_parser.add_argument("--max_population_size", type=int, default=30)
+
+    islands_parser = subparsers.add_parser(
+        "islands", help="Use multiple islands of steady state opulations."
+    )
+    islands_parser.add_argument("--n_islands", type=int, default=10)
+    islands_parser.add_argument("--max_island_size", type=int, default=10)
+    islands_parser.add_argument("--genomes_before_extinction", type=int, default=100)
+    islands_parser.add_argument("--genomes_for_next_extinction", type=int, default=200)
+    islands_parser.add_argument("--islands_to_extinct", type=int, default=2)
+    islands_parser.add_argument("--primary_parent", type=str, default="best")
+    islands_parser.add_argument(
+        "--intra_island_crossover_rate", type=float, default=0.5
+    )
+
+    p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--learning_rate", "-lr", type=float, default=5e-4)
-    p.add_argument("--max_population_size", type=int, default=30)
     p.add_argument("--number_genomes", type=int, default=2000)
     p.add_argument("--input_qubits", type=int, default=6)
+
+    p.add_argument(
+        "--encoding",
+        choices=["basis", "angle", "amplitude"],
+        type=str,
+        default="angle",
+        help="Choose the kind of encoding",
+    )
     p.add_argument(
         "--batch_size",
         type=int,
-        default=None,
+        required=True,
         help="Use mini-batch training with the given batch size, if provided",
     )
 
@@ -252,12 +328,15 @@ if __name__ == "__main__":
     logger.add(sys.stdout, level=args.logging_level)
     logger.add(os.path.join(args.out_dir, "run.log"))
 
+    logger.info(f"mutation strategy: {args.mutation_strategy}")
+
     # specify hyperparameter options for genome evaluation
     hyperparameters = {
-        "steps": args.steps,
+        "epochs": args.epochs,
         "learning_rate": args.learning_rate,
         "log_every": 15,
         "batch_size": args.batch_size,
+        "encoding": args.encoding,
     }
 
     # set up the objective function
@@ -301,17 +380,36 @@ if __name__ == "__main__":
     else:
         raise ValueError(args.dataset)
 
-    master_worker(
-        gate_specifications=pennylane_gate_specifications,
-        population=SteadyStatePopulation(
+    population = None
+    print(f"args.population_strategy: {args.population_strategy}")
+
+    if args.population_strategy == "steady_state":
+        population = SteadyStatePopulation(
             max_population_size=args.max_population_size,
             compare=compare,
             out_dir=args.out_dir,
-        ),
+        )
+    elif args.population_strategy == "islands":
+        population = SteadyStateIslands(
+            n_islands=args.n_islands,
+            max_island_size=args.max_island_size,
+            genomes_before_extinction=args.genomes_before_extinction,
+            genomes_for_next_extinction=args.genomes_for_next_extinction,
+            islands_to_extinct=args.islands_to_extinct,
+            primary_parent=args.primary_parent,
+            compare=compare,
+            out_dir=args.out_dir,
+        )
+
+    master_worker(
+        gate_specifications=pennylane_gate_specifications,
+        population=population,
         objective=objective,
         hyperparameters=hyperparameters,
+        mutation_strategy=args.mutation_strategy,
+        parent_strategy=args.parent_strategy,
         run_for=args.number_genomes,
         input_registers={"input": min(args.input_qubits, objective.input_size)},
-        output_registers={"output": math.ceil(math.log(objective.n_classes, 2))},
+        output_registers={"input": math.ceil(math.log(objective.n_classes, 2))},
         target="pennylane",
     )
