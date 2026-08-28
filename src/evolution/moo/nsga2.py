@@ -1,270 +1,297 @@
-# src/evolution/moo/nsga2.py
+"""NSGA-II population strategy for EXAQC."""
 
 from __future__ import annotations
 
 import math
 
 from collections.abc import Sequence
-from typing import Optional
-
-import numpy as np
 
 from src.circuits.circuit import CircuitGenome
-from src.evolution.multi_objective.base_population import (
+from src.evolution.moo.base_population import (
     MultiObjectivePopulationBase,
 )
-from src.evolution.multi_objective.objective_spec import (
-    ObjectiveSpec,
-)
-from src.evolution.multi_objective.pareto import (
+from src.evolution.moo.pareto import (
     assign_pareto_ranks,
-    objective_matrix,
+    objective_vector,
 )
-from src.utils.profiler import EXAQCProfiler
 
 
-def calculate_crowding_distance(
-    population: Sequence[CircuitGenome],
-    front: Sequence[int],
-    objectives: Sequence[ObjectiveSpec],
-) -> dict[int, float]:
-    """Calculate NSGA-II crowding distances for one Pareto front.
+class NSGA2(MultiObjectivePopulationBase):
+    """Steady-state NSGA-II population strategy.
 
-    Args:
-        population: Complete population.
-        front: Population indices belonging to the front.
-        objectives: Objective specifications.
+    NSGA-II ranks candidate solutions using Pareto dominance and maintains
+    diversity within each Pareto front using crowding distance.
 
-    Returns:
-        Mapping from population index to crowding distance.
+    All objective values are internally treated as minimization objectives.
+    Maximization objectives should therefore use ``sign=-1.0`` in their
+    ``ObjectiveSpec``.
     """
-    distances = {
-        population_index: 0.0
-        for population_index in front
-    }
-
-    if not front:
-        return distances
-
-    if len(front) <= 2:
-        return {
-            population_index: float("inf")
-            for population_index in front
-        }
-
-    values = objective_matrix(
-        population,
-        objectives,
-    )
-
-    front_array = np.asarray(
-        front,
-        dtype=np.int64,
-    )
-    front_values = values[front_array]
-
-    for objective_index in range(front_values.shape[1]):
-        local_order = np.argsort(
-            front_values[:, objective_index],
-            kind="stable",
-        )
-
-        first_population_index = front[
-            int(local_order[0])
-        ]
-        last_population_index = front[
-            int(local_order[-1])
-        ]
-
-        distances[first_population_index] = float("inf")
-        distances[last_population_index] = float("inf")
-
-        minimum = float(
-            front_values[
-                local_order[0],
-                objective_index,
-            ]
-        )
-        maximum = float(
-            front_values[
-                local_order[-1],
-                objective_index,
-            ]
-        )
-
-        objective_range = maximum - minimum
-
-        if (
-            not np.isfinite(objective_range)
-            or objective_range <= 1e-12
-        ):
-            continue
-
-        for position in range(1, len(local_order) - 1):
-            local_index = int(local_order[position])
-            population_index = front[local_index]
-
-            if math.isinf(distances[population_index]):
-                continue
-
-            previous_value = float(
-                front_values[
-                    local_order[position - 1],
-                    objective_index,
-                ]
-            )
-            next_value = float(
-                front_values[
-                    local_order[position + 1],
-                    objective_index,
-                ]
-            )
-
-            distances[population_index] += (
-                next_value - previous_value
-            ) / objective_range
-
-    return distances
-
-
-class NSGA2Population(MultiObjectivePopulationBase):
-    """Steady-state NSGA-II population for EXAQC."""
-
-    def __init__(
-        self,
-        max_population_size: int,
-        objectives: Sequence[ObjectiveSpec],
-        tournament_size: int = 2,
-        out_dir: str = "artifacts",
-        profiler: Optional[EXAQCProfiler] = None,
-        seed: int = 0,
-        save_all_genomes: bool = True,
-        save_pareto_front: bool = True,
-    ):
-        super().__init__(
-            max_population_size=max_population_size,
-            objectives=objectives,
-            tournament_size=tournament_size,
-            out_dir=out_dir,
-            profiler=profiler,
-            seed=seed,
-            save_all_genomes=save_all_genomes,
-            save_pareto_front=save_pareto_front,
-        )
 
     @property
     def algorithm_name(self) -> str:
-        """Return the algorithm name."""
+        """Return the optimization algorithm name.
+
+        Returns:
+            ``"nsga2"``.
+        """
         return "nsga2"
 
-    def _assign_rank_and_crowding(
+    def _refresh_selection_metadata(
         self,
-        population: Sequence[CircuitGenome],
-    ) -> list[list[int]]:
-        """Assign Pareto rank and crowding distance."""
+    ) -> None:
+        """Refresh Pareto ranks and crowding distances."""
+        if not self.population:
+            return
+
+        fronts = assign_pareto_ranks(
+            self.population,
+            self.objectives,
+        )
+
+        for front in fronts:
+            self._assign_crowding_distance(
+                self.population,
+                front,
+            )
+
+    def _assign_crowding_distance(
+        self,
+        population: Sequence[
+            CircuitGenome
+        ],
+        front: list[int],
+    ) -> None:
+        """Calculate NSGA-II crowding distance for one Pareto front.
+
+        Args:
+            population: Population containing the front.
+            front: Genome indexes belonging to the Pareto front.
+        """
+        if not front:
+            return
+
+        for index in front:
+            population[index].metadata[
+                "crowding_distance"
+            ] = 0.0
+
+        if len(front) <= 2:
+            for index in front:
+                population[index].metadata[
+                    "crowding_distance"
+                ] = math.inf
+
+            return
+
+        for objective_index in range(
+            len(self.objectives)
+        ):
+            sorted_front = sorted(
+                front,
+                key=lambda index: (
+                    objective_vector(
+                        population[index],
+                        self.objectives,
+                    )[objective_index]
+                ),
+            )
+
+            first_index = sorted_front[0]
+            last_index = sorted_front[-1]
+
+            population[first_index].metadata[
+                "crowding_distance"
+            ] = math.inf
+
+            population[last_index].metadata[
+                "crowding_distance"
+            ] = math.inf
+
+            minimum = objective_vector(
+                population[first_index],
+                self.objectives,
+            )[objective_index]
+
+            maximum = objective_vector(
+                population[last_index],
+                self.objectives,
+            )[objective_index]
+
+            objective_range = (
+                maximum - minimum
+            )
+
+            if math.isclose(
+                objective_range,
+                0.0,
+            ):
+                continue
+
+            for position in range(
+                1,
+                len(sorted_front) - 1,
+            ):
+                index = sorted_front[position]
+
+                genome = population[index]
+
+                if math.isinf(
+                    genome.metadata[
+                        "crowding_distance"
+                    ]
+                ):
+                    continue
+
+                previous_value = (
+                    objective_vector(
+                        population[
+                            sorted_front[
+                                position - 1
+                            ]
+                        ],
+                        self.objectives,
+                    )[objective_index]
+                )
+
+                next_value = (
+                    objective_vector(
+                        population[
+                            sorted_front[
+                                position + 1
+                            ]
+                        ],
+                        self.objectives,
+                    )[objective_index]
+                )
+
+                normalized_distance = (
+                    next_value
+                    - previous_value
+                ) / objective_range
+
+                genome.metadata[
+                    "crowding_distance"
+                ] += normalized_distance
+
+    def _environmental_selection(
+        self,
+        population: Sequence[
+            CircuitGenome
+        ],
+        population_size: int,
+    ) -> list[CircuitGenome]:
+        """Perform NSGA-II environmental selection.
+
+        Complete Pareto fronts are inserted while space remains. When only
+        part of a front can fit, genomes with the greatest crowding distance
+        are selected.
+
+        Args:
+            population: Candidate population.
+            population_size: Maximum number of survivors.
+
+        Returns:
+            Selected survivor population.
+        """
+        population = list(population)
+
         fronts = assign_pareto_ranks(
             population,
             self.objectives,
         )
 
-        for genome in population:
-            genome.metadata.pop(
-                "crowding_distance",
-                None,
-            )
-
         for front in fronts:
-            distances = calculate_crowding_distance(
+            self._assign_crowding_distance(
                 population,
                 front,
-                self.objectives,
             )
 
-            for population_index in front:
-                population[population_index].metadata[
-                    "crowding_distance"
-                ] = float(
-                    distances[population_index]
-                )
-
-        return fronts
-
-    def _environmental_selection(
-        self,
-        population: Sequence[CircuitGenome],
-        population_size: int,
-    ) -> list[CircuitGenome]:
-        """Select NSGA-II survivors."""
-        population = list(population)
-        fronts = self._assign_rank_and_crowding(population)
-
-        if len(population) <= population_size:
-            return population
-
-        survivors: list[CircuitGenome] = []
+        survivors: list[
+            CircuitGenome
+        ] = []
 
         for front in fronts:
-            remaining = population_size - len(survivors)
-
-            if remaining <= 0:
-                break
-
-            if len(front) <= remaining:
+            if (
+                len(survivors)
+                + len(front)
+                <= population_size
+            ):
                 survivors.extend(
                     population[index]
                     for index in front
                 )
+
                 continue
 
-            ordered_front = sorted(
-                (
-                    population[index]
-                    for index in front
-                ),
+            remaining = (
+                population_size
+                - len(survivors)
+            )
+
+            if remaining <= 0:
+                break
+
+            candidates = [
+                population[index]
+                for index in front
+            ]
+
+            candidates.sort(
                 key=lambda genome: (
-                    float(
-                        genome.metadata.get(
-                            "crowding_distance",
-                            0.0,
-                        )
-                    ),
-                    -genome.genome_number,
+                    genome.metadata.get(
+                        "crowding_distance",
+                        0.0,
+                    )
                 ),
                 reverse=True,
             )
 
             survivors.extend(
-                ordered_front[:remaining]
+                candidates[:remaining]
             )
+
             break
 
-        self._assign_rank_and_crowding(survivors)
-        return survivors
-
-    def _refresh_selection_metadata(self) -> None:
-        """Refresh Pareto-rank and crowding metadata."""
-        if self.population:
-            self._assign_rank_and_crowding(
-                self.population
+        survivor_fronts = (
+            assign_pareto_ranks(
+                survivors,
+                self.objectives,
             )
+        )
+
+        for front in survivor_fronts:
+            self._assign_crowding_distance(
+                survivors,
+                front,
+            )
+
+        return survivors
 
     def _tournament_winner(
         self,
         left: CircuitGenome,
         right: CircuitGenome,
     ) -> CircuitGenome:
-        """Choose a winner using NSGA-II crowded comparison."""
-        left_rank = int(
-            left.metadata.get(
-                "pareto_rank",
-                np.iinfo(np.int64).max,
-            )
+        """Choose the preferred NSGA-II tournament candidate.
+
+        Lower Pareto rank is preferred. If both genomes have the same rank,
+        the genome with greater crowding distance is preferred.
+
+        Args:
+            left: First tournament candidate.
+            right: Second tournament candidate.
+
+        Returns:
+            Preferred candidate.
+        """
+        left_rank = left.metadata.get(
+            "pareto_rank",
+            math.inf,
         )
-        right_rank = int(
-            right.metadata.get(
-                "pareto_rank",
-                np.iinfo(np.int64).max,
-            )
+
+        right_rank = right.metadata.get(
+            "pareto_rank",
+            math.inf,
         )
 
         if left_rank < right_rank:
@@ -273,17 +300,14 @@ class NSGA2Population(MultiObjectivePopulationBase):
         if right_rank < left_rank:
             return right
 
-        left_distance = float(
-            left.metadata.get(
-                "crowding_distance",
-                0.0,
-            )
+        left_distance = left.metadata.get(
+            "crowding_distance",
+            0.0,
         )
-        right_distance = float(
-            right.metadata.get(
-                "crowding_distance",
-                0.0,
-            )
+
+        right_distance = right.metadata.get(
+            "crowding_distance",
+            0.0,
         )
 
         if left_distance > right_distance:
@@ -292,24 +316,41 @@ class NSGA2Population(MultiObjectivePopulationBase):
         if right_distance > left_distance:
             return right
 
-        return self.rng.choice([left, right])
+        return (
+            left
+            if left.genome_number
+            <= right.genome_number
+            else right
+        )
 
-    def _representative_genome(self) -> CircuitGenome:
-        """Return a diverse member of the first Pareto front."""
-        pareto_front = [
-            genome
-            for genome in self.population
-            if genome.metadata.get("pareto_rank") == 0
-        ]
+    def _representative_genome(
+        self,
+    ) -> CircuitGenome:
+        """Return one representative Pareto-optimal genome.
+
+        The Pareto-front genome with the largest crowding distance is used.
+        Genome number provides a deterministic tie breaker.
+
+        Returns:
+            Representative Pareto-optimal genome.
+
+        Raises:
+            RuntimeError: If the Pareto front is unexpectedly empty.
+        """
+        front = self.get_pareto_front()
+
+        if not front:
+            raise RuntimeError(
+                "Cannot choose a representative "
+                "from an empty Pareto front."
+            )
 
         return max(
-            pareto_front,
+            front,
             key=lambda genome: (
-                float(
-                    genome.metadata.get(
-                        "crowding_distance",
-                        0.0,
-                    )
+                genome.metadata.get(
+                    "crowding_distance",
+                    0.0,
                 ),
                 -genome.genome_number,
             ),
@@ -319,19 +360,23 @@ class NSGA2Population(MultiObjectivePopulationBase):
         self,
         genome: CircuitGenome,
     ) -> tuple:
-        """Sort selected parents by rank and crowding."""
+        """Return NSGA-II ordering for crossover parents.
+
+        Args:
+            genome: Selected parent.
+
+        Returns:
+            Tuple ordered by Pareto rank, decreasing crowding distance,
+            and genome number.
+        """
         return (
-            int(
-                genome.metadata.get(
-                    "pareto_rank",
-                    np.iinfo(np.int64).max,
-                )
+            genome.metadata.get(
+                "pareto_rank",
+                math.inf,
             ),
-            -float(
-                genome.metadata.get(
-                    "crowding_distance",
-                    0.0,
-                )
+            -genome.metadata.get(
+                "crowding_distance",
+                0.0,
             ),
             genome.genome_number,
         )

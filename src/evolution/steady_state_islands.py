@@ -215,7 +215,19 @@ def island_compare(island1: Island, island2: Island) -> int:
         island2.population[0] should be sorted before island1.population[0]
     """
 
-    return island1.compare(island1.population[0], island2.population[0])
+    genome1 = (
+        island1.strategy.get_best_genome()
+        if hasattr(island1, "strategy")
+        else island1.population[0]
+    )
+
+    genome2 = (
+        island2.strategy.get_best_genome()
+        if hasattr(island2, "strategy")
+        else island2.population[0]
+    )
+
+    return island1.compare(genome1, genome2)
 
 
 class SteadyStateIslands(PopulationStrategy):
