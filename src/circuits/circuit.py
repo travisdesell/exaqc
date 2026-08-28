@@ -905,7 +905,7 @@ class CircuitGenome:
         logger.info(f"output mode is: {output_mode}")
 
         # Define the QNode function
-        @qml.qnode(dev, interface="torch", diff_method=diff_method)
+        @qml.qnode(dev, interface="torch", diff_method="backprop")
         def qnode_fn(
             inputs: Tensor,
             weights: Tensor,

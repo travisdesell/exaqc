@@ -53,34 +53,17 @@ class NSGA3(MultiObjectivePopulationBase):
         )
 
         if reference_divisions <= 0:
-            raise ValueError(
-                "reference_divisions must be "
-                "greater than zero."
-            )
+            raise ValueError("reference_divisions must be " "greater than zero.")
 
-        self.reference_divisions = int(
-            reference_divisions
+        self.reference_divisions = int(reference_divisions)
+
+        self.reference_directions = self._generate_reference_directions(
+            n_objectives=len(self.objectives),
+            divisions=(self.reference_divisions),
         )
 
-        self.reference_directions = (
-            self._generate_reference_directions(
-                n_objectives=len(
-                    self.objectives
-                ),
-                divisions=(
-                    self.reference_divisions
-                ),
-            )
-        )
-
-        if (
-            len(self.reference_directions)
-            == 0
-        ):
-            raise ValueError(
-                "No NSGA-III reference directions "
-                "were generated."
-            )
+        if len(self.reference_directions) == 0:
+            raise ValueError("No NSGA-III reference directions " "were generated.")
 
     @property
     def algorithm_name(self) -> str:
@@ -105,9 +88,7 @@ class NSGA3(MultiObjectivePopulationBase):
         Returns:
             Two-dimensional array whose rows are reference directions.
         """
-        directions: list[
-            list[float]
-        ] = []
+        directions: list[list[float]] = []
 
         def generate(
             remaining: int,
@@ -121,26 +102,14 @@ class NSGA3(MultiObjectivePopulationBase):
                 objective_index: Current objective dimension.
                 current: Partial integer direction.
             """
-            if (
-                objective_index
-                == n_objectives - 1
-            ):
-                complete = (
-                    current + [remaining]
-                )
+            if objective_index == n_objectives - 1:
+                complete = current + [remaining]
 
-                directions.append(
-                    [
-                        value / divisions
-                        for value in complete
-                    ]
-                )
+                directions.append([value / divisions for value in complete])
 
                 return
 
-            for value in range(
-                remaining + 1
-            ):
+            for value in range(remaining + 1):
                 generate(
                     remaining - value,
                     objective_index + 1,
@@ -160,9 +129,7 @@ class NSGA3(MultiObjectivePopulationBase):
 
     def _objective_matrix(
         self,
-        population: Sequence[
-            CircuitGenome
-        ],
+        population: Sequence[CircuitGenome],
     ) -> np.ndarray:
         """Construct the transformed objective matrix.
 
@@ -195,17 +162,11 @@ class NSGA3(MultiObjectivePopulationBase):
         Returns:
             Array containing one extreme point per objective.
         """
-        n_objectives = (
-            shifted_values.shape[1]
-        )
+        n_objectives = shifted_values.shape[1]
 
-        extreme_points: list[
-            np.ndarray
-        ] = []
+        extreme_points: list[np.ndarray] = []
 
-        for objective_index in range(
-            n_objectives
-        ):
+        for objective_index in range(n_objectives):
             weights = np.full(
                 n_objectives,
                 1e-6,
@@ -219,15 +180,9 @@ class NSGA3(MultiObjectivePopulationBase):
                 axis=1,
             )
 
-            extreme_index = int(
-                np.argmin(asf_values)
-            )
+            extreme_index = int(np.argmin(asf_values))
 
-            extreme_points.append(
-                shifted_values[
-                    extreme_index
-                ]
-            )
+            extreme_points.append(shifted_values[extreme_index])
 
         return np.asarray(
             extreme_points,
@@ -253,9 +208,7 @@ class NSGA3(MultiObjectivePopulationBase):
         Returns:
             Positive normalization intercepts.
         """
-        n_objectives = (
-            shifted_values.shape[1]
-        )
+        n_objectives = shifted_values.shape[1]
 
         fallback = np.max(
             shifted_values,
@@ -278,17 +231,12 @@ class NSGA3(MultiObjectivePopulationBase):
                 ),
             )
 
-            intercepts = (
-                1.0 / coefficients
-            )
+            intercepts = 1.0 / coefficients
 
         except np.linalg.LinAlgError:
             return fallback
 
-        invalid = (
-            ~np.isfinite(intercepts)
-            | (intercepts <= 1e-12)
-        )
+        invalid = ~np.isfinite(intercepts) | (intercepts <= 1e-12)
 
         if np.any(invalid):
             return fallback
@@ -315,38 +263,24 @@ class NSGA3(MultiObjectivePopulationBase):
             axis=0,
         )
 
-        shifted = (
-            values - ideal_point
+        shifted = values - ideal_point
+
+        extreme_points = self._find_extreme_points(shifted)
+
+        intercepts = self._calculate_intercepts(
+            shifted,
+            extreme_points,
         )
 
-        extreme_points = (
-            self._find_extreme_points(
-                shifted
-            )
-        )
+        normalized = shifted / intercepts
 
-        intercepts = (
-            self._calculate_intercepts(
-                shifted,
-                extreme_points,
-            )
-        )
-
-        normalized = (
-            shifted / intercepts
-        )
-
-        normalized[
-            ~np.isfinite(normalized)
-        ] = 0.0
+        normalized[~np.isfinite(normalized)] = 0.0
 
         return normalized
 
     def _associate_reference_directions(
         self,
-        population: Sequence[
-            CircuitGenome
-        ],
+        population: Sequence[CircuitGenome],
     ) -> None:
         """Associate each genome with its nearest reference direction.
 
@@ -359,72 +293,38 @@ class NSGA3(MultiObjectivePopulationBase):
         if not population:
             return
 
-        values = self._objective_matrix(
-            population
-        )
+        values = self._objective_matrix(population)
 
-        normalized_values = (
-            self._normalize_objectives(
-                values
-            )
-        )
+        normalized_values = self._normalize_objectives(values)
 
-        directions = (
-            self.reference_directions
-        )
+        directions = self.reference_directions
 
         norms = np.linalg.norm(
             directions,
             axis=1,
         )
 
-        norms[
-            np.isclose(norms, 0.0)
-        ] = 1.0
+        norms[np.isclose(norms, 0.0)] = 1.0
 
-        unit_directions = (
-            directions
-            / norms[:, np.newaxis]
-        )
+        unit_directions = directions / norms[:, np.newaxis]
 
-        for genome_index, genome in enumerate(
-            population
-        ):
-            point = normalized_values[
-                genome_index
-            ]
+        for genome_index, genome in enumerate(population):
+            point = normalized_values[genome_index]
 
-            projection_lengths = (
-                unit_directions @ point
-            )
+            projection_lengths = unit_directions @ point
 
-            projected_points = (
-                projection_lengths[
-                    :, np.newaxis
-                ]
-                * unit_directions
-            )
+            projected_points = projection_lengths[:, np.newaxis] * unit_directions
 
             distances = np.linalg.norm(
                 point - projected_points,
                 axis=1,
             )
 
-            reference_index = int(
-                np.argmin(distances)
-            )
+            reference_index = int(np.argmin(distances))
 
-            genome.metadata[
-                "reference_index"
-            ] = reference_index
+            genome.metadata["reference_index"] = reference_index
 
-            genome.metadata[
-                "reference_distance"
-            ] = float(
-                distances[
-                    reference_index
-                ]
-            )
+            genome.metadata["reference_distance"] = float(distances[reference_index])
 
     def _refresh_selection_metadata(
         self,
@@ -438,15 +338,11 @@ class NSGA3(MultiObjectivePopulationBase):
             self.objectives,
         )
 
-        self._associate_reference_directions(
-            self.population
-        )
+        self._associate_reference_directions(self.population)
 
     def _environmental_selection(
         self,
-        population: Sequence[
-            CircuitGenome
-        ],
+        population: Sequence[CircuitGenome],
         population_size: int,
     ) -> list[CircuitGenome]:
         """Perform NSGA-III environmental selection.
@@ -469,55 +365,30 @@ class NSGA3(MultiObjectivePopulationBase):
             self.objectives,
         )
 
-        self._associate_reference_directions(
-            population
-        )
+        self._associate_reference_directions(population)
 
-        survivors: list[
-            CircuitGenome
-        ] = []
+        survivors: list[CircuitGenome] = []
 
-        splitting_front: list[
-            CircuitGenome
-        ] = []
+        splitting_front: list[CircuitGenome] = []
 
         for front in fronts:
-            candidates = [
-                population[index]
-                for index in front
-            ]
+            candidates = [population[index] for index in front]
 
-            if (
-                len(survivors)
-                + len(candidates)
-                <= population_size
-            ):
-                survivors.extend(
-                    candidates
-                )
+            if len(survivors) + len(candidates) <= population_size:
+                survivors.extend(candidates)
 
                 continue
 
             splitting_front = candidates
             break
 
-        remaining = (
-            population_size
-            - len(survivors)
-        )
+        remaining = population_size - len(survivors)
 
-        if (
-            remaining > 0
-            and splitting_front
-        ):
-            selected = (
-                self._niching_selection(
-                    survivors=survivors,
-                    candidates=(
-                        splitting_front
-                    ),
-                    n_select=remaining,
-                )
+        if remaining > 0 and splitting_front:
+            selected = self._niching_selection(
+                survivors=survivors,
+                candidates=(splitting_front),
+                n_select=remaining,
             )
 
             survivors.extend(selected)
@@ -527,20 +398,14 @@ class NSGA3(MultiObjectivePopulationBase):
             self.objectives,
         )
 
-        self._associate_reference_directions(
-            survivors
-        )
+        self._associate_reference_directions(survivors)
 
         return survivors
 
     def _niching_selection(
         self,
-        survivors: Sequence[
-            CircuitGenome
-        ],
-        candidates: Sequence[
-            CircuitGenome
-        ],
+        survivors: Sequence[CircuitGenome],
+        candidates: Sequence[CircuitGenome],
         n_select: int,
     ) -> list[CircuitGenome]:
         """Select members of a partial front using NSGA-III niching.
@@ -553,13 +418,9 @@ class NSGA3(MultiObjectivePopulationBase):
         Returns:
             Genomes selected from the splitting front.
         """
-        remaining_candidates = list(
-            candidates
-        )
+        remaining_candidates = list(candidates)
 
-        selected: list[
-            CircuitGenome
-        ] = []
+        selected: list[CircuitGenome] = []
 
         niche_counts = np.zeros(
             len(self.reference_directions),
@@ -567,74 +428,38 @@ class NSGA3(MultiObjectivePopulationBase):
         )
 
         for genome in survivors:
-            reference_index = int(
-                genome.metadata[
-                    "reference_index"
-                ]
-            )
+            reference_index = int(genome.metadata["reference_index"])
 
-            niche_counts[
-                reference_index
-            ] += 1
+            niche_counts[reference_index] += 1
 
-        while (
-            len(selected) < n_select
-            and remaining_candidates
-        ):
+        while len(selected) < n_select and remaining_candidates:
             available_references = sorted(
                 {
-                    int(
-                        genome.metadata[
-                            "reference_index"
-                        ]
-                    )
-                    for genome
-                    in remaining_candidates
+                    int(genome.metadata["reference_index"])
+                    for genome in remaining_candidates
                 }
             )
 
             minimum_niche_count = min(
-                niche_counts[
-                    reference_index
-                ]
-                for reference_index
-                in available_references
+                niche_counts[reference_index]
+                for reference_index in available_references
             )
 
             least_occupied = [
                 reference_index
-                for reference_index
-                in available_references
-                if niche_counts[
-                    reference_index
-                ]
-                == minimum_niche_count
+                for reference_index in available_references
+                if niche_counts[reference_index] == minimum_niche_count
             ]
 
-            reference_index = (
-                self.rng.choice(
-                    least_occupied
-                )
-            )
+            reference_index = self.rng.choice(least_occupied)
 
             niche_candidates = [
                 genome
-                for genome
-                in remaining_candidates
-                if int(
-                    genome.metadata[
-                        "reference_index"
-                    ]
-                )
-                == reference_index
+                for genome in remaining_candidates
+                if int(genome.metadata["reference_index"]) == reference_index
             ]
 
-            if (
-                niche_counts[
-                    reference_index
-                ]
-                == 0
-            ):
+            if niche_counts[reference_index] == 0:
                 winner = min(
                     niche_candidates,
                     key=lambda genome: (
@@ -647,19 +472,13 @@ class NSGA3(MultiObjectivePopulationBase):
                 )
 
             else:
-                winner = self.rng.choice(
-                    niche_candidates
-                )
+                winner = self.rng.choice(niche_candidates)
 
             selected.append(winner)
 
-            remaining_candidates.remove(
-                winner
-            )
+            remaining_candidates.remove(winner)
 
-            niche_counts[
-                reference_index
-            ] += 1
+            niche_counts[reference_index] += 1
 
         return selected
 
@@ -712,12 +531,7 @@ class NSGA3(MultiObjectivePopulationBase):
         if right_distance < left_distance:
             return right
 
-        return (
-            left
-            if left.genome_number
-            <= right.genome_number
-            else right
-        )
+        return left if left.genome_number <= right.genome_number else right
 
     def _representative_genome(
         self,
@@ -736,8 +550,7 @@ class NSGA3(MultiObjectivePopulationBase):
 
         if not front:
             raise RuntimeError(
-                "Cannot choose a representative "
-                "from an empty Pareto front."
+                "Cannot choose a representative " "from an empty Pareto front."
             )
 
         return min(

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from functools import cmp_to_key
 from typing import Type
 
 from loguru import logger
@@ -106,9 +105,7 @@ class MultiObjectiveIsland(Island):
                 occurred. Older outstanding genomes can then be discarded.
         """
         self.status = "repopulating"
-        self.repopulation_genome_number = (
-            repopulation_genome_number
-        )
+        self.repopulation_genome_number = repopulation_genome_number
 
         self.population = []
 
@@ -124,9 +121,7 @@ class MultiObjectiveIsland(Island):
         Returns:
             Selected genome, or ``None`` if the island is empty.
         """
-        parent, _ = self.strategy.get_parent(
-            **kwargs
-        )
+        parent, _ = self.strategy.get_parent(**kwargs)
 
         return parent
 
@@ -171,18 +166,13 @@ class MultiObjectiveIsland(Island):
         """
         if (
             "insert_type" not in genome.metadata
-            or genome.metadata["insert_type"]
-            != "global_best"
+            or genome.metadata["insert_type"] != "global_best"
         ):
-            genome.metadata[
-                "insert_type"
-            ] = "inserted"
+            genome.metadata["insert_type"] = "inserted"
 
         if (
-            genome.genome_number
-            < self.repopulation_genome_number
-            and genome.metadata["insert_type"]
-            != "global_best"
+            genome.genome_number < self.repopulation_genome_number
+            and genome.metadata["insert_type"] != "global_best"
         ):
             logger.info(
                 f"discarding genome {genome.genome_number} "
@@ -191,9 +181,7 @@ class MultiObjectiveIsland(Island):
                 f"{self.repopulation_genome_number}"
             )
 
-            genome.metadata[
-                "insert_type"
-            ] = "discarded"
+            genome.metadata["insert_type"] = "discarded"
 
             return False
 
@@ -208,16 +196,12 @@ class MultiObjectiveIsland(Island):
             self.status = "full"
 
         if survived:
-            genome.metadata[
-                "insert_type"
-            ] = "inserted"
+            genome.metadata["insert_type"] = "inserted"
         else:
-            genome.metadata[
-                "insert_type"
-            ] = "discarded"
+            genome.metadata["insert_type"] = "discarded"
 
         return survived
-    
+
 
 class MultiObjectiveSteadyStateIslands(SteadyStateIslands):
     """Steady-state islands using NSGA-II or NSGA-III locally.
@@ -253,17 +237,11 @@ class MultiObjectiveSteadyStateIslands(SteadyStateIslands):
         """Initialize the multi-objective island strategy."""
         self.objectives = list(objectives)
 
-        self.population_class = (
-            population_class
-        )
+        self.population_class = population_class
 
-        self.tournament_size = (
-            tournament_size
-        )
+        self.tournament_size = tournament_size
 
-        self.population_kwargs = (
-            population_kwargs or {}
-        )
+        self.population_kwargs = population_kwargs or {}
 
         super().__init__(
             n_islands=n_islands,
@@ -292,9 +270,7 @@ class MultiObjectiveSteadyStateIslands(SteadyStateIslands):
                     ),
                 },
             )
-            for island_id in range(
-                n_islands
-            )
+            for island_id in range(n_islands)
         ]
 
     def _compare_genomes(

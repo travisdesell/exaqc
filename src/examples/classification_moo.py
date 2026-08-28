@@ -196,17 +196,11 @@ class MultiObjectiveClassificationObjective(Objective):
         Returns:
             Mean training and validation metric value.
         """
-        training_value = self._scalar_metric_value(
-            training[name]
-        )
+        training_value = self._scalar_metric_value(training[name])
 
-        validation_value = self._scalar_metric_value(
-            validation[name]
-        )
+        validation_value = self._scalar_metric_value(validation[name])
 
-        return (
-            training_value + validation_value
-        ) / 2.0
+        return (training_value + validation_value) / 2.0
 
     def __call__(
         self,
@@ -225,19 +219,11 @@ class MultiObjectiveClassificationObjective(Objective):
         """
         self.trainer.train(genome)
 
-        training = genome.metadata[
-            "best_training_metrics"
-        ]
+        training = genome.metadata["best_training_metrics"]
 
-        validation = genome.metadata[
-            "best_validation_metrics"
-        ]
+        validation = genome.metadata["best_validation_metrics"]
 
-        enabled_gates = [
-            gate
-            for gate in genome.gates
-            if gate.enabled
-        ]
+        enabled_gates = [gate for gate in genome.gates if gate.enabled]
 
         fitness: dict[str, float] = {}
 
@@ -246,36 +232,26 @@ class MultiObjectiveClassificationObjective(Objective):
 
             if name == "loss":
                 fitness[name] = (
-                    float(training["loss"])
-                    + float(validation["loss"])
+                    float(training["loss"]) + float(validation["loss"])
                 ) / 2.0
 
             elif name == "n_parameters":
                 fitness[name] = float(
-                    sum(
-                        len(gate.parameters)
-                        for gate in enabled_gates
-                    )
+                    sum(len(gate.parameters) for gate in enabled_gates)
                 )
 
             elif name == "n_gates":
-                fitness[name] = float(
-                    len(enabled_gates)
-                )
+                fitness[name] = float(len(enabled_gates))
 
             elif name in self.metrics:
-                fitness[name] = (
-                    self._metric_objective(
-                        name=name,
-                        training=training,
-                        validation=validation,
-                    )
+                fitness[name] = self._metric_objective(
+                    name=name,
+                    training=training,
+                    validation=validation,
                 )
 
             else:
-                raise ValueError(
-                    f"Unsupported MOO objective '{name}'."
-                )
+                raise ValueError(f"Unsupported MOO objective '{name}'.")
 
         genome.fitness = fitness
 
@@ -588,8 +564,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default="cpu",
         help=(
-            "PyTorch device to use for training, e.g. "
-            "'cpu', 'cuda', or 'cuda:0'."
+            "PyTorch device to use for training, e.g. " "'cpu', 'cuda', or 'cuda:0'."
         ),
     )
 
@@ -661,18 +636,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use a single NSGA-II population.",
     )
 
-    add_population_arguments(
-        nsga2
-    )
+    add_population_arguments(nsga2)
 
     nsga3 = populations.add_parser(
         "nsga3",
         help="Use a single NSGA-III population.",
     )
 
-    add_population_arguments(
-        nsga3
-    )
+    add_population_arguments(nsga3)
 
     nsga3.add_argument(
         "--reference_divisions",
@@ -682,27 +653,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     nsga2_islands = populations.add_parser(
         "nsga2_islands",
-        help=(
-            "Use the steady-state island model with NSGA-II "
-            "within each island."
-        ),
+        help=("Use the steady-state island model with NSGA-II " "within each island."),
     )
 
-    add_island_arguments(
-        nsga2_islands
-    )
+    add_island_arguments(nsga2_islands)
 
     nsga3_islands = populations.add_parser(
         "nsga3_islands",
-        help=(
-            "Use the steady-state island model with NSGA-III "
-            "within each island."
-        ),
+        help=("Use the steady-state island model with NSGA-III " "within each island."),
     )
 
-    add_island_arguments(
-        nsga3_islands
-    )
+    add_island_arguments(nsga3_islands)
 
     nsga3_islands.add_argument(
         "--reference_divisions",
@@ -725,34 +686,18 @@ def load_data(
         Training and validation data loaders.
     """
     if args.dataset in IMAGE_DATASETS:
-        training_loader, validation_loader = (
-            get_image_dataloaders(
-                args.dataset,
-                data_dir=args.data_dir,
-                batch_size=args.batch_size,
-                validation_batch_size=(
-                    args.validation_batch_size
-                ),
-                validation_fraction=(
-                    args.validation_fraction
-                ),
-                training_samples=(
-                    args.training_samples
-                ),
-                validation_samples=(
-                    args.validation_samples
-                ),
-                seed=args.seed,
-                download=(
-                    args.download_dataset
-                ),
-                num_workers=(
-                    args.num_workers
-                ),
-                pin_memory=(
-                    args.pin_memory
-                ),
-            )
+        training_loader, validation_loader = get_image_dataloaders(
+            args.dataset,
+            data_dir=args.data_dir,
+            batch_size=args.batch_size,
+            validation_batch_size=(args.validation_batch_size),
+            validation_fraction=(args.validation_fraction),
+            training_samples=(args.training_samples),
+            validation_samples=(args.validation_samples),
+            seed=args.seed,
+            download=(args.download_dataset),
+            num_workers=(args.num_workers),
+            pin_memory=(args.pin_memory),
         )
 
         return (
@@ -760,13 +705,11 @@ def load_data(
             validation_loader,
         )
 
-    training_loader, validation_loader = (
-        get_uci_dataloaders(
-            args.dataset,
-            normalize=args.normalization,
-            batch_size=args.batch_size,
-            seed=args.seed,
-        )
+    training_loader, validation_loader = get_uci_dataloaders(
+        args.dataset,
+        normalize=args.normalization,
+        batch_size=args.batch_size,
+        seed=args.seed,
     )
 
     return (
@@ -802,9 +745,7 @@ def load_encoder_config(
         config,
         dict,
     ):
-        raise ValueError(
-            "Encoder configuration must contain a JSON object."
-        )
+        raise ValueError("Encoder configuration must contain a JSON object.")
 
     return config
 
@@ -824,9 +765,7 @@ def build_metrics(
         Mapping of metric names to metric objects.
     """
     return {
-        "mean_class_accuracy": MeanClassAccuracy(
-            training_loader.n_labels
-        ),
+        "mean_class_accuracy": MeanClassAccuracy(training_loader.n_labels),
     }
 
 
@@ -857,22 +796,16 @@ def build_objectives(
         ValueError: If an objective sign is not ``1`` or ``-1``.
         ValueError: If the same objective is specified multiple times.
     """
-    available_objectives = (
-        set(metrics.keys())
-        | STRUCTURAL_OBJECTIVES
-        | {"loss"}
-    )
+    available_objectives = set(metrics.keys()) | STRUCTURAL_OBJECTIVES | {"loss"}
 
     objectives: list[ObjectiveSpec] = []
     objective_names: set[str] = set()
 
     for specification in args.objectives:
         try:
-            name, sign_string = (
-                specification.rsplit(
-                    ":",
-                    maxsplit=1,
-                )
+            name, sign_string = specification.rsplit(
+                ":",
+                maxsplit=1,
             )
         except ValueError as exc:
             raise ValueError(
@@ -890,9 +823,7 @@ def build_objectives(
             )
 
         if name in objective_names:
-            raise ValueError(
-                f"Objective '{name}' was specified more than once."
-            )
+            raise ValueError(f"Objective '{name}' was specified more than once.")
 
         try:
             sign = float(sign_string)
@@ -922,8 +853,7 @@ def build_objectives(
 
     if len(objectives) < 2:
         raise ValueError(
-            "Multi-objective optimization requires at least "
-            "two objectives."
+            "Multi-objective optimization requires at least " "two objectives."
         )
 
     return objectives
@@ -947,106 +877,57 @@ def build_population(
     """
     if args.population_strategy == "nsga2":
         return NSGA2(
-            max_population_size=(
-                args.max_population_size
-            ),
+            max_population_size=(args.max_population_size),
             objectives=objectives,
-            tournament_size=(
-                args.tournament_size
-            ),
+            tournament_size=(args.tournament_size),
             out_dir=args.out_dir,
             seed=args.seed,
         )
 
     if args.population_strategy == "nsga3":
         return NSGA3(
-            max_population_size=(
-                args.max_population_size
-            ),
+            max_population_size=(args.max_population_size),
             objectives=objectives,
-            tournament_size=(
-                args.tournament_size
-            ),
-            reference_divisions=(
-                args.reference_divisions
-            ),
+            tournament_size=(args.tournament_size),
+            reference_divisions=(args.reference_divisions),
             out_dir=args.out_dir,
             seed=args.seed,
         )
 
-    if (
-        args.population_strategy
-        == "nsga2_islands"
-    ):
+    if args.population_strategy == "nsga2_islands":
         return MultiObjectiveSteadyStateIslands(
             population_class=NSGA2,
             objectives=objectives,
             n_islands=args.n_islands,
-            max_island_size=(
-                args.max_island_size
-            ),
-            tournament_size=(
-                args.tournament_size
-            ),
-            intra_island_crossover_rate=(
-                args.intra_island_crossover_rate
-            ),
-            genomes_before_extinction=(
-                args.genomes_before_extinction
-            ),
-            genomes_for_next_extinction=(
-                args.genomes_for_next_extinction
-            ),
-            islands_to_extinct=(
-                args.islands_to_extinct
-            ),
-            primary_parent=(
-                args.primary_parent
-            ),
+            max_island_size=(args.max_island_size),
+            tournament_size=(args.tournament_size),
+            intra_island_crossover_rate=(args.intra_island_crossover_rate),
+            genomes_before_extinction=(args.genomes_before_extinction),
+            genomes_for_next_extinction=(args.genomes_for_next_extinction),
+            islands_to_extinct=(args.islands_to_extinct),
+            primary_parent=(args.primary_parent),
             out_dir=args.out_dir,
         )
 
-    if (
-        args.population_strategy
-        == "nsga3_islands"
-    ):
+    if args.population_strategy == "nsga3_islands":
         return MultiObjectiveSteadyStateIslands(
             population_class=NSGA3,
             objectives=objectives,
             n_islands=args.n_islands,
-            max_island_size=(
-                args.max_island_size
-            ),
-            tournament_size=(
-                args.tournament_size
-            ),
-            intra_island_crossover_rate=(
-                args.intra_island_crossover_rate
-            ),
-            genomes_before_extinction=(
-                args.genomes_before_extinction
-            ),
-            genomes_for_next_extinction=(
-                args.genomes_for_next_extinction
-            ),
-            islands_to_extinct=(
-                args.islands_to_extinct
-            ),
-            primary_parent=(
-                args.primary_parent
-            ),
+            max_island_size=(args.max_island_size),
+            tournament_size=(args.tournament_size),
+            intra_island_crossover_rate=(args.intra_island_crossover_rate),
+            genomes_before_extinction=(args.genomes_before_extinction),
+            genomes_for_next_extinction=(args.genomes_for_next_extinction),
+            islands_to_extinct=(args.islands_to_extinct),
+            primary_parent=(args.primary_parent),
             out_dir=args.out_dir,
             population_kwargs={
-                "reference_divisions": (
-                    args.reference_divisions
-                ),
+                "reference_divisions": (args.reference_divisions),
             },
         )
 
-    raise ValueError(
-        "Unknown population strategy: "
-        f"{args.population_strategy}"
-    )
+    raise ValueError("Unknown population strategy: " f"{args.population_strategy}")
 
 
 def main() -> None:
@@ -1094,25 +975,16 @@ def main() -> None:
     # Load dataset.
     # ------------------------------------------------------------------
 
-    training_loader, validation_loader = (
-        load_data(args)
-    )
+    training_loader, validation_loader = load_data(args)
 
-    if (
-        not training_loader.is_image
-        and args.encoding == "cnn"
-    ):
-        parser.error(
-            "CNN encoding is only valid for image datasets."
-        )
+    if not training_loader.is_image and args.encoding == "cnn":
+        parser.error("CNN encoding is only valid for image datasets.")
 
     # ------------------------------------------------------------------
     # Metrics and MOO objectives.
     # ------------------------------------------------------------------
 
-    metrics = build_metrics(
-        training_loader
-    )
+    metrics = build_metrics(training_loader)
 
     try:
         objectives = build_objectives(
@@ -1122,16 +994,10 @@ def main() -> None:
     except ValueError as exc:
         parser.error(str(exc))
 
-    logger.info(
-        "Multi-objective optimization objectives:"
-    )
+    logger.info("Multi-objective optimization objectives:")
 
     for objective_spec in objectives:
-        direction = (
-            "maximize"
-            if objective_spec.sign == -1.0
-            else "minimize"
-        )
+        direction = "maximize" if objective_spec.sign == -1.0 else "minimize"
 
         logger.info(
             "  {}: {} (sign={})",
@@ -1144,43 +1010,31 @@ def main() -> None:
     # Training objective.
     # ------------------------------------------------------------------
 
-    objective = (
-        MultiObjectiveClassificationObjective(
-            training_dataloader=(
-                training_loader
-            ),
-            validation_dataloader=(
-                validation_loader
-            ),
-            training_loss_function=(
-                torch.nn.CrossEntropyLoss(
-                    weight=(
-                        training_loader.label_weights
-                    ),
-                    reduction="mean",
-                )
-            ),
-            validation_loss_function=(
-                torch.nn.CrossEntropyLoss(
-                    weight=(
-                        validation_loader.label_weights
-                    ),
-                    reduction="mean",
-                )
-            ),
-            metrics=metrics,
-            objectives=objectives,
-            device=device,
-        )
+    objective = MultiObjectiveClassificationObjective(
+        training_dataloader=(training_loader),
+        validation_dataloader=(validation_loader),
+        training_loss_function=(
+            torch.nn.CrossEntropyLoss(
+                weight=(training_loader.label_weights),
+                reduction="mean",
+            )
+        ),
+        validation_loss_function=(
+            torch.nn.CrossEntropyLoss(
+                weight=(validation_loader.label_weights),
+                reduction="mean",
+            )
+        ),
+        metrics=metrics,
+        objectives=objectives,
+        device=device,
     )
 
     # ------------------------------------------------------------------
     # Encoder dimensions.
     # ------------------------------------------------------------------
 
-    n_encoder_outputs = (
-        args.input_qubits
-    )
+    n_encoder_outputs = args.input_qubits
 
     if args.quantum_input_mode == "u3":
         n_encoder_outputs *= 3
@@ -1189,17 +1043,10 @@ def main() -> None:
     # Decoder dimensions.
     # ------------------------------------------------------------------
 
-    n_decoder_inputs = (
-        args.output_qubits
-    )
+    n_decoder_inputs = args.output_qubits
 
-    if (
-        args.quantum_output_mode
-        == "probs"
-    ):
-        n_decoder_inputs = (
-            2**args.output_qubits
-        )
+    if args.quantum_output_mode == "probs":
+        n_decoder_inputs = 2**args.output_qubits
 
     # ------------------------------------------------------------------
     # Build optional CNN encoder configuration.
@@ -1207,34 +1054,19 @@ def main() -> None:
 
     encoder_config = None
 
-    if (
-        training_loader.is_image
-        and args.encoding == "cnn"
-    ):
-        channels, height, width = (
-            training_loader.input_shape
-        )
+    if training_loader.is_image and args.encoding == "cnn":
+        channels, height, width = training_loader.input_shape
 
-        encoder_config = (
-            load_encoder_config(
-                args.encoder_config
-            )
-        )
+        encoder_config = load_encoder_config(args.encoder_config)
 
         encoder_config.update(
             {
                 "input_channels": channels,
                 "input_height": height,
                 "input_width": width,
-                "hidden_channels": (
-                    args.cnn_channels
-                ),
-                "pooled_size": (
-                    args.cnn_pooled_size
-                ),
-                "dropout": (
-                    args.cnn_dropout
-                ),
+                "hidden_channels": (args.cnn_channels),
+                "pooled_size": (args.cnn_pooled_size),
+                "dropout": (args.cnn_dropout),
             }
         )
 
@@ -1245,9 +1077,7 @@ def main() -> None:
     initial_encoder = initialize_encoder(
         target=args.target,
         encoding_str=args.encoding,
-        n_inputs=(
-            training_loader.n_features
-        ),
+        n_inputs=(training_loader.n_features),
         n_outputs=n_encoder_outputs,
         config=encoder_config,
     )
@@ -1256,9 +1086,7 @@ def main() -> None:
         target=args.target,
         decoding_str=args.decoding,
         n_inputs=n_decoder_inputs,
-        n_outputs=(
-            training_loader.n_labels
-        ),
+        n_outputs=(training_loader.n_labels),
     )
 
     # ------------------------------------------------------------------
@@ -1276,30 +1104,14 @@ def main() -> None:
 
     hyperparameters = {
         "epochs": args.epochs,
-        "learning_rate": (
-            args.learning_rate
-        ),
-        "weight_decay": (
-            args.weight_decay
-        ),
-        "improvement_cutoff": (
-            args.improvement_cutoff
-        ),
-        "batch_size": (
-            args.batch_size
-        ),
-        "quantum_input_mode": (
-            args.quantum_input_mode
-        ),
-        "quantum_output_mode": (
-            args.quantum_output_mode
-        ),
-        "quantum_dropout_type": (
-            args.quantum_dropout_type
-        ),
-        "quantum_dropout_rate": (
-            args.quantum_dropout_rate
-        ),
+        "learning_rate": (args.learning_rate),
+        "weight_decay": (args.weight_decay),
+        "improvement_cutoff": (args.improvement_cutoff),
+        "batch_size": (args.batch_size),
+        "quantum_input_mode": (args.quantum_input_mode),
+        "quantum_output_mode": (args.quantum_output_mode),
+        "quantum_dropout_type": (args.quantum_dropout_type),
+        "quantum_dropout_rate": (args.quantum_dropout_rate),
     }
 
     gate_specifications = (
@@ -1313,29 +1125,15 @@ def main() -> None:
     # ------------------------------------------------------------------
 
     master_worker(
-        gate_specifications=(
-            gate_specifications
-        ),
+        gate_specifications=(gate_specifications),
         population=population,
         objective=objective,
-        initial_encoder=(
-            initial_encoder
-        ),
-        initial_decoder=(
-            initial_decoder
-        ),
-        hyperparameters=(
-            hyperparameters
-        ),
-        mutation_strategy=(
-            args.mutation_strategy
-        ),
-        parent_strategy=(
-            args.parent_strategy
-        ),
-        run_for=(
-            args.number_genomes
-        ),
+        initial_encoder=(initial_encoder),
+        initial_decoder=(initial_decoder),
+        hyperparameters=(hyperparameters),
+        mutation_strategy=(args.mutation_strategy),
+        parent_strategy=(args.parent_strategy),
+        run_for=(args.number_genomes),
         input_registers={
             "input": args.input_qubits,
         },

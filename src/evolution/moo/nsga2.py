@@ -56,9 +56,7 @@ class NSGA2(MultiObjectivePopulationBase):
 
     def _assign_crowding_distance(
         self,
-        population: Sequence[
-            CircuitGenome
-        ],
+        population: Sequence[CircuitGenome],
         front: list[int],
     ) -> None:
         """Calculate NSGA-II crowding distance for one Pareto front.
@@ -71,21 +69,15 @@ class NSGA2(MultiObjectivePopulationBase):
             return
 
         for index in front:
-            population[index].metadata[
-                "crowding_distance"
-            ] = 0.0
+            population[index].metadata["crowding_distance"] = 0.0
 
         if len(front) <= 2:
             for index in front:
-                population[index].metadata[
-                    "crowding_distance"
-                ] = math.inf
+                population[index].metadata["crowding_distance"] = math.inf
 
             return
 
-        for objective_index in range(
-            len(self.objectives)
-        ):
+        for objective_index in range(len(self.objectives)):
             sorted_front = sorted(
                 front,
                 key=lambda index: (
@@ -99,13 +91,9 @@ class NSGA2(MultiObjectivePopulationBase):
             first_index = sorted_front[0]
             last_index = sorted_front[-1]
 
-            population[first_index].metadata[
-                "crowding_distance"
-            ] = math.inf
+            population[first_index].metadata["crowding_distance"] = math.inf
 
-            population[last_index].metadata[
-                "crowding_distance"
-            ] = math.inf
+            population[last_index].metadata["crowding_distance"] = math.inf
 
             minimum = objective_vector(
                 population[first_index],
@@ -117,9 +105,7 @@ class NSGA2(MultiObjectivePopulationBase):
                 self.objectives,
             )[objective_index]
 
-            objective_range = (
-                maximum - minimum
-            )
+            objective_range = maximum - minimum
 
             if math.isclose(
                 objective_range,
@@ -135,49 +121,26 @@ class NSGA2(MultiObjectivePopulationBase):
 
                 genome = population[index]
 
-                if math.isinf(
-                    genome.metadata[
-                        "crowding_distance"
-                    ]
-                ):
+                if math.isinf(genome.metadata["crowding_distance"]):
                     continue
 
-                previous_value = (
-                    objective_vector(
-                        population[
-                            sorted_front[
-                                position - 1
-                            ]
-                        ],
-                        self.objectives,
-                    )[objective_index]
-                )
+                previous_value = objective_vector(
+                    population[sorted_front[position - 1]],
+                    self.objectives,
+                )[objective_index]
 
-                next_value = (
-                    objective_vector(
-                        population[
-                            sorted_front[
-                                position + 1
-                            ]
-                        ],
-                        self.objectives,
-                    )[objective_index]
-                )
+                next_value = objective_vector(
+                    population[sorted_front[position + 1]],
+                    self.objectives,
+                )[objective_index]
 
-                normalized_distance = (
-                    next_value
-                    - previous_value
-                ) / objective_range
+                normalized_distance = (next_value - previous_value) / objective_range
 
-                genome.metadata[
-                    "crowding_distance"
-                ] += normalized_distance
+                genome.metadata["crowding_distance"] += normalized_distance
 
     def _environmental_selection(
         self,
-        population: Sequence[
-            CircuitGenome
-        ],
+        population: Sequence[CircuitGenome],
         population_size: int,
     ) -> list[CircuitGenome]:
         """Perform NSGA-II environmental selection.
@@ -206,35 +169,20 @@ class NSGA2(MultiObjectivePopulationBase):
                 front,
             )
 
-        survivors: list[
-            CircuitGenome
-        ] = []
+        survivors: list[CircuitGenome] = []
 
         for front in fronts:
-            if (
-                len(survivors)
-                + len(front)
-                <= population_size
-            ):
-                survivors.extend(
-                    population[index]
-                    for index in front
-                )
+            if len(survivors) + len(front) <= population_size:
+                survivors.extend(population[index] for index in front)
 
                 continue
 
-            remaining = (
-                population_size
-                - len(survivors)
-            )
+            remaining = population_size - len(survivors)
 
             if remaining <= 0:
                 break
 
-            candidates = [
-                population[index]
-                for index in front
-            ]
+            candidates = [population[index] for index in front]
 
             candidates.sort(
                 key=lambda genome: (
@@ -246,17 +194,13 @@ class NSGA2(MultiObjectivePopulationBase):
                 reverse=True,
             )
 
-            survivors.extend(
-                candidates[:remaining]
-            )
+            survivors.extend(candidates[:remaining])
 
             break
 
-        survivor_fronts = (
-            assign_pareto_ranks(
-                survivors,
-                self.objectives,
-            )
+        survivor_fronts = assign_pareto_ranks(
+            survivors,
+            self.objectives,
         )
 
         for front in survivor_fronts:
@@ -316,12 +260,7 @@ class NSGA2(MultiObjectivePopulationBase):
         if right_distance > left_distance:
             return right
 
-        return (
-            left
-            if left.genome_number
-            <= right.genome_number
-            else right
-        )
+        return left if left.genome_number <= right.genome_number else right
 
     def _representative_genome(
         self,
@@ -341,8 +280,7 @@ class NSGA2(MultiObjectivePopulationBase):
 
         if not front:
             raise RuntimeError(
-                "Cannot choose a representative "
-                "from an empty Pareto front."
+                "Cannot choose a representative " "from an empty Pareto front."
             )
 
         return max(

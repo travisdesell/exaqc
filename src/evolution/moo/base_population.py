@@ -63,44 +63,29 @@ class MultiObjectivePopulationBase(PopulationStrategy):
     ) -> None:
         """Initialize a multi-objective population."""
         if max_population_size <= 0:
-            raise ValueError(
-                "max_population_size must be greater than zero."
-            )
+            raise ValueError("max_population_size must be greater than zero.")
 
         if len(objectives) < 2:
             raise ValueError(
-                "Multi-objective optimization requires at least "
-                "two objectives."
+                "Multi-objective optimization requires at least " "two objectives."
             )
 
         if tournament_size < 2:
-            raise ValueError(
-                "tournament_size must be at least two."
-            )
+            raise ValueError("tournament_size must be at least two.")
 
-        self.max_population_size = int(
-            max_population_size
-        )
+        self.max_population_size = int(max_population_size)
 
         self.objectives = list(objectives)
 
-        self.tournament_size = int(
-            tournament_size
-        )
+        self.tournament_size = int(tournament_size)
 
         self.out_dir = out_dir
 
-        self.save_all_genomes = bool(
-            save_all_genomes
-        )
+        self.save_all_genomes = bool(save_all_genomes)
 
-        self.save_pareto_front_enabled = bool(
-            save_pareto_front
-        )
+        self.save_pareto_front_enabled = bool(save_pareto_front)
 
-        self.population: list[
-            CircuitGenome
-        ] = []
+        self.population: list[CircuitGenome] = []
 
         self.insertions = 0
 
@@ -113,9 +98,7 @@ class MultiObjectivePopulationBase(PopulationStrategy):
                 out_dir=out_dir,
             )
 
-        self._last_pareto_signature: tuple[
-            int, ...
-        ] = ()
+        self._last_pareto_signature: tuple[int, ...] = ()
 
     def is_initializing(self) -> bool:
         """Determine whether the initial population is still being filled.
@@ -124,10 +107,7 @@ class MultiObjectivePopulationBase(PopulationStrategy):
             ``True`` if the population has fewer genomes than its configured
             maximum size.
         """
-        return (
-            len(self.population)
-            < self.max_population_size
-        )
+        return len(self.population) < self.max_population_size
 
     def get_pareto_front(
         self,
@@ -145,10 +125,7 @@ class MultiObjectivePopulationBase(PopulationStrategy):
         return [
             genome
             for genome in self.population
-            if genome.metadata.get(
-                "pareto_rank"
-            )
-            == 0
+            if genome.metadata.get("pareto_rank") == 0
         ]
 
     def get_best_genome(
@@ -194,19 +171,11 @@ class MultiObjectivePopulationBase(PopulationStrategy):
 
         self._refresh_selection_metadata()
 
-        parent = self._run_tournament(
-            excluded_genome_numbers=set()
-        )
+        parent = self._run_tournament(excluded_genome_numbers=set())
 
         metadata = {
-            "selection_algorithm": (
-                self.algorithm_name
-            ),
-            "parent_pareto_rank": (
-                parent.metadata.get(
-                    "pareto_rank"
-                )
-            ),
+            "selection_algorithm": (self.algorithm_name),
+            "parent_pareto_rank": (parent.metadata.get("pareto_rank")),
         }
 
         return parent, metadata
@@ -233,9 +202,7 @@ class MultiObjectivePopulationBase(PopulationStrategy):
             ValueError: If ``n_parents`` is not positive.
         """
         if n_parents <= 0:
-            raise ValueError(
-                "n_parents must be positive."
-            )
+            raise ValueError("n_parents must be positive.")
 
         if len(self.population) < n_parents:
             return None, None
@@ -247,31 +214,18 @@ class MultiObjectivePopulationBase(PopulationStrategy):
         selected_numbers: set[int] = set()
 
         while len(parents) < n_parents:
-            parent = self._run_tournament(
-                excluded_genome_numbers=(
-                    selected_numbers
-                )
-            )
+            parent = self._run_tournament(excluded_genome_numbers=(selected_numbers))
 
             parents.append(parent)
 
-            selected_numbers.add(
-                parent.genome_number
-            )
+            selected_numbers.add(parent.genome_number)
 
-        parents.sort(
-            key=self._parent_sort_key
-        )
+        parents.sort(key=self._parent_sort_key)
 
         metadata = {
-            "selection_algorithm": (
-                self.algorithm_name
-            ),
+            "selection_algorithm": (self.algorithm_name),
             "parent_pareto_ranks": [
-                parent.metadata.get(
-                    "pareto_rank"
-                )
-                for parent in parents
+                parent.metadata.get("pareto_rank") for parent in parents
             ],
         }
 
@@ -302,16 +256,10 @@ class MultiObjectivePopulationBase(PopulationStrategy):
 
         self.insertions += 1
 
-        duplicate_result = (
-            self._handle_duplicate(
-                genome
-            )
-        )
+        duplicate_result = self._handle_duplicate(genome)
 
         if duplicate_result is False:
-            genome.metadata[
-                "insert_type"
-            ] = "discarded_duplicate"
+            genome.metadata["insert_type"] = "discarded_duplicate"
 
             self._record_and_save(
                 genome,
@@ -320,32 +268,22 @@ class MultiObjectivePopulationBase(PopulationStrategy):
 
             return False
 
-        combined_population = (
-            self.population + [genome]
-        )
+        combined_population = self.population + [genome]
 
-        survivors = (
-            self._environmental_selection(
-                combined_population,
-                self.max_population_size,
-            )
+        survivors = self._environmental_selection(
+            combined_population,
+            self.max_population_size,
         )
 
         survived = any(
-            candidate.genome_number
-            == genome.genome_number
-            for candidate in survivors
+            candidate.genome_number == genome.genome_number for candidate in survivors
         )
 
         self.population = survivors
 
         self._refresh_selection_metadata()
 
-        genome.metadata["insert_type"] = (
-            "inserted"
-            if survived
-            else "discarded"
-        )
+        genome.metadata["insert_type"] = "inserted" if survived else "discarded"
 
         self._record_and_save(
             genome,
@@ -381,12 +319,8 @@ class MultiObjectivePopulationBase(PopulationStrategy):
             new genome should be discarded, or ``None`` if no decisive
             duplicate relationship was found.
         """
-        for index, existing in enumerate(
-            self.population
-        ):
-            if not existing.has_same_gates(
-                genome
-            ):
+        for index, existing in enumerate(self.population):
+            if not existing.has_same_gates(genome):
                 continue
 
             if genome_dominates(
@@ -444,15 +378,11 @@ class MultiObjectivePopulationBase(PopulationStrategy):
         available = [
             genome
             for genome in self.population
-            if genome.genome_number
-            not in excluded_genome_numbers
+            if genome.genome_number not in excluded_genome_numbers
         ]
 
         if not available:
-            raise RuntimeError(
-                "No genomes are available for "
-                "parent selection."
-            )
+            raise RuntimeError("No genomes are available for " "parent selection.")
 
         sample_size = min(
             self.tournament_size,
@@ -496,11 +426,7 @@ class MultiObjectivePopulationBase(PopulationStrategy):
 
         if self.save_all_genomes:
             genome.save_circuit(
-                insert_type=(
-                    "genome_inserted"
-                    if survived
-                    else "genome_discarded"
-                ),
+                insert_type=("genome_inserted" if survived else "genome_discarded"),
                 out_dir=os.path.join(
                     self.out_dir,
                     "all_genomes",
@@ -517,26 +443,14 @@ class MultiObjectivePopulationBase(PopulationStrategy):
         self,
     ) -> None:
         """Save the Pareto front when its membership changes."""
-        pareto_front = (
-            self.get_pareto_front()
-        )
+        pareto_front = self.get_pareto_front()
 
-        signature = tuple(
-            sorted(
-                genome.genome_number
-                for genome in pareto_front
-            )
-        )
+        signature = tuple(sorted(genome.genome_number for genome in pareto_front))
 
-        if (
-            signature
-            == self._last_pareto_signature
-        ):
+        if signature == self._last_pareto_signature:
             return
 
-        self._last_pareto_signature = (
-            signature
-        )
+        self._last_pareto_signature = signature
 
         pareto_directory = os.path.join(
             self.out_dir,
@@ -554,13 +468,9 @@ class MultiObjectivePopulationBase(PopulationStrategy):
             f"{len(pareto_front)} genomes."
         )
 
-        for index, genome in enumerate(
-            pareto_front
-        ):
+        for index, genome in enumerate(pareto_front):
             genome.save_circuit(
-                insert_type=(
-                    f"pareto_{index}"
-                ),
+                insert_type=(f"pareto_{index}"),
                 out_dir=pareto_directory,
             )
 
@@ -576,10 +486,7 @@ class MultiObjectivePopulationBase(PopulationStrategy):
             survived: Whether the genome survived selection.
         """
         objective_text = ", ".join(
-            (
-                f"{objective.name}="
-                f"{genome.fitness[objective.name]}"
-            )
+            (f"{objective.name}=" f"{genome.fitness[objective.name]}")
             for objective in self.objectives
         )
 
@@ -608,9 +515,7 @@ class MultiObjectivePopulationBase(PopulationStrategy):
     @abstractmethod
     def _environmental_selection(
         self,
-        population: Sequence[
-            CircuitGenome
-        ],
+        population: Sequence[CircuitGenome],
         population_size: int,
     ) -> list[CircuitGenome]:
         """Select genomes that survive environmental selection.

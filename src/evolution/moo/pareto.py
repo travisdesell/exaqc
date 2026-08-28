@@ -27,9 +27,7 @@ def validate_genome_fitness(
             value.
     """
     if genome.fitness is None:
-        raise ValueError(
-            f"Genome {genome.genome_number} has not been evaluated."
-        )
+        raise ValueError(f"Genome {genome.genome_number} has not been evaluated.")
 
     for objective in objectives:
         if objective.name not in genome.fitness:
@@ -73,9 +71,7 @@ def objective_vector(
     values: list[float] = []
 
     for objective in objectives:
-        value = objective.transform(
-            genome.fitness[objective.name]
-        )
+        value = objective.transform(genome.fitness[objective.name])
 
         if not np.isfinite(value):
             value = np.inf
@@ -119,17 +115,11 @@ def genome_dominates(
         objectives,
     )
 
-    no_worse = np.all(
-        left_values <= right_values
-    )
+    no_worse = np.all(left_values <= right_values)
 
-    strictly_better = np.any(
-        left_values < right_values
-    )
+    strictly_better = np.any(left_values < right_values)
 
-    return bool(
-        no_worse and strictly_better
-    )
+    return bool(no_worse and strictly_better)
 
 
 def non_dominated_sort(
@@ -155,13 +145,9 @@ def non_dominated_sort(
     if population_size == 0:
         return []
 
-    domination_sets: list[list[int]] = [
-        [] for _ in range(population_size)
-    ]
+    domination_sets: list[list[int]] = [[] for _ in range(population_size)]
 
-    domination_counts = [
-        0 for _ in range(population_size)
-    ]
+    domination_counts = [0 for _ in range(population_size)]
 
     first_front: list[int] = []
 
@@ -178,9 +164,7 @@ def non_dominated_sort(
                 right,
                 objectives,
             ):
-                domination_sets[left_index].append(
-                    right_index
-                )
+                domination_sets[left_index].append(right_index)
 
                 domination_counts[right_index] += 1
 
@@ -189,15 +173,11 @@ def non_dominated_sort(
                 left,
                 objectives,
             ):
-                domination_sets[right_index].append(
-                    left_index
-                )
+                domination_sets[right_index].append(left_index)
 
                 domination_counts[left_index] += 1
 
-    for index, count in enumerate(
-        domination_counts
-    ):
+    for index, count in enumerate(domination_counts):
         if count == 0:
             first_front.append(index)
 
@@ -212,22 +192,11 @@ def non_dominated_sort(
         next_front: list[int] = []
 
         for genome_index in fronts[front_index]:
-            for dominated_index in domination_sets[
-                genome_index
-            ]:
-                domination_counts[
-                    dominated_index
-                ] -= 1
+            for dominated_index in domination_sets[genome_index]:
+                domination_counts[dominated_index] -= 1
 
-                if (
-                    domination_counts[
-                        dominated_index
-                    ]
-                    == 0
-                ):
-                    next_front.append(
-                        dominated_index
-                    )
+                if domination_counts[dominated_index] == 0:
+                    next_front.append(dominated_index)
 
         if next_front:
             fronts.append(next_front)
@@ -265,8 +234,6 @@ def assign_pareto_ranks(
 
     for rank, front in enumerate(fronts):
         for index in front:
-            population[index].metadata[
-                "pareto_rank"
-            ] = rank
+            population[index].metadata["pareto_rank"] = rank
 
     return fronts
