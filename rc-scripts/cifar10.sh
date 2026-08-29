@@ -2,8 +2,8 @@
 #SBATCH -J exaqc_cifar10
 #SBATCH -t 5-00:00:00
 #SBATCH -A cps -p tier3
-#SBATCH -o ./outs/cifar10/runs/1/output_amp.o
-#SBATCH -e ./logs/cifar10/runs/1/error_amp.e
+#SBATCH -o ./outs/cifar10/compare/output.o
+#SBATCH -e ./logs/cifar10/compare/error.e
 #SBATCH --nodes=1
 #SBATCH --ntasks=6
 #SBATCH --ntasks-per-node=6
@@ -16,10 +16,10 @@ spack env activate default-ml-x86_64-25052701
 source .venv/bin/activate
 
 DATASET="cifar10"
-QUBITS=12
-ENCODING="identity"
-QUANTUM_ENC="amplitude"
-BATCH_SIZE=32
+QUBITS=8
+ENCODING="cnn"
+QUANTUM_ENC="ry"
+BATCH_SIZE=64
 N_GENOMES=1000
 
 # if [[ "$DATASET" == "mnist" || "$DATASET" == "fashion_mnist" ]]; then
@@ -45,7 +45,7 @@ for i in $(seq $MIN_COUNT $MAX_COUNT); do
         --target pennylane \
         --encoding $ENCODING \
         --decoding linear \
-        --encoder_config configs/mnist_fc.json \
+        --encoder_config configs/cifar10_cnn_3.json \
         --input_qubits $QUBITS \
         --output_qubits $QUBITS \
         --quantum_input_mode $QUANTUM_ENC \

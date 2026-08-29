@@ -1,8 +1,8 @@
 #!/bin/bash -l
-#SBATCH -J exaqc_mnist_u3
+#SBATCH -J exaqc_mnist_amp
 #SBATCH -t 3-00:00:00
-#SBATCH -o ./outs/mnist/runs/5/output_u3.o
-#SBATCH -e ./logs/mnist/runs/5/error_u3.e
+#SBATCH -o ./outs/mnist/runs/5/output_amp_expval.o
+#SBATCH -e ./logs/mnist/runs/5/error_amp_expval.e
 #SBATCH -A cps -p tier3
 #SBATCH --nodes=1
 #SBATCH --ntasks=6
@@ -16,9 +16,10 @@ spack env activate default-ml-x86_64-25052701
 source .venv/bin/activate
 
 DATASET="mnist"
-QUBITS=5
-ENCODING="linear"
-QUANTUM_ENC="u3"
+QUBITS=10
+ENCODING="identity"
+QUANTUM_ENC="amplitude"
+QUANTUM_OUT="expval"
 BATCH_SIZE=32
 N_GENOMES=800
 
@@ -49,7 +50,7 @@ for i in $(seq $MIN_COUNT $MAX_COUNT); do
         --input_qubits $QUBITS \
         --output_qubits $QUBITS \
         --quantum_input_mode $QUANTUM_ENC \
-        --quantum_output_mode probs \
+        --quantum_output_mode $QUANTUM_OUT \
         --device cuda \
         --batch_size $BATCH_SIZE \
         --validation_batch_size $BATCH_SIZE \
@@ -59,7 +60,7 @@ for i in $(seq $MIN_COUNT $MAX_COUNT); do
         --mutation_strategy uniform 1 5 \
         --parent_strategy uniform 2 5 \
         --seed $((i + 40)) \
-        --out_dir artifacts/${DATASET}_${ENCODING}_${QUANTUM_ENC}_g${N_GENOMES}_q${QUBITS}_b${BATCH_SIZE}/runs/${i} \
+        --out_dir artifacts/${DATASET}_${ENCODING}_${QUANTUM_ENC}_${QUANTUM_OUT}_g${N_GENOMES}_q${QUBITS}_b${BATCH_SIZE}/runs/${i} \
         steady_state \
         --max_population_size 30
 done
