@@ -286,6 +286,7 @@ class SupervisedTrainer:
             p.numel() for p in genome.parameters() if p.requires_grad
         )
         genome.metadata["n_trainable_parameters"] = n_trainable_parameters
+        genome.metadata["n_circuit_parameters"] = genome.get_genome_circuit_parameters()
 
         logger.debug(f"hybrid model n trainable parameters: {n_trainable_parameters}")
 

@@ -19,6 +19,7 @@ DATASET="cifar10"
 QUBITS=8
 ENCODING="cnn"
 QUANTUM_ENC="ry"
+QUANTUM_OUT="probs"
 BATCH_SIZE=64
 N_GENOMES=1000
 
@@ -49,7 +50,7 @@ for i in $(seq $MIN_COUNT $MAX_COUNT); do
         --input_qubits $QUBITS \
         --output_qubits $QUBITS \
         --quantum_input_mode $QUANTUM_ENC \
-        --quantum_output_mode probs \
+        --quantum_output_mode $QUANTUM_OUT \
         --device cuda \
         --batch_size $BATCH_SIZE \
         --validation_batch_size $BATCH_SIZE \

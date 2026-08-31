@@ -28,6 +28,16 @@ def main() -> None:
     parser.add_argument("--data_dir", default="data")
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument(
+        "--device",
+        type=str,
+        default="cpu",
+        help=(
+            "PyTorch device to use for training, e.g. "
+            "'cpu', 'cuda', or 'cuda:0'. "
+            "Defaults to CUDA when available."
+        ),
+    )
+    parser.add_argument(
         "--download_dataset",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -51,6 +61,7 @@ def main() -> None:
 
     genome = CircuitGenome.from_dict(serialized)
     genome.initialize_model()
+    genome.hybrid_model.to(torch.device(args.device))
 
     testing_loader = get_image_test_dataloader(
         args.dataset,
@@ -74,6 +85,7 @@ def main() -> None:
         validation_loss_function=testing_loss,
         testing_loss_function=testing_loss,
         metrics=metrics,
+        device=args.device,
     )
 
     test_metrics = trainer.test(genome)

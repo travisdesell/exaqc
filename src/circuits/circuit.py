@@ -804,6 +804,7 @@ class CircuitGenome:
         """
         # Create wire registers via qml.registers
         self.total_qubits = len(self.qubits)
+        self.circuit_parameters = 0
 
         logger.info(
             f"input indexes: {self.input_indexes}, output_indexes: {self.output_indexes}"
@@ -877,6 +878,8 @@ class CircuitGenome:
                     )
                 offset += len(gate.parameters)
 
+            self.circuit_parameters = offset
+
             if output_mode == "probs":
                 return qml.probs(wires=self.output_indexes)
 
@@ -913,6 +916,9 @@ class CircuitGenome:
         Raises:
             ValueError: If the genome's ``quantum_output_mode`` is unsupported.
         """
+        self.total_qubits = len(self.qubits)
+        self.circuit_parameters = 0
+
         quantum_registers = []
         register_dict = {}
         for qubit_name, qubit_index in self.qubits:
@@ -973,6 +979,8 @@ class CircuitGenome:
                     register_dict, circuit, self.weight_vector, offset
                 )
             offset += len(gate.parameters)
+
+        self.circuit_parameters = offset
 
         for output_index, input_index in enumerate(self.output_indexes):
             # print(f"measuring quantum_register[{input_index}] to classical_register[{output_index}]")
@@ -1143,7 +1151,7 @@ class CircuitGenome:
         self.dropout_gate_innovations.clear()
         self.dropout_qubits.clear()
 
-    def is_gate_dropped(self, gate) -> bool:
+    def is_gate_dropped(self, gate: Gate) -> bool:
         """Returns whether a gate is dropped for the current forward pass."""
         if gate.innovation_number in self.dropout_gate_innovations:
             return True
@@ -1152,3 +1160,7 @@ class CircuitGenome:
             return True
 
         return False
+
+    def get_genome_circuit_parameters(self) -> int:
+        """Returns the number of parameters the circuit has"""
+        return self.circuit_parameters

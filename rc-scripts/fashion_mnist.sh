@@ -1,8 +1,6 @@
 #!/bin/bash -l
-#SBATCH -J exaqc_fmnist_amp
+#SBATCH -J exaqc_fmnist_u3
 #SBATCH -t 3-00:00:00
-#SBATCH -o ./outs/fmnist/runs/5/output_amp_expval.o
-#SBATCH -e ./logs/fmnist/runs/5/error_amp_expval.e
 #SBATCH -A cps -p tier3
 #SBATCH --nodes=1
 #SBATCH --ntasks=6
@@ -16,10 +14,11 @@ spack env activate default-ml-x86_64-25052701
 source .venv/bin/activate
 
 DATASET="fashion_mnist"
-QUBITS=10
-ENCODING="identity"
-QUANTUM_ENC="amplitude"
-QUANTUM_OUT="expval"
+QUBITS=6
+ENCODING="cnn"
+MODEL_CONFIG="configs/mnist_fc.json"
+QUANTUM_ENC="u3"
+QUANTUM_OUT="probs"
 BATCH_SIZE=32
 N_GENOMES=800
 
@@ -35,18 +34,40 @@ N_GENOMES=800
 
 # --training_samples $TRAIN_SAMPLES \
 # --validation_samples $TEST_SAMPLES \
-# --encoder_config configs/mnist_cnn_2.json \
+
+MODEL_FILENAME=$(basename "$MODEL_CONFIG" .json)
 
 MIN_COUNT=$1
 MAX_COUNT=$2
 
 for i in $(seq $MIN_COUNT $MAX_COUNT); do
+
+    TARGET_DIR="./outs/$DATASET/runs/$i"
+
+    # Check if the directory does NOT exist
+    if [ ! -d "$TARGET_DIR" ]; then
+        echo "Directory does not exist. Creating it now..."
+        mkdir -p "$TARGET_DIR"
+    else
+        echo "Directory already exists. Skipping."
+    fi
+
+    TARGET_DIR="./logs/$DATASET/runs/$i"
+
+    # Check if the directory does NOT exist
+    if [ ! -d "$TARGET_DIR" ]; then
+        echo "Directory does not exist. Creating it now..."
+        mkdir -p "$TARGET_DIR"
+    else
+        echo "Directory already exists. Skipping."
+    fi
+
     srun python3.11 -m src.examples.classification \
         --dataset $DATASET \
         --target pennylane \
         --encoding $ENCODING \
         --decoding linear \
-        --encoder_config configs/mnist_fc.json \
+        --encoder_config ${MODEL_CONFIG} \
         --input_qubits $QUBITS \
         --output_qubits $QUBITS \
         --quantum_input_mode $QUANTUM_ENC \
@@ -59,8 +80,10 @@ for i in $(seq $MIN_COUNT $MAX_COUNT); do
         --number_genomes $N_GENOMES \
         --mutation_strategy uniform 1 5 \
         --parent_strategy uniform 2 5 \
-        --seed 42 \
-        --out_dir artifacts/${DATASET}_${ENCODING}_${QUANTUM_ENC}_${QUANTUM_OUT}_g${N_GENOMES}_q${QUBITS}_b${BATCH_SIZE}/runs/${i} \
+        --seed $((i + 40)) \
+        --out_dir artifacts/${DATASET}_${ENCODING}_f${MODEL_FILENAME}_${QUANTUM_ENC}_${QUANTUM_OUT}_g${N_GENOMES}_q${QUBITS}_b${BATCH_SIZE}/runs/${i} \
         steady_state \
-        --max_population_size 30
+        --max_population_size 30 \
+        > ./outs/$DATASET/runs/${i}/output_${QUANTUM_ENC}_1.o \
+        2> ./logs/$DATASET/runs/${i}/error_${QUANTUM_ENC}_1.o
 done
