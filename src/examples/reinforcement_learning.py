@@ -324,9 +324,8 @@ class ReinforcementLearningObjective(Objective):
         training_metrics = genome.metadata["best_training_metrics"]
         validation_metrics = genome.metadata["best_validation_metrics"]
 
-        mean_return = (
-            validation_metrics["return_mean"] + training_metrics["return_mean"]
-        ) / 2.0
+        mean_return = (0.2 * validation_metrics["return_mean"]) + (0.8 * training_metrics["return_mean"])
+
         # mean_return = validation_metrics["return_mean"]
         # mean_return = training_metrics["return_mean"]
 
