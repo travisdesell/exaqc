@@ -14,7 +14,7 @@ from src.circuits.layer_spec import LayerSpec
 if TYPE_CHECKING:
     from src.circuits.circuit import CircuitGenome
 
-ENCODING_OPTIONS = ["identity", "linear", "cnn"]
+ENCODING_OPTIONS = ["identity", "linear", "cnn", "quantum_conv"]
 
 
 def initialize_encoder(
@@ -118,6 +118,65 @@ def initialize_encoder(
                 encoder_config.get(
                     "dropout",
                     0.0,
+                )
+            ),
+            output_activation=str(
+                encoder_config.get(
+                    "output_activation",
+                    "tanh",
+                )
+            ),
+        )
+
+    elif encoding_str == "quantum_conv":
+        required = {
+            "input_channels",
+            "input_height",
+            "input_width",
+            "conv_blocks",
+        }
+
+        missing = required.difference(
+            encoder_config
+        )
+
+        if missing:
+            raise ValueError(
+                "Quantum convolution encoder configuration "
+                f"is missing fields: {sorted(missing)}"
+            )
+
+        encoder = QuantumConvEncoder(
+            n_inputs=n_inputs,
+            n_outputs=n_outputs,
+            input_channels=int(
+                encoder_config["input_channels"]
+            ),
+            input_height=int(
+                encoder_config["input_height"]
+            ),
+            input_width=int(
+                encoder_config["input_width"]
+            ),
+            conv_blocks=encoder_config[
+                "conv_blocks"
+            ],
+            compressed_channels=int(
+                encoder_config.get(
+                    "compressed_channels",
+                    2,
+                )
+            ),
+            patch_size=int(
+                encoder_config.get(
+                    "patch_size",
+                    2,
+                )
+            ),
+            patch_stride=int(
+                encoder_config.get(
+                    "patch_stride",
+                    2,
                 )
             ),
             output_activation=str(
@@ -955,4 +1014,306 @@ class CNNEncoder(Encoder, torch.nn.Module):
         Returns:
             Deep copy of this encoder.
         """
+        return copy.deepcopy(self)
+
+
+class QuantumConvEncoder(Encoder, torch.nn.Module):
+    """Prepares image patches for an evolved quantum convolution.
+
+    This encoder applies the classical convolutional blocks preceding the
+    quantum convolution, compresses the channel dimension, and extracts
+    non-overlapping spatial patches. Each resulting patch is passed as one
+    input sample to the evolved EXAQC quantum circuit.
+
+    For example, with CIFAR-10::
+
+        [B, 3, 32, 32]
+            -> Conv blocks
+        [B, 64, 8, 8]
+            -> 1x1 Conv(64, 2)
+        [B, 2, 8, 8]
+            -> unfold(kernel=2, stride=2)
+        [B * 16, 8]
+
+    The final dimension must equal the number of quantum circuit inputs.
+
+    Args:
+        n_inputs: Number of values in the original input image.
+        n_outputs: Number of values expected by the quantum circuit.
+        input_channels: Number of input image channels.
+        input_height: Input image height.
+        input_width: Input image width.
+        conv_blocks: Classical convolution blocks before the quantum block.
+        compressed_channels: Number of channels before patch extraction.
+        patch_size: Spatial quantum-convolution patch size.
+        patch_stride: Stride between quantum patches.
+        output_activation: Activation applied to quantum inputs.
+    """
+
+    def __init__(
+        self,
+        n_inputs: int,
+        n_outputs: int,
+        input_channels: int,
+        input_height: int,
+        input_width: int,
+        conv_blocks: Sequence[Mapping[str, Any]],
+        compressed_channels: int = 2,
+        patch_size: int = 2,
+        patch_stride: int = 2,
+        output_activation: str = "tanh",
+    ) -> None:
+        torch.nn.Module.__init__(self)
+        Encoder.__init__(self, n_inputs, n_outputs)
+
+        self.input_channels = int(input_channels)
+        self.input_height = int(input_height)
+        self.input_width = int(input_width)
+
+        self.conv_blocks_config = [
+            dict(block)
+            for block in conv_blocks
+        ]
+
+        self.compressed_channels = int(compressed_channels)
+        self.patch_size = int(patch_size)
+        self.patch_stride = int(patch_stride)
+        self.output_activation = str(output_activation)
+
+        self.features, final_channels = (
+            self._build_feature_extractor()
+        )
+
+        # Learnable channel compression before the PQC.
+        self.channel_compression = torch.nn.Conv2d(
+            in_channels=final_channels,
+            out_channels=self.compressed_channels,
+            kernel_size=1,
+        )
+
+        patch_features = (
+            self.compressed_channels
+            * self.patch_size
+            * self.patch_size
+        )
+
+        if patch_features != self.n_outputs:
+            raise ValueError(
+                "Quantum convolution patch contains "
+                f"{patch_features} values, but quantum circuit "
+                f"expects {self.n_outputs}. "
+                "compressed_channels * patch_size^2 must equal "
+                "n_outputs."
+            )
+
+        self.activation = CNNEncoder._activation(
+            self.output_activation
+        )
+
+        self._initialize_parameters()
+
+    def _build_feature_extractor(
+        self,
+    ) -> tuple[torch.nn.Sequential, int]:
+        """Builds classical CNN blocks preceding the quantum block."""
+
+        layers: list[torch.nn.Module] = []
+
+        in_channels = self.input_channels
+
+        for index, block in enumerate(
+            self.conv_blocks_config
+        ):
+            out_channels = int(block["out_channels"])
+            kernel_size = int(
+                block.get("kernel_size", 3)
+            )
+            stride = int(block.get("stride", 1))
+            padding = int(block.get("padding", 1))
+            dilation = int(block.get("dilation", 1))
+
+            use_batch_norm = bool(
+                block.get("batch_norm", True)
+            )
+
+            layers.append(
+                torch.nn.Conv2d(
+                    in_channels=in_channels,
+                    out_channels=out_channels,
+                    kernel_size=kernel_size,
+                    stride=stride,
+                    padding=padding,
+                    dilation=dilation,
+                    bias=not use_batch_norm,
+                )
+            )
+
+            if use_batch_norm:
+                layers.append(
+                    torch.nn.BatchNorm2d(out_channels)
+                )
+
+            layers.append(
+                CNNEncoder._activation(
+                    str(
+                        block.get(
+                            "activation",
+                            "relu",
+                        )
+                    )
+                )
+            )
+
+            block_dropout = float(
+                block.get("dropout", 0.0)
+            )
+
+            if block_dropout > 0.0:
+                layers.append(
+                    torch.nn.Dropout2d(
+                        block_dropout
+                    )
+                )
+
+            pooling = CNNEncoder._pooling(
+                block.get("pool")
+            )
+
+            if pooling is not None:
+                layers.append(pooling)
+
+            in_channels = out_channels
+
+        return (
+            torch.nn.Sequential(*layers),
+            in_channels,
+        )
+
+    def _initialize_parameters(self) -> None:
+        """Initializes classical convolution parameters."""
+
+        for module in self.modules():
+            if isinstance(
+                module,
+                torch.nn.Conv2d,
+            ):
+                torch.nn.init.kaiming_normal_(
+                    module.weight,
+                    nonlinearity="relu",
+                )
+
+                if module.bias is not None:
+                    torch.nn.init.zeros_(
+                        module.bias
+                    )
+
+    def __call__(
+        self,
+        inputs: torch.Tensor,
+        genome: Any | None = None,
+    ) -> torch.Tensor:
+        """Produces patch vectors for the quantum circuit.
+
+        Args:
+            inputs: Image batch with shape
+                ``[B, C, H, W]``.
+            genome: Owning EXAQC genome. Unused.
+
+        Returns:
+            Tensor with shape
+            ``[B * number_of_patches, n_outputs]``.
+        """
+
+        if inputs.ndim != 4:
+            raise ValueError(
+                "QuantumConvEncoder expects "
+                "[batch_size, channels, height, width], "
+                f"received {tuple(inputs.shape)}."
+            )
+
+        expected_shape = (
+            self.input_channels,
+            self.input_height,
+            self.input_width,
+        )
+
+        if tuple(inputs.shape[1:]) != expected_shape:
+            raise ValueError(
+                f"Expected image shape {expected_shape}, "
+                f"received {tuple(inputs.shape[1:])}."
+            )
+
+        # Example:
+        # [B, 3, 32, 32]
+        #       ->
+        # [B, 64, 8, 8]
+        features = self.features(
+            inputs.float()
+        )
+
+        # [B, 64, 8, 8]
+        #       ->
+        # [B, 2, 8, 8]
+        features = self.channel_compression(
+            features
+        )
+
+        # unfold:
+        #
+        # [B, 2, 8, 8]
+        #       ->
+        # [B, 8, 16]
+        patches = torch.nn.functional.unfold(
+            features,
+            kernel_size=self.patch_size,
+            stride=self.patch_stride,
+        )
+
+        batch_size = patches.shape[0]
+        n_patches = patches.shape[-1]
+
+        # [B, 8, 16]
+        #       ->
+        # [B, 16, 8]
+        patches = patches.transpose(1, 2)
+
+        # Treat each patch as a quantum-circuit sample.
+        #
+        # [B, 16, 8]
+        #       ->
+        # [B * 16, 8]
+        patches = patches.reshape(
+            batch_size * n_patches,
+            self.n_outputs,
+        )
+
+        return self.activation(patches)
+
+    def get_constructor_args(
+        self,
+    ) -> dict[str, Any]:
+        """Returns arguments required to reconstruct the encoder."""
+
+        return {
+            "n_inputs": self.n_inputs,
+            "n_outputs": self.n_outputs,
+            "input_channels": self.input_channels,
+            "input_height": self.input_height,
+            "input_width": self.input_width,
+            "conv_blocks": copy.deepcopy(
+                self.conv_blocks_config
+            ),
+            "compressed_channels": (
+                self.compressed_channels
+            ),
+            "patch_size": self.patch_size,
+            "patch_stride": self.patch_stride,
+            "output_activation": (
+                self.output_activation
+            ),
+        }
+
+    def copy(self) -> "QuantumConvEncoder":
+        """Returns an independent copy of the encoder."""
+
         return copy.deepcopy(self)

@@ -1,0 +1,49 @@
+{
+    "conv_blocks": [
+        {
+            "out_channels": 32,
+            "kernel_size": 3,
+            "stride": 1,
+            "padding": 1,
+            "batch_norm": true,
+            "activation": "relu",
+            "pool": {
+                "type": "max",
+                "kernel_size": 2,
+                "stride": 2
+            }
+        },
+        {
+            "out_channels": 64,
+            "kernel_size": 3,
+            "stride": 1,
+            "padding": 1,
+            "batch_norm": true,
+            "activation": "relu",
+            "pool": {
+                "type": "max",
+                "kernel_size": 2,
+                "stride": 2
+            }
+        }
+    ],
+
+    "compressed_channels": 2,
+
+    "patch_size": 2,
+    "patch_stride": 2,
+
+    "output_activation": "tanh",
+
+    "quantum_feature_height": 4,
+    "quantum_feature_width": 4,
+
+    "quantum_out_channels": 128,
+
+    "adaptive_pool_size": [2, 2],
+
+    "fully_connected_layers": [
+        256,
+        128
+    ]
+}

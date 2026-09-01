@@ -480,7 +480,7 @@ def main() -> None:
 
     # if training_loader.is_image and args.encoding != "cnn":
     #     parser.error("Image datasets require --encoding cnn in this implementation.")
-    if not training_loader.is_image and args.encoding == "cnn":
+    if not training_loader.is_image and args.encoding in ["cnn", "quantum_conv"]:
         parser.error("CNN encoding is only valid for image datasets.")
 
     metrics: dict[str, Metric] = {
@@ -547,6 +547,11 @@ def main() -> None:
         decoding_str=args.decoding,
         n_inputs=n_decoder_inputs,
         n_outputs=training_loader.n_labels,
+        config=(
+            encoder_config
+            if args.decoding == "quantum_conv"
+            else None
+        ),
     )
 
     if args.population_strategy == "steady_state":
