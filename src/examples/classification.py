@@ -547,11 +547,7 @@ def main() -> None:
         decoding_str=args.decoding,
         n_inputs=n_decoder_inputs,
         n_outputs=training_loader.n_labels,
-        config=(
-            encoder_config
-            if args.decoding == "quantum_conv"
-            else None
-        ),
+        config=(encoder_config if args.decoding == "quantum_conv" else None),
     )
 
     if args.population_strategy == "steady_state":

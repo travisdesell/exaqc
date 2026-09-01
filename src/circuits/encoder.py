@@ -136,9 +136,7 @@ def initialize_encoder(
             "conv_blocks",
         }
 
-        missing = required.difference(
-            encoder_config
-        )
+        missing = required.difference(encoder_config)
 
         if missing:
             raise ValueError(
@@ -149,18 +147,10 @@ def initialize_encoder(
         encoder = QuantumConvEncoder(
             n_inputs=n_inputs,
             n_outputs=n_outputs,
-            input_channels=int(
-                encoder_config["input_channels"]
-            ),
-            input_height=int(
-                encoder_config["input_height"]
-            ),
-            input_width=int(
-                encoder_config["input_width"]
-            ),
-            conv_blocks=encoder_config[
-                "conv_blocks"
-            ],
+            input_channels=int(encoder_config["input_channels"]),
+            input_height=int(encoder_config["input_height"]),
+            input_width=int(encoder_config["input_width"]),
+            conv_blocks=encoder_config["conv_blocks"],
             compressed_channels=int(
                 encoder_config.get(
                     "compressed_channels",
@@ -1070,19 +1060,14 @@ class QuantumConvEncoder(Encoder, torch.nn.Module):
         self.input_height = int(input_height)
         self.input_width = int(input_width)
 
-        self.conv_blocks_config = [
-            dict(block)
-            for block in conv_blocks
-        ]
+        self.conv_blocks_config = [dict(block) for block in conv_blocks]
 
         self.compressed_channels = int(compressed_channels)
         self.patch_size = int(patch_size)
         self.patch_stride = int(patch_stride)
         self.output_activation = str(output_activation)
 
-        self.features, final_channels = (
-            self._build_feature_extractor()
-        )
+        self.features, final_channels = self._build_feature_extractor()
 
         # Learnable channel compression before the PQC.
         self.channel_compression = torch.nn.Conv2d(
@@ -1091,11 +1076,7 @@ class QuantumConvEncoder(Encoder, torch.nn.Module):
             kernel_size=1,
         )
 
-        patch_features = (
-            self.compressed_channels
-            * self.patch_size
-            * self.patch_size
-        )
+        patch_features = self.compressed_channels * self.patch_size * self.patch_size
 
         if patch_features != self.n_outputs:
             raise ValueError(
@@ -1106,9 +1087,7 @@ class QuantumConvEncoder(Encoder, torch.nn.Module):
                 "n_outputs."
             )
 
-        self.activation = CNNEncoder._activation(
-            self.output_activation
-        )
+        self.activation = CNNEncoder._activation(self.output_activation)
 
         self._initialize_parameters()
 
@@ -1121,20 +1100,14 @@ class QuantumConvEncoder(Encoder, torch.nn.Module):
 
         in_channels = self.input_channels
 
-        for index, block in enumerate(
-            self.conv_blocks_config
-        ):
+        for index, block in enumerate(self.conv_blocks_config):
             out_channels = int(block["out_channels"])
-            kernel_size = int(
-                block.get("kernel_size", 3)
-            )
+            kernel_size = int(block.get("kernel_size", 3))
             stride = int(block.get("stride", 1))
             padding = int(block.get("padding", 1))
             dilation = int(block.get("dilation", 1))
 
-            use_batch_norm = bool(
-                block.get("batch_norm", True)
-            )
+            use_batch_norm = bool(block.get("batch_norm", True))
 
             layers.append(
                 torch.nn.Conv2d(
@@ -1149,9 +1122,7 @@ class QuantumConvEncoder(Encoder, torch.nn.Module):
             )
 
             if use_batch_norm:
-                layers.append(
-                    torch.nn.BatchNorm2d(out_channels)
-                )
+                layers.append(torch.nn.BatchNorm2d(out_channels))
 
             layers.append(
                 CNNEncoder._activation(
@@ -1164,20 +1135,12 @@ class QuantumConvEncoder(Encoder, torch.nn.Module):
                 )
             )
 
-            block_dropout = float(
-                block.get("dropout", 0.0)
-            )
+            block_dropout = float(block.get("dropout", 0.0))
 
             if block_dropout > 0.0:
-                layers.append(
-                    torch.nn.Dropout2d(
-                        block_dropout
-                    )
-                )
+                layers.append(torch.nn.Dropout2d(block_dropout))
 
-            pooling = CNNEncoder._pooling(
-                block.get("pool")
-            )
+            pooling = CNNEncoder._pooling(block.get("pool"))
 
             if pooling is not None:
                 layers.append(pooling)
@@ -1203,9 +1166,7 @@ class QuantumConvEncoder(Encoder, torch.nn.Module):
                 )
 
                 if module.bias is not None:
-                    torch.nn.init.zeros_(
-                        module.bias
-                    )
+                    torch.nn.init.zeros_(module.bias)
 
     def __call__(
         self,
@@ -1247,16 +1208,12 @@ class QuantumConvEncoder(Encoder, torch.nn.Module):
         # [B, 3, 32, 32]
         #       ->
         # [B, 64, 8, 8]
-        features = self.features(
-            inputs.float()
-        )
+        features = self.features(inputs.float())
 
         # [B, 64, 8, 8]
         #       ->
         # [B, 2, 8, 8]
-        features = self.channel_compression(
-            features
-        )
+        features = self.channel_compression(features)
 
         # unfold:
         #
@@ -1300,17 +1257,11 @@ class QuantumConvEncoder(Encoder, torch.nn.Module):
             "input_channels": self.input_channels,
             "input_height": self.input_height,
             "input_width": self.input_width,
-            "conv_blocks": copy.deepcopy(
-                self.conv_blocks_config
-            ),
-            "compressed_channels": (
-                self.compressed_channels
-            ),
+            "conv_blocks": copy.deepcopy(self.conv_blocks_config),
+            "compressed_channels": (self.compressed_channels),
             "patch_size": self.patch_size,
             "patch_stride": self.patch_stride,
-            "output_activation": (
-                self.output_activation
-            ),
+            "output_activation": (self.output_activation),
         }
 
     def copy(self) -> "QuantumConvEncoder":

@@ -407,24 +407,14 @@ class QuantumConvDecoder(
             n_outputs,
         )
 
-        self.feature_height = int(
-            feature_height
-        )
-        self.feature_width = int(
-            feature_width
-        )
-        self.out_channels = int(
-            out_channels
-        )
+        self.feature_height = int(feature_height)
+        self.feature_width = int(feature_width)
+        self.out_channels = int(out_channels)
 
-        self.adaptive_pool_size = tuple(
-            int(value)
-            for value in adaptive_pool_size
-        )
+        self.adaptive_pool_size = tuple(int(value) for value in adaptive_pool_size)
 
         self.fully_connected_layers = tuple(
-            int(value)
-            for value in fully_connected_layers
+            int(value) for value in fully_connected_layers
         )
 
         # Quantum outputs become channels of the new
@@ -435,31 +425,21 @@ class QuantumConvDecoder(
             kernel_size=1,
         )
 
-        self.batch_norm = torch.nn.BatchNorm2d(
-            self.out_channels
-        )
+        self.batch_norm = torch.nn.BatchNorm2d(self.out_channels)
 
         self.activation = torch.nn.ReLU()
 
-        self.pool = torch.nn.AdaptiveAvgPool2d(
-            self.adaptive_pool_size
-        )
+        self.pool = torch.nn.AdaptiveAvgPool2d(self.adaptive_pool_size)
 
         flattened_size = (
-            self.out_channels
-            * self.adaptive_pool_size[0]
-            * self.adaptive_pool_size[1]
+            self.out_channels * self.adaptive_pool_size[0] * self.adaptive_pool_size[1]
         )
 
-        layers: list[torch.nn.Module] = [
-            torch.nn.Flatten(start_dim=1)
-        ]
+        layers: list[torch.nn.Module] = [torch.nn.Flatten(start_dim=1)]
 
         current_size = flattened_size
 
-        for hidden_size in (
-            self.fully_connected_layers
-        ):
+        for hidden_size in self.fully_connected_layers:
             layers.extend(
                 [
                     torch.nn.Linear(
@@ -479,9 +459,7 @@ class QuantumConvDecoder(
             )
         )
 
-        self.classifier = torch.nn.Sequential(
-            *layers
-        )
+        self.classifier = torch.nn.Sequential(*layers)
 
         self._initialize_parameters()
 
@@ -499,20 +477,14 @@ class QuantumConvDecoder(
                 )
 
                 if module.bias is not None:
-                    torch.nn.init.zeros_(
-                        module.bias
-                    )
+                    torch.nn.init.zeros_(module.bias)
 
             elif isinstance(
                 module,
                 torch.nn.Linear,
             ):
-                torch.nn.init.xavier_uniform_(
-                    module.weight
-                )
-                torch.nn.init.zeros_(
-                    module.bias
-                )
+                torch.nn.init.xavier_uniform_(module.weight)
+                torch.nn.init.zeros_(module.bias)
 
     def __call__(
         self,
@@ -531,10 +503,7 @@ class QuantumConvDecoder(
             ``[B, n_outputs]``.
         """
 
-        n_patches = (
-            self.feature_height
-            * self.feature_width
-        )
+        n_patches = self.feature_height * self.feature_width
 
         if inputs.shape[0] % n_patches != 0:
             raise ValueError(
@@ -543,9 +512,7 @@ class QuantumConvDecoder(
                 f"{n_patches} patches per image."
             )
 
-        batch_size = (
-            inputs.shape[0] // n_patches
-        )
+        batch_size = inputs.shape[0] // n_patches
 
         # [B * 16, 8]
         #       ->
@@ -570,17 +537,11 @@ class QuantumConvDecoder(
         # [B, 8, 4, 4]
         #       ->
         # [B, 128, 4, 4]
-        features = self.channel_expansion(
-            features.float()
-        )
+        features = self.channel_expansion(features.float())
 
-        features = self.batch_norm(
-            features
-        )
+        features = self.batch_norm(features)
 
-        features = self.activation(
-            features
-        )
+        features = self.activation(features)
 
         # [B, 128, 4, 4]
         #       ->
@@ -602,8 +563,7 @@ class QuantumConvDecoder(
 
         state_dict = {
             name: tensor.cpu().numpy().tolist()
-            for name, tensor
-            in self.state_dict().items()
+            for name, tensor in self.state_dict().items()
         }
 
         return {
@@ -611,19 +571,11 @@ class QuantumConvDecoder(
             "args": {
                 "n_inputs": self.n_inputs,
                 "n_outputs": self.n_outputs,
-                "feature_height": (
-                    self.feature_height
-                ),
-                "feature_width": (
-                    self.feature_width
-                ),
+                "feature_height": (self.feature_height),
+                "feature_width": (self.feature_width),
                 "out_channels": self.out_channels,
-                "adaptive_pool_size": list(
-                    self.adaptive_pool_size
-                ),
-                "fully_connected_layers": list(
-                    self.fully_connected_layers
-                ),
+                "adaptive_pool_size": list(self.adaptive_pool_size),
+                "fully_connected_layers": list(self.fully_connected_layers),
                 "state_dict": state_dict,
             },
         }
