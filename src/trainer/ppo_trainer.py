@@ -223,8 +223,13 @@ class PPOTrainer(ReinforcementLearningTrainer):
                 )
 
                 optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                # A genome whose only parameterized gates are disabled (or
+                # transiently dropped) produces outputs that are constant w.r.t.
+                # the circuit weights, so the loss has no grad_fn and backward()
+                # would raise. Skip the update for such a minibatch.
+                if loss.requires_grad:
+                    loss.backward()
+                    optimizer.step()
                 last_loss = float(loss.item())
 
         mean_return = (

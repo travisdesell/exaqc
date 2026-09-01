@@ -23,6 +23,7 @@ from src.circuits.gate import Gate
 from src.circuits.decoder import Decoder
 from src.circuits.encoder import Encoder
 from src.utils.helpers import draw_network
+from src.utils import training_plots
 from src.dropout.quantum_dropout import apply_qubit_readout_dropout
 
 QUANTUM_INPUT_MODES = ["u3", "rx", "ry", "rz", "basis", "amplitude"]
@@ -1026,6 +1027,7 @@ class CircuitGenome:
         self,
         insert_type: str,
         out_dir: str = "artifacts/",
+        save_training_plot: bool = False,
     ) -> None:
         """
         Saves this genome into the specified output directory.
@@ -1033,18 +1035,25 @@ class CircuitGenome:
         Writes three artifacts for the genome: a ``genome_<n>.json`` serialized
         form (round-trippable via :meth:`from_dict`), a ``genome_<n>.txt``
         human-readable gate listing, and a ``<insert_type>_genome_<n>_<tag>.png``
-        drawing of the quantum circuit rendered with the genome's target
-        framework (pennylane or qiskit).
+        architecture diagram (the encoder/decoder stages with the genome's
+        quantum circuit embedded). When ``save_training_plot`` is set, it also
+        writes a ``<insert_type>_genome_<n>_<tag>_training.png`` line plot of the
+        genome's per-epoch/episode training history.
 
         Args:
             insert_type: a tag to put at the beginning of the PNG filename, e.g.
                 'best' for global_best genomes.
             out_dir: where to write the genome files.
+            save_training_plot: when True, also write a training-history line
+                plot (loss and mean class accuracy per epoch for classification;
+                return and loss per episode for reinforcement learning), drawn
+                from the genome's metadata via
+                :func:`src.utils.training_plots.save_training_plot`.
         """
         os.makedirs(out_dir, exist_ok=True)
 
         json_path = os.path.join(out_dir, f"genome_{self.genome_number}.json")
-        logger.info(f"writing NEW BEST gnome to {json_path}")
+        logger.info(f"writing genome to {json_path}")
         with open(json_path, "w") as fp:
             json.dump(self.to_dict(), fp, ensure_ascii=False, indent=4)
 
@@ -1089,6 +1098,14 @@ class CircuitGenome:
         # concrete values and the circuit inputs set to zero.
         try:
             trained_weights = self.get_parameters_as_list()
+
+            # Generate the hybrid model (and its circuit) exactly once, up front,
+            # so the target-specific circuit drawing below and draw_network()
+            # both reuse the same generation. Re-generating a qiskit circuit
+            # corrupts its cached gate parameters ("Weight param ... not present
+            # in circuit"); an already-initialized genome is left untouched.
+            if getattr(self, "hybrid_model", None) is None:
+                self.initialize_model()
 
             if self.target == "pennylane":
                 # Generate the PennyLane QNode if one is not already present
@@ -1137,19 +1154,45 @@ class CircuitGenome:
                     f"Cannot draw circuit for unknown target {self.target}"
                 )
 
-            path = os.path.join(
-                out_dir, f"{insert_type}_genome_{self.genome_number}_{tag}.png"
+            # Compose the single architecture diagram: the encoder layers, the
+            # quantum input encoding, the quantum circuit drawn above embedded in
+            # place, the output readout, and the decoder layers. draw_network
+            # rasterizes and embeds ``fig`` and then closes the composed figure.
+            output_filename = f"{insert_type}_genome_{self.genome_number}_{tag}.png"
+            draw_network(
+                out_dir,
+                self,
+                output_filename,
+                quantum_circuit_fig=fig,
             )
-            fig.savefig(path, dpi=200, bbox_inches="tight")
             plt.close(fig)
-            draw_network(out_dir, self.hybrid_model, self.genome_number)
         except Exception as e:
-            logger.warning(f"Could not draw circuit: {e}")
+            logger.warning("Could not draw circuit!")
+            logger.exception(e)
+
+        # Optionally write the per-epoch/episode training-history line plot,
+        # drawn from this genome's metadata. Best-effort (never raises).
+        if save_training_plot:
+            training_plots.save_training_plot(
+                out_dir,
+                self,
+                f"{insert_type}_genome_{self.genome_number}_{tag}_training.png",
+            )
 
     def clear_quantum_dropout(self) -> None:
-        """Clears temporary quantum dropout masks."""
+        """Clears temporary quantum dropout masks.
+
+        Clears the genome-level dropout state (dropped gate innovations and
+        dropped qubits) and, when a hybrid model has already been built, resets
+        its qubit-dropout mask so the next forward pass runs the complete
+        evolved circuit.
+        """
         self.dropout_gate_innovations.clear()
         self.dropout_qubits.clear()
+        if hasattr(self, "hybrid_model") and hasattr(
+            self.hybrid_model, "dropout_qubits"
+        ):
+            self.hybrid_model.dropout_qubits = set()
 
     def is_gate_dropped(self, gate: Gate) -> bool:
         """Returns whether a gate is dropped for the current forward pass."""

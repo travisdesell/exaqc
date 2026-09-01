@@ -232,6 +232,7 @@ class SteadyStateIslands(PopulationStrategy):
         primary_parent: str = "best",
         out_dir: str = None,
         profiler: Optional[EXAQCProfiler] = None,
+        save_training_plot: bool = False,
     ):
         """
         Creates a steady state population with the specified max population size.  The population
@@ -255,11 +256,15 @@ class SteadyStateIslands(PopulationStrategy):
                 then the first genome is the one from the target island for the child.
             out_dir: is the directory to write out the best found genomes and log files, if not
                 specified log files will not be written.
+            save_training_plot: when True, each saved genome also gets a
+                training-history line plot written next to its diagram (see
+                :meth:`CircuitGenome.save_circuit`).
         """
 
         self.n_islands = n_islands
         self.max_island_size = max_island_size
         self.compare = compare
+        self.save_training_plot = save_training_plot
         self.intra_island_crossover_rate = intra_island_crossover_rate
         self.genomes_before_extinction = genomes_before_extinction
         self.genomes_for_next_extinction = genomes_for_next_extinction
@@ -572,7 +577,11 @@ class SteadyStateIslands(PopulationStrategy):
             )
 
             if self.out_dir is not None:
-                genome.save_circuit(insert_type="best_accuracy", out_dir=self.out_dir)
+                genome.save_circuit(
+                    insert_type="best_accuracy",
+                    out_dir=self.out_dir,
+                    save_training_plot=self.save_training_plot,
+                )
                 self.profiler.plot_single_run()
 
         if (
@@ -595,7 +604,11 @@ class SteadyStateIslands(PopulationStrategy):
             )
 
             if self.out_dir is not None:
-                genome.save_circuit(insert_type="best_fitness", out_dir=self.out_dir)
+                genome.save_circuit(
+                    insert_type="best_fitness",
+                    out_dir=self.out_dir,
+                    save_training_plot=self.save_training_plot,
+                )
                 self.profiler.plot_single_run()
 
         # check to see if the genome was a new global best
@@ -605,7 +618,9 @@ class SteadyStateIslands(PopulationStrategy):
 
         if self.out_dir is not None:
             genome.save_circuit(
-                insert_type="genome", out_dir=self.out_dir + "/all_genomes/"
+                insert_type="genome",
+                out_dir=self.out_dir + "/all_genomes/",
+                save_training_plot=self.save_training_plot,
             )
 
         if (

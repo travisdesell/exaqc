@@ -131,6 +131,9 @@ def master_worker(
     mutation_strategy: list[str],
     parent_strategy: list[str],
     run_for: int,
+    binary_crossover_rate: float = 0.00,
+    n_ary_crossover_rate: float = 0.20,
+    exponential_crossover_rate: float = 0.10,
     input_qubits: list[tuple[str, int]] = None,
     input_registers: dict[str, int] = None,
     output_registers: dict[str, int] = None,
@@ -158,15 +161,21 @@ def master_worker(
             this is an additional search space to search over.
         mutation_strategy: specifies how many mutations should be performed if mutation is selected. current
             options are 'uniform <min> <max>' which will select a number of mutations uniformly at random
-            between range(min, max), where min should be at least 1; or 'exponential <scale>' which will select the
-            number of mutations using an exponential distribution with the given scale plus 1 to ensure at least
-            1 mutation happens.
+            between min and max, inclusive of both endpoints, where min should be at least 1; or
+            'exponential <scale>' which will select the number of mutations using an exponential distribution
+            with the given scale plus 1 to ensure at least 1 mutation happens.
         parent_strategy: specifies how many parents should be selected for n-ary crossover. current
-            options are 'uniform <min> <max>' which will select a number of mutations uniformly at random
-            between range(min, max), where min should be at least 2; or 'exponential <scale>' which will select the
-            number of mutations using an exponential distribution with the given scale plus 2 to ensure at least
-            2 mutation happens.
+            options are 'uniform <min> <max>' which will select a number of parents uniformly at random
+            between min and max, inclusive of both endpoints, where min should be at least 2; or
+            'exponential <scale>' which will select the number of parents using an exponential distribution
+            with the given scale plus 2 to ensure at least 2 parents.
         run_for: how many genomes to generate in the search process.
+        binary_crossover_rate: fraction of generated genomes (after the population is initialized) produced by
+            binary crossover.
+        n_ary_crossover_rate: fraction of generated genomes (after the population is initialized) produced by
+            n-ary crossover.
+        exponential_crossover_rate: fraction of generated genomes (after the population is initialized) produced
+            by exponential crossover. Whatever fraction remains is used for mutation.
         input_registers: a dict of register names and sizes (the key is the qubit name, the value is its size). must
             be specified if input_qubits is not specified.
         input_qubits: a list of qubit tuples (name, register_index) which would be the expanded form of the
@@ -193,6 +202,9 @@ def master_worker(
             hyperparameters=hyperparameters,
             mutation_strategy=mutation_strategy,
             parent_strategy=parent_strategy,
+            binary_crossover_rate=binary_crossover_rate,
+            n_ary_crossover_rate=n_ary_crossover_rate,
+            exponential_crossover_rate=exponential_crossover_rate,
             input_registers=input_registers,
             input_qubits=input_qubits,
             output_registers=output_registers,

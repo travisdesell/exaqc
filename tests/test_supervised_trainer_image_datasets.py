@@ -321,6 +321,7 @@ def test_main_builds_cnn_encoder_for_image_data(
         max_population_size=2,
         compare=classification.compare,
         out_dir=str(output_directory),
+        save_training_plot=False,
     )
 
     mocked_master_worker.assert_called_once()

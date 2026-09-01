@@ -76,6 +76,7 @@ class ClassificationObjective(Objective):
         validation_loss_function: Any,
         metrics: dict[str, Metric],
         device: str | None = None,
+        quantum_dropout: bool = False,
     ) -> None:
         """Initializes the classification objective.
 
@@ -85,6 +86,9 @@ class ClassificationObjective(Objective):
             training_loss_function: Training loss function.
             validation_loss_function: Validation loss function.
             metrics: Evaluation metrics.
+            device: PyTorch device to train on, or ``None`` to auto-select.
+            quantum_dropout: Whether to apply quantum dropout during training.
+                Defaults to ``False`` (disabled).
         """
         self.trainer = SupervisedTrainer(
             training_dataloader=training_dataloader,
@@ -93,6 +97,7 @@ class ClassificationObjective(Objective):
             validation_loss_function=validation_loss_function,
             metrics=metrics,
             device=device,
+            quantum_dropout=quantum_dropout,
         )
 
     def __call__(self, genome: CircuitGenome) -> None:
@@ -144,6 +149,24 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         nargs="+",
         required=True,
+    )
+    parser.add_argument(
+        "--binary_crossover_rate",
+        type=float,
+        default=0.00,
+        help="Fraction of genomes generated via binary crossover once the population is initialized.",
+    )
+    parser.add_argument(
+        "--n_ary_crossover_rate",
+        type=float,
+        default=0.20,
+        help="Fraction of genomes generated via n-ary crossover once the population is initialized.",
+    )
+    parser.add_argument(
+        "--exponential_crossover_rate",
+        type=float,
+        default=0.10,
+        help="Fraction of genomes generated via exponential crossover once the population is initialized.",
     )
 
     populations = parser.add_subparsers(
@@ -234,19 +257,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Choose the output mode from the quantum circuit.",
     )
     parser.add_argument(
+        "--quantum_dropout",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Master switch for quantum dropout during training. Disabled by "
+            "default; when enabled, dropout is applied per training batch using "
+            "--quantum_dropout_type and --quantum_dropout_rate."
+        ),
+    )
+    parser.add_argument(
         "--quantum_dropout_type",
         "-qdt",
         type=str,
         default="none",
         choices=["gate", "rotation", "entangling", "qubit", "innovation"],
-        help="Choose the dropout type for quantum gates.",
+        help="Choose the dropout type for quantum gates (used only when --quantum_dropout is set).",
     )
     parser.add_argument(
         "--quantum_dropout_rate",
         "-qdr",
         type=float,
         default=0.0,
-        help="Choose the dropout rate for quantum gates.",
+        help="Choose the dropout rate for quantum gates (used only when --quantum_dropout is set).",
     )
     parser.add_argument(
         "--encoding",
@@ -342,6 +375,15 @@ def build_parser() -> argparse.ArgumentParser:
         default="minmax",
     )
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--save_training_plot",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Also save a line plot of loss and mean class accuracy per epoch "
+            "next to each saved genome's diagram."
+        ),
+    )
     parser.add_argument(
         "--logging_level",
         type=str,
@@ -457,11 +499,18 @@ def main() -> None:
         ),
         metrics=metrics,
         device=args.device,
+        quantum_dropout=args.quantum_dropout,
     )
 
-    n_encoder_outputs = args.input_qubits
-    if args.quantum_input_mode == "u3":
-        n_encoder_outputs *= 3
+    if args.encoding == "identity":
+        # The identity encoder passes its input straight through, so its output
+        # size must equal its input size (the raw feature count) -- it does not
+        # resize or clip to the qubit count.
+        n_encoder_outputs = training_loader.n_features
+    else:
+        n_encoder_outputs = args.input_qubits
+        if args.quantum_input_mode == "u3":
+            n_encoder_outputs *= 3
 
     n_decoder_inputs = args.output_qubits
     if args.quantum_output_mode == "probs":
@@ -490,6 +539,8 @@ def main() -> None:
         n_inputs=training_loader.n_features,
         n_outputs=n_encoder_outputs,
         config=encoder_config,
+        quantum_input_mode=args.quantum_input_mode,
+        n_input_qubits=args.input_qubits,
     )
     initial_decoder = initialize_decoder(
         target=args.target,
@@ -503,6 +554,7 @@ def main() -> None:
             max_population_size=args.max_population_size,
             compare=compare,
             out_dir=args.out_dir,
+            save_training_plot=args.save_training_plot,
         )
     else:
         population = SteadyStateIslands(
@@ -514,6 +566,7 @@ def main() -> None:
             primary_parent=args.primary_parent,
             compare=compare,
             out_dir=args.out_dir,
+            save_training_plot=args.save_training_plot,
         )
 
     hyperparameters = {
@@ -543,6 +596,9 @@ def main() -> None:
         hyperparameters=hyperparameters,
         mutation_strategy=args.mutation_strategy,
         parent_strategy=args.parent_strategy,
+        binary_crossover_rate=args.binary_crossover_rate,
+        n_ary_crossover_rate=args.n_ary_crossover_rate,
+        exponential_crossover_rate=args.exponential_crossover_rate,
         run_for=args.number_genomes,
         input_registers={"input": args.input_qubits},
         output_registers={"input": args.output_qubits},

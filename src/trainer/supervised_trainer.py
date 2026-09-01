@@ -11,13 +11,7 @@ from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 
 from src.circuits.circuit import CircuitGenome
-from src.dropout.quantum_dropout import (
-    gate_dropout,
-    rotation_dropout,
-    entangling_dropout,
-    qubit_dropout,
-    innovation_dropout,
-)
+from src.dropout.quantum_dropout import sample_quantum_dropout
 
 
 class SupervisedTrainer:
@@ -33,6 +27,7 @@ class SupervisedTrainer:
         testing_dataloader: DataLoader | None = None,
         testing_loss_function: Callable[[Tensor, Tensor], Tensor] | None = None,
         device: str | None = None,
+        quantum_dropout: bool = False,
     ) -> None:
         """
         This creates a SupervisedTrainer object which can be (re)used to train circuit
@@ -55,6 +50,11 @@ class SupervisedTrainer:
             testing_dataloader: Optional held-out test dataloader.
             testing_loss_function: Optional held-out test loss function.
                 Defaults to the validation loss function.
+            quantum_dropout: Master switch for quantum dropout during training.
+                When ``False`` (the default) no quantum dropout is ever applied,
+                regardless of the ``quantum_dropout_type``/``quantum_dropout_rate``
+                genome hyperparameters. When ``True``, dropout is sampled and
+                applied per training batch according to those hyperparameters.
         """
 
         self.training_dataloader = training_dataloader
@@ -68,6 +68,7 @@ class SupervisedTrainer:
             else validation_loss_function
         )
         self.metrics = metrics
+        self.quantum_dropout = quantum_dropout
 
         self.device = torch.device(
             device
@@ -86,71 +87,6 @@ class SupervisedTrainer:
             self.testing_loss_function, torch.nn.Module
         ):
             self.testing_loss_function.to(self.device)
-
-    def _apply_quantum_dropout(self, genome) -> None:
-        """Samples and applies the configured quantum dropout strategy.
-
-        Args:
-            genome: The CircuitGenome on which to apply dropout
-
-        Returns:
-            None
-        """
-        genome.clear_quantum_dropout()
-
-        dropout_type = genome.hyperparameters.get(
-            "quantum_dropout_type",
-            "none",
-        )
-
-        dropout_rate = float(
-            genome.hyperparameters.get(
-                "quantum_dropout_rate",
-                0.0,
-            )
-        )
-
-        if dropout_rate == 0.0 or dropout_type == "none":
-            return
-
-        if dropout_type == "gate":
-            genome.dropout_gate_innovations = gate_dropout(
-                genome.gates,
-                dropout_rate,
-            )
-
-        elif dropout_type == "rotation":
-            genome.dropout_gate_innovations = rotation_dropout(
-                genome.gates,
-                dropout_rate,
-            )
-
-        elif dropout_type == "entangling":
-            genome.dropout_gate_innovations = entangling_dropout(
-                genome.gates,
-                dropout_rate,
-            )
-
-        elif dropout_type == "qubit":
-            genome.dropout_qubits = qubit_dropout(
-                genome.qubits,
-                dropout_rate,
-            )
-
-        elif dropout_type == "innovation":
-            genome.dropout_gate_innovations = innovation_dropout(
-                genome.gates,
-                dropout_rate,
-                innovation_strength=float(
-                    genome.hyperparameters.get(
-                        "quantum_dropout_innovation_strength",
-                        0.5,
-                    )
-                ),
-            )
-
-        else:
-            raise ValueError(f"Unknown quantum dropout type: {dropout_type}")
 
     def get_metrics(
         self,
@@ -202,20 +138,15 @@ class SupervisedTrainer:
 
                 if is_training:
                     optimizer.zero_grad(set_to_none=True)
-
-                    self._apply_quantum_dropout(genome)
-                    if genome.dropout_qubits:
-                        genome.hybrid_model.dropout_qubits = genome.dropout_qubits
-                        genome.hybrid_model.output_qubits = genome.output_qubits
-                        genome.hybrid_model.quantum_output_mode = (
-                            genome.hyperparameters["quantum_output_mode"]
-                        )
-
+                    if self.quantum_dropout:
+                        sample_quantum_dropout(genome)
+                    else:
+                        # Train on the complete evolved circuit; clear any stale
+                        # dropout state.
+                        genome.clear_quantum_dropout()
                 else:
                     # Validation/test always uses the complete evolved circuit.
                     genome.clear_quantum_dropout()
-                    if genome.dropout_qubits:
-                        genome.hybrid_model.dropout_qubits = set()
 
                 predictions = genome.forward(x_batch)
 
@@ -233,7 +164,13 @@ class SupervisedTrainer:
 
                 loss = loss_function(predictions.float(), y_batch.long())
 
-                if is_training:
+                # A parameterized gate can be disabled (structurally) or dropped
+                # (transiently, by quantum dropout) so that no enabled gate uses
+                # the circuit weights on this forward pass. When that happens the
+                # loss is disconnected from every trainable parameter and has no
+                # grad_fn, so calling backward() would raise. Skip the update for
+                # such batches; the metrics below are still accumulated.
+                if is_training and loss.requires_grad:
                     loss.backward()
                     optimizer.step()
 
@@ -247,8 +184,6 @@ class SupervisedTrainer:
                             metric.accumulate(prediction.float(), target.long())
 
         genome.clear_quantum_dropout()
-        if hasattr(genome.hybrid_model, "dropout_qubits"):
-            genome.hybrid_model.dropout_qubits = set()
 
         metric_results: dict[str, Any] = {
             "loss": (total_loss / total_samples if total_samples else float("nan"))
@@ -288,12 +223,30 @@ class SupervisedTrainer:
         genome.metadata["n_trainable_parameters"] = n_trainable_parameters
         genome.metadata["n_circuit_parameters"] = genome.get_genome_circuit_parameters()
 
-        logger.debug(f"hybrid model n trainable parameters: {n_trainable_parameters}")
+        # The quantum weight vector carries one entry per gate parameter for
+        # *every* gate, including disabled ones, but disabled gates are skipped
+        # in the forward pass -- so their parameters are never connected to the
+        # loss. Counting them would send a genome whose only parameterized gates
+        # are disabled down the training path, where backward() fails with
+        # "element 0 of tensors does not require grad". Base the train-vs-eval
+        # decision on the parameters that are actually used (encoder/decoder
+        # plus enabled gates).
+        disabled_gate_parameters = sum(
+            len(gate.parameters) for gate in genome.gates if not gate.enabled
+        )
+        effective_trainable_parameters = (
+            n_trainable_parameters - disabled_gate_parameters
+        )
 
-        if n_trainable_parameters == 0:
-            # this model has no parameters so it can't be trained. instead
-            # just evaluate it on the validation data.
-            logger.info("Model has no trainable parameters; evaluating only.")
+        logger.debug(
+            f"hybrid model n trainable parameters: {n_trainable_parameters} "
+            f"(effective/enabled: {effective_trainable_parameters})"
+        )
+
+        if effective_trainable_parameters == 0:
+            # this model has no parameters connected to the loss so it can't be
+            # trained. instead just evaluate it on the validation data.
+            logger.info("Model has no trainable (enabled) parameters; evaluating only.")
 
             # calculate the metrics on the training data
             training_metric_results = self.get_metrics(

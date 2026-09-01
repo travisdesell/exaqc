@@ -8,6 +8,8 @@ from loguru import logger
 
 from typing import TYPE_CHECKING
 
+from src.circuits.layer_spec import LayerSpec
+
 if TYPE_CHECKING:
     from src.circuits.circuit import CircuitGenome
 
@@ -30,6 +32,11 @@ def initialize_decoder(
         n_outputs: how many output values are required for the loss
             function, which the decoder will perform some operation
             to reduce its input tensor to.
+
+    Raises:
+        ValueError: If the decoder is unknown, or a clipped decoder is requested
+            with ``n_outputs > n_inputs`` (it can only keep a prefix of its
+            input, so it cannot produce more outputs than it receives).
     """
 
     logger.info(
@@ -39,6 +46,16 @@ def initialize_decoder(
     decoder = None
 
     if decoding_str == "clipped":
+        # Validate before constructing: a clipped decoder keeps only the first
+        # n_outputs values, so it cannot expand its input.
+        if n_outputs > n_inputs:
+            raise ValueError(
+                f"ClippedDecoder requires n_outputs <= n_inputs, but got "
+                f"n_outputs={n_outputs} and n_inputs={n_inputs}. It keeps only "
+                f"the first n_outputs values, so it cannot produce more outputs "
+                f"than it receives; reduce n_outputs (or use a linear decoder to "
+                f"expand the size)."
+            )
         decoder = ClippedDecoder(n_inputs, n_outputs)
 
     elif decoding_str == "linear":
@@ -164,6 +181,27 @@ class Decoder(ABC):
         """
         pass
 
+    def describe_layers(self) -> list[LayerSpec]:
+        """Describes this decoder as an ordered list of drawable layers.
+
+        Used by the architecture diagram compositor
+        (:func:`src.utils.helpers.draw_network`). The base implementation
+        returns a single generic block; subclasses override this to expose
+        their real layer structure.
+
+        Returns:
+            A list of :class:`~src.circuits.layer_spec.LayerSpec` describing the
+            decoder's layers in input-to-output order.
+        """
+        return [
+            LayerSpec(
+                kind="block",
+                label=type(self).__name__,
+                in_shape=(self.n_inputs,),
+                out_shape=(self.n_outputs,),
+            )
+        ]
+
 
 class ClippedDecoder(Decoder):
     def __call__(self, inputs: torch.Tensor, genome: CircuitGenome):
@@ -172,21 +210,40 @@ class ClippedDecoder(Decoder):
         the rest, where N is the expected number of outputs
         for the loss function.
 
+        The values are returned unmodified (no sum-to-1 rescaling): every
+        downstream consumer re-applies its own normalization -- classification
+        uses ``CrossEntropyLoss`` (an internal ``log_softmax``) and the discrete
+        reinforcement-learning policies use ``Categorical(logits=...)`` (an
+        internal softmax), while the continuous policies read per-dimension mean
+        and log-std slots directly -- so none of them require a normalized input.
+
         Args:
             inputs: the z (output) tensor from a quantum circuit.
             genome: the circuit genome whose quantum circuit
                 inputs are being set
+
+        Returns:
+            The leading ``self.n_outputs`` values of ``inputs`` along the last
+            dimension, unmodified.
         """
 
-        clipped_inputs = inputs[..., : self.n_outputs]
+        return inputs[..., : self.n_outputs]
 
-        # rescale the inputs as probabilities so they sum to 1.0
-        # this may not be needed
-        clipped_inputs = clipped_inputs / (
-            clipped_inputs.sum(dim=-1, keepdim=True) + 1e-12
-        )
+    def describe_layers(self) -> list[LayerSpec]:
+        """Describes the clipped decoder as a single pass-through block.
 
-        return clipped_inputs
+        Returns:
+            A one-element list with a ``"passthrough"`` :class:`LayerSpec` (it
+            keeps the leading ``n_outputs`` values without trainable weights).
+        """
+        return [
+            LayerSpec(
+                kind="passthrough",
+                label="Clip",
+                in_shape=(self.n_inputs,),
+                out_shape=(self.n_outputs,),
+            )
+        ]
 
     def copy(self) -> Decoder:
         return self
@@ -239,6 +296,22 @@ class LinearDecoder(torch.nn.Module, Decoder):
 
         # linear layer requires float32 values
         return self.layer(inputs.float())
+
+    def describe_layers(self) -> list[LayerSpec]:
+        """Describes the linear decoder as a single fully connected layer.
+
+        Returns:
+            A one-element list with an ``"fc"`` :class:`LayerSpec` mapping
+            ``n_inputs`` -> ``n_outputs``.
+        """
+        return [
+            LayerSpec(
+                kind="fc",
+                label="Linear",
+                in_shape=(self.n_inputs,),
+                out_shape=(self.n_outputs,),
+            )
+        ]
 
     def copy(self) -> Decoder:
         """

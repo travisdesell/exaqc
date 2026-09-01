@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import copy
+import math
 import torch
 
 from abc import ABC, abstractmethod
 from loguru import logger
 
 from typing import TYPE_CHECKING, Mapping, Sequence, Any
+
+from src.circuits.layer_spec import LayerSpec
 
 if TYPE_CHECKING:
     from src.circuits.circuit import CircuitGenome
@@ -20,6 +23,8 @@ def initialize_encoder(
     n_inputs: int,
     n_outputs: int,
     config: Mapping[str, Any] | None = None,
+    quantum_input_mode: str | None = None,
+    n_input_qubits: int | None = None,
 ) -> Encoder:
     """
     Given the target system (e.g., pennylane or qiskit) create a
@@ -35,21 +40,39 @@ def initialize_encoder(
             will be used as inputs for the quantum circuit.
         config: Optional encoder-specific configuration. The CNN encoder
             requires ``input_channels``, ``input_height``, and ``input_width``.
+        quantum_input_mode: The circuit's quantum input mode (one of
+            ``QUANTUM_INPUT_MODES``). When given together with
+            ``n_input_qubits``, encoder/quantum-input size mismatches are
+            validated via :func:`validate_encoder_sizing`.
+        n_input_qubits: The circuit's number of input qubits, used with
+            ``quantum_input_mode`` for the sizing check above.
 
     Returns:
             A configured encoder instance.
 
     Raises:
-        ValueError: If the requested encoder is unknown or its configuration is
-            invalid.
+        ValueError: If the requested encoder is unknown, its configuration is
+            invalid, or its sizing is inconsistent (see
+            :func:`validate_encoder_sizing`).
     """
 
     logger.info(
         f"creating {encoding_str} encoder with n_inputs: {n_inputs} and n_outputs: {n_outputs}"
     )
 
-    encoder = None
     encoder_config = dict(config or {})
+
+    # Validate sizing before constructing anything, so a mis-sized configuration
+    # fails fast rather than silently building an incorrectly sized network.
+    validate_encoder_sizing(
+        encoding_str,
+        n_inputs,
+        n_outputs,
+        quantum_input_mode,
+        n_input_qubits,
+    )
+
+    encoder = None
 
     if encoding_str == "linear":
         encoder = LinearEncoder(n_inputs, n_outputs)
@@ -111,6 +134,82 @@ def initialize_encoder(
     return encoder
 
 
+def validate_encoder_sizing(
+    encoding_str: str,
+    n_inputs: int,
+    n_outputs: int,
+    quantum_input_mode: str | None = None,
+    n_input_qubits: int | None = None,
+) -> None:
+    """Validates encoder / quantum-input sizing, raising on invalid configs.
+
+    Called before an encoder is constructed so a mis-sized configuration fails
+    fast rather than silently building an incorrect network. Checks:
+
+    * **Identity size:** an identity encoder passes its input through unchanged
+      (it cannot clip or resize), so it requires ``n_inputs == n_outputs``.
+    * When the circuit's input mode and qubit count are given:
+
+      - **Amplitude register too small:** amplitude embedding must fit the
+        encoder's values into ``2**n_input_qubits`` amplitudes, so it cannot
+        encode more values than that.
+      - **Identity vs. quantum inputs:** an identity encoder feeds its values
+        straight through as the circuit's quantum inputs, so its size must equal
+        the number of quantum inputs the circuit expects.
+
+    Args:
+        encoding_str: The chosen encoder name (``"identity"``, ``"linear"``,
+            ``"cnn"``).
+        n_inputs: The encoder's classical input feature count.
+        n_outputs: The encoder's declared output size.
+        quantum_input_mode: One of the circuit's ``QUANTUM_INPUT_MODES``, or
+            ``None`` to skip the quantum-input checks.
+        n_input_qubits: The circuit's number of input qubits, or ``None`` to
+            skip the quantum-input checks.
+
+    Raises:
+        ValueError: If any sizing check fails.
+    """
+    if encoding_str == "identity" and n_inputs != n_outputs:
+        raise ValueError(
+            f"IdentityEncoder requires n_inputs == n_outputs, but got "
+            f"n_inputs={n_inputs} and n_outputs={n_outputs}. The identity "
+            f"encoder passes its input through unchanged (it does not clip or "
+            f"resize), so set n_outputs = n_inputs."
+        )
+
+    if quantum_input_mode is None or n_input_qubits is None:
+        return
+
+    # The number of values the encoder feeds the circuit: an identity encoder
+    # feeds its input (n_inputs) straight through; every other encoder feeds its
+    # declared n_outputs.
+    encoder_output_size = n_inputs if encoding_str == "identity" else n_outputs
+
+    if quantum_input_mode == "amplitude":
+        capacity = 2**n_input_qubits
+        if encoder_output_size > capacity:
+            needed = int(math.ceil(math.log2(encoder_output_size)))
+            raise ValueError(
+                f"amplitude encoding: the encoder feeds {encoder_output_size} "
+                f"values but a {n_input_qubits}-qubit amplitude register only "
+                f"holds 2**{n_input_qubits} = {capacity}; the excess cannot be "
+                f"encoded. Increase input_qubits to at least {needed} "
+                f"(ceil(log2({encoder_output_size})))."
+            )
+        return
+
+    expected = n_input_qubits * (3 if quantum_input_mode == "u3" else 1)
+    if encoding_str == "identity" and encoder_output_size != expected:
+        raise ValueError(
+            f"identity encoding with quantum_input_mode='{quantum_input_mode}': "
+            f"the encoder passes {encoder_output_size} values through, but the "
+            f"circuit expects {expected} quantum inputs (from {n_input_qubits} "
+            f"input qubits). These must match; adjust input_qubits or the "
+            f"feature count so they agree."
+        )
+
+
 class Encoder(ABC):
     def __init__(self, n_inputs: int, n_outputs: int):
         """
@@ -138,6 +237,27 @@ class Encoder(ABC):
                 inputs are being set
         """
         pass
+
+    def describe_layers(self) -> list[LayerSpec]:
+        """Describes this encoder as an ordered list of drawable layers.
+
+        Used by the architecture diagram compositor
+        (:func:`src.utils.helpers.draw_network`). The base implementation
+        returns a single generic block spanning ``n_inputs`` -> ``n_outputs``;
+        subclasses override this to expose their real layer structure.
+
+        Returns:
+            A list of :class:`~src.circuits.layer_spec.LayerSpec` describing the
+            encoder's layers in input-to-output order.
+        """
+        return [
+            LayerSpec(
+                kind="block",
+                label=type(self).__name__,
+                in_shape=(self.n_inputs,),
+                out_shape=(self.n_outputs,),
+            )
+        ]
 
     def get_constructor_args(self) -> dict[str, Any]:
         """Returns constructor arguments required to rebuild the encoder.
@@ -259,6 +379,21 @@ class IdentityEncoder(Encoder):
 
         return inputs
 
+    def describe_layers(self) -> list[LayerSpec]:
+        """Describes the identity encoder as a single pass-through block.
+
+        Returns:
+            A one-element list with an ``"identity"`` :class:`LayerSpec`.
+        """
+        return [
+            LayerSpec(
+                kind="identity",
+                label="Identity",
+                in_shape=(self.n_inputs,),
+                out_shape=(self.n_outputs,),
+            )
+        ]
+
     def copy(self) -> Encoder:
         """
         This encoder has no state so we don't need to do a copy.
@@ -326,6 +461,22 @@ class LinearEncoder(Encoder, torch.nn.Module):
         encoding = self.layer(inputs.float())
 
         return encoding
+
+    def describe_layers(self) -> list[LayerSpec]:
+        """Describes the linear encoder as a single fully connected layer.
+
+        Returns:
+            A one-element list with an ``"fc"`` :class:`LayerSpec` mapping
+            ``n_inputs`` -> ``n_outputs``.
+        """
+        return [
+            LayerSpec(
+                kind="fc",
+                label="Linear",
+                in_shape=(self.n_inputs,),
+                out_shape=(self.n_outputs,),
+            )
+        ]
 
     def copy(self) -> Encoder:
         """
@@ -661,6 +812,119 @@ class CNNEncoder(Encoder, torch.nn.Module):
 
         features = self.features(inputs.float())
         return self.projection(features)
+
+    @staticmethod
+    def _pool_label(module: torch.nn.Module) -> str:
+        """Builds a human-readable label for a pooling module.
+
+        Args:
+            module: A ``MaxPool2d`` or ``AvgPool2d`` module.
+
+        Returns:
+            A label such as ``"max pool 2x2"``.
+        """
+        kernel = module.kernel_size
+        kh, kw = (kernel, kernel) if isinstance(kernel, int) else kernel
+        pool_type = "max" if isinstance(module, torch.nn.MaxPool2d) else "avg"
+        return f"{pool_type} pool {kh}x{kw}"
+
+    def describe_layers(self) -> list[LayerSpec]:
+        """Describes the CNN encoder as an ordered list of drawable layers.
+
+        The convolutional feature extractor is traced with a dummy input so each
+        convolution and pooling layer reports its **exact** per-sample tensor
+        shape transition ``(channels, height, width) -> (channels', height',
+        width')``. The final adaptive-average-pool output feeds the flatten,
+        whose flattened size and the fully connected projection head dimensions
+        are therefore all known. Batch-norm/activation/dropout modules preserve
+        shape and are not drawn as their own layers.
+
+        Returns:
+            A list of :class:`~src.circuits.layer_spec.LayerSpec` in
+            input-to-output order, with 3-D shapes on the convolution/pooling
+            layers and 1-D shapes from the flatten onward.
+        """
+        layers: list[LayerSpec] = []
+
+        # Trace a dummy image through the feature extractor to record exact
+        # intermediate shapes. Run in eval mode (restored afterwards) so a
+        # batch of one does not trip batch-norm running-stat updates.
+        was_training = self.training
+        self.eval()
+        try:
+            with torch.no_grad():
+                activation = torch.zeros(
+                    1, self.input_channels, self.input_height, self.input_width
+                )
+                prev_shape: tuple[int, ...] = tuple(activation.shape[1:])
+                for module in self.features:
+                    activation = module(activation)
+                    out_shape = tuple(int(dim) for dim in activation.shape[1:])
+
+                    if isinstance(module, torch.nn.Conv2d):
+                        kh, kw = module.kernel_size
+                        layers.append(
+                            LayerSpec(
+                                kind="conv",
+                                label=f"Conv {kh}x{kw}",
+                                in_shape=prev_shape,
+                                out_shape=out_shape,
+                            )
+                        )
+                        prev_shape = out_shape
+                    elif isinstance(module, (torch.nn.MaxPool2d, torch.nn.AvgPool2d)):
+                        layers.append(
+                            LayerSpec(
+                                kind="pool",
+                                label=self._pool_label(module),
+                                in_shape=prev_shape,
+                                out_shape=out_shape,
+                            )
+                        )
+                        prev_shape = out_shape
+                    else:
+                        # BatchNorm/activation/dropout preserve shape; the final
+                        # AdaptiveAvgPool2d output simply feeds the flatten.
+                        prev_shape = out_shape
+        finally:
+            self.train(was_training)
+
+        # Flatten the final feature map into the projection head.
+        flattened = 1
+        for dim in prev_shape:
+            flattened *= int(dim)
+        layers.append(
+            LayerSpec(
+                kind="flatten",
+                label="Flatten",
+                in_shape=prev_shape,
+                out_shape=(flattened,),
+            )
+        )
+
+        # Fully connected projection head down to n_outputs, with known dims.
+        prev_dim = flattened
+        for hidden_dim in self.fully_connected_layers:
+            layers.append(
+                LayerSpec(
+                    kind="fc",
+                    label="Linear",
+                    in_shape=(prev_dim,),
+                    out_shape=(int(hidden_dim),),
+                )
+            )
+            prev_dim = int(hidden_dim)
+
+        layers.append(
+            LayerSpec(
+                kind="fc",
+                label="Linear",
+                in_shape=(prev_dim,),
+                out_shape=(self.n_outputs,),
+            )
+        )
+
+        return layers
 
     def get_constructor_args(
         self,

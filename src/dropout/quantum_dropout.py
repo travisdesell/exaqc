@@ -1,6 +1,11 @@
+from __future__ import annotations
+
 import random
 import torch
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.circuits.circuit import CircuitGenome
 
 
 def gate_dropout(
@@ -282,3 +287,82 @@ def _validate_dropout_rate(dropout_rate: float) -> None:
     """Validates a dropout probability."""
     if not 0.0 <= dropout_rate <= 1.0:
         raise ValueError("dropout_rate must be in [0, 1], " f"received {dropout_rate}.")
+
+
+def sample_quantum_dropout(genome: CircuitGenome) -> None:
+    """Samples the configured quantum dropout for a genome, in place.
+
+    Reads ``quantum_dropout_type`` and ``quantum_dropout_rate`` (and, for the
+    ``"innovation"`` type, ``quantum_dropout_innovation_strength``) from
+    ``genome.hyperparameters``, and populates the genome's dropout state
+    (``dropout_gate_innovations`` for gate-level dropout types, or
+    ``dropout_qubits`` for ``"qubit"`` dropout). Any previously sampled dropout
+    is cleared first, so calling this with a zero rate or a ``"none"`` type
+    simply leaves the genome with no dropout.
+
+    This is the single source of truth for quantum dropout shared by the
+    supervised and reinforcement-learning trainers, so both trainers apply
+    dropout by simply calling this function. Gate-level dropout is read directly
+    from the genome during the forward pass; for ``"qubit"`` dropout this also
+    mirrors ``genome.dropout_qubits`` onto ``genome.hybrid_model`` so the
+    forward pass masks those qubits. Requires ``genome.initialize_model`` to
+    have been called when qubit dropout is active.
+
+    Args:
+        genome: The genome whose dropout state is (re)sampled in place.
+
+    Returns:
+        None. Mutates ``genome.dropout_gate_innovations`` /
+        ``genome.dropout_qubits`` (and, for qubit dropout, the hybrid model's
+        ``dropout_qubits``).
+
+    Raises:
+        ValueError: If ``quantum_dropout_type`` is not one of the supported
+            values.
+    """
+
+    genome.clear_quantum_dropout()
+
+    dropout_type = genome.hyperparameters.get("quantum_dropout_type", "none")
+    dropout_rate = float(genome.hyperparameters.get("quantum_dropout_rate", 0.0))
+
+    if dropout_rate == 0.0 or dropout_type == "none":
+        return
+
+    if dropout_type == "gate":
+        genome.dropout_gate_innovations = gate_dropout(genome.gates, dropout_rate)
+
+    elif dropout_type == "rotation":
+        genome.dropout_gate_innovations = rotation_dropout(genome.gates, dropout_rate)
+
+    elif dropout_type == "entangling":
+        genome.dropout_gate_innovations = entangling_dropout(genome.gates, dropout_rate)
+
+    elif dropout_type == "qubit":
+        genome.dropout_qubits = qubit_dropout(genome.qubits, dropout_rate)
+
+    elif dropout_type == "innovation":
+        genome.dropout_gate_innovations = innovation_dropout(
+            genome.gates,
+            dropout_rate,
+            innovation_strength=float(
+                genome.hyperparameters.get(
+                    "quantum_dropout_innovation_strength",
+                    0.5,
+                )
+            ),
+        )
+
+    else:
+        raise ValueError(f"Unknown quantum dropout type: {dropout_type}")
+
+    # Qubit dropout is enforced by the hybrid model's forward pass, so mirror
+    # the sampled qubits (and the output configuration it needs to mask them)
+    # onto the model. Gate-level dropout types are read directly from the genome
+    # and need no mirroring.
+    if genome.dropout_qubits:
+        genome.hybrid_model.dropout_qubits = genome.dropout_qubits
+        genome.hybrid_model.output_qubits = genome.output_qubits
+        genome.hybrid_model.quantum_output_mode = genome.hyperparameters[
+            "quantum_output_mode"
+        ]

@@ -102,7 +102,12 @@ class ReinforceTrainer(ReinforcementLearningTrainer):
         loss = policy_loss + (entropy_loss if isinstance(entropy_loss, Tensor) else 0.0)
 
         optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        # A genome whose only parameterized gates are disabled (or transiently
+        # dropped) produces a policy that is constant w.r.t. the circuit
+        # weights, so the loss has no grad_fn and backward() would raise. Skip
+        # the update for such a step.
+        if loss.requires_grad:
+            loss.backward()
+            optimizer.step()
 
         return episode_return, {"loss": float(loss.item())}

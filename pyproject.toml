@@ -56,7 +56,6 @@ dependencies = [
     "qiskit-aer",
     "torch",
     "torchvision",
-    "visualtorch==1.4.1",
     "matplotlib",
     "seaborn",
     "pytest",

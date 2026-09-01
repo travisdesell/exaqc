@@ -108,6 +108,7 @@ from torch.distributions import Categorical, Distribution, Normal
 import gymnasium as gym
 
 from src.circuits.circuit import CircuitGenome
+from src.dropout.quantum_dropout import sample_quantum_dropout
 
 #: Bounds applied to the per-dimension log-standard-deviation a continuous
 #: (Gaussian) policy reads from the decoder, keeping the sampled action scale
@@ -672,6 +673,7 @@ class ReinforcementLearningTrainer(ABC):
         epsilon: float = 0.2,
         epsilon_min: float = 0.05,
         epsilon_decay: float = 0.995,
+        quantum_dropout: bool = False,
     ) -> None:
         """Initializes the trainer's default hyperparameters.
 
@@ -679,7 +681,16 @@ class ReinforcementLearningTrainer(ABC):
         (an :class:`RLHyperparameters`), which supplies the value whenever a
         genome does not override that field through its ``hyperparameters``
         dict. See the class docstring for a description of every argument.
+
+        Args:
+            quantum_dropout: Master switch for quantum dropout during training.
+                When ``False`` (the default) no quantum dropout is ever applied;
+                when ``True`` dropout is sampled per training episode from the
+                genome's ``quantum_dropout_type``/``quantum_dropout_rate``
+                hyperparameters and never applied during greedy evaluation.
         """
+
+        self.quantum_dropout = quantum_dropout
 
         self.defaults = RLHyperparameters(
             episodes=episodes,
@@ -808,6 +819,10 @@ class ReinforcementLearningTrainer(ABC):
             ``best_episode_return``.
         """
 
+        # Evaluation is always greedy on the complete evolved circuit; make
+        # sure any dropout sampled during a training episode is cleared first.
+        genome.clear_quantum_dropout()
+
         n_episodes = 1 if environment.deterministic else hp.eval_episodes
 
         returns: list[float] = []
@@ -873,11 +888,28 @@ class ReinforcementLearningTrainer(ABC):
         trainable_parameters = list(genome.parameters())
 
         genome.metadata["training_episode_metrics"] = []
+        genome.metadata["evaluation_episode_metrics"] = []
 
         n_trainable = sum(p.numel() for p in trainable_parameters if p.requires_grad)
-        if n_trainable == 0:
-            # nothing to optimize -- just evaluate the untrained genome
-            logger.info("genome has no trainable parameters; evaluating only.")
+
+        # The quantum weight vector carries one entry per gate parameter for
+        # *every* gate, including disabled ones, but disabled gates are skipped
+        # in the forward pass, so their parameters are never connected to the
+        # loss. Counting them would send a genome whose only parameterized gates
+        # are disabled down the training path, where backward() fails with
+        # "element 0 of tensors does not require grad". Base the train-vs-eval
+        # decision on the parameters that are actually used (encoder/decoder
+        # plus enabled gates).
+        disabled_gate_parameters = sum(
+            len(gate.parameters) for gate in genome.gates if not gate.enabled
+        )
+        effective_trainable = n_trainable - disabled_gate_parameters
+
+        if effective_trainable == 0:
+            # nothing connected to the loss to optimize -- just evaluate
+            logger.info(
+                "genome has no trainable (enabled) parameters; evaluating only."
+            )
             evaluation = self.evaluate(genome, environment, hp)
             genome.metadata["best_training_metrics"] = {
                 "return_mean": evaluation["return_mean"],
@@ -903,6 +935,12 @@ class ReinforcementLearningTrainer(ABC):
         best_episode = 0
 
         for episode in range(hp.episodes):
+            # Sample fresh quantum dropout for this training episode (a no-op
+            # when the toggle is off). Evaluation clears it so greedy rollouts
+            # always use the complete circuit.
+            if self.quantum_dropout:
+                sample_quantum_dropout(genome)
+
             episode_return, info = self.run_update(
                 genome, environment, optimizer, episode, hp
             )
@@ -919,6 +957,10 @@ class ReinforcementLearningTrainer(ABC):
 
             if (episode % eval_every == 0) or (episode == hp.episodes - 1):
                 evaluation = self.evaluate(genome, environment, hp)
+                evaluation["episode"] = episode
+
+                # track evaluations for visualization purposes
+                genome.metadata["evaluation_episode_metrics"].append(evaluation)
 
                 logger.info(
                     f"[{type(self).__name__}] genome {genome.genome_number:4d} episode {episode:4d} "
@@ -948,3 +990,7 @@ class ReinforcementLearningTrainer(ABC):
             if best_evaluation is not None
             else self.evaluate(genome, environment, hp)
         )
+
+        # Leave the genome with no active dropout so the returned/serialized
+        # policy runs the complete evolved circuit.
+        genome.clear_quantum_dropout()

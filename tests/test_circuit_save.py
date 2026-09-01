@@ -5,8 +5,10 @@
 * ``genome_<n>.json`` -- the serialized genome (round-trippable via
   ``CircuitGenome.from_dict``),
 * ``genome_<n>.txt``  -- a human-readable gate listing, and
-* ``<insert_type>_genome_<n>_<tag>.png`` -- a drawing of the quantum circuit
-  produced with the genome's target framework (pennylane or qiskit).
+* ``<insert_type>_genome_<n>_<tag>.png`` -- the composed architecture diagram
+  drawn by ``draw_network`` (the encoder/decoder stages with the genome's
+  quantum circuit embedded in the middle; see ``tests/test_draw_network.py``
+  for focused coverage of the diagram itself).
 
 All of these tests write exclusively into pytest's per-test ``tmp_path``
 directory (which pytest creates and removes automatically) and additionally
@@ -122,6 +124,9 @@ def test_save_circuit_writes_exactly_the_expected_files(
     target: str, complexity: str, tmp_path, monkeypatch
 ) -> None:
     """``save_circuit`` writes exactly the json/txt/png trio and nothing else.
+
+    The single ``.png`` is the composed architecture diagram, named from the
+    metric tag.
 
     Args:
         target: Either ``"pennylane"`` or ``"qiskit"``.
@@ -268,7 +273,8 @@ def test_save_circuit_works_without_initialize_model(
     genome = _build_saveable_genome(target, initialize=False)
     genome.save_circuit(insert_type="best", out_dir=str(out_dir))
 
-    # the drawing branch must still have produced a png (not just json/txt)
+    # the drawing branch must still have produced a png (not just json/txt),
+    # even though the genome was not pre-initialized
     assert len(_split_by_suffix(str(out_dir)).get(".png", [])) == 1
 
 

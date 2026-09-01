@@ -19,6 +19,7 @@ class SteadyStatePopulation(PopulationStrategy):
         compare: Callable[[CircuitGenome, CircuitGenome], int],
         out_dir: str = "artifacts",
         profiler: Optional[EXAQCProfiler] = None,
+        save_training_plot: bool = False,
     ):
         """
         Creates a steady state population with the specified max population size.  The population
@@ -35,11 +36,15 @@ class SteadyStatePopulation(PopulationStrategy):
                 come before the second genome, and a positive number otherwise
             out_dir: is the directory to write out the logs and best found genomes
             profiler: A profiler class for recording execution steps to plot later
+            save_training_plot: when True, each saved genome also gets a
+                training-history line plot written next to its diagram (see
+                :meth:`CircuitGenome.save_circuit`).
         """
 
         self.max_population_size = max_population_size
         self.compare = compare
         self.out_dir = out_dir
+        self.save_training_plot = save_training_plot
 
         self.insertions = 0
 
@@ -191,7 +196,11 @@ class SteadyStatePopulation(PopulationStrategy):
                 f"with fitness: {genome.fitness}"
             )
             if self.out_dir is not None:
-                genome.save_circuit(insert_type="best_accuracy", out_dir=self.out_dir)
+                genome.save_circuit(
+                    insert_type="best_target",
+                    out_dir=self.out_dir,
+                    save_training_plot=self.save_training_plot,
+                )
 
         if genome.genome_number == self.population[0].genome_number:
             # this was a new global best genome
@@ -201,7 +210,11 @@ class SteadyStatePopulation(PopulationStrategy):
             )
             genome.metadata["insert_type"] = "global_best"
             if self.out_dir is not None:
-                genome.save_circuit(insert_type="best_fitness", out_dir=self.out_dir)
+                genome.save_circuit(
+                    insert_type="best_fitness",
+                    out_dir=self.out_dir,
+                    save_training_plot=self.save_training_plot,
+                )
 
         if len(self.population) > self.max_population_size:
             # remove the last genome from the population
@@ -212,6 +225,8 @@ class SteadyStatePopulation(PopulationStrategy):
 
         if self.out_dir is not None:
             genome.save_circuit(
-                insert_type="genome", out_dir=self.out_dir + "/all_genomes/"
+                insert_type="genome",
+                out_dir=self.out_dir + "/all_genomes/",
+                save_training_plot=self.save_training_plot,
             )
             self.profiler.plot_single_run()

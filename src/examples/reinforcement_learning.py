@@ -76,6 +76,7 @@ ENV_IDS: dict[str, str] = {
     "cartpole": "CartPole-v1",
     "acrobot": "Acrobot-v1",
     "mountaincar": "MountainCar-v0",
+    "mountaincar_continuous": "MountainCarContinuous-v0",
     "frozenlake": "FrozenLake-v1",
     "pendulum": "Pendulum-v1",
     "hopper": "Hopper-v5",
@@ -86,13 +87,22 @@ ENV_IDS: dict[str, str] = {
 }
 
 #: The subset of :data:`ENV_IDS` that are continuous (``Box``-action) tasks.
-#: Pendulum is classic control; the rest are MuJoCo tasks (require
+#: MountainCarContinuous and Pendulum are classic control; the rest are MuJoCo
+#: tasks (require
 #: ``gymnasium[mujoco]``). Their observation size, action dimensionality, and
 #: action bounds are read from the environment at build time by
 #: :func:`make_continuous_environment` rather than hardcoded, since these
 #: differ across Gymnasium versions (e.g. Ant/Humanoid observation sizes).
 CONTINUOUS_ENVS: frozenset[str] = frozenset(
-    {"pendulum", "hopper", "walker2d", "halfcheetah", "ant", "humanoid"}
+    {
+        "mountaincar_continuous",
+        "pendulum",
+        "hopper",
+        "walker2d",
+        "halfcheetah",
+        "ant",
+        "humanoid",
+    }
 )
 
 #: All environment names understood by :func:`make_environment`, in the order
@@ -152,8 +162,9 @@ def make_environment(name: str, **kwargs) -> RLEnvironment:
         name: Environment name; one of :data:`ENV_CHOICES`. The discrete tasks
             are ``"cartpole"``, ``"acrobot"``, ``"mountaincar"`` and
             ``"frozenlake"``; the continuous (``Box``-action) tasks are the
-            members of :data:`CONTINUOUS_ENVS` (``"pendulum"``, ``"hopper"``,
-            ``"walker2d"``, ``"halfcheetah"``, ``"ant"``, ``"humanoid"``).
+            members of :data:`CONTINUOUS_ENVS` (``"mountaincar_continuous"``,
+            ``"pendulum"``, ``"hopper"``, ``"walker2d"``, ``"halfcheetah"``,
+            ``"ant"``, ``"humanoid"``).
         **kwargs: Environment-specific options (e.g. ``map_name`` and
             ``is_slippery`` for FrozenLake).
 
@@ -313,20 +324,18 @@ class ReinforcementLearningObjective(Objective):
         training_metrics = genome.metadata["best_training_metrics"]
         validation_metrics = genome.metadata["best_validation_metrics"]
 
-        """
         mean_return = (
             validation_metrics["return_mean"] + training_metrics["return_mean"]
         ) / 2.0
-        """
         # mean_return = validation_metrics["return_mean"]
-        mean_return = training_metrics["return_mean"]
+        # mean_return = training_metrics["return_mean"]
 
         # "loss" (lower is better) drives population sorting via compare();
         # the remaining keys mirror the RL fields used by save_circuit's tag
         # fallback and by downstream analysis.
         genome.fitness = {
             "loss": -mean_return,
-            "target_metric": mean_return,
+            "target_metric": validation_metrics["return_mean"],
             "eval_return_mean": validation_metrics["return_mean"],
             "eval_return_std": validation_metrics["return_std"],
             "train_return_mean": training_metrics["return_mean"],
@@ -382,6 +391,24 @@ if __name__ == "__main__":
         type=str,
         nargs="+",
         required=True,
+    )
+    p.add_argument(
+        "--binary_crossover_rate",
+        type=float,
+        default=0.00,
+        help="Fraction of genomes generated via binary crossover once the population is initialized.",
+    )
+    p.add_argument(
+        "--n_ary_crossover_rate",
+        type=float,
+        default=0.20,
+        help="Fraction of genomes generated via n-ary crossover once the population is initialized.",
+    )
+    p.add_argument(
+        "--exponential_crossover_rate",
+        type=float,
+        default=0.10,
+        help="Fraction of genomes generated via exponential crossover once the population is initialized.",
     )
 
     subparsers = p.add_subparsers(
@@ -447,6 +474,32 @@ if __name__ == "__main__":
         default="linear",
         help="Circuit-output-to-action decoding.",
     )
+    p.add_argument(
+        "--quantum_dropout",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Master switch for quantum dropout during training. Disabled by "
+            "default; when enabled, dropout is sampled per training episode "
+            "from --quantum_dropout_type and --quantum_dropout_rate and is "
+            "never applied during greedy evaluation."
+        ),
+    )
+    p.add_argument(
+        "--quantum_dropout_type",
+        "-qdt",
+        type=str,
+        default="none",
+        choices=["gate", "rotation", "entangling", "qubit", "innovation"],
+        help="Quantum dropout type (used only when --quantum_dropout is set).",
+    )
+    p.add_argument(
+        "--quantum_dropout_rate",
+        "-qdr",
+        type=float,
+        default=0.0,
+        help="Quantum dropout rate (used only when --quantum_dropout is set).",
+    )
 
     # RL hyperparameters (become genome.hyperparameters, mutable by the search)
     p.add_argument("--episodes", type=int, default=60)
@@ -459,6 +512,15 @@ if __name__ == "__main__":
     p.add_argument("--value_coef", type=float, default=0.5)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--log_every", type=int, default=10)
+    p.add_argument(
+        "--save_training_plot",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Also save a line plot of return and loss per episode next to each "
+            "saved genome's diagram."
+        ),
+    )
     p.add_argument(
         "--ema_alpha",
         type=float,
@@ -539,6 +601,7 @@ if __name__ == "__main__":
         epsilon=args.epsilon,
         epsilon_min=args.epsilon_min,
         epsilon_decay=args.epsilon_decay,
+        quantum_dropout=args.quantum_dropout,
     )
 
     # Value-based trainers (q_learning / sarsa) enumerate discrete actions and
@@ -557,6 +620,8 @@ if __name__ == "__main__":
     hyperparameters = {
         "quantum_input_mode": args.quantum_input_mode,
         "quantum_output_mode": args.quantum_output_mode,
+        "quantum_dropout_type": args.quantum_dropout_type,
+        "quantum_dropout_rate": args.quantum_dropout_rate,
         "episodes": args.episodes,
         "eval_episodes": args.eval_episodes,
         "max_steps": args.max_steps,
@@ -584,9 +649,15 @@ if __name__ == "__main__":
     # Encoder / decoder sizing (reuses the existing linear encoder/decoder)
     # -----------------------------------------------------------------
     n_input_registers = args.input_qubits
-    n_encoder_outputs = n_input_registers
-    if args.quantum_input_mode == "u3":
-        n_encoder_outputs *= 3
+    if args.encoding == "identity":
+        # The identity encoder passes its input straight through, so its output
+        # size must equal its input size (the observation feature count) -- it
+        # does not resize or clip to the qubit count.
+        n_encoder_outputs = environment.n_observation_features
+    else:
+        n_encoder_outputs = n_input_registers
+        if args.quantum_input_mode == "u3":
+            n_encoder_outputs *= 3
 
     # The policy occupies environment.n_policy_outputs decoder outputs: one per
     # action for a discrete space, or a mean + log-std per action dimension for
@@ -613,6 +684,8 @@ if __name__ == "__main__":
         encoding_str=args.encoding,
         n_inputs=environment.n_observation_features,
         n_outputs=n_encoder_outputs,
+        quantum_input_mode=args.quantum_input_mode,
+        n_input_qubits=n_input_registers,
     )
     # decoder: quantum outputs -> per-action values (policy logits / Q-values),
     # plus an optional trailing state-value output for advantage methods.
@@ -631,6 +704,7 @@ if __name__ == "__main__":
             max_population_size=args.max_population_size,
             compare=compare,
             out_dir=args.out_dir,
+            save_training_plot=args.save_training_plot,
         )
     elif args.population_strategy == "islands":
         population = SteadyStateIslands(
@@ -642,6 +716,7 @@ if __name__ == "__main__":
             primary_parent=args.primary_parent,
             compare=compare,
             out_dir=args.out_dir,
+            save_training_plot=args.save_training_plot,
         )
     else:
         raise ValueError(args.population_strategy)
@@ -667,6 +742,9 @@ if __name__ == "__main__":
         hyperparameters=hyperparameters,
         mutation_strategy=args.mutation_strategy,
         parent_strategy=args.parent_strategy,
+        binary_crossover_rate=args.binary_crossover_rate,
+        n_ary_crossover_rate=args.n_ary_crossover_rate,
+        exponential_crossover_rate=args.exponential_crossover_rate,
         run_for=args.number_genomes,
         input_registers={"input": n_input_registers},
         output_registers={"input": n_output_registers},
