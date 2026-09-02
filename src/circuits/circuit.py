@@ -1130,13 +1130,15 @@ class CircuitGenome:
     def metrics_tag(self) -> str:
         """Builds a short filename tag summarizing this genome's performance.
 
-        Different tasks record different metrics, so the most descriptive tag
-        that the genome's recorded metrics support is used: a classification
-        genome reports loss and accuracy, a reinforcement-learning genome
-        reports returns, and any other task (e.g. quantum-teacher imitation)
-        falls back to its training and validation loss. A genome that has not
-        been evaluated is tagged as such rather than failing -- this only names
-        an artifact file, so it must never abort saving one.
+        Each task records different metrics, so the genome's own :attr:`task`
+        selects what to report: a classification genome reports loss and
+        accuracy, a reinforcement-learning genome reports returns, and any other
+        task (e.g. quantum-teacher imitation) reports its training and
+        validation loss.
+
+        A genome that records no task, or has not been evaluated, is tagged
+        ``"unevaluated"`` rather than failing -- this only names an artifact
+        file, so it must never abort saving one.
 
         Returns:
             A filename-safe tag describing the genome's best metrics.
@@ -1147,30 +1149,29 @@ class CircuitGenome:
         validation = metadata.get("best_validation_metrics") or {}
         fitness = getattr(self, "fitness", None) or {}
 
-        # classification: loss plus mean class accuracy
         try:
-            return (
-                f"trainloss_{training['loss']:.4f}_"
-                f"trainacc_{training['mean_class_accuracy']['mean']:.4f}_"
-                f"valloss_{validation['loss']:.4f}_"
-                f"valacc_{validation['mean_class_accuracy']['mean']:.4f}"
-            )
-        except (KeyError, TypeError, ValueError):
-            pass
+            if self.task == "classification":
+                return (
+                    f"trainloss_{training['loss']:.4f}_"
+                    f"trainacc_{training['mean_class_accuracy']['mean']:.4f}_"
+                    f"valloss_{validation['loss']:.4f}_"
+                    f"valacc_{validation['mean_class_accuracy']['mean']:.4f}"
+                )
 
-        # reinforcement learning: training and evaluation returns
-        try:
-            return (
-                f"train_ret_{fitness['train_return_mean']:.4f}_"
-                f"val_ret_{fitness['eval_return_mean']:.4f}"
-            )
-        except (KeyError, TypeError, ValueError):
-            pass
+            if self.task == "reinforcement_learning":
+                return (
+                    f"train_ret_{fitness['train_return_mean']:.4f}_"
+                    f"val_ret_{fitness['eval_return_mean']:.4f}"
+                )
 
-        # anything else that trained: whatever loss it recorded
-        try:
-            return f"trainloss_{training['loss']:.4f}_valloss_{validation['loss']:.4f}"
+            if self.task:
+                # every other task trains per epoch against a loss
+                return (
+                    f"trainloss_{training['loss']:.4f}_"
+                    f"valloss_{validation['loss']:.4f}"
+                )
         except (KeyError, TypeError, ValueError):
+            # a task whose metrics are missing or malformed still gets a name
             pass
 
         return "unevaluated"

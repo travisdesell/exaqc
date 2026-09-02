@@ -138,6 +138,12 @@ def qubit_swap(circuit: CircuitGenome, favor_enabled: bool = False) -> bool:
     for qubit in new_gate.qubits:
         selection_qubits.remove(qubit)
 
+    if len(selection_qubits) == 0:
+        # There are no possible qubits to swap in this gate, so we can't
+        # perform this mutation.
+        logger.debug("there is no qubit available to swap one of this gate's qubits to")
+        return False
+
     new_qubit = random.choice(selection_qubits)
     logger.debug(f"replacing qubit {replace_qubit} with {new_qubit}")
     logger.debug(f"gate qubits before replace {new_gate.qubits}")

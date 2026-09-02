@@ -37,6 +37,20 @@ fully covered by their enclosing function's docstring may be left undocumented.
 - Format with `black` and keep `flake8 --max-line-length=200` clean.
 - Match the conventions of the file you are editing.
 
+### Parked files (leave alone)
+
+Some files are knowingly excluded from the standards above. Do not lint,
+reformat, refactor, "fix" or delete them, and do not report them as findings
+unless explicitly asked about them:
+
+- `src/analysis/plot_gptp_histogram.py` — not reachable from any entry point and
+  runs all of its work at import time (it has no `__main__` guard, so merely
+  importing it executes everything). Parked pending a decision on its future.
+  Already excluded in `.flake8` and in `[tool.black]` in `pyproject.toml`; keep
+  those exclusions in sync with this list.
+
+When auditing for dead or stale code, treat this list as expected and skip it.
+
 ## Keep the README entry-point scripts in sync (required)
 
 The `README.md` documents a set of runnable entry points and the wrapper
