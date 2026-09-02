@@ -441,8 +441,8 @@ class EXAQC:
             + ["enable_gate"]  # 5%
             + ["disable_gate"] * 2  # 10%
             + ["clone"] * 2  # 10%
-            + ["mutate_some_weights"] * 2
-            + ["mutate_all_weights"] * 2
+            # + ["mutate_some_weights"] * 2
+            # + ["mutate_all_weights"] * 2
         )
 
         # only use the gates with which do not still require some validation from us to
