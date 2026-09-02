@@ -1,0 +1,16 @@
+Genome 288
+Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
+
+0.056  y  [('input', 3)]  {}
+0.068  rxx  [('input', 3), ('input', 2)]  {'phi': 2.8368292995851565}
+0.176  ryy  [('input', 3), ('input', 0)]  {'phi': 1.1895008669472205}
+0.297  swap  [('output', 0), ('input', 3)]  {}
+0.472  cz  [('input', 2), ('output', 0)]  {}
+0.503  cx  [('output', 0), ('output', 1)]  {}
+0.563  iswap  [('input', 3), ('output', 0)]  {}
+0.651  rzz  [('output', 1), ('input', 1)]  {'phi': 0.9273154338625096}
+0.656  sx  [('input', 1)]  {}
+0.798  crx  [('input', 2), ('output', 0)]  {'phi': -1.7680712100059452}
+0.904  rxx  [('input', 3), ('output', 1)]  {'phi': 0.34260638135172794}
+0.926  sx  [('output', 1)]  {}
+0.970  swap  [('output', 0), ('input', 3)]  {}
