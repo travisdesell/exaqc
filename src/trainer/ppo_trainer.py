@@ -6,6 +6,7 @@ and environment abstraction this trainer builds on.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -17,7 +18,6 @@ from src.circuits.circuit import CircuitGenome
 from src.trainer.reinforcement_trainer import (
     RLEnvironment,
     ReinforcementLearningTrainer,
-    RLHyperparameters,
     _normalize,
     action_distribution,
     distribution_entropy,
@@ -48,7 +48,7 @@ class PPOTrainer(ReinforcementLearningTrainer):
         genome: CircuitGenome,
         environment: RLEnvironment,
         episode_index: int,
-        hp: RLHyperparameters,
+        hp: SimpleNamespace,
     ) -> dict[str, Any]:
         """Collects a behavior-policy rollout spanning one or more episodes.
 
@@ -135,7 +135,7 @@ class PPOTrainer(ReinforcementLearningTrainer):
         environment: RLEnvironment,
         optimizer: torch.optim.Optimizer,
         episode_index: int,
-        hp: RLHyperparameters,
+        hp: SimpleNamespace,
     ) -> tuple[float, dict[str, float]]:
         """Collects a multi-episode rollout and performs the PPO epochs.
 

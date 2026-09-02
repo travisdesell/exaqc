@@ -22,7 +22,7 @@ from qiskit_machine_learning.connectors import TorchConnector
 from src.circuits.gate import Gate
 from src.circuits.decoder import Decoder
 from src.circuits.encoder import Encoder
-from src.utils.helpers import draw_network
+from src.utils.draw_hybrid_model import draw_hybrid_model
 from src.utils import training_plots
 from src.dropout.quantum_dropout import apply_qubit_readout_dropout
 
@@ -1092,7 +1092,7 @@ class CircuitGenome:
             trained_weights = self.get_parameters_as_list()
 
             # Generate the hybrid model (and its circuit) exactly once, up front,
-            # so the target-specific circuit drawing below and draw_network()
+            # so the target-specific circuit drawing below and draw_hybrid_model()
             # both reuse the same generation. Re-generating a qiskit circuit
             # corrupts its cached gate parameters ("Weight param ... not present
             # in circuit"); an already-initialized genome is left untouched.
@@ -1148,10 +1148,10 @@ class CircuitGenome:
 
             # Compose the single architecture diagram: the encoder layers, the
             # quantum input encoding, the quantum circuit drawn above embedded in
-            # place, the output readout, and the decoder layers. draw_network
+            # place, the output readout, and the decoder layers. draw_hybrid_model
             # rasterizes and embeds ``fig`` and then closes the composed figure.
             output_filename = f"{insert_type}_genome_{self.genome_number}_{tag}.png"
-            draw_network(
+            draw_hybrid_model(
                 out_dir,
                 self,
                 output_filename,

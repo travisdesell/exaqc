@@ -1,3 +1,4 @@
+import argparse
 import random
 
 import bisect
@@ -219,6 +220,71 @@ def island_compare(island1: Island, island2: Island) -> int:
 
 
 class SteadyStateIslands(PopulationStrategy):
+
+    @staticmethod
+    def initialize_parser(parser: argparse.ArgumentParser) -> None:
+        """Adds this population strategy's command-line arguments to a parser.
+
+        Entry points call this on the ``islands`` sub-parser so every script
+        exposes the same flags with the same defaults and help text, rather
+        than repeating them. Each argument corresponds to the like-named
+        :meth:`__init__` keyword.
+
+        Args:
+            parser: The (sub-)parser to add this strategy's arguments to.
+
+        Returns:
+            None. Mutates ``parser`` by adding ``--n_islands``,
+            ``--max_island_size``, ``--genomes_before_extinction``,
+            ``--genomes_for_next_extinction``, ``--islands_to_extinct``,
+            ``--primary_parent`` and ``--intra_island_crossover_rate``.
+        """
+
+        parser.add_argument(
+            "--n_islands",
+            type=int,
+            default=10,
+            help="Number of steady-state populations (islands) evolved in parallel.",
+        )
+        parser.add_argument(
+            "--max_island_size",
+            type=int,
+            default=10,
+            help="Maximum number of genomes retained in each island.",
+        )
+        parser.add_argument(
+            "--genomes_before_extinction",
+            type=int,
+            default=100,
+            help="Number of genomes inserted before the first island extinction event.",
+        )
+        parser.add_argument(
+            "--genomes_for_next_extinction",
+            type=int,
+            default=200,
+            help="Number of genomes inserted between successive extinction events.",
+        )
+        parser.add_argument(
+            "--islands_to_extinct",
+            type=int,
+            default=1,
+            help="Number of worst islands cleared and repopulated at each extinction event.",
+        )
+        parser.add_argument(
+            "--primary_parent",
+            type=str,
+            default="best",
+            help=(
+                "How the primary crossover parent is chosen: 'best' (highest-fitness "
+                "parent first) or 'island' (the target island's genome first)."
+            ),
+        )
+        parser.add_argument(
+            "--intra_island_crossover_rate",
+            type=float,
+            default=0.5,
+            help="Fraction of an island's offspring produced by crossover within the same island.",
+        )
 
     def __init__(
         self,

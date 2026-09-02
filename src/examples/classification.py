@@ -37,6 +37,7 @@ from src.datasets.classification_loaders import (
     get_image_dataloaders,
     get_uci_dataloaders,
 )
+from src.evolution.exaqc import EXAQC
 from src.evolution.master_worker import master_worker
 from src.evolution.objective import Objective
 from src.evolution.steady_state_islands import SteadyStateIslands
@@ -76,9 +77,12 @@ class ClassificationObjective(Objective):
         validation_loss_function: Any,
         metrics: dict[str, Metric],
         device: str | None = None,
-        quantum_dropout: bool = False,
     ) -> None:
         """Initializes the classification objective.
+
+        Quantum dropout is not configured here: it is carried per genome via
+        the ``quantum_dropout`` hyperparameter and read by the trainer at train
+        time, so the evolutionary search can carry and mutate it per genome.
 
         Args:
             training_dataloader: Batched training loader.
@@ -87,8 +91,6 @@ class ClassificationObjective(Objective):
             validation_loss_function: Validation loss function.
             metrics: Evaluation metrics.
             device: PyTorch device to train on, or ``None`` to auto-select.
-            quantum_dropout: Whether to apply quantum dropout during training.
-                Defaults to ``False`` (disabled).
         """
         self.trainer = SupervisedTrainer(
             training_dataloader=training_dataloader,
@@ -97,7 +99,6 @@ class ClassificationObjective(Objective):
             validation_loss_function=validation_loss_function,
             metrics=metrics,
             device=device,
-            quantum_dropout=quantum_dropout,
         )
 
     def __call__(self, genome: CircuitGenome) -> None:
@@ -134,112 +135,83 @@ def build_parser() -> argparse.ArgumentParser:
         "--dataset",
         choices=CLASSIFICATION_DATASETS,
         required=True,
+        help="Dataset to evolve classifiers on (a UCI tabular or image dataset).",
     )
-    parser.add_argument("--out_dir", type=str, default="artifacts")
     parser.add_argument(
-        "--mutation_strategy",
-        "-ms",
+        "--out_dir",
         type=str,
-        nargs="+",
-        required=True,
+        default="artifacts",
+        help="Directory to write per-genome artifacts (diagrams, plots, logs) into.",
     )
-    parser.add_argument(
-        "--parent_strategy",
-        "-ps",
-        type=str,
-        nargs="+",
-        required=True,
-    )
-    parser.add_argument(
-        "--binary_crossover_rate",
-        type=float,
-        default=0.00,
-        help="Fraction of genomes generated via binary crossover once the population is initialized.",
-    )
-    parser.add_argument(
-        "--n_ary_crossover_rate",
-        type=float,
-        default=0.20,
-        help="Fraction of genomes generated via n-ary crossover once the population is initialized.",
-    )
-    parser.add_argument(
-        "--exponential_crossover_rate",
-        type=float,
-        default=0.10,
-        help="Fraction of genomes generated via exponential crossover once the population is initialized.",
-    )
+    # The evolutionary search's own flags (mutation/parent strategies and
+    # crossover rates) are owned by EXAQC so every entry point stays in sync.
+    EXAQC.initialize_parser(parser)
 
     populations = parser.add_subparsers(
         dest="population_strategy",
         required=True,
     )
-    steady = populations.add_parser("steady_state")
-    steady.add_argument(
-        "--max_population_size",
+    # Each population strategy owns the flags for its own constructor.
+    SteadyStatePopulation.initialize_parser(
+        populations.add_parser(
+            "steady_state", help="Use a single steady state population."
+        )
+    )
+    SteadyStateIslands.initialize_parser(
+        populations.add_parser(
+            "islands", help="Use multiple islands of steady state populations."
+        )
+    )
+
+    parser.add_argument(
+        "--epochs",
         type=int,
         default=30,
+        help="Maximum number of training epochs per genome.",
     )
-
-    islands = populations.add_parser("islands")
-    islands.add_argument("--n_islands", type=int, default=10)
-    islands.add_argument(
-        "--max_island_size",
-        type=int,
-        default=10,
-    )
-    islands.add_argument(
-        "--genomes_before_extinction",
-        type=int,
-        default=100,
-    )
-    islands.add_argument(
-        "--genomes_for_next_extinction",
-        type=int,
-        default=200,
-    )
-    islands.add_argument(
-        "--islands_to_extinct",
-        type=int,
-        default=2,
-    )
-    islands.add_argument(
-        "--primary_parent",
-        default="best",
-    )
-
-    parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument(
         "--learning_rate",
         "-lr",
         type=float,
         default=5e-4,
+        help="Adam learning rate used when training each genome.",
     )
-    parser.add_argument("--weight_decay", type=float, default=0.0)
+    parser.add_argument(
+        "--weight_decay",
+        type=float,
+        default=0.0,
+        help="Adam weight decay (L2 regularization) used when training each genome.",
+    )
     parser.add_argument(
         "--improvement_cutoff",
         type=int,
         default=2,
+        help="Stop training a genome after this many epochs without validation improvement.",
     )
     parser.add_argument(
         "--number_genomes",
         type=int,
         default=2000,
+        help="Total number of genomes to evolve and evaluate before stopping.",
     )
     parser.add_argument(
         "--input_qubits",
         type=int,
         required=True,
+        help="Number of input (data-encoding) qubits in each evolved circuit.",
     )
     parser.add_argument(
         "--output_qubits",
         type=int,
         required=True,
+        help="Number of output (readout) qubits measured in each evolved circuit.",
     )
     parser.add_argument(
         "--target",
         type=str,
         choices=["pennylane", "qiskit"],
         default="pennylane",
+        help="Quantum backend used to build and simulate the evolved circuits.",
     )
     parser.add_argument(
         "--quantum_input_mode",
@@ -288,7 +260,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="linear",
         help="Choose the kind of encoding",
     )
-    parser.add_argument("--encoder_config", type=str, default="configs")
+    parser.add_argument(
+        "--encoder_config",
+        type=str,
+        default="configs",
+        help="Path to a JSON file of encoder configuration options (e.g. CNN activation, batch norm).",
+    )
     parser.add_argument(
         "--decoding",
         type=str,
@@ -309,28 +286,38 @@ def build_parser() -> argparse.ArgumentParser:
         "--validation_batch_size",
         type=int,
         default=None,
+        help="Batch size for validation/testing; defaults to --batch_size when unset.",
     )
 
-    parser.add_argument("--data_dir", type=str, default="data")
+    parser.add_argument(
+        "--data_dir",
+        type=str,
+        default="data",
+        help="Directory where datasets are stored (and downloaded to).",
+    )
     parser.add_argument(
         "--download_dataset",
         action=argparse.BooleanOptionalAction,
         default=True,
+        help="Download the dataset if it is not already present in --data_dir.",
     )
     parser.add_argument(
         "--validation_fraction",
         type=float,
         default=0.1,
+        help="Fraction of the training data held out for validation when no fixed split exists.",
     )
     parser.add_argument(
         "--training_samples",
         type=int,
         default=None,
+        help="Cap the training set to this many samples (use all when unset).",
     )
     parser.add_argument(
         "--validation_samples",
         type=int,
         default=None,
+        help="Cap the validation set to this many samples (use all when unset).",
     )
     parser.add_argument(
         "--device",
@@ -346,35 +333,46 @@ def build_parser() -> argparse.ArgumentParser:
         "--num_workers",
         type=int,
         default=0,
+        help="Number of worker processes used by the PyTorch DataLoaders.",
     )
     parser.add_argument(
         "--pin_memory",
         action=argparse.BooleanOptionalAction,
         default=False,
+        help="Use pinned (page-locked) host memory in the DataLoaders for faster GPU transfers.",
     )
     parser.add_argument(
         "--cnn_channels",
         type=int,
         nargs=2,
         default=[16, 32],
+        help="Output channel counts for the two CNN encoder convolution layers (image datasets).",
     )
     parser.add_argument(
         "--cnn_pooled_size",
         type=int,
         default=4,
+        help="Spatial size (height = width) the CNN encoder pools its feature maps down to.",
     )
     parser.add_argument(
         "--cnn_dropout",
         type=float,
         default=0.0,
+        help="Dropout rate applied inside the CNN encoder.",
     )
     parser.add_argument(
         "--normalization",
         type=str,
         choices=["none", "zscore", "minmax"],
         default="minmax",
+        help="Feature normalization applied to tabular datasets before encoding.",
     )
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="Random seed for reproducible dataset splits and evolution.",
+    )
     parser.add_argument(
         "--save_training_plot",
         action=argparse.BooleanOptionalAction,
@@ -499,7 +497,6 @@ def main() -> None:
         ),
         metrics=metrics,
         device=args.device,
-        quantum_dropout=args.quantum_dropout,
     )
 
     if args.encoding == "identity":
@@ -564,6 +561,7 @@ def main() -> None:
             genomes_for_next_extinction=(args.genomes_for_next_extinction),
             islands_to_extinct=args.islands_to_extinct,
             primary_parent=args.primary_parent,
+            intra_island_crossover_rate=args.intra_island_crossover_rate,
             compare=compare,
             out_dir=args.out_dir,
             save_training_plot=args.save_training_plot,
@@ -577,6 +575,7 @@ def main() -> None:
         "batch_size": args.batch_size,
         "quantum_input_mode": args.quantum_input_mode,
         "quantum_output_mode": args.quantum_output_mode,
+        "quantum_dropout": args.quantum_dropout,
         "quantum_dropout_type": args.quantum_dropout_type,
         "quantum_dropout_rate": args.quantum_dropout_rate,
     }

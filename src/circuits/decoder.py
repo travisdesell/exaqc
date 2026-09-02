@@ -185,7 +185,7 @@ class Decoder(ABC):
         """Describes this decoder as an ordered list of drawable layers.
 
         Used by the architecture diagram compositor
-        (:func:`src.utils.helpers.draw_network`). The base implementation
+        (:func:`src.utils.draw_hybrid_model.draw_hybrid_model`). The base implementation
         returns a single generic block; subclasses override this to expose
         their real layer structure.
 

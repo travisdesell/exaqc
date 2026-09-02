@@ -6,8 +6,8 @@
   ``CircuitGenome.from_dict``),
 * ``genome_<n>.txt``  -- a human-readable gate listing, and
 * ``<insert_type>_genome_<n>_<tag>.png`` -- the composed architecture diagram
-  drawn by ``draw_network`` (the encoder/decoder stages with the genome's
-  quantum circuit embedded in the middle; see ``tests/test_draw_network.py``
+  drawn by ``draw_hybrid_model`` (the encoder/decoder stages with the genome's
+  quantum circuit embedded in the middle; see ``tests/test_draw_hybrid_model.py``
   for focused coverage of the diagram itself).
 
 All of these tests write exclusively into pytest's per-test ``tmp_path``

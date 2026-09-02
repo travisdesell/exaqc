@@ -6,7 +6,7 @@ and environment abstraction this trainer builds on.
 
 from __future__ import annotations
 
-from typing import Any
+from types import SimpleNamespace
 
 import numpy as np
 import torch
@@ -17,7 +17,6 @@ from src.circuits.circuit import CircuitGenome
 from src.trainer.reinforcement_trainer import (
     RLEnvironment,
     ReinforcementLearningTrainer,
-    RLHyperparameters,
 )
 
 
@@ -45,23 +44,20 @@ class QLearningTrainer(ReinforcementLearningTrainer):
     Args:
         sarsa: If True, use the on-policy SARSA target; otherwise use the
             off-policy Q-learning (max) target.
-        **kwargs: Forwarded to :class:`ReinforcementLearningTrainer`.
     """
 
     #: Value-based action selection is discrete-only (argmax / epsilon-greedy).
     supports_continuous: bool = False
 
-    def __init__(self, *, sarsa: bool = False, **kwargs: Any) -> None:
+    def __init__(self, *, sarsa: bool = False) -> None:
         """Initializes the value-based trainer.
 
         Args:
             sarsa: If True, use the on-policy SARSA target; otherwise use the
                 off-policy Q-learning (max) target.
-            **kwargs: Forwarded to
-                :class:`~src.trainer.reinforcement_trainer.ReinforcementLearningTrainer`.
         """
 
-        super().__init__(**kwargs)
+        super().__init__()
         self.sarsa = sarsa
 
     def _epsilon_greedy(self, q_values: Tensor, epsilon: float) -> int:
@@ -85,7 +81,7 @@ class QLearningTrainer(ReinforcementLearningTrainer):
         environment: RLEnvironment,
         optimizer: torch.optim.Optimizer,
         episode_index: int,
-        hp: RLHyperparameters,
+        hp: SimpleNamespace,
     ) -> tuple[float, dict[str, float]]:
         """Runs one episode with a per-step temporal-difference update.
 

@@ -22,6 +22,8 @@ It centralizes:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 import torch
 
@@ -31,7 +33,6 @@ from gymnasium import spaces
 from src.circuits.circuit import CircuitGenome
 from src.trainer.reinforcement_trainer import (
     RLEnvironment,
-    RLHyperparameters,
     ReinforcementLearningTrainer,
     box_observation_encoder,
 )
@@ -257,21 +258,26 @@ def rl_hyperparameters() -> dict[str, object]:
 
 
 def build_trainer(name: str) -> ReinforcementLearningTrainer:
-    """Constructs a trainer of the given algorithm with the tiny test config.
+    """Constructs a trainer of the given algorithm.
+
+    Training hyperparameters are carried per genome (the tiny :data:`_RL_CONFIG`
+    is merged into ``genome.hyperparameters`` by :func:`build_rl_genome`) and
+    resolved by the trainer at train time, so the trainer here is constructed
+    with only its algorithm choice -- ``sarsa`` selecting the on-policy variant
+    of the value-based trainer.
 
     Args:
         name: An algorithm name from
             :data:`src.trainer.rl_trainer_registry.TRAINER_REGISTRY`.
 
     Returns:
-        A configured :class:`ReinforcementLearningTrainer` subclass instance.
+        A :class:`ReinforcementLearningTrainer` subclass instance.
     """
 
     trainer_class = TRAINER_REGISTRY[name]
-    kwargs = dict(_RL_CONFIG)
     if name == "sarsa":
-        kwargs["sarsa"] = True
-    return trainer_class(**kwargs)
+        return trainer_class(sarsa=True)
+    return trainer_class()
 
 
 def build_rl_genome(
@@ -413,7 +419,7 @@ def make_continuous_test_environment(
 def prepare_single_update(
     trainer: ReinforcementLearningTrainer,
     genome: CircuitGenome,
-) -> tuple[torch.optim.Optimizer, RLHyperparameters]:
+) -> tuple[torch.optim.Optimizer, SimpleNamespace]:
     """Initializes a genome's model and sets up a single manual update.
 
     Builds the genome's hybrid model, resolves the trainer's hyperparameters
