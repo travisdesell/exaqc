@@ -48,6 +48,17 @@ scripts in [`scripts/`](scripts) that invoke them:
 - **Reinforcement learning:** `python3 -m src.examples.reinforcement_learning`,
   wrapped by `scripts/run_cartpole.sh`, `scripts/run_frozenlake.sh`,
   `scripts/run_walker2d.sh`, and `scripts/run_mountaincar_continuous.sh`.
+- **Quantum teacher imitation:** `python3 -m src.examples.teacher`, wrapped by
+  `scripts/run_teacher.sh`. Unlike the other two this evolves *purely quantum*
+  genomes (no encoder or decoder), so it has no `--encoding`/`--decoding`
+  options and its `--teacher` / `--loss` choices come from
+  `src.circuits.teacher_circuits.TEACHER_NAMES` and
+  `src.metrics.teacher_losses.TEACHER_LOSS_NAMES`.
+- **Genome refinement:** `python3 -m src.examples.refine_genome`, which reloads
+  a single saved genome and trains it further. It has no wrapper script and
+  takes no task options: every genome records the `task` and `task_target` it
+  was evolved for (stamped by `EXAQC`), so changing those names, or the
+  hyperparameter keys a task records, changes what refinement can reload.
 - **Analysis:** `python3 -m src.analysis.analyze_genome_generation`.
 
 Whenever an edit would change **how any of these documented entry points

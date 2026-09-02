@@ -227,13 +227,19 @@ class Gate:
 
         qubit_args = {}
 
-        if not hasattr(self, "qiskit_parameters"):
-            # set up the parameters within the qiskit weight parameter vector
-            self.qiskit_parameters = {}
+        # Bind to the weight vector we were handed, every time. These bindings
+        # must never be cached across circuit builds: each build creates a fresh
+        # ParameterVector, and qiskit Parameters compare by identity rather than
+        # by name, so reusing bindings from an earlier build would put stale
+        # Parameter objects in the circuit while the QNN is told about the new
+        # ones -- which fails with a confusing "Weight param weights[0] not
+        # present in circuit". Rebuilding here is what makes
+        # ``CircuitGenome.initialize_model`` safe to call more than once.
+        self.qiskit_parameters = {}
 
-            for name, value in self.parameters.items():
-                self.qiskit_parameters[name] = weight_vector[offset]
-                offset += 1
+        for name in self.parameters:
+            self.qiskit_parameters[name] = weight_vector[offset]
+            offset += 1
 
         for i, qubit in enumerate(self.qubits):
             qubit_name = qubit[0]

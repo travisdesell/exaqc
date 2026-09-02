@@ -709,6 +709,7 @@ if __name__ == "__main__":
     hyperparameters = {
         "quantum_input_mode": args.quantum_input_mode,
         "quantum_output_mode": args.quantum_output_mode,
+        "algo": args.algo,
         "quantum_dropout": args.quantum_dropout,
         "quantum_dropout_type": args.quantum_dropout_type,
         "quantum_dropout_rate": args.quantum_dropout_rate,
@@ -841,4 +842,6 @@ if __name__ == "__main__":
         input_registers={"input": n_input_registers},
         output_registers={"input": n_output_registers},
         target=target,
+        task="reinforcement_learning",
+        task_target=args.env,
     )

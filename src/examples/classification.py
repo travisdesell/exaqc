@@ -602,6 +602,8 @@ def main() -> None:
         input_registers={"input": args.input_qubits},
         output_registers={"input": args.output_qubits},
         target=args.target,
+        task="classification",
+        task_target=args.dataset,
     )
 
 
