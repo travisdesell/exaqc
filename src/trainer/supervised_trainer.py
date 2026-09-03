@@ -27,7 +27,6 @@ class SupervisedTrainer:
         testing_dataloader: DataLoader | None = None,
         testing_loss_function: Callable[[Tensor, Tensor], Tensor] | None = None,
         device: str | None = None,
-        quantum_dropout: bool = False,
     ) -> None:
         """
         This creates a SupervisedTrainer object which can be (re)used to train circuit
@@ -50,11 +49,17 @@ class SupervisedTrainer:
             testing_dataloader: Optional held-out test dataloader.
             testing_loss_function: Optional held-out test loss function.
                 Defaults to the validation loss function.
-            quantum_dropout: Master switch for quantum dropout during training.
-                When ``False`` (the default) no quantum dropout is ever applied,
-                regardless of the ``quantum_dropout_type``/``quantum_dropout_rate``
-                genome hyperparameters. When ``True``, dropout is sampled and
-                applied per training batch according to those hyperparameters.
+
+        Note:
+            Quantum dropout is controlled per genome via its
+            ``quantum_dropout`` hyperparameter (read from
+            ``genome.hyperparameters`` at train time by :meth:`get_metrics`),
+            not by this trainer -- so the evolutionary search can carry and
+            mutate it per genome. When the ``quantum_dropout`` hyperparameter is
+            falsy (the default) no quantum dropout is ever applied, regardless
+            of the ``quantum_dropout_type``/``quantum_dropout_rate``
+            hyperparameters; when truthy, dropout is sampled and applied per
+            training batch according to those hyperparameters.
         """
 
         self.training_dataloader = training_dataloader
@@ -68,7 +73,6 @@ class SupervisedTrainer:
             else validation_loss_function
         )
         self.metrics = metrics
-        self.quantum_dropout = quantum_dropout
 
         self.device = torch.device(
             device
@@ -138,7 +142,10 @@ class SupervisedTrainer:
 
                 if is_training:
                     optimizer.zero_grad(set_to_none=True)
-                    if self.quantum_dropout:
+                    # Quantum dropout is a per-genome hyperparameter (so the
+                    # evolutionary search can carry/mutate it), read from the
+                    # genome here rather than from trainer-level state.
+                    if genome.hyperparameters.get("quantum_dropout", False):
                         sample_quantum_dropout(genome)
                     else:
                         # Train on the complete evolved circuit; clear any stale
@@ -337,7 +344,7 @@ class SupervisedTrainer:
                 # get a copy of the current state dict of the hybrid model, this will be
                 # all the weights
                 best_parameters = genome.clone_state_dict()
-            elif epoch - best_epoch > improvement_cutoff:
+            elif improvement_cutoff > 0 and epoch - best_epoch > improvement_cutoff:
                 logger.info(
                     "Stopping at epoch {} because the last improvement "
                     "occurred at epoch {}.",

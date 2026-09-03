@@ -1,3 +1,4 @@
+import argparse
 import random
 import numpy as np
 
@@ -28,6 +29,69 @@ from src.evolution.population_strategy import PopulationStrategy
 
 
 class EXAQC:
+
+    @staticmethod
+    def initialize_parser(parser: argparse.ArgumentParser) -> None:
+        """Adds the search's command-line arguments to a parser.
+
+        Entry points call this so every script exposes the same evolutionary
+        search flags with the same defaults and help text, rather than
+        repeating them. Each argument corresponds to the like-named
+        :meth:`__init__` keyword and is validated by
+        :meth:`validate_mutation_strategy` / :meth:`validate_parent_strategy`
+        once the search is constructed.
+
+        Args:
+            parser: The parser to add the search's arguments to.
+
+        Returns:
+            None. Mutates ``parser`` by adding ``--mutation_strategy``/``-ms``,
+            ``--parent_strategy``/``-ps``, ``--binary_crossover_rate``,
+            ``--n_ary_crossover_rate`` and ``--exponential_crossover_rate``.
+        """
+
+        parser.add_argument(
+            "--mutation_strategy",
+            "-ms",
+            type=str,
+            nargs="+",
+            required=True,
+            help=(
+                "Distribution for the number of mutations applied to each new genome: "
+                "'uniform <min> <max>' (integers, min >= 1) or 'exponential <scale>' "
+                "(float)."
+            ),
+        )
+        parser.add_argument(
+            "--parent_strategy",
+            "-ps",
+            type=str,
+            nargs="+",
+            required=True,
+            help=(
+                "Distribution for the number of parents used to generate each new "
+                "genome: 'uniform <min> <max>' (integers, min >= 2) or "
+                "'exponential <scale>' (float)."
+            ),
+        )
+        parser.add_argument(
+            "--binary_crossover_rate",
+            type=float,
+            default=0.00,
+            help="Fraction of genomes generated via binary crossover once the population is initialized.",
+        )
+        parser.add_argument(
+            "--n_ary_crossover_rate",
+            type=float,
+            default=0.20,
+            help="Fraction of genomes generated via n-ary crossover once the population is initialized.",
+        )
+        parser.add_argument(
+            "--exponential_crossover_rate",
+            type=float,
+            default=0.10,
+            help="Fraction of genomes generated via exponential crossover once the population is initialized.",
+        )
 
     def __init__(
         self,
@@ -289,7 +353,7 @@ class EXAQC:
         )
         hyperparameters["epochs"] = random.choice([5, 10, 15, 20, 25, 30, 35, 40])
         """
-        hyperparameters["learning_rate"] = 0.0010
+        # hyperparameters["learning_rate"] = 0.0010
         # hyperparameters["epochs"] = random.choice([5, 10])
         # hyperparameters["epochs"] = self.saved_epochs
         # hyperparameters["epochs"] = 10

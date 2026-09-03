@@ -49,6 +49,7 @@ from src.circuits.encoder import initialize_encoder, ENCODING_OPTIONS
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
 from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
 
+from src.evolution.exaqc import EXAQC
 from src.evolution.master_worker import master_worker
 from src.evolution.objective import Objective
 from src.evolution.steady_state_islands import SteadyStateIslands
@@ -230,15 +231,18 @@ def make_environment(name: str, **kwargs) -> RLEnvironment:
     )
 
 
-def build_trainer(algo: str, **overrides) -> ReinforcementLearningTrainer:
+def build_trainer(algo: str) -> ReinforcementLearningTrainer:
     """Constructs a trainer for the requested algorithm.
+
+    Every training hyperparameter (including the quantum-dropout master switch)
+    is carried per genome in ``genome.hyperparameters`` and resolved by the
+    trainer at train time, so no hyperparameters are passed here -- the only
+    construction-time input is the algorithm choice itself, which also selects
+    the on-policy SARSA variant of the value-based trainer.
 
     Args:
         algo: Algorithm name; one of the keys of
-            ``src.trainer.reinforcement_trainer.TRAINER_REGISTRY``.
-        **overrides: Constructor keyword arguments forwarded to the trainer
-            (algorithm defaults; per-genome values from
-            ``genome.hyperparameters`` still take precedence at train time).
+            ``src.trainer.rl_trainer_registry.TRAINER_REGISTRY``.
 
     Returns:
         An instantiated :class:`ReinforcementLearningTrainer` subclass.
@@ -254,11 +258,12 @@ def build_trainer(algo: str, **overrides) -> ReinforcementLearningTrainer:
 
     trainer_class = TRAINER_REGISTRY[algo]
 
-    # SARSA is the on-policy variant of the value-based trainer.
+    # SARSA is the on-policy variant of the value-based trainer, selected by a
+    # constructor flag rather than a per-genome hyperparameter.
     if algo == "sarsa":
-        overrides.setdefault("sarsa", True)
+        return trainer_class(sarsa=True)
 
-    return trainer_class(**overrides)
+    return trainer_class()
 
 
 # ---------------------------------------------------------------------
@@ -307,9 +312,11 @@ class ReinforcementLearningObjective(Objective):
         self,
         environment: RLEnvironment,
         trainer: ReinforcementLearningTrainer,
+        train_vs_validation_bias: float = 0.1,
     ):
         self.environment = environment
         self.trainer = trainer
+        self.train_vs_validation_bias = train_vs_validation_bias
 
     def __call__(self, genome: CircuitGenome):
         """Trains and evaluates a genome, setting its fitness.
@@ -325,8 +332,9 @@ class ReinforcementLearningObjective(Objective):
         validation_metrics = genome.metadata["best_validation_metrics"]
 
         mean_return = (
-            validation_metrics["return_mean"] + training_metrics["return_mean"]
-        ) / 2.0
+            self.train_vs_validation_bias * validation_metrics["return_mean"]
+        ) + ((1.0 - self.train_vs_validation_bias) * training_metrics["return_mean"])
+
         # mean_return = validation_metrics["return_mean"]
         # mean_return = training_metrics["return_mean"]
 
@@ -363,12 +371,14 @@ if __name__ == "__main__":
         "--env",
         choices=list(ENV_CHOICES),
         required=True,
+        help="Gymnasium environment to evolve policies on.",
     )
     p.add_argument(
         "--algo",
         choices=sorted(TRAINER_REGISTRY.keys()),
         required=True,
         default="reinforce",
+        help="Reinforcement-learning algorithm used to train each genome.",
     )
 
     p.add_argument(
@@ -378,38 +388,9 @@ if __name__ == "__main__":
         help="Output directory to store results from runs",
     )
 
-    p.add_argument(
-        "--mutation_strategy",
-        "-ms",
-        type=str,
-        nargs="+",
-        required=True,
-    )
-    p.add_argument(
-        "--parent_strategy",
-        "-ps",
-        type=str,
-        nargs="+",
-        required=True,
-    )
-    p.add_argument(
-        "--binary_crossover_rate",
-        type=float,
-        default=0.00,
-        help="Fraction of genomes generated via binary crossover once the population is initialized.",
-    )
-    p.add_argument(
-        "--n_ary_crossover_rate",
-        type=float,
-        default=0.20,
-        help="Fraction of genomes generated via n-ary crossover once the population is initialized.",
-    )
-    p.add_argument(
-        "--exponential_crossover_rate",
-        type=float,
-        default=0.10,
-        help="Fraction of genomes generated via exponential crossover once the population is initialized.",
-    )
+    # The evolutionary search's own flags (mutation/parent strategies and
+    # crossover rates) are owned by EXAQC so every entry point stays in sync.
+    EXAQC.initialize_parser(p)
 
     subparsers = p.add_subparsers(
         dest="population_strategy",
@@ -417,31 +398,44 @@ if __name__ == "__main__":
         required=True,
     )
 
-    steady_state_parser = subparsers.add_parser(
-        "steady_state", help="Use a single steady state population."
+    # Each population strategy owns the flags for its own constructor.
+    SteadyStatePopulation.initialize_parser(
+        subparsers.add_parser(
+            "steady_state", help="Use a single steady state population."
+        )
     )
-    steady_state_parser.add_argument("--max_population_size", type=int, default=30)
-
-    islands_parser = subparsers.add_parser(
-        "islands", help="Use multiple islands of steady state populations."
-    )
-    islands_parser.add_argument("--n_islands", type=int, default=10)
-    islands_parser.add_argument("--max_island_size", type=int, default=10)
-    islands_parser.add_argument("--genomes_before_extinction", type=int, default=100)
-    islands_parser.add_argument("--genomes_for_next_extinction", type=int, default=200)
-    islands_parser.add_argument("--islands_to_extinct", type=int, default=1)
-    islands_parser.add_argument("--primary_parent", type=str, default="best")
-    islands_parser.add_argument(
-        "--intra_island_crossover_rate", type=float, default=0.5
+    SteadyStateIslands.initialize_parser(
+        subparsers.add_parser(
+            "islands", help="Use multiple islands of steady state populations."
+        )
     )
 
     # Evolution
-    p.add_argument("--number_genomes", type=int, default=500)
-    p.add_argument("--input_qubits", type=int, default=4)
-    p.add_argument("--output_qubits", type=int, default=None)
+    p.add_argument(
+        "--number_genomes",
+        type=int,
+        default=500,
+        help="Total number of genomes to evolve and evaluate before stopping.",
+    )
+    p.add_argument(
+        "--input_qubits",
+        type=int,
+        default=4,
+        help="Number of input (observation-encoding) qubits in each evolved circuit.",
+    )
+    p.add_argument(
+        "--output_qubits",
+        type=int,
+        default=None,
+        help="Number of output (readout) qubits; defaults to --input_qubits when unset.",
+    )
 
     p.add_argument(
-        "--target", type=str, choices=["pennylane", "qiskit"], default="pennylane"
+        "--target",
+        type=str,
+        choices=["pennylane", "qiskit"],
+        default="pennylane",
+        help="Quantum backend used to build and simulate the evolved circuits.",
     )
 
     p.add_argument(
@@ -502,16 +496,67 @@ if __name__ == "__main__":
     )
 
     # RL hyperparameters (become genome.hyperparameters, mutable by the search)
-    p.add_argument("--episodes", type=int, default=60)
-    p.add_argument("--eval_episodes", type=int, default=10)
-    p.add_argument("--max_steps", type=int, default=500)
-    p.add_argument("--gamma", type=float, default=0.99)
-    p.add_argument("--learning_rate", "-lr", type=float, default=1e-2)
-    p.add_argument("--entropy_coef", type=float, default=0.0)
-    p.add_argument("--baseline", choices=["mean", "none"], default="mean")
-    p.add_argument("--value_coef", type=float, default=0.5)
-    p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--log_every", type=int, default=10)
+    p.add_argument(
+        "--episodes",
+        type=int,
+        default=60,
+        help="Number of training episodes (outer-loop iterations) per genome.",
+    )
+    p.add_argument(
+        "--eval_episodes",
+        type=int,
+        default=10,
+        help="Number of greedy episodes used to evaluate a genome's return.",
+    )
+    p.add_argument(
+        "--max_steps",
+        type=int,
+        default=500,
+        help="Maximum number of environment steps per episode.",
+    )
+    p.add_argument(
+        "--gamma",
+        type=float,
+        default=0.99,
+        help="Reward discount factor.",
+    )
+    p.add_argument(
+        "--learning_rate",
+        "-lr",
+        type=float,
+        default=1e-2,
+        help="Adam learning rate used when training each genome.",
+    )
+    p.add_argument(
+        "--entropy_coef",
+        type=float,
+        default=0.0,
+        help="Coefficient on the policy entropy bonus.",
+    )
+    p.add_argument(
+        "--baseline",
+        choices=["mean", "none"],
+        default="mean",
+        help="REINFORCE advantage baseline ('mean' subtracts the batch-mean return).",
+    )
+    p.add_argument(
+        "--value_coef",
+        type=float,
+        default=0.5,
+        help="Weight on the value-function loss (actor-critic and PPO).",
+    )
+    p.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="Base random seed for the environment, PyTorch, and NumPy.",
+    )
+    p.add_argument(
+        "--log_every",
+        type=int,
+        default=10,
+        help="Evaluate and log every this many training episodes.",
+    )
     p.add_argument(
         "--save_training_plot",
         action=argparse.BooleanOptionalAction,
@@ -530,25 +575,84 @@ if __name__ == "__main__":
     )
 
     # PPO extras
-    p.add_argument("--rollout_steps", type=int, default=512)
+    p.add_argument(
+        "--rollout_steps",
+        type=int,
+        default=512,
+        help="Environment steps collected per PPO rollout before updating (PPO only).",
+    )
     p.add_argument(
         "--ppo_passes",
         type=int,
         default=4,
         help="Passes over each PPO rollout (PPO literature calls these 'epochs').",
     )
-    p.add_argument("--ppo_minibatch", type=int, default=128)
-    p.add_argument("--ppo_clip", type=float, default=0.2)
-    p.add_argument("--gae_lambda", type=float, default=0.95)
+    p.add_argument(
+        "--ppo_minibatch",
+        type=int,
+        default=128,
+        help="PPO minibatch size (transitions per weight update).",
+    )
+    p.add_argument(
+        "--ppo_clip",
+        type=float,
+        default=0.2,
+        help="PPO clipped-surrogate probability-ratio clip range.",
+    )
+    p.add_argument(
+        "--gae_lambda",
+        type=float,
+        default=0.95,
+        help="Generalized Advantage Estimation (GAE) lambda for PPO.",
+    )
 
     # Value-based extras
-    p.add_argument("--epsilon", type=float, default=0.2)
-    p.add_argument("--epsilon_min", type=float, default=0.05)
-    p.add_argument("--epsilon_decay", type=float, default=0.995)
+    p.add_argument(
+        "--epsilon",
+        type=float,
+        default=0.2,
+        help="Initial epsilon for epsilon-greedy exploration (Q-learning / SARSA).",
+    )
+    p.add_argument(
+        "--epsilon_min",
+        type=float,
+        default=0.05,
+        help="Minimum epsilon for epsilon-greedy exploration (Q-learning / SARSA).",
+    )
+    p.add_argument(
+        "--epsilon_decay",
+        type=float,
+        default=0.995,
+        help="Per-episode multiplicative decay applied to epsilon (Q-learning / SARSA).",
+    )
 
     # FrozenLake options
-    p.add_argument("--map_name", choices=["4x4", "8x8"], default="4x4")
-    p.add_argument("--is_slippery", action="store_true")
+    p.add_argument(
+        "--map_name",
+        choices=["4x4", "8x8"],
+        default="4x4",
+        help="FrozenLake grid size (used only for the frozenlake environment).",
+    )
+    p.add_argument(
+        "--is_slippery",
+        action="store_true",
+        help="Enable stochastic (slippery) transitions for the frozenlake environment.",
+    )
+
+    p.add_argument(
+        "--improvement_cutoff",
+        type=int,
+        default=30,
+        help="Stop training a genome after this many episodes without an improved evaluation return.",
+    )
+
+    p.add_argument(
+        "--train_vs_validation_bias",
+        "-tvb",
+        type=float,
+        default=0.01,
+        help="Weights how the loss is calculated as (<tvb> * train_return) + ((1.0 - <tvb>) * validation_return)).",
+    )
 
     p.add_argument(
         "--logging_level",
@@ -580,29 +684,10 @@ if __name__ == "__main__":
             f"{args.eval_episodes} will be reduced to 1 during evaluation."
         )
 
-    trainer = build_trainer(
-        args.algo,
-        episodes=args.episodes,
-        learning_rate=args.learning_rate,
-        gamma=args.gamma,
-        max_steps=args.max_steps,
-        eval_episodes=args.eval_episodes,
-        seed=args.seed,
-        log_every=args.log_every,
-        ema_alpha=args.ema_alpha,
-        entropy_coef=args.entropy_coef,
-        baseline=args.baseline,
-        value_coef=args.value_coef,
-        gae_lambda=args.gae_lambda,
-        rollout_steps=args.rollout_steps,
-        ppo_passes=args.ppo_passes,
-        ppo_minibatch=args.ppo_minibatch,
-        ppo_clip=args.ppo_clip,
-        epsilon=args.epsilon,
-        epsilon_min=args.epsilon_min,
-        epsilon_decay=args.epsilon_decay,
-        quantum_dropout=args.quantum_dropout,
-    )
+    # All training hyperparameters are carried per genome (see the
+    # ``hyperparameters`` dict below) and resolved by the trainer at train time,
+    # so the trainer itself is constructed with only the algorithm choice.
+    trainer = build_trainer(args.algo)
 
     # Value-based trainers (q_learning / sarsa) enumerate discrete actions and
     # cannot drive a continuous Box-action environment; fail fast with a clear
@@ -613,13 +698,18 @@ if __name__ == "__main__":
             f"environment {args.env!r}; use reinforce, actor_critic, or ppo."
         )
 
-    objective = ReinforcementLearningObjective(environment=environment, trainer=trainer)
+    objective = ReinforcementLearningObjective(
+        environment=environment,
+        trainer=trainer,
+        train_vs_validation_bias=args.train_vs_validation_bias,
+    )
 
     # These become each genome's hyperparameters, so the evolutionary search
     # can carry/mutate them per genome (mirroring the classification example).
     hyperparameters = {
         "quantum_input_mode": args.quantum_input_mode,
         "quantum_output_mode": args.quantum_output_mode,
+        "quantum_dropout": args.quantum_dropout,
         "quantum_dropout_type": args.quantum_dropout_type,
         "quantum_dropout_rate": args.quantum_dropout_rate,
         "episodes": args.episodes,
@@ -641,6 +731,7 @@ if __name__ == "__main__":
         "seed": args.seed,
         "log_every": args.log_every,
         "ema_alpha": args.ema_alpha,
+        "improvement_cutoff": args.improvement_cutoff,
     }
 
     target = args.target
@@ -714,6 +805,7 @@ if __name__ == "__main__":
             genomes_for_next_extinction=args.genomes_for_next_extinction,
             islands_to_extinct=args.islands_to_extinct,
             primary_parent=args.primary_parent,
+            intra_island_crossover_rate=args.intra_island_crossover_rate,
             compare=compare,
             out_dir=args.out_dir,
             save_training_plot=args.save_training_plot,
