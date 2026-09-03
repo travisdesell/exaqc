@@ -19,13 +19,13 @@ classification objective. The environment is described by a pluggable
 :class:`~src.trainer.reinforcement_trainer.RLEnvironment`, which the
 :class:`ReinforcementLearningObjective` receives together with a trainer.
 
-Example (single-process smoke run is driven programmatically via the
-objective; the ``__main__`` block wires everything into ``master_worker`` for
-an MPI evolutionary search)::
+Example (single-process smoke runs are driven programmatically via the
+objective; :func:`main` wires everything into ``master_worker`` for an MPI
+evolutionary search)::
 
     mpirun -n 4 python -m src.examples.reinforcement_learning \\
-        --env cartpole --algo ppo -ms "uniform 1 3" -ps "uniform 2 3" \\
-        --target pennylane --batch_placeholder steady_state
+        --env cartpole --algo ppo -ms uniform 1 3 -ps uniform 2 3 \\
+        --target pennylane steady_state
 """
 
 from __future__ import annotations
@@ -362,11 +362,20 @@ class ReinforcementLearningObjective(Objective):
 
 
 # ---------------------------------------------------------------------
-# Main
+# Command-line interface
 # ---------------------------------------------------------------------
 
-if __name__ == "__main__":
-    p = argparse.ArgumentParser()
+
+def build_parser() -> argparse.ArgumentParser:
+    """Builds the command-line parser for the reinforcement-learning experiment.
+
+    Returns:
+        The configured :class:`argparse.ArgumentParser`.
+    """
+
+    p = argparse.ArgumentParser(
+        description="Evolve quantum genomes for reinforcement learning with EXAQC."
+    )
     p.add_argument(
         "--env",
         choices=list(ENV_CHOICES),
@@ -427,7 +436,14 @@ if __name__ == "__main__":
         "--output_qubits",
         type=int,
         default=None,
-        help="Number of output (readout) qubits; defaults to --input_qubits when unset.",
+        help=(
+            "Number of output (readout) qubits measured in each evolved circuit. "
+            "When unset, this is derived from the environment instead: the "
+            "smallest register that can carry the policy's outputs, i.e. "
+            "ceil(log2(n_policy_outputs)) and at least 1, where a discrete policy "
+            "needs one output per action and a continuous one needs a mean and a "
+            "log-standard-deviation per action dimension."
+        ),
     )
 
     p.add_argument(
@@ -661,7 +677,19 @@ if __name__ == "__main__":
         help="DEBUG/INFO/WARNING/ERROR/CRITICAL",
     )
 
-    args = p.parse_args()
+    return p
+
+
+# ---------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------
+
+
+def main() -> None:
+    """Runs a reinforcement-learning experiment."""
+
+    parser = build_parser()
+    args = parser.parse_args()
 
     logger.remove()
     os.makedirs(args.out_dir, exist_ok=True)
@@ -693,7 +721,7 @@ if __name__ == "__main__":
     # cannot drive a continuous Box-action environment; fail fast with a clear
     # message rather than deep inside the first weight update.
     if environment.continuous and not trainer.supports_continuous:
-        p.error(
+        parser.error(
             f"algorithm {args.algo!r} does not support the continuous "
             f"environment {args.env!r}; use reinforce, actor_critic, or ppo."
         )
@@ -845,3 +873,7 @@ if __name__ == "__main__":
         task="reinforcement_learning",
         task_target=args.env,
     )
+
+
+if __name__ == "__main__":
+    main()
