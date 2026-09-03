@@ -427,7 +427,14 @@ if __name__ == "__main__":
         "--output_qubits",
         type=int,
         default=None,
-        help="Number of output (readout) qubits; defaults to --input_qubits when unset.",
+        help=(
+            "Number of output (readout) qubits measured in each evolved circuit. "
+            "When unset, this is derived from the environment instead: the "
+            "smallest register that can carry the policy's outputs, i.e. "
+            "ceil(log2(n_policy_outputs)) and at least 1, where a discrete policy "
+            "needs one output per action and a continuous one needs a mean and a "
+            "log-standard-deviation per action dimension."
+        ),
     )
 
     p.add_argument(
