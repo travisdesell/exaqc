@@ -27,7 +27,26 @@ from src.utils import training_plots
 from src.dropout.quantum_dropout import apply_qubit_readout_dropout
 
 QUANTUM_INPUT_MODES = ["u3", "rx", "ry", "rz", "basis", "amplitude"]
-QUANTUM_OUTPUT_MODES = ["probs", "expval", "state"]
+
+#: Readout modes a genome can be built with.
+#:
+#: A full-statevector (``"state"``) readout was removed: pennylane's
+#: ``TorchLayer`` casts the complex amplitudes to real and silently discards the
+#: imaginary part, so any circuit with complex amplitudes came back as an
+#: invalid, non-unit-norm vector. It was never usable in practice -- sizing it
+#: raised -- so nothing depended on it.
+QUANTUM_OUTPUT_MODES = ["probs", "expval"]
+
+#: Name given to the classical (measurement) register of a generated qiskit
+#: circuit.
+#:
+#: This is not cosmetic. ``qiskit_machine_learning``'s ``SamplerQNN`` unpacks a
+#: batched sampler result by looking for per-sample counts on a result data
+#: field named ``"meas"``; when it cannot find one it falls back to counts
+#: aggregated over the entire batch, which silently gives every sample in the
+#: batch an identical output (and therefore wrong losses and gradients). Naming
+#: the register to match keeps the supported per-sample path.
+QISKIT_CLASSICAL_REGISTER_NAME = "meas"
 
 
 class CircuitGenome:
@@ -39,6 +58,8 @@ class CircuitGenome:
         input_qubits: list[tuple[str, int]],
         output_qubits: list[tuple[str, int]] | None = None,
         metadata: dict[str, Any] = {},
+        task: str | None = None,
+        task_target: str | None = None,
     ) -> None:
         """
         Initializes an empty quantum circuit.
@@ -52,9 +73,19 @@ class CircuitGenome:
                 the same as the input qubits.
             metadata: is metadata about the genome used by things like the population strategy, etc. or to
                 track other information about the genome.
+            task: which kind of problem this genome was evolved for -- one of
+                ``"classification"``, ``"teacher"`` or ``"reinforcement_learning"``.
+                Assigned by EXAQC to every genome it generates, so a saved genome
+                says what it was trained on without anyone having to guess.
+            task_target: what the task was run against -- the dataset name, the
+                teacher circuit name, or the environment name. Named
+                ``task_target`` rather than ``target`` because ``target`` already
+                names the quantum framework (pennylane or qiskit).
         """
         self.genome_number = genome_number
         self.metadata = metadata
+        self.task = task
+        self.task_target = task_target
 
         # these should be specified by EXAQC
 
@@ -287,6 +318,10 @@ class CircuitGenome:
         serialized = {}
         serialized["fitness"] = self.fitness
         serialized["genome_number"] = self.genome_number
+        # what this genome was evolved for, so a saved genome can be reloaded
+        # and refined without anyone having to say what it was trained on
+        serialized["task"] = self.task
+        serialized["task_target"] = self.task_target
         serialized["metadata"] = self.metadata
         serialized["target"] = self.target
         serialized["input_qubits"] = self.input_qubits.copy()
@@ -294,8 +329,10 @@ class CircuitGenome:
         serialized["hyperparameters"] = self.hyperparameters.copy()
         serialized["gates"] = []
 
-        serialized["encoder"] = self.encoder.to_dict()
-        serialized["decoder"] = self.decoder.to_dict()
+        # A purely quantum genome has no classical stages; serialize those as
+        # null so from_dict restores them as None.
+        serialized["encoder"] = self.encoder.to_dict() if self.encoder else None
+        serialized["decoder"] = self.decoder.to_dict() if self.decoder else None
 
         for gate in self.gates:
             serialized["gates"].append(gate.to_dict())
@@ -333,12 +370,23 @@ class CircuitGenome:
             input_qubits=input_qubits,
             output_qubits=output_qubits,
             metadata=serialized["metadata"],
+            # absent in genomes written before these were recorded
+            task=serialized.get("task"),
+            task_target=serialized.get("task_target"),
         )
         new_genome.fitness = serialized["fitness"]
         new_genome.hyperparameters = serialized["hyperparameters"]
 
-        new_genome.encoder = Encoder.from_dict(serialized["encoder"])
-        new_genome.decoder = Decoder.from_dict(serialized["decoder"])
+        # A null encoder/decoder round-trips as None (a purely quantum genome).
+        serialized_encoder = serialized.get("encoder")
+        serialized_decoder = serialized.get("decoder")
+
+        new_genome.encoder = (
+            Encoder.from_dict(serialized_encoder) if serialized_encoder else None
+        )
+        new_genome.decoder = (
+            Decoder.from_dict(serialized_decoder) if serialized_decoder else None
+        )
 
         for serialized_gate in serialized["gates"]:
             gate = Gate.from_dict(
@@ -634,6 +682,17 @@ class CircuitGenome:
         calculate the outputs (which is wrapped in the forward method of
         CircuitGenome).
 
+        This is idempotent: calling it again rebuilds the model from the
+        genome's current gates and leaves it in the same state as a single
+        call, on both targets. Callers therefore do not have to track whether a
+        genome was already initialized -- ``SupervisedTrainer.train`` and
+        ``save_circuit`` both call it unconditionally.
+
+        Because the rebuild reads the gate parameter values stored on the
+        genome, any weights learned into ``hybrid_model`` but not written back
+        to the gates are discarded -- re-initializing resets the model to the
+        genome's own parameters.
+
         Raises:
             ValueError: If ``self.target`` is neither ``"pennylane"`` nor
                 ``"qiskit"``.
@@ -660,20 +719,28 @@ class CircuitGenome:
             so its parameters can be optimized, snapshotted, and serialized
             together.
 
+            Either classical stage may be ``None``, which drops it from the
+            forward pass. A genome with both set to ``None`` is a purely
+            quantum model: its inputs are fed straight into the quantum layer
+            and its outputs are the raw circuit readout. This is what
+            quantum-teacher imitation uses, where there is nothing classical to
+            learn and the search is over the circuit alone.
+
             Args:
                 encoder: The classical encoder mapping inputs to quantum-circuit
-                    inputs.
+                    inputs, or ``None`` to feed inputs straight to the circuit.
                 quantum_layer: The quantum layer (a qiskit ``TorchConnector`` or
                     a pennylane ``TorchLayer``).
                 decoder: The classical decoder mapping quantum outputs to the
-                    model outputs.
+                    model outputs, or ``None`` to return the raw circuit
+                    readout.
             """
 
             def __init__(
                 self,
-                encoder: Encoder,
+                encoder: Encoder | None,
                 quantum_layer: TorchConnector | qml.qnn.TorchLayer,
-                decoder: Decoder,
+                decoder: Decoder | None,
             ) -> None:
                 super().__init__()
                 self.encoder = encoder
@@ -683,16 +750,22 @@ class CircuitGenome:
             def forward(self, x: Tensor) -> Tensor:
                 """Runs a forward pass through encoder, quantum layer, decoder.
 
+                The encoder and decoder are each skipped when ``None``, so a
+                purely quantum genome passes its inputs straight into the
+                circuit and returns the raw readout.
+
                 Args:
                     x: The input tensor (a single sample of shape
                         ``[n_inputs]`` or a batch of shape
                         ``[batch_size, n_inputs]``).
 
                 Returns:
-                    The decoded output tensor.
+                    The decoded output tensor, or the raw quantum readout when
+                    there is no decoder.
                 """
 
-                x = self.encoder(x, self)
+                if self.encoder is not None:
+                    x = self.encoder(x, self)
 
                 # Expected shapes:
                 #   single sample: [n_quantum_inputs]
@@ -746,7 +819,8 @@ class CircuitGenome:
                 #   batch:         [batch_size, n_quantum_outputs]
                 assert x.shape[-1] == n_quantum_outputs
 
-                x = self.decoder(x, self)
+                if self.decoder is not None:
+                    x = self.decoder(x, self)
 
                 return x
 
@@ -777,14 +851,34 @@ class CircuitGenome:
             x: is the input sample batch to pass through the model.
 
         Returns:
-            The model output tensor (encoder -> quantum layer -> decoder).
+            The model output tensor (encoder -> quantum layer -> decoder,
+            skipping whichever classical stages are ``None``).
         """
 
-        logger.debug(
-            f"doing forward pass, encoder.n_inputs: {self.encoder.n_inputs}, encoder.n_outputs: "
-            f"{self.encoder.n_outputs}, quantum_inputs: {self.n_quantum_inputs()}, quantum_outputs: "
-            f"{self.n_quantum_outputs()}, decoder.n_inputs: {self.decoder.n_inputs}, decoder.n_outputs: "
-            f"{self.decoder.n_outputs}"
+        def describe_stage(stage: Encoder | Decoder | None) -> str:
+            """Summarizes a classical stage's input/output sizes for logging.
+
+            Args:
+                stage: The encoder or decoder to describe, or ``None`` when the
+                    genome has no such stage (a purely quantum model).
+
+            Returns:
+                ``"<n_inputs> -> <n_outputs>"``, or ``"none"`` when the stage is
+                absent.
+            """
+
+            if stage is None:
+                return "none"
+            return f"{stage.n_inputs} -> {stage.n_outputs}"
+
+        # lazy=True keeps this off the forward-pass hot path unless DEBUG is on.
+        logger.opt(lazy=True).debug(
+            "doing forward pass, encoder: {}, quantum_inputs: {}, "
+            "quantum_outputs: {}, decoder: {}",
+            lambda: describe_stage(self.encoder),
+            self.n_quantum_inputs,
+            self.n_quantum_outputs,
+            lambda: describe_stage(self.decoder),
         )
 
         return self.hybrid_model(x)
@@ -888,9 +982,6 @@ class CircuitGenome:
                 ]
                 return expvals
 
-            elif output_mode == "state":
-                return qml.state()
-
             else:
                 raise ValueError(f"Unknown quantum_output_mode={output_mode}")
 
@@ -911,8 +1002,14 @@ class CircuitGenome:
         vectors are stored on ``self.qiskit_circuit`` / ``self.weight_vector``
         / ``self.qiskit_input_vector`` (this method has no return value).
 
+        Of the readout modes in :data:`QUANTUM_OUTPUT_MODES`, this backend
+        implements only ``"probs"``. The pennylane backend additionally
+        implements ``"expval"``.
+
         Raises:
-            ValueError: If the genome's ``quantum_output_mode`` is unsupported.
+            NotImplementedError: If ``quantum_output_mode`` is a recognized mode
+                that the qiskit backend does not implement.
+            ValueError: If ``quantum_output_mode`` is not a recognized mode.
         """
         quantum_registers = []
         register_dict = {}
@@ -923,7 +1020,16 @@ class CircuitGenome:
 
         # unfortunately to get the correct number of output probs we need to use a
         # single output classical register
-        classical_register = ClassicalRegister(len(self.output_qubits), name="c")
+        #
+        # The name matters and must stay QISKIT_CLASSICAL_REGISTER_NAME: when
+        # unpacking a batched result, qiskit-machine-learning's SamplerQNN looks
+        # for per-sample counts on a data field with that specific name. Under
+        # any other name it silently falls back to counts aggregated over the
+        # whole batch, which hands every sample in the batch the same output
+        # (see test_qiskit_batched_forward.py).
+        classical_register = ClassicalRegister(
+            len(self.output_qubits), name=QISKIT_CLASSICAL_REGISTER_NAME
+        )
         circuit = QuantumCircuit(*quantum_registers, classical_register)
 
         # initialize the qubits given the specified input mode
@@ -1009,11 +1115,66 @@ class CircuitGenome:
             # logger.debug(f"parameter_list: {parameter_list}")
             # logger.debug(f"torch_model.weight: {self.torch_model.weight}")
 
-        elif output_mode == "expval":
-            self.torch_model = None
+        elif output_mode in QUANTUM_OUTPUT_MODES:
+            # A recognized readout mode that only the pennylane backend builds a
+            # model for. Refuse it here: leaving self.torch_model unset would
+            # surface much later as an opaque AttributeError on a None model.
+            raise NotImplementedError(
+                f"quantum_output_mode={output_mode!r} is not implemented for the "
+                "qiskit target; use 'probs', or run this genome on pennylane."
+            )
 
         else:
             raise ValueError(f"Unknown quantum_output_mode={output_mode}")
+
+    def metrics_tag(self) -> str:
+        """Builds a short filename tag summarizing this genome's performance.
+
+        Each task records different metrics, so the genome's own :attr:`task`
+        selects what to report: a classification genome reports loss and
+        accuracy, a reinforcement-learning genome reports returns, and any other
+        task (e.g. quantum-teacher imitation) reports its training and
+        validation loss.
+
+        A genome that records no task, or has not been evaluated, is tagged
+        ``"unevaluated"`` rather than failing -- this only names an artifact
+        file, so it must never abort saving one.
+
+        Returns:
+            A filename-safe tag describing the genome's best metrics.
+        """
+
+        metadata = getattr(self, "metadata", {}) or {}
+        training = metadata.get("best_training_metrics") or {}
+        validation = metadata.get("best_validation_metrics") or {}
+        fitness = getattr(self, "fitness", None) or {}
+
+        try:
+            if self.task == "classification":
+                return (
+                    f"trainloss_{training['loss']:.4f}_"
+                    f"trainacc_{training['mean_class_accuracy']['mean']:.4f}_"
+                    f"valloss_{validation['loss']:.4f}_"
+                    f"valacc_{validation['mean_class_accuracy']['mean']:.4f}"
+                )
+
+            if self.task == "reinforcement_learning":
+                return (
+                    f"train_ret_{fitness['train_return_mean']:.4f}_"
+                    f"val_ret_{fitness['eval_return_mean']:.4f}"
+                )
+
+            if self.task:
+                # every other task trains per epoch against a loss
+                return (
+                    f"trainloss_{training['loss']:.4f}_"
+                    f"valloss_{validation['loss']:.4f}"
+                )
+        except (KeyError, TypeError, ValueError):
+            # a task whose metrics are missing or malformed still gets a name
+            pass
+
+        return "unevaluated"
 
     def save_circuit(
         self,
@@ -1064,26 +1225,7 @@ class CircuitGenome:
         print("metadata:")
         print(self.metadata)
 
-        try:
-            training_loss = self.metadata["best_training_metrics"]["loss"]
-            training_accuracy = self.metadata["best_training_metrics"][
-                "mean_class_accuracy"
-            ]["mean"]
-
-            validation_loss = self.metadata["best_validation_metrics"]["loss"]
-            validation_accuracy = self.metadata["best_validation_metrics"][
-                "mean_class_accuracy"
-            ]["mean"]
-
-            tag = (
-                f"trainloss_{training_loss:.4f}_trainacc_{training_accuracy:.4f}_valloss_"
-                f"{validation_loss:.4f}_valacc_{validation_accuracy:.4f}"
-            )
-        except Exception:
-            tag = (
-                f"train_ret_{self.fitness['train_return_mean']:.4f}_"
-                f"val_ret_{self.fitness['eval_return_mean']:.4f}"
-            )
+        tag = self.metrics_tag()
 
         # --- draw the quantum circuit using this genome's target framework ---
         # Both targets draw with the genome's trained gate parameters bound to

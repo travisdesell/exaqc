@@ -24,18 +24,24 @@ pennylane_gate_specifications["ch"] = GateSpecification(
 )
 
 pennylane_gate_specifications["cx"] = GateSpecification(
+    cnot_count=1,
+    rot_count=0,
     name="Controlled X",
     qubits=["control_qubit", "target_qubit"],
     pennylane_op="CNOT",
 )
 
 pennylane_gate_specifications["cy"] = GateSpecification(
+    cnot_count=1,
+    rot_count=0,
     name="Controlled Y",
     qubits=["control_qubit", "target_qubit"],
     pennylane_op="CY",
 )
 
 pennylane_gate_specifications["cz"] = GateSpecification(
+    cnot_count=1,
+    rot_count=0,
     name="Controlled Z",
     qubits=["control_qubit", "target_qubit"],
     pennylane_op="CZ",
@@ -51,6 +57,8 @@ pennylane_gate_specifications["cswap"] = GateSpecification(
 # Controlled parametric gates (native PL)
 # ======================================================
 pennylane_gate_specifications["cp"] = GateSpecification(
+    cnot_count=2,
+    rot_count=3,
     name="Controlled Phase",
     qubits=["control_qubit", "target_qubit"],
     parameters=["phi"],
@@ -58,6 +66,8 @@ pennylane_gate_specifications["cp"] = GateSpecification(
 )
 
 pennylane_gate_specifications["crx"] = GateSpecification(
+    cnot_count=2,
+    rot_count=2,
     name="Controlled RX",
     qubits=["control_qubit", "target_qubit"],
     parameters=["phi"],
@@ -65,6 +75,8 @@ pennylane_gate_specifications["crx"] = GateSpecification(
 )
 
 pennylane_gate_specifications["cry"] = GateSpecification(
+    cnot_count=2,
+    rot_count=2,
     name="Controlled RY",
     qubits=["control_qubit", "target_qubit"],
     parameters=["phi"],
@@ -72,6 +84,8 @@ pennylane_gate_specifications["cry"] = GateSpecification(
 )
 
 pennylane_gate_specifications["crz"] = GateSpecification(
+    cnot_count=2,
+    rot_count=2,
     name="Controlled RZ",
     qubits=["control_qubit", "target_qubit"],
     parameters=["phi"],
@@ -82,12 +96,16 @@ pennylane_gate_specifications["crz"] = GateSpecification(
 # Controlled / single-qubit decompositions (needs_validation)
 # ======================================================
 pennylane_gate_specifications["cs"] = GateSpecification(
+    cnot_count=2,
+    rot_count=3,
     name="Controlled S",
     qubits=["control_qubit", "target_qubit"],
     needs_validation=True,
 )
 
 pennylane_gate_specifications["csdg"] = GateSpecification(
+    cnot_count=2,
+    rot_count=3,
     name="Controlled S^dagger",
     qubits=["control_qubit", "target_qubit"],
     needs_validation=True,
@@ -100,6 +118,8 @@ pennylane_gate_specifications["csx"] = GateSpecification(
 )
 
 pennylane_gate_specifications["cu"] = GateSpecification(
+    cnot_count=2,
+    rot_count=6,
     name="Controlled U",
     qubits=["control_qubit", "target_qubit"],
     parameters=["theta", "phi", "lam", "gamma"],
@@ -107,24 +127,32 @@ pennylane_gate_specifications["cu"] = GateSpecification(
 )
 
 pennylane_gate_specifications["dcx"] = GateSpecification(
+    cnot_count=2,
+    rot_count=0,
     name="Double CNOT",
     qubits=["qubit1", "qubit2"],
     needs_validation=True,
 )
 
 pennylane_gate_specifications["ecr"] = GateSpecification(
+    cnot_count=4,
+    rot_count=2,
     name="Echoed Cross-Resonance",
     qubits=["qubit1", "qubit2"],
     needs_validation=True,
 )
 
 pennylane_gate_specifications["rccx"] = GateSpecification(
+    cnot_count=3,
+    rot_count=0,
     name="Simplified Toffoli (Margolus)",
     qubits=["control_qubit1", "control_qubit2", "target_qubit"],
     needs_validation=True,
 )
 
 pennylane_gate_specifications["rcccx"] = GateSpecification(
+    cnot_count=8,
+    rot_count=0,
     name="Simplified 3-Controlled Toffoli",
     qubits=["control_qubit1", "control_qubit2", "control_qubit3", "target_qubit"],
     needs_validation=True,
@@ -140,6 +168,8 @@ pennylane_gate_specifications["mcx"] = GateSpecification(
 )
 
 pennylane_gate_specifications["mcp"] = GateSpecification(
+    cnot_count=0,
+    rot_count=1,
     name="Multi-Controlled Phase",
     qubits=["control_qubits...", "target_qubit"],
     parameters=["theta"],
@@ -147,6 +177,8 @@ pennylane_gate_specifications["mcp"] = GateSpecification(
 )
 
 pennylane_gate_specifications["mcrx"] = GateSpecification(
+    cnot_count=0,
+    rot_count=1,
     name="Multi-Controlled X Rotation",
     qubits=["control_qubits...", "target_qubit"],
     parameters=["theta"],
@@ -154,6 +186,8 @@ pennylane_gate_specifications["mcrx"] = GateSpecification(
 )
 
 pennylane_gate_specifications["mcry"] = GateSpecification(
+    cnot_count=0,
+    rot_count=1,
     name="Multi-Controlled Y Rotation",
     qubits=["control_qubits...", "target_qubit"],
     parameters=["theta"],
@@ -161,6 +195,8 @@ pennylane_gate_specifications["mcry"] = GateSpecification(
 )
 
 pennylane_gate_specifications["mcrz"] = GateSpecification(
+    cnot_count=0,
+    rot_count=1,
     name="Multi-Controlled Z Rotation",
     qubits=["control_qubits...", "target_qubit"],
     parameters=["theta"],
@@ -241,6 +277,8 @@ pennylane_gate_specifications["sxdg"] = GateSpecification(
 # Parametric single-qubit rotations
 # ======================================================
 pennylane_gate_specifications["rx"] = GateSpecification(
+    cnot_count=0,
+    rot_count=1,
     name="RX",
     qubits=["qubit"],
     parameters=["phi"],
@@ -248,6 +286,8 @@ pennylane_gate_specifications["rx"] = GateSpecification(
 )
 
 pennylane_gate_specifications["ry"] = GateSpecification(
+    cnot_count=0,
+    rot_count=1,
     name="RY",
     qubits=["qubit"],
     parameters=["phi"],
@@ -255,6 +295,8 @@ pennylane_gate_specifications["ry"] = GateSpecification(
 )
 
 pennylane_gate_specifications["rz"] = GateSpecification(
+    cnot_count=0,
+    rot_count=1,
     name="RZ",
     qubits=["qubit"],
     parameters=["phi"],
@@ -262,6 +304,8 @@ pennylane_gate_specifications["rz"] = GateSpecification(
 )
 
 pennylane_gate_specifications["r"] = GateSpecification(
+    cnot_count=0,
+    rot_count=1,
     name="R",
     qubits=["qubit"],
     parameters=["theta", "phi"],
@@ -269,6 +313,8 @@ pennylane_gate_specifications["r"] = GateSpecification(
 )
 
 pennylane_gate_specifications["rv"] = GateSpecification(
+    cnot_count=0,
+    rot_count=1,
     name="RV",
     qubits=["qubit"],
     parameters=["vx", "vy", "vz"],
@@ -279,6 +325,8 @@ pennylane_gate_specifications["rv"] = GateSpecification(
 # Two-qubit parametric gates
 # ======================================================
 pennylane_gate_specifications["rxx"] = GateSpecification(
+    cnot_count=2,
+    rot_count=1,
     name="RXX",
     qubits=["qubit1", "qubit2"],
     parameters=["phi"],
@@ -286,6 +334,8 @@ pennylane_gate_specifications["rxx"] = GateSpecification(
 )
 
 pennylane_gate_specifications["ryy"] = GateSpecification(
+    cnot_count=2,
+    rot_count=1,
     name="RYY",
     qubits=["qubit1", "qubit2"],
     parameters=["phi"],
@@ -293,6 +343,8 @@ pennylane_gate_specifications["ryy"] = GateSpecification(
 )
 
 pennylane_gate_specifications["rzz"] = GateSpecification(
+    cnot_count=2,
+    rot_count=1,
     name="RZZ",
     qubits=["qubit1", "qubit2"],
     parameters=["phi"],
@@ -300,6 +352,8 @@ pennylane_gate_specifications["rzz"] = GateSpecification(
 )
 
 pennylane_gate_specifications["rzx"] = GateSpecification(
+    cnot_count=2,
+    rot_count=1,
     name="RZX",
     qubits=["qubit1", "qubit2"],
     parameters=["theta"],
@@ -316,6 +370,8 @@ pennylane_gate_specifications["iswap"] = GateSpecification(
 )
 
 pennylane_gate_specifications["swap"] = GateSpecification(
+    cnot_count=3,
+    rot_count=0,
     name="SWAP",
     qubits=["qubit1", "qubit2"],
     pennylane_op="SWAP",
@@ -325,6 +381,8 @@ pennylane_gate_specifications["swap"] = GateSpecification(
 # Phase / U family
 # ======================================================
 pennylane_gate_specifications["p"] = GateSpecification(
+    cnot_count=0,
+    rot_count=1,
     name="Phase",
     qubits=["qubit"],
     parameters=["phi"],
@@ -332,6 +390,8 @@ pennylane_gate_specifications["p"] = GateSpecification(
 )
 
 pennylane_gate_specifications["u"] = GateSpecification(
+    cnot_count=0,
+    rot_count=1,
     name="U",
     qubits=["qubit"],
     parameters=["theta", "phi", "delta"],

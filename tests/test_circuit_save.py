@@ -55,11 +55,11 @@ def _build_saveable_genome(
         target: Either ``"pennylane"`` or ``"qiskit"``.
         complexity: A circuit complexity level understood by
             ``build_classification_genome``.
-        with_metrics: If True, populate ``metadata`` with the
+        with_metrics: If True, build a classification genome carrying the
             ``best_training_metrics``/``best_validation_metrics`` that
-            ``save_circuit`` uses to build the PNG filename tag. If False,
-            leave them out and instead set ``fitness`` so the fallback tag
-            path is exercised.
+            ``save_circuit`` uses for the PNG filename tag. If False, build a
+            reinforcement-learning genome instead, whose tag comes from its
+            ``fitness`` returns.
         initialize: If True, call ``initialize_model()`` (the realistic
             post-training state). If False, leave the model uninitialized so
             the lazy circuit-generation branch of ``save_circuit`` is
@@ -80,7 +80,11 @@ def _build_saveable_genome(
 
     # Assign a fresh metadata dict (CircuitGenome's default argument is a
     # shared mutable dict) so tests stay isolated from one another.
+    # The task is what selects the filename tag, and EXAQC stamps it onto every
+    # genome it generates, so the fixtures record it too.
     if with_metrics:
+        genome.task = "classification"
+        genome.task_target = "iris"
         genome.metadata = {
             "best_training_metrics": {
                 "loss": 0.1234,
@@ -92,6 +96,8 @@ def _build_saveable_genome(
             },
         }
     else:
+        genome.task = "reinforcement_learning"
+        genome.task_target = "cartpole"
         genome.metadata = {}
         genome.fitness = {"train_return_mean": 1.5, "eval_return_mean": 2.5}
 

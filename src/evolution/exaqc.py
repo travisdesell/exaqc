@@ -111,6 +111,8 @@ class EXAQC:
         output_registers: dict[str, int] = None,
         output_qubits: list[tuple[str, int]] = None,
         target: str = "pennylane",
+        task: str | None = None,
+        task_target: str | None = None,
     ):
         """
         Creates an instance of Evolutionary Exploration of Augmenting Quantum Circuits given a
@@ -157,6 +159,14 @@ class EXAQC:
                 output_registers. Must be specified if output_registers is not specified. If output_registers
                 and output_qubits are None, they are set to the input_registers/qubits.
             target: qiskit or pennylane
+            task: which kind of problem is being solved -- one of 'classification',
+                'teacher' or 'reinforcement_learning'. Stamped onto every genome
+                this search generates so a saved genome records what it was
+                evolved for.
+            task_target: what the task is run against -- the dataset name, the
+                teacher circuit name, or the environment name. Also stamped onto
+                every generated genome. Named 'task_target' because 'target'
+                already names the quantum framework.
         """
 
         self.gate_specifications = gate_specifications
@@ -164,6 +174,8 @@ class EXAQC:
         self.objective = objective
         self.hyperparameters = hyperparameters
         self.target = target
+        self.task = task
+        self.task_target = task_target
         self.inserted_genomes = 0
 
         self.initial_encoder = initial_encoder
@@ -441,8 +453,8 @@ class EXAQC:
             + ["enable_gate"]  # 5%
             + ["disable_gate"] * 2  # 10%
             + ["clone"] * 2  # 10%
-            # + ["mutate_some_weights"] * 2
-            # + ["mutate_all_weights"] * 2
+            + ["mutate_some_weights"] * 2
+            + ["mutate_all_weights"] * 2
         )
 
         # only use the gates with which do not still require some validation from us to
@@ -562,8 +574,21 @@ class EXAQC:
 
             child.genome_number = self.next_genome_number()
             child.hyperparameters = self.get_hyperparameters()
-            child.encoder = self.initial_encoder.copy()
-            child.decoder = self.initial_decoder.copy()
+            # record what this genome was evolved for, so it can be
+            # reloaded and refined later without being told
+            child.task = self.task
+            child.task_target = self.task_target
+            # A purely quantum search seeds no classical stages to copy.
+            child.encoder = (
+                self.initial_encoder.copy()
+                if self.initial_encoder is not None
+                else None
+            )
+            child.decoder = (
+                self.initial_decoder.copy()
+                if self.initial_decoder is not None
+                else None
+            )
             logger.info(
                 f"set child encoder and decoder: {type(child.encoder)}, {type(child.decoder)}"
             )
@@ -645,8 +670,13 @@ class EXAQC:
                     )
 
                     child = self.mutate(parent, metadata, mutation_count)
-                    child.encoder = parent.encoder.copy()
-                    child.decoder = parent.decoder.copy()
+                    # A purely quantum genome has no classical stages to copy.
+                    child.encoder = (
+                        parent.encoder.copy() if parent.encoder is not None else None
+                    )
+                    child.decoder = (
+                        parent.decoder.copy() if parent.decoder is not None else None
+                    )
 
                 if not child.is_valid():
                     logger.warning(
@@ -657,9 +687,26 @@ class EXAQC:
             # successfully generated a child
             child.genome_number = self.next_genome_number()
             child.hyperparameters = self.get_hyperparameters()
+            # record what this genome was evolved for, so it can be
+            # reloaded and refined later without being told
+            child.task = self.task
+            child.task_target = self.task_target
 
-            assert child.encoder is not None
-            assert child.decoder is not None
+            # A child's classical stages must match how the search was seeded:
+            # a hybrid search (encoder/decoder given) must never drop a stage,
+            # and a purely quantum search (e.g. quantum-teacher imitation, which
+            # seeds neither) must never acquire one. Catching a mismatch here is
+            # much clearer than the failure it would cause later inside the
+            # child's forward pass.
+            if self.initial_encoder is None:
+                assert child.encoder is None
+            else:
+                assert child.encoder is not None
+
+            if self.initial_decoder is None:
+                assert child.decoder is None
+            else:
+                assert child.decoder is not None
 
             return child
 

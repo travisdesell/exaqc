@@ -62,6 +62,62 @@ sh scripts/run_walker2d.sh 1 10 per_class ./2026_ppsn_exaqc/rl
 sh scripts/run_mountaincar_continuous.sh 1 10 per_class ./2026_ppsn_exaqc/rl
 ```
 
+# Quantum Teacher Imitation
+
+Circuits can also be evolved to reproduce the outputs of a known reference
+("teacher") circuit. The teacher is itself a circuit genome, so it runs on either
+the `pennylane` or `qiskit` backend, and the evolved circuits carry **no encoder
+and no decoder** -- there is nothing classical to learn, so the search is over
+the circuit alone (hence no `--encoding`/`--decoding` options). The dataset is
+generated: random input angles are drawn and the teacher's outputs for them
+become the targets.
+
+```
+mpiexec -n 12 python3 -m src.examples.teacher --logging_level INFO --teacher half_adder --input_qubits 2 --output_qubits 2 --number_genomes 1000 --loss fidelity --epochs 30 --batch_size 8 -ms uniform 1 3 -ps uniform 5 5 --binary_crossover_rate 0.1 --n_ary_crossover_rate 0.1 --exponential_crossover_rate 0.1 -qim ry -qom probs --out_dir ./2026_ppsn_exaqc/teacher_half_adder_1 steady_state --max_population_size 30
+```
+
+The input wires are the first `--input_qubits` wires and the readout wires are
+the `--output_qubits` wires after them, so a teacher spans
+`--input_qubits + --output_qubits` wires and the two sets never overlap. The
+available teachers are `identity`, `x_out4`, `bell_out`, `copy_in_to_out`,
+`parity012_to_out4`, `input_controlled_bell`, `2layer_out_block`, `grover` and
+`half_adder`; each reports clearly if the requested wires cannot express it.
+
+`--loss` selects the optimized measure from `fidelity`, `angle`, `kl` and `mse`.
+The first three compare probability distributions and therefore require
+`-qom probs`; `mse` also works with `-qom expval`. All four are reported every
+epoch regardless of which one is optimized.
+
+Repeated experiments can be run with:
+
+```
+sh scripts/run_teacher.sh 1 10 half_adder ./2026_ppsn_exaqc/teacher
+```
+
+# Refining a Single Genome
+
+Every genome the search evaluates is written to JSON, and each one records the
+`task` it was evolved for (`classification`, `teacher` or
+`reinforcement_learning`) along with the `task_target` it ran against (the
+dataset, teacher circuit or environment). A saved genome is therefore
+self-describing and can be reloaded and trained further -- useful for giving the
+best genome of a search a longer run than the search itself could afford:
+
+```
+python3 -m src.examples.refine_genome --genome ./2026_ppsn_exaqc/teacher/all_genomes/genome_11.json
+```
+
+The hyperparameters stored in the file are reused unchanged. Any of them can be
+overridden with `--set`, which may be repeated:
+
+```
+python3 -m src.examples.refine_genome --genome best_genome.json --out_dir ./refined --set epochs=200 --set learning_rate=0.01
+```
+
+The refined genome is written back out as JSON (still self-describing, so it can
+be refined again), alongside its architecture diagram and, with
+`--save_training_plot`, its training history.
+
 The results of these can then be processed to generate the table of mutation and crossover rates as well as statistics on the best found genomes:
 
 ```

@@ -9,9 +9,9 @@ as a list of :class:`~src.circuits.layer_spec.LayerSpec`
 (``describe_layers()``), keeping stage-specific knowledge in the stage classes
 and out of this renderer.
 
-This module was extracted from :mod:`src.utils.helpers` to keep the diagram
-code (and its matplotlib dependency) separate from the general genome/training
-utilities.
+The diagram code (and its matplotlib dependency) lives here rather than beside
+the general genome utilities so that importing a genome does not drag in a
+plotting stack.
 """
 
 from __future__ import annotations
@@ -61,7 +61,6 @@ _INPUT_MODE_LABELS: dict[str, str] = {
 _OUTPUT_MODE_LABELS: dict[str, str] = {
     "probs": "Probabilities",
     "expval": "Pauli-Z Expectation",
-    "state": "Statevector",
 }
 
 #: Fill colors per layer kind for the block renderer.
@@ -682,7 +681,10 @@ def _build_columns(genome: CircuitGenome) -> list[Column]:
     encoder_layers = encoder.describe_layers() if encoder is not None else []
 
     # Input tensor: full image shape for a CNN encoder, else the first
-    # transform's input (a flat feature vector).
+    # transform's input (a flat feature vector). With no encoder at all (a
+    # purely quantum genome) the inputs go straight into the circuit, so the
+    # input tensor is the circuit's own input width and the column is grouped
+    # under the quantum stage -- there is no encoder to bracket.
     if encoder is not None and hasattr(encoder, "input_channels"):
         input_shape: tuple[int, ...] | None = (
             encoder.input_channels,
@@ -694,8 +696,13 @@ def _build_columns(genome: CircuitGenome) -> list[Column]:
     elif encoder is not None:
         input_shape = (encoder.n_inputs,)
     else:
-        input_shape = None
-    columns.append(("encoder", ("tensor", input_shape)))
+        try:
+            input_shape = (genome.n_quantum_inputs(),)
+        except Exception:
+            input_shape = None
+    columns.append(
+        (("encoder" if encoder is not None else "quantum"), ("tensor", input_shape))
+    )
 
     # Each encoder transform, followed by the tensor it produces -- except the
     # last encoder output tensor, which is omitted because it carries the same
@@ -720,12 +727,14 @@ def _build_columns(genome: CircuitGenome) -> list[Column]:
             columns.append(("decoder", ("transform", layer)))
             columns.append(("decoder", ("tensor", layer.out_shape)))
     else:
-        # With no decoder, still show the readout tensor as the output tensor.
+        # With no decoder, the raw circuit readout *is* the model output, so
+        # show it as the output tensor grouped under the quantum stage -- there
+        # is no decoder to bracket.
         try:
             readout_shape: tuple[int, ...] | None = (genome.n_quantum_outputs(),)
         except Exception:
             readout_shape = None
-        columns.append(("decoder", ("tensor", readout_shape)))
+        columns.append(("quantum", ("tensor", readout_shape)))
 
     return columns
 
