@@ -51,10 +51,14 @@ unless explicitly asked about them:
 
 When auditing for dead or stale code, treat this list as expected and skip it.
 
-## Keep the README entry-point scripts in sync (required)
+## Keep the README tutorial and entry-point scripts in sync (required)
 
-The `README.md` documents a set of runnable entry points and the wrapper
-scripts in [`scripts/`](scripts) that invoke them:
+`README.md` is the project's **tutorial**. It has a linked table of contents and
+is organized as: shared sections for `EXAQC` (the search), the population
+strategies, and the trainers; then **one section per entry point** in
+`src/examples/`; then analysis and reproduction. Every runnable entry point is
+documented there, and most are also wrapped by a script in
+[`scripts/`](scripts):
 
 - **Classification:** `python3 -m src.examples.classification`, wrapped by
   `scripts/run_iris.sh`, `scripts/run_seeds.sh`, `scripts/run_breast_cancer.sh`,
@@ -117,6 +121,66 @@ Each documented entry point appears twice: as a standalone example command in
 interface — same flags, same choice values, same defaults. When you update one,
 update the other in the same change, and keep per-dataset/per-env values (qubit
 counts, output qubits, crossover rates, encodings) consistent between them.
+
+### The README tutorial must track each entry point
+
+Every file in `src/examples/` has its own `###` section under **Entry points**
+in `README.md`, containing a one-line description of what it does, a runnable
+example command, and a table of its command-line arguments with defaults. When
+you change an entry point, update its section **in the same change**:
+
+- **Adding, removing or renaming an argument** — add, remove or rename its table
+  row. Keep the documented default, choices and required-ness identical to the
+  parser.
+- **Changing a default, choice list, or how a value is derived** — update the
+  table cell *and* any guidance prose that quotes it. A default that is computed
+  rather than fixed (for example the reinforcement-learning `--output_qubits`,
+  derived from the environment's action space) must be described by what it
+  actually computes, not by a plausible-sounding rule.
+- **Adding a new entry point** — add a `### <module name>` section under
+  **Entry points** *and* a matching link in the table of contents.
+- **Removing or renaming one** — remove or rename both its section and its TOC
+  link.
+- **Changing shared behavior** — the search arguments, the population strategies
+  and the trainers are documented once in their own sections, not repeated per
+  entry point. Update those sections instead, and check whether any per-entry
+  hyperparameter guidance still holds.
+
+Write the documentation **from the parser, not from memory.** Introspect the
+real defaults rather than recalling them:
+
+```
+python3 -c "
+import src.examples.<module> as m
+for a in m.build_parser()._actions: print(a.dest, a.default, a.choices)"
+```
+
+`classification`, `teacher`, `reinforcement_learning`, `refine_genome` and
+`classical_image_classification` expose `build_parser()` alongside a `main()`,
+which is the pattern to follow for any new entry point. The rest
+(`reinforcement_learning_fixed`, `evaluate`, `visualize_rl`) still build their
+parser inline under `if __name__ == "__main__":`, so read the source or run the
+module with `--help` instead.
+
+### Verify the tutorial after changing it
+
+These checks are cheap and catch the mistakes that matter. Run them after
+editing `README.md`:
+
+- **Every table-of-contents anchor resolves.** Collect the `## `/`### ` headings,
+  slugify them (lowercase, punctuation stripped, spaces to hyphens) and confirm
+  every `](#...)` link matches one.
+- **Every documented flag exists.** Collect every `` `--flag` `` mentioned in
+  `README.md` and confirm each appears in some entry point's parser (including
+  sub-parsers) or in `src/analysis/`.
+- **Every documented default matches the parser.** Compare the default column of
+  each argument table against the parser's actual `default=`.
+- **Every example command still parses.** Feed each README command's arguments to
+  its `build_parser().parse_args(...)`; for the inline-parser entry points, run
+  the module and confirm argparse does not reject the arguments.
+- **Every external link resolves.** `curl -s -o /dev/null -w "%{http_code}" -L
+  <url>` for each `](http...)` link; treat anything other than 2xx/3xx as broken
+  and replace it.
 
 ### Dependency and environment sync
 

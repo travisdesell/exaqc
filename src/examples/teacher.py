@@ -385,7 +385,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    """Runs the quantum-teacher imitation experiment."""
+    """Runs a quantum-teacher imitation experiment."""
 
     parser = build_parser()
     args = parser.parse_args()
