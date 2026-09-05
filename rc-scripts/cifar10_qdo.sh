@@ -1,8 +1,6 @@
 #!/bin/bash -l
-#SBATCH -J exaqc_cifar10_gqdo
-#SBATCH -t 2-00:00:00
-#SBATCH -o ./outs/cifar10/output_gqdo.o
-#SBATCH -e ./logs/cifar10/error_gqdo.e
+#SBATCH -J exaqc_cifar10_gqdo_inno
+#SBATCH -t 3-00:00:00
 #SBATCH -A cps -p tier3
 #SBATCH --nodes=1
 #SBATCH --ntasks=6
@@ -16,11 +14,15 @@ spack env activate default-ml-x86_64-25052701
 source .venv/bin/activate
 
 DATASET="cifar10"
-QUBITS=6
+QUBITS=8
 ENCODING="cnn"
-BATCH_SIZE=32
-QUANTUM_DROPOUT_TYPE="gate"
+DECODING="linear"
+QUANTUM_ENC="ry"
+QUANTUM_OUT="probs"
+BATCH_SIZE=64
+QUANTUM_DROPOUT_TYPE="innovation"
 N_GENOMES=500
+MODEL_CONFIG="configs/cifar10_cnn_3.json"
 
 # if [[ "$DATASET" == "mnist" || "$DATASET" == "fashion_mnist" ]]; then
 #     HIDDEN_DIMS=64
@@ -36,28 +38,56 @@ N_GENOMES=500
 # --validation_samples $TEST_SAMPLES \
 # --encoder_config configs/mnist_cnn_2.json \
 
-srun python3.11 -m src.examples.classification \
-    --dataset $DATASET \
-    --target pennylane \
-    --encoding $ENCODING \
-    --decoding linear \
-    --encoder_config configs/mnist_cnn_3.json \
-    --input_qubits $QUBITS \
-    --output_qubits $QUBITS \
-    --quantum_input_mode ry \
-    --quantum_output_mode probs \
-    --quantum_dropout_type $QUANTUM_DROPOUT_TYPE \
-    --quantum_dropout_rate 0.1 \
-    --device cuda \
-    --batch_size $BATCH_SIZE \
-    --validation_batch_size $BATCH_SIZE \
-    --epochs 20 \
-    --learning_rate 0.001 \
-    --weight_decay 0.0005 \
-    --number_genomes $N_GENOMES \
-    --mutation_strategy uniform 1 5 \
-    --parent_strategy uniform 2 5 \
-    --seed 42 \
-    --out_dir artifacts/${DATASET}_g${N_GENOMES}_${ENCODING}_b${BATCH_SIZE}_q${QUBITS}_3_dropout_${QUANTUM_DROPOUT_TYPE} \
-    steady_state \
-    --max_population_size 30
+MODEL_FILENAME=$(basename "$MODEL_CONFIG" .json)
+
+MIN_COUNT=$1
+MAX_COUNT=$2
+
+for i in $(seq $MIN_COUNT $MAX_COUNT); do
+    TARGET_DIR="./outs/$DATASET/runs/$i"
+
+    # Check if the directory does NOT exist
+    if [ ! -d "$TARGET_DIR" ]; then
+        echo "Directory does not exist. Creating it now..."
+        mkdir -p "$TARGET_DIR"
+    else
+        echo "Directory already exists. Skipping."
+    fi
+
+    TARGET_DIR="./logs/$DATASET/runs/$i"
+
+    # Check if the directory does NOT exist
+    if [ ! -d "$TARGET_DIR" ]; then
+        echo "Directory does not exist. Creating it now..."
+        mkdir -p "$TARGET_DIR"
+    else
+        echo "Directory already exists. Skipping."
+    fi
+    
+    srun python3.11 -m src.examples.classification \
+        --dataset $DATASET \
+        --target pennylane \
+        --encoding $ENCODING \
+        --decoding $DECODING \
+        --encoder_config $MODEL_CONFIG \
+        --input_qubits $QUBITS \
+        --output_qubits $QUBITS \
+        --quantum_input_mode $QUANTUM_ENC \
+        --quantum_output_mode $QUANTUM_OUT \
+        --quantum_dropout_type $QUANTUM_DROPOUT_TYPE \
+        --quantum_dropout_rate 0.1 \
+        --device cuda \
+        --batch_size $BATCH_SIZE \
+        --validation_batch_size $BATCH_SIZE \
+        --epochs 20 \
+        --learning_rate 0.001 \
+        --number_genomes $N_GENOMES \
+        --mutation_strategy uniform 1 5 \
+        --parent_strategy uniform 2 5 \
+        --seed $((i + 40)) \
+        --out_dir artifacts/${DATASET}_e${ENCODING}_d${DECODING}_do${QUANTUM_DROPOUT_TYPE}_f${MODEL_FILENAME}_qe${QUANTUM_ENC}_qo${QUANTUM_OUT}_g${N_GENOMES}_q${QUBITS}_b${BATCH_SIZE}/runs/${i} \
+        steady_state \
+        --max_population_size 30 \
+        > ./outs/$DATASET/runs/${i}/output_${QUANTUM_ENC}_${QUANTUM_DROPOUT_TYPE}.o \
+        2> ./logs/$DATASET/runs/${i}/error_${QUANTUM_ENC}_${QUANTUM_DROPOUT_TYPE}.o
+done
