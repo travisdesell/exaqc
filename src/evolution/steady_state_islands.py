@@ -620,9 +620,11 @@ class SteadyStateIslands(PopulationStrategy):
             target_island = self.islands[genome.metadata["target_island_id"]]
 
         if self.profiler is not None:
-            merged_population = []
+            # sort the global population snapshot 
+            merged_population: list[CircuitGenome] = []
             for island in self.islands:
                 merged_population.extend(island.population)
+            merged_population.sort(key=cmp_to_key(self.compare))
 
             self.profiler.record(
                 step=self.insertions,
