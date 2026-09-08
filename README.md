@@ -2,25 +2,26 @@
 
 **Evolutionary Exploration of Augmenting Quantum Circuits.**
 
-EXAQC evolves quantum circuits for machine-learning tasks. Rather than fixing a
+EXAQC evolves and trains hybrid and parameterized quantum circuits for machine-learning and other tasks. Rather than fixing a
 circuit ansatz up front and only training its rotation angles, EXAQC treats the
 *circuit itself* as the thing being searched: gates are added, disabled,
-reordered and recombined across a population of candidate circuits, while each
+reordered and recombined across a population of candidate circuits, while the parameters of each circuit
 candidate is also trained with gradient descent.
 
-A candidate is a **genome**, and a genome is a hybrid model with three stages:
+A candidate circuit is a **genome**, and a genome is a hybrid model with three stages:
 
 ```
 inputs -> [ classical encoder ] -> [ quantum circuit ] -> [ classical decoder ] -> outputs
 ```
 
-Either classical stage may be absent. Quantum-teacher imitation uses neither, so
-the search is over the circuit alone.
+Either classical stage may be absent, as for example, quantum-teacher imitation uses neither, so in this case
+the search would be over the circuit alone. Circuits for reinforcement learning and classification utilize some
+kind of classical to quantum encoding and quantum to classical decoding, and therefore do utilize and encoder and decoder.
 
-Circuits run on either [PennyLane](https://pennylane.ai/) or
-[Qiskit](https://www.ibm.com/quantum/qiskit), and the whole model is a
-[PyTorch](https://pytorch.org/) module, so the circuit's gate parameters and the
-classical layers train together with ordinary backpropagation.
+EXAQC represents circuits in an internal JSON format, which allows them to generate targets which can run using either [PennyLane](https://pennylane.ai/) or
+[Qiskit](https://www.ibm.com/quantum/qiskit). The Pennylane or Qiskit models can be exported as 
+[PyTorch](https://pytorch.org/) modules, which is a layer alongside the encoder and decoder modules (if used), so the circuit's gate parameters and the
+classical layers train together with ordinary backpropagation and the standard PyTorch training framework (Datasets, Data Loaders, Optimizers, etc.).
 
 ---
 
@@ -54,8 +55,7 @@ classical layers train together with ordinary backpropagation.
   - [visualize_rl](#visualize_rl)
   - [classical_image_classification](#classical_image_classification)
   - [reinforcement_learning_fixed](#reinforcement_learning_fixed)
-- [Analysis](#analysis)
-- [Reproducing the PPSN results](#reproducing-the-ppsn-results)
+- [Reproducing 2026 PPSN results](#reproducing-2026-ppsn-results)
 - [Contributing](#contributing)
 
 ---
@@ -75,7 +75,7 @@ Then load that environment:
 source </path/to/exaqc/environment/bin/activate/>
 ```
 
-Then dependencies can be installed with (from the EXAQC project root directory):
+From the EXAQC project root directory, the dependencies can be installed with:
 
 ```
 python3 -m pip install -e .
@@ -93,11 +93,13 @@ Or on linux with `apt` (replace with your favorite application manager):
 sudo apt-get install openmpi
 ```
 
+If you are using Windows, we strongly recommend using EXAQC within WSL and a version of Linux of your choice.
+
 ---
 
 ## How a run is put together
 
-Every evolutionary entry point wires up the same four pieces, and the
+Every example use of EXAQC (the evolutionary entry points in the [`./src/examples`](./src/examples) directory) combine the same four components, and their
 command-line arguments group the same way:
 
 | Piece | What it does | Where its arguments come from |
@@ -105,13 +107,13 @@ command-line arguments group the same way:
 | **EXAQC** | Generates new genomes by mutation and crossover | [Search arguments](#search-command-line-arguments) |
 | **Population strategy** | Decides which genomes survive and become parents | [`steady_state`](#steady_state) / [`islands`](#islands) sub-command |
 | **Trainer** | Trains each genome once it is generated | [Trainers](#trainers) |
-| **Objective** | Trains a genome and writes its `fitness` | The entry point itself |
+| **Objective** | Calls the trainer for a genome and sets its `fitness` | The entry point itself |
 
 Runs are parallelised with **MPI**: rank 0 is the master that generates genomes
 and owns the population, and every other rank is a worker that trains them.
 
-> **A run needs at least 2 MPI ranks.** With `-n 1` there are no workers, and the
-> master blocks forever waiting for results. Use `mpiexec -n <ranks>`, where
+> **A run needs at least 2 MPI processes.** With `-n 1` there are no workers, and the
+> master blocks forever waiting for work requests. Use `mpiexec -n <ranks>`, where
 > `<ranks>` is one master plus however many genomes you want trained
 > concurrently.
 
@@ -132,9 +134,9 @@ and the strategies controlling how children are produced.
 
 ### How the search works
 
-Until the population is full, EXAQC seeds it by mutating an initial empty
-genome. After that, each new child is produced by one of four operators, chosen
-by the crossover rates:
+Until its population(s) are full, EXAQC generates new genomes by mutating an initial empty
+seed genome. After that, each new child is produced by either crossover or mutation, chosen
+by the mutation and crossover rates:
 
 | Operator | Selected with | What it does |
 |---|---|---|
@@ -143,17 +145,17 @@ by the crossover rates:
 | **Exponential crossover** | `--exponential_crossover_rate` | Splices two parents at a random circuit depth |
 | **Mutation** | whatever fraction remains | Applies `--mutation_strategy` mutations to one parent |
 
-Mutation itself picks from a weighted set of operators: adding a gate (~55%),
+Mutation itself picks from a weighted set of operators: adding a gate,
 reordering a gate, swapping which qubits a gate acts on, enabling or disabling a
 gate, cloning, and perturbing some or all gate weights. Only gates that have
-been validated for the chosen backend are ever added.
+been validated for the chosen backend are ever added.  Rates at which these operations are selected can currently be specified by modifying EXAQC's mutate method.
 
 A child is rejected and regenerated if its inputs cannot reach its outputs
 through enabled gates, so every evaluated circuit is functionally connected.
 
-Every genome EXAQC generates is stamped with the `task` and `task_target` it was
-evolved for, which is what lets [`refine_genome`](#refine_genome) reload one
-later without being told anything about it.
+Every genome EXAQC generates is stamped with the `task` and the `task_target` it was
+evolved for, which is what lets [`refine_genome`](#refine_genome) reload a genome
+later for further training or other uses without external input.
 
 ### Search command-line arguments
 
@@ -209,7 +211,7 @@ qubits). `expval` is implemented only on the PennyLane backend.
   circuit *topologies*; raising the crossover rates exploits combinations of
   parents that already work. `-ms uniform 1 3` is a good default: mostly small
   edits, occasionally a bigger jump.
-- **`--number_genomes`** is the real budget knob. The published runs use 1000–2000.
+- **`--number_genomes`** determines how long to run the search for. Current published results use 1000–2000.
 
 Background on the underlying ideas:
 [variational quantum circuits](https://pennylane.ai/qml/glossary/variational_circuit),
@@ -244,11 +246,11 @@ MPI master/worker design, since workers finish at different times.
 
 ### islands
 
-Several independent steady-state populations ("islands") evolved in parallel.
+Several independent steady-state populations ("islands") are evolved in parallel.
 Islands mostly breed within themselves, which preserves distinct solution
-lineages that a single population would wash out. Periodically the worst islands
+lineages that would not survive in a single population. Periodically the worst islands
 suffer an **extinction event**: they are cleared and repopulated from the best
-island, spreading good material without collapsing diversity.
+island, spreading good genomes without overly collapsing diversity.
 
 | Argument | Default | Description |
 |---|---|---|
@@ -270,9 +272,6 @@ island, spreading good material without collapsing diversity.
   increases how aggressively good material is shared.
 - **Total capacity is `n_islands × max_island_size`.** Keep that in the same
   range as a steady-state population you would otherwise use.
-- **Match population size to worker count.** A population much smaller than the
-  number of workers means workers keep training children of the same few
-  parents.
 
 Background: island models are a standard technique in
 [evolutionary algorithms](https://en.wikipedia.org/wiki/Evolutionary_algorithm)
@@ -283,18 +282,19 @@ for maintaining population diversity.
 ## Trainers
 
 Once EXAQC generates a genome, a trainer trains it. Every trainer reads its
-hyperparameters from `genome.hyperparameters`, which is stamped onto the genome
-by the entry point, so hyperparameters travel with a genome and can be evolved.
+hyperparameters from `genome.hyperparameters`, which are provided to the genome
+by EXAQC (with initial values specified by the entry point. This allows hyperparameters
+to potentially be evolved, and also studied at the end of a search to see which work best.
 
 ### SupervisedTrainer
 
 `src/trainer/supervised_trainer.py`. Used by both
 [`classification`](#classification) and [`teacher`](#teacher). It is task
-agnostic: it drives `genome.forward` over dataloaders and hands each batch's
+agnostic: it calls `genome.forward` over dataloaders and hands each batch's
 predictions and targets to the caller's loss function and metrics, passing
 targets through untouched. Classification supplies integer class labels with
 [cross-entropy](https://docs.pytorch.org/docs/stable/generated/torch.nn.CrossEntropyLoss.html);
-teacher imitation supplies float target vectors with a distribution measure.
+while teacher imitation supplies float target vectors with a distribution measure.
 
 Training uses [Adam](https://docs.pytorch.org/docs/stable/generated/torch.optim.Adam.html),
 snapshots the best weights by validation loss, restores them at the end, and
@@ -305,12 +305,12 @@ stops early after `improvement_cutoff` epochs without improvement.
 | `epochs` | `--epochs` | Maximum training epochs per genome |
 | `learning_rate` | `--learning_rate`, `-lr` | Adam learning rate |
 | `weight_decay` | `--weight_decay` | Adam L2 regularisation |
-| `improvement_cutoff` | `--improvement_cutoff` | Epochs without validation improvement before stopping |
+| `improvement_cutoff` | `--improvement_cutoff` | Epochs without validation improvement before stopping, 0 to disable |
 | `batch_size` | `--batch_size` | Samples per gradient step |
 
 ### Reinforcement-learning trainers
 
-`src/trainer/reinforcement_trainer.py` provides the shared scaffold — the
+`src/trainer/reinforcement_trainer.py` provides the shared training scaffold — the
 environment abstraction, greedy evaluation, best-weight snapshotting — and each
 algorithm subclasses it. Choose one with `--algo`.
 
@@ -411,7 +411,7 @@ environment's reward scale and episode length.
 
 ## Entry points
 
-All entry points live in `src/examples/`. The three evolutionary ones
+All entry points live in [`src/examples/`](./src/examples). The three evolutionary ones
 (`classification`, `teacher`, `reinforcement_learning`) share the search and
 population arguments described above; the rest are single-genome tools.
 
@@ -452,7 +452,7 @@ mpiexec -n 12 python3 -m src.examples.classification \
 | `--epochs` | `30` | Training epochs per genome |
 | `--learning_rate`, `-lr` | `5e-4` | Adam learning rate |
 | `--weight_decay` | `0.0` | Adam L2 regularisation |
-| `--improvement_cutoff` | `2` | Epochs without validation improvement before stopping |
+| `--improvement_cutoff` | `2` | Epochs without validation improvement before stopping, 0 to disable |
 | `--batch_size` | `1` | Use `1` for small tabular data, larger for images |
 | `--validation_batch_size` | = `--batch_size` | Validation batch size |
 | `--validation_fraction` | `0.1` | Held-out fraction when no fixed split exists |
@@ -511,7 +511,7 @@ Input wires are the first `--input_qubits` wires and readout wires are the
 | `--batch_size` | `8` | Samples per gradient step |
 | `--epochs` | `30` | Training epochs per genome |
 | `--learning_rate`, `-lr` | `5e-3` | Adam learning rate |
-| `--improvement_cutoff` | `5` | Epochs without validation improvement before stopping |
+| `--improvement_cutoff` | `5` | Epochs without validation improvement before stopping, 0 to disable |
 
 **Losses.** All four are reported every epoch regardless of which is optimized,
 so runs stay comparable.
@@ -579,7 +579,7 @@ environments work only with `reinforce`, `actor_critic`/`a2c` and `ppo`.
 | `--eval_episodes` | `10` | Greedy episodes used to score a genome |
 | `--max_steps` | `500` | Step cap per episode |
 | `--log_every` | `10` | Evaluate and log every N episodes |
-| `--improvement_cutoff` | `30` | Episodes without an improved evaluation before stopping |
+| `--improvement_cutoff` | `30` | Episodes without an improved evaluation before stopping, 0 to disable |
 | `--ema_alpha` | `0.05` | Smoothing for the reported training return |
 | `--train_vs_validation_bias`, `-tvb` | `0.01` | Weight of training return vs. evaluation return in fitness |
 | `--map_name` / `--is_slippery` | `4x4` / off | FrozenLake only |
@@ -686,25 +686,9 @@ control for RL experiments.
 
 ---
 
-## Analysis
+## Reproducing 2026 PPSN results
 
-`src/analysis/analyze_genome_generation.py` aggregates finished runs into tables
-of mutation/crossover effectiveness and statistics on the best genomes found.
-
-```
-python3 -m src.analysis.analyze_genome_generation \
-    --input_directories ./artifacts/classification/* \
-    --groups iris seeds wine breast_cancer --metric target_metric
-```
-
-`--metric` names a key in each genome's `fitness` dict — `target_metric` for
-classification and teacher runs, `eval_return_mean` for RL runs.
-
----
-
-## Reproducing the PPSN results
-
-The classification benchmarks use amplitude encoding, the `probs` output mode
+For this work, the classification benchmarks use amplitude encoding, the `probs` output mode
 with a `clipped` decoder, and an identity encoder:
 
 ```
