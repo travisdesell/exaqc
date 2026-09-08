@@ -128,7 +128,7 @@ linearly with the number of workers.
 
 ## EXAQC: the evolutionary search
 
-`src/evolution/exaqc.py` owns genome *generation*. It holds the allowed gate
+[`src/evolution/exaqc.py`](./src/evolution/exaqc.py) owns genome *generation*. It holds the allowed gate
 set, the initial encoder/decoder, the hyperparameters stamped onto each genome,
 and the strategies controlling how children are produced.
 
@@ -233,7 +233,7 @@ python3 -m src.examples.classification <options...> steady_state --max_populatio
 python3 -m src.examples.classification <options...> islands --n_islands 10 --max_island_size 10
 ```
 
-### steady_state
+### [`steady_state`](./src/evolution/steady_state_population.py)
 
 A single population sorted by fitness. A new genome is inserted if it is better
 than the worst member; once the population is full, the worst is dropped. There
@@ -244,7 +244,7 @@ MPI master/worker design, since workers finish at different times.
 |---|---|---|
 | `--max_population_size` | `30` | Genomes retained in the population |
 
-### islands
+### [`islands`](./src/evolution/steady_state_islands.py)
 
 Several independent steady-state populations ("islands") are evolved in parallel.
 Islands mostly breed within themselves, which preserves distinct solution
@@ -286,9 +286,9 @@ hyperparameters from `genome.hyperparameters`, which are provided to the genome
 by EXAQC (with initial values specified by the entry point. This allows hyperparameters
 to potentially be evolved, and also studied at the end of a search to see which work best.
 
-### SupervisedTrainer
+### [`SupervisedTrainer`](./src/trainer/supervised_trainer.py)
 
-`src/trainer/supervised_trainer.py`. Used by both
+[`src/trainer/supervised_trainer.py`](./src/trainer/supervised_trainer.py). Used by both
 [`classification`](#classification) and [`teacher`](#teacher). It is task
 agnostic: it calls `genome.forward` over dataloaders and hands each batch's
 predictions and targets to the caller's loss function and metrics, passing
@@ -308,9 +308,9 @@ stops early after `improvement_cutoff` epochs without improvement.
 | `improvement_cutoff` | `--improvement_cutoff` | Epochs without validation improvement before stopping, 0 to disable |
 | `batch_size` | `--batch_size` | Samples per gradient step |
 
-### Reinforcement-learning trainers
+### [Reinforcement-learning trainers](./src/trainer/reinforcement_trainer.py)
 
-`src/trainer/reinforcement_trainer.py` provides the shared training scaffold — the
+[`src/trainer/reinforcement_trainer.py`](./src/trainer/reinforcement_trainer.py) provides the shared training scaffold — the
 environment abstraction, greedy evaluation, best-weight snapshotting — and each
 algorithm subclasses it. Choose one with `--algo`.
 
@@ -319,11 +319,11 @@ an **episode** is a full rollout, and an **epoch** is one weight update.
 
 | `--algo` | Class | Continuous actions | Extra decoder outputs |
 |---|---|---|---|
-| `reinforce` | `ReinforceTrainer` | yes | 0 |
-| `actor_critic` / `a2c` | `ActorCriticTrainer` | yes | 1 |
-| `ppo` | `PPOTrainer` | yes | 1 |
-| `q_learning` | `QLearningTrainer` | no | 0 |
-| `sarsa` | `QLearningTrainer` (on-policy target) | no | 0 |
+| `reinforce` | [`ReinforceTrainer`](./src/trainer/reinforce_trainer.py) | yes | 0 |
+| `actor_critic` / `a2c` | [`ActorCriticTrainer`](./src/trainer/actor_critic_trainer.py) | yes | 1 |
+| `ppo` | [`PPOTrainer`](./src/trainer/ppo_trainer.py) | yes | 1 |
+| `q_learning` | [`QLearningTrainer`](./src/trainer/q_learning_trainer.py) | no | 0 |
+| `sarsa` | [`QLearningTrainer`](./src/trainer/q_learning_trainer.py) (on-policy target) | no | 0 |
 
 Advantage methods need a state value, and they get it from one **extra decoder
 output** rather than a separate head — so the value function is part of the
@@ -473,7 +473,7 @@ width — pair it with `-qim amplitude`, which absorbs many features into few
 qubits. `--decoding clipped` normalises circuit outputs into class scores and
 suits `probs`. Fitness records `loss` and `target_metric` (mean class accuracy).
 
-### teacher
+### [`teacher`](./src/examples/teacher.py)
 
 Evolves **purely quantum** circuits to reproduce the outputs of a known
 reference ("teacher") circuit. There is nothing classical to learn, so genomes
@@ -532,7 +532,7 @@ total wires, because a wider multi-controlled Z would need a gate the search is
 not allowed to use. `fidelity` is the most forgiving objective; `kl` punishes
 missing probability mass hardest and can dominate the reported scale early on.
 
-### reinforcement_learning
+### [`reinforcement_learning`](./src/examples/reinforcement_learning.py)
 
 Evolves hybrid circuits as control policies for
 [Gymnasium](https://gymnasium.farama.org/) environments.
@@ -592,7 +592,7 @@ environment — so use `--decoding linear` for those algorithms. `cartpole` is t
 fastest environment to sanity-check a configuration. Fitness records
 `train_return_mean`, `eval_return_mean` and `best_episode_return`.
 
-### refine_genome
+### [`refine_genome`](./src/examples/refine_genome.py)
 
 Reloads one saved genome and trains it further — useful for giving the best
 genome of a search a longer run than the search could afford.
@@ -623,7 +623,7 @@ unknown key is rejected rather than silently added. The refined genome is
 written back out as JSON, still self-describing, so it can be refined again.
 Genomes saved before task recording are refused with an explanatory message.
 
-### evaluate
+### [`evaluate`](./src/examples/evaluate.py)
 
 Scores a saved classification genome on an image dataset's official test split
 (the search itself only ever sees training and validation data).
@@ -636,7 +636,7 @@ Scores a saved classification genome on an image dataset's official test split
 | `--batch_size` | `32` | Evaluation batch size |
 | `--download_dataset` | on | Download if missing |
 
-### visualize_rl
+### [`visualize_rl`](./src/examples/visualize_rl.py)
 
 Replays a trained RL genome in its environment so you can *watch* the evolved
 circuit control it, optionally saving an animated GIF.
@@ -657,7 +657,7 @@ python3 -m src.examples.visualize_rl --genome_json ./artifacts/cartpole/all_geno
 | `--fps` | `30` | GIF frame rate |
 | `--map_name` / `--is_slippery` | `4x4` / off | FrozenLake only |
 
-### classical_image_classification
+### [`classical_image_classification`](./src/examples/classical_image_classification.py)
 
 A **classical baseline**, with no quantum circuit and no evolution: it trains a
 standard image model so quantum results have something to be compared against.
@@ -677,7 +677,7 @@ standard image model so quantum results have something to be compared against.
 | `--seed` | `0` | Random seed |
 | `--device` | auto | PyTorch device (CUDA when available) |
 
-### reinforcement_learning_fixed
+### [`reinforcement_learning_fixed`](./src/examples/reinforcement_learning_fixed.py)
 
 A variant of the RL entry point that trains a **fixed classical MLP**
 (`ClassicalModel`, two 64-unit `tanh` layers) instead of an evolved quantum
