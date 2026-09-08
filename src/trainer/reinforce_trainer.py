@@ -6,6 +6,8 @@ and environment abstraction this trainer builds on.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import torch
 
 from torch import Tensor
@@ -14,7 +16,6 @@ from src.circuits.circuit import CircuitGenome
 from src.trainer.reinforcement_trainer import (
     RLEnvironment,
     ReinforcementLearningTrainer,
-    RLHyperparameters,
     action_distribution,
     discounted_returns,
     distribution_entropy,
@@ -40,7 +41,7 @@ class ReinforceTrainer(ReinforcementLearningTrainer):
         environment: RLEnvironment,
         optimizer: torch.optim.Optimizer,
         episode_index: int,
-        hp: RLHyperparameters,
+        hp: SimpleNamespace,
     ) -> tuple[float, dict[str, float]]:
         """Runs one episode and performs one weight update (epoch).
 

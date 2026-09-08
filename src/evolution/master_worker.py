@@ -139,6 +139,8 @@ def master_worker(
     output_registers: dict[str, int] = None,
     output_qubits: list[tuple[str, int]] = None,
     target: str = "pennylane",
+    task: str | None = None,
+    task_target: str | None = None,
 ):
     """
     Creates an instance of Evolutionary Exploration of Augmenting Quantum Circuits given a
@@ -187,6 +189,12 @@ def master_worker(
             output_registers. Must be specified if output_registers is not specified. If output_registers
             and output_qubits are None, they are set to the input_registers/qubits.
         target: qiskit or pennylane
+        task: which kind of problem is being solved -- 'classification', 'teacher'
+            or 'reinforcement_learning'. Recorded on every generated genome.
+        task_target: what the task is run against -- the dataset, teacher circuit
+            or environment name. Also recorded on every generated genome, so a
+            saved genome can be reloaded and refined without being told what it
+            was trained on.
     """
 
     comm = MPI.COMM_WORLD
@@ -210,6 +218,8 @@ def master_worker(
             output_registers=output_registers,
             output_qubits=output_qubits,
             target=target,
+            task=task,
+            task_target=task_target,
         )
 
         master(comm=comm, rank=rank, exaqc=exaqc, run_for=run_for)

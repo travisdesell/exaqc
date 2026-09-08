@@ -1,9 +1,11 @@
 """Tests for the optional per-epoch/episode training-history line plots.
 
-``src.utils.training_plots.save_training_plot`` auto-detects the task from a
-genome's metadata and writes a twin-axis line plot: loss and mean class
-accuracy per epoch for classification, or return and loss per episode for
-reinforcement learning. ``CircuitGenome.save_circuit`` writes it too when its
+``src.utils.training_plots.save_training_plot`` chooses a plot from the
+genome's task and writes it: loss and mean class accuracy per epoch for
+classification, return and loss per episode for reinforcement learning, and --
+for a task that reports several measures at once, such as quantum teacher
+imitation -- every recorded metric drawn across side-by-side training and
+validation panels. ``CircuitGenome.save_circuit`` writes it too when its
 ``save_training_plot`` flag is set.
 """
 
@@ -198,3 +200,204 @@ def test_save_circuit_skips_training_plot_by_default(tmp_path, monkeypatch) -> N
     genome.save_circuit(insert_type="best", out_dir=str(out_dir))
 
     assert not any(path.name.endswith("_training.png") for path in out_dir.iterdir())
+
+
+# ---------------------------------------------------------------------
+# Multi-metric (quantum teacher) plots
+# ---------------------------------------------------------------------
+
+
+def teacher_epoch_metrics(n_epochs: int = 5, offset: float = 0.0) -> list[dict]:
+    """Builds per-epoch records shaped like a teacher run's metrics.
+
+    Args:
+        n_epochs: How many epoch records to build.
+        offset: Added to every value so training and validation differ.
+
+    Returns:
+        A list of per-epoch metric records carrying loss plus all four
+        teacher measures.
+    """
+    return [
+        {
+            "epoch": e,
+            "loss": 1.0 / (e + 1) + offset,
+            "fidelity": {"mean": 1.0 - 1.0 / (e + 2) - offset},
+            "angle": {"mean": 0.8 / (e + 1) + offset},
+            "kl": {"mean": 2.0 / (e + 1) + offset},
+            "mse": {"mean": 0.05 / (e + 1) + offset},
+        }
+        for e in range(n_epochs)
+    ]
+
+
+class _TeacherGenome:
+    """Genome stand-in that records a task, as EXAQC now stamps."""
+
+    def __init__(self, metadata: dict, task: str | None = "teacher") -> None:
+        self.metadata = metadata
+        self.task = task
+        self.genome_number = 3
+
+
+def test_metric_names_finds_every_measure_with_loss_first() -> None:
+    """All recorded measures are discovered, with the loss ordered first."""
+    from src.utils.training_plots import _metric_names
+
+    names = _metric_names(teacher_epoch_metrics(), teacher_epoch_metrics())
+
+    assert names[0] == "loss"
+    assert set(names) == {"loss", "fidelity", "angle", "kl", "mse"}
+    # 'epoch' labels the record, it is not a measured quantity
+    assert "epoch" not in names
+
+
+def test_metric_value_unwraps_both_shapes() -> None:
+    """Bare numbers and ``{"mean": ...}`` metrics both read back as floats."""
+    from src.utils.training_plots import _metric_value
+
+    record = {"loss": 0.25, "fidelity": {"mean": 0.75}}
+
+    assert _metric_value(record, "loss") == 0.25
+    assert _metric_value(record, "fidelity") == 0.75
+    # a missing metric is NaN rather than an error
+    assert _metric_value(record, "absent") != _metric_value(record, "absent")
+
+
+def test_teacher_plot_written_with_all_metrics(tmp_path) -> None:
+    """A teacher genome's plot is written and covers every recorded measure.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+    genome = _TeacherGenome(
+        {
+            "training_epoch_metrics": teacher_epoch_metrics(),
+            "validation_epoch_metrics": teacher_epoch_metrics(offset=0.05),
+        }
+    )
+
+    save_training_plot(str(tmp_path), genome, "teacher.png")
+
+    _assert_valid_png(tmp_path / "teacher.png")
+
+
+def test_teacher_plot_draws_training_and_validation_panels(
+    tmp_path, monkeypatch
+) -> None:
+    """Both splits get a panel, each carrying every discovered metric.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+        monkeypatch: Used to observe the panels that were drawn.
+    """
+    import src.utils.training_plots as training_plots
+
+    drawn = []
+    original = training_plots._plot_metrics_panel
+
+    def record_panel(axes, title, records, names):
+        """Records the split title and metrics each panel was drawn with."""
+        drawn.append((title, list(names), len(records)))
+        return original(axes, title, records, names)
+
+    monkeypatch.setattr(training_plots, "_plot_metrics_panel", record_panel)
+
+    genome = _TeacherGenome(
+        {
+            "training_epoch_metrics": teacher_epoch_metrics(),
+            "validation_epoch_metrics": teacher_epoch_metrics(offset=0.05),
+        }
+    )
+    save_training_plot(str(tmp_path), genome, "teacher.png")
+
+    expected = ["loss", "fidelity", "angle", "kl", "mse"]
+    assert [title for title, _, _ in drawn] == ["Training", "Validation"]
+    # every metric appears on both panels
+    assert all(names == expected for _, names, _ in drawn)
+    # and each panel got its own split's records
+    assert all(n_records == 5 for _, _, n_records in drawn)
+
+
+def test_each_task_routes_to_its_own_plot() -> None:
+    """A genome's task selects its plot, with no metric sniffing involved."""
+    import src.utils.training_plots as training_plots
+
+    assert training_plots._PLOTS_BY_TASK == {
+        "classification": training_plots._plot_classification,
+        "reinforcement_learning": training_plots._plot_reinforcement_learning,
+        "teacher": training_plots._plot_all_metrics,
+    }
+
+
+def test_plot_is_inferred_when_the_genome_records_no_task() -> None:
+    """Genomes saved before tasks were recorded are routed by their metrics."""
+    import src.utils.training_plots as training_plots
+
+    classification_metadata = {
+        "training_epoch_metrics": [
+            {"epoch": 0, "loss": 1.0, "mean_class_accuracy": {"mean": 0.5}}
+        ]
+    }
+    reinforcement_metadata = {
+        "training_episode_metrics": [{"episode": 0, "return": 1.0, "loss": 0.5}]
+    }
+    teacher_metadata = {"training_epoch_metrics": teacher_epoch_metrics()}
+
+    chooser = training_plots._plot_for_metrics
+
+    assert (
+        chooser(reinforcement_metadata) is training_plots._plot_reinforcement_learning
+    )
+    assert chooser(classification_metadata) is training_plots._plot_classification
+    assert chooser(teacher_metadata) is training_plots._plot_all_metrics
+    # nothing recorded at all -> no plot to draw
+    assert chooser({}) is None
+
+
+def test_classification_genome_keeps_its_own_plot(tmp_path) -> None:
+    """A classification genome still gets the loss/accuracy panels drawn.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+    genome = _TeacherGenome(
+        {
+            "training_epoch_metrics": [
+                {
+                    "epoch": e,
+                    "loss": 1.0 / (e + 1),
+                    "mean_class_accuracy": {"mean": 0.5},
+                }
+                for e in range(4)
+            ],
+            "validation_epoch_metrics": [
+                {
+                    "epoch": e,
+                    "loss": 1.1 / (e + 1),
+                    "mean_class_accuracy": {"mean": 0.4},
+                }
+                for e in range(4)
+            ],
+        },
+        task="classification",
+    )
+
+    save_training_plot(str(tmp_path), genome, "cls.png")
+
+    _assert_valid_png(tmp_path / "cls.png")
+
+
+def test_empty_epoch_metrics_do_not_raise(tmp_path) -> None:
+    """A genome that recorded no epochs is skipped rather than crashing.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+    genome = _TeacherGenome(
+        {"training_epoch_metrics": [], "validation_epoch_metrics": []}
+    )
+
+    save_training_plot(str(tmp_path), genome, "empty.png")
+
+    assert not (tmp_path / "empty.png").is_file()

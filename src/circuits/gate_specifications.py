@@ -24,6 +24,8 @@ class GateSpecification:
         parameters: list[str] = [],
         needs_validation: bool = False,
         pennylane_op: str | None = None,
+        cnot_count: int = 0,
+        rot_count: int = 0,
     ):
         """
         Initializes a gate specification object which tracks the qiskit method name, formal name,
@@ -36,6 +38,14 @@ class GateSpecification:
             needs_validation: can be set to true for a gate method we know exists but we have not yet validated
                 how to use it correctly, so it will be turned off for testing and the EXAQC algorithm.
             pennylane_op: method name in pennylane
+            cnot_count: how many CNOT (two-qubit entangling) operations this gate costs once decomposed
+                into a hardware-native basis. Zero for gates that need no entangling operation. This is
+                decomposition cost, not the gate's own arity -- e.g. a controlled rotation is one gate but
+                decomposes into two CNOTs. Used by :mod:`src.utils.profiler` to score circuit complexity.
+            rot_count: how many parameterized rotation operations this gate costs once decomposed into a
+                hardware-native basis. Like ``cnot_count`` this is decomposition cost rather than the number
+                of parameters the gate itself accepts -- e.g. ``crx`` takes one parameter but decomposes into
+                two rotations.
         """
 
         self.name = name
@@ -43,6 +53,8 @@ class GateSpecification:
         self.parameters = parameters
         self.needs_validation = needs_validation
         self.pennylane_op = pennylane_op
+        self.cnot_count = cnot_count
+        self.rot_count = rot_count
 
         # this will be set when when the GateSpecification is added to a
         # GateSpecifications object in the __setitem__ method.

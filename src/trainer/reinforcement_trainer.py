@@ -95,6 +95,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, Callable, Optional
 
 import math
@@ -438,63 +439,70 @@ def greedy_action(
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class RLHyperparameters:
-    """Per-genome training hyperparameters resolved for a single run.
-
-    A trainer reads these from ``genome.hyperparameters`` (so the
-    evolutionary search can mutate them per genome), falling back to the
-    trainer's own defaults when a key is absent.
-
-    Attributes:
-        episodes: Number of training episodes (outer-loop iterations).
-        learning_rate: Adam learning rate.
-        gamma: Reward discount factor.
-        max_steps: Maximum number of steps per episode.
-        eval_episodes: Number of episodes used for greedy evaluation.
-        seed: Base random seed.
-        log_every: Logging / evaluation frequency, in episodes.
-        ema_alpha: Smoothing factor for the exponential moving average (EMA)
-            of episode returns that is reported as the training return mean.
-            Each episode updates ``ema = alpha * return + (1 - alpha) * ema``;
-            a smaller alpha tracks more slowly and smoothly (the default 0.01
-            corresponds to an effective averaging window of ~100 episodes).
-        baseline: REINFORCE advantage baseline (``"mean"`` or ``"none"``).
-        entropy_coef: Entropy-bonus coefficient.
-        value_coef: Weight on the value loss (actor-critic / PPO).
-        gae_lambda: Generalized Advantage Estimation lambda (PPO).
-        rollout_steps: Environment steps collected per PPO episode (a rollout
-            spanning one or more environment episodes).
-        ppo_passes: Number of passes over a collected PPO rollout; each pass
-            performs several minibatch epochs (weight updates). PPO literature
-            often calls these passes "epochs"; renamed here so "epoch" refers
-            only to a single weight update.
-        ppo_minibatch: PPO minibatch size (steps per weight update).
-        ppo_clip: PPO clip range.
-        epsilon: Initial epsilon for epsilon-greedy exploration (value-based).
-        epsilon_min: Minimum epsilon.
-        epsilon_decay: Per-episode multiplicative epsilon decay.
-    """
-
-    episodes: int = 60
-    learning_rate: float = 1e-2
-    gamma: float = 0.99
-    max_steps: int = 500
-    eval_episodes: int = 10
-    seed: int = 0
-    log_every: int = 10
-    ema_alpha: float = 0.01
-    baseline: str = "mean"
-    entropy_coef: float = 0.0
-    value_coef: float = 0.5
-    gae_lambda: float = 0.95
-    rollout_steps: int = 512
-    ppo_passes: int = 4
-    ppo_minibatch: int = 128
-    ppo_clip: float = 0.2
-    epsilon: float = 0.2
-    epsilon_min: float = 0.05
-    epsilon_decay: float = 0.995
+#: Fallback values for every reinforcement-learning training hyperparameter.
+#:
+#: This is the single source of truth for RL hyperparameter defaults. Each
+#: genome carries its own values in ``genome.hyperparameters`` (so the
+#: evolutionary search can mutate them per genome), and
+#: :meth:`ReinforcementLearningTrainer.resolve_hyperparameters` falls back to
+#: the value here whenever a genome does not specify a key. The example scripts
+#: populate a genome's ``hyperparameters`` from the command line, so these
+#: defaults normally only matter for genomes (e.g. in tests) built without a
+#: full configuration.
+#:
+#: Keys:
+#:     episodes: Number of training episodes (outer-loop iterations).
+#:     learning_rate: Adam learning rate.
+#:     gamma: Reward discount factor.
+#:     max_steps: Maximum number of steps per episode.
+#:     eval_episodes: Number of episodes used for greedy evaluation.
+#:     seed: Base random seed.
+#:     log_every: Logging / evaluation frequency, in episodes.
+#:     ema_alpha: Smoothing factor for the exponential moving average (EMA) of
+#:         episode returns reported as the training return mean. Each episode
+#:         updates ``ema = alpha * return + (1 - alpha) * ema``; a smaller alpha
+#:         tracks more slowly and smoothly.
+#:     baseline: REINFORCE advantage baseline (``"mean"`` or ``"none"``).
+#:     entropy_coef: Entropy-bonus coefficient.
+#:     value_coef: Weight on the value loss (actor-critic / PPO).
+#:     gae_lambda: Generalized Advantage Estimation lambda (PPO).
+#:     rollout_steps: Environment steps collected per PPO episode.
+#:     ppo_passes: Passes over a collected PPO rollout; each pass performs
+#:         several minibatch epochs (weight updates).
+#:     ppo_minibatch: PPO minibatch size (steps per weight update).
+#:     ppo_clip: PPO clip range.
+#:     epsilon: Initial epsilon for epsilon-greedy exploration (value-based).
+#:     epsilon_min: Minimum epsilon.
+#:     epsilon_decay: Per-episode multiplicative epsilon decay.
+#:     improvement_cutoff: Number of episodes without an improvement in the best
+#:         evaluation return after which training stops early.
+#:     quantum_dropout: Master switch for quantum dropout during training. When
+#:         false no quantum dropout is ever applied; when true it is sampled per
+#:         training episode from the genome's ``quantum_dropout_type`` /
+#:         ``quantum_dropout_rate`` and never applied during greedy evaluation.
+RL_HYPERPARAMETER_DEFAULTS: dict[str, Any] = {
+    "episodes": 60,
+    "learning_rate": 1e-2,
+    "gamma": 0.99,
+    "max_steps": 500,
+    "eval_episodes": 10,
+    "seed": 0,
+    "log_every": 10,
+    "ema_alpha": 0.01,
+    "baseline": "mean",
+    "entropy_coef": 0.0,
+    "value_coef": 0.5,
+    "gae_lambda": 0.95,
+    "rollout_steps": 512,
+    "ppo_passes": 4,
+    "ppo_minibatch": 128,
+    "ppo_clip": 0.2,
+    "epsilon": 0.2,
+    "epsilon_min": 0.05,
+    "epsilon_decay": 0.995,
+    "improvement_cutoff": 30,
+    "quantum_dropout": False,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -604,32 +612,14 @@ class ReinforcementLearningTrainer(ABC):
     See the module docstring for how the "step", "episode", and "epoch"
     (one weight update) terms are used.
 
-    Hyperparameters are read from ``genome.hyperparameters`` where present
-    (so the search can mutate them), otherwise from the values passed to this
-    constructor.
-
-    Args:
-        episodes: Number of training episodes (outer-loop iterations).
-        learning_rate: Adam learning rate.
-        gamma: Reward discount factor.
-        max_steps: Maximum number of steps per episode.
-        eval_episodes: Number of episodes used for greedy evaluation.
-        seed: Base random seed.
-        log_every: Logging / evaluation frequency, in episodes.
-        ema_alpha: Smoothing factor for the exponential moving average of
-            episode returns reported as the training return mean.
-        entropy_coef: Entropy-bonus coefficient.
-        baseline: Baseline used by REINFORCE (``"mean"`` or ``"none"``).
-        value_coef: Weight on the value loss (actor-critic / PPO).
-        gae_lambda: GAE lambda (PPO).
-        rollout_steps: Environment steps collected per PPO episode.
-        ppo_passes: Passes over a collected PPO rollout; each pass performs
-            several minibatch epochs (weight updates).
-        ppo_minibatch: PPO minibatch size (steps per weight update).
-        ppo_clip: PPO clip range.
-        epsilon: Initial epsilon for epsilon-greedy (value-based).
-        epsilon_min: Minimum epsilon.
-        epsilon_decay: Per-episode multiplicative epsilon decay.
+    Hyperparameters are read entirely from ``genome.hyperparameters`` (so the
+    evolutionary search can mutate them per genome), falling back to
+    :data:`RL_HYPERPARAMETER_DEFAULTS` for any key a genome does not specify --
+    see :meth:`resolve_hyperparameters`. The base trainer therefore holds no
+    per-run configuration and needs no constructor; subclasses that carry an
+    algorithm *variant* (rather than a hyperparameter) may still define one --
+    e.g. :class:`~src.trainer.q_learning_trainer.QLearningTrainer` takes a
+    ``sarsa`` flag selecting the on-policy target.
 
     Class Attributes:
         n_value_outputs: How many extra decoder outputs (beyond the policy
@@ -651,69 +641,6 @@ class ReinforcementLearningTrainer(ABC):
     #: Whether the algorithm supports continuous (``Box``) action spaces.
     supports_continuous: bool = True
 
-    def __init__(
-        self,
-        *,
-        episodes: int = 60,
-        learning_rate: float = 1e-2,
-        gamma: float = 0.99,
-        max_steps: int = 500,
-        eval_episodes: int = 10,
-        seed: int = 0,
-        log_every: int = 10,
-        ema_alpha: float = 0.01,
-        entropy_coef: float = 0.0,
-        baseline: str = "mean",
-        value_coef: float = 0.5,
-        gae_lambda: float = 0.95,
-        rollout_steps: int = 512,
-        ppo_passes: int = 4,
-        ppo_minibatch: int = 128,
-        ppo_clip: float = 0.2,
-        epsilon: float = 0.2,
-        epsilon_min: float = 0.05,
-        epsilon_decay: float = 0.995,
-        quantum_dropout: bool = False,
-    ) -> None:
-        """Initializes the trainer's default hyperparameters.
-
-        Each keyword argument sets the corresponding field of :attr:`defaults`
-        (an :class:`RLHyperparameters`), which supplies the value whenever a
-        genome does not override that field through its ``hyperparameters``
-        dict. See the class docstring for a description of every argument.
-
-        Args:
-            quantum_dropout: Master switch for quantum dropout during training.
-                When ``False`` (the default) no quantum dropout is ever applied;
-                when ``True`` dropout is sampled per training episode from the
-                genome's ``quantum_dropout_type``/``quantum_dropout_rate``
-                hyperparameters and never applied during greedy evaluation.
-        """
-
-        self.quantum_dropout = quantum_dropout
-
-        self.defaults = RLHyperparameters(
-            episodes=episodes,
-            learning_rate=learning_rate,
-            gamma=gamma,
-            max_steps=max_steps,
-            eval_episodes=eval_episodes,
-            seed=seed,
-            log_every=log_every,
-            ema_alpha=ema_alpha,
-            entropy_coef=entropy_coef,
-            baseline=baseline,
-            value_coef=value_coef,
-            gae_lambda=gae_lambda,
-            rollout_steps=rollout_steps,
-            ppo_passes=ppo_passes,
-            ppo_minibatch=ppo_minibatch,
-            ppo_clip=ppo_clip,
-            epsilon=epsilon,
-            epsilon_min=epsilon_min,
-            epsilon_decay=epsilon_decay,
-        )
-
     # -- hooks for subclasses -------------------------------------------------
 
     @abstractmethod
@@ -723,7 +650,7 @@ class ReinforcementLearningTrainer(ABC):
         environment: RLEnvironment,
         optimizer: torch.optim.Optimizer,
         episode_index: int,
-        hp: RLHyperparameters,
+        hp: SimpleNamespace,
     ) -> tuple[float, dict[str, float]]:
         """Runs one outer-loop training episode and its weight update(s).
 
@@ -749,29 +676,34 @@ class ReinforcementLearningTrainer(ABC):
 
     # -- shared helpers -------------------------------------------------------
 
-    def resolve_hyperparameters(self, genome: CircuitGenome) -> RLHyperparameters:
+    def resolve_hyperparameters(self, genome: CircuitGenome) -> SimpleNamespace:
         """Resolves the hyperparameters to use for training a genome.
 
-        Each field is taken from the genome's ``hyperparameters`` dict when
-        present (so the evolutionary search can mutate it per genome), and
-        otherwise from the defaults this trainer was constructed with. This is
-        the same resolution :meth:`train` performs internally; it is public so
-        callers can build the :class:`RLHyperparameters` needed to drive a
-        single :meth:`run_update` (e.g. for a custom loop or a unit test)
-        without reaching into private state.
+        Each hyperparameter is taken from the genome's ``hyperparameters`` dict
+        when present (so the evolutionary search can mutate it per genome), and
+        otherwise from :data:`RL_HYPERPARAMETER_DEFAULTS`. Only the keys in the
+        defaults are read, so unrelated entries in the genome's dict (e.g. the
+        quantum input/output modes) are ignored. This is the same resolution
+        :meth:`train` performs internally; it is public so callers can build the
+        attribute bag a single :meth:`run_update` needs (e.g. for a custom loop
+        or a unit test) without reaching into private state.
 
         Args:
             genome: The genome whose ``hyperparameters`` dict is consulted.
 
         Returns:
-            A fully-populated :class:`RLHyperparameters`.
+            A fresh :class:`types.SimpleNamespace` with one attribute per key of
+            :data:`RL_HYPERPARAMETER_DEFAULTS` (so fields are accessed as
+            ``hp.episodes``, ``hp.gamma``, and so on).
         """
 
         source = getattr(genome, "hyperparameters", {}) or {}
-        resolved = RLHyperparameters()
-        for name in resolved.__dataclass_fields__:
-            resolved.__dict__[name] = source.get(name, getattr(self.defaults, name))
-        return resolved
+        return SimpleNamespace(
+            **{
+                name: source.get(name, default)
+                for name, default in RL_HYPERPARAMETER_DEFAULTS.items()
+            }
+        )
 
     def policy_logits(
         self, genome: CircuitGenome, environment: RLEnvironment, observation: Any
@@ -799,7 +731,7 @@ class ReinforcementLearningTrainer(ABC):
         self,
         genome: CircuitGenome,
         environment: RLEnvironment,
-        hp: RLHyperparameters,
+        hp: SimpleNamespace,
     ) -> dict[str, float]:
         """Evaluates the genome greedily over several episodes.
 
@@ -938,7 +870,7 @@ class ReinforcementLearningTrainer(ABC):
             # Sample fresh quantum dropout for this training episode (a no-op
             # when the toggle is off). Evaluation clears it so greedy rollouts
             # always use the complete circuit.
-            if self.quantum_dropout:
+            if hp.quantum_dropout:
                 sample_quantum_dropout(genome)
 
             episode_return, info = self.run_update(
@@ -974,6 +906,18 @@ class ReinforcementLearningTrainer(ABC):
                     best_evaluation = evaluation
                     best_state = genome.clone_state_dict()
                     best_episode = episode
+
+                elif (
+                    hp.improvement_cutoff > 0
+                    and episode - best_episode > hp.improvement_cutoff
+                ):
+                    logger.info(
+                        "Stopping at episode {} because the last improvement "
+                        "occurred at episode {}.",
+                        episode,
+                        best_episode,
+                    )
+                    break
 
         # restore the best-evaluated weights into the genome
         genome.set_state_dict(best_state)

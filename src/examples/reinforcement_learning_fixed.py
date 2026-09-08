@@ -400,28 +400,10 @@ if __name__ == "__main__":
             f"{args.eval_episodes} will be reduced to 1 during evaluation."
         )
 
-    trainer = build_trainer(
-        args.algo,
-        episodes=args.episodes,
-        learning_rate=args.learning_rate,
-        gamma=args.gamma,
-        max_steps=args.max_steps,
-        eval_episodes=args.eval_episodes,
-        seed=args.seed,
-        log_every=args.log_every,
-        ema_alpha=args.ema_alpha,
-        entropy_coef=args.entropy_coef,
-        baseline=args.baseline,
-        value_coef=args.value_coef,
-        gae_lambda=args.gae_lambda,
-        rollout_steps=args.rollout_steps,
-        ppo_passes=args.ppo_passes,
-        ppo_minibatch=args.ppo_minibatch,
-        ppo_clip=args.ppo_clip,
-        epsilon=args.epsilon,
-        epsilon_min=args.epsilon_min,
-        epsilon_decay=args.epsilon_decay,
-    )
+    # All training hyperparameters are carried per genome and resolved by the
+    # trainer at train time, so the trainer is constructed with only the
+    # algorithm choice.
+    trainer = build_trainer(args.algo)
 
     # Value-based trainers (q_learning / sarsa) enumerate discrete actions and
     # cannot drive a continuous Box-action environment; fail fast with a clear

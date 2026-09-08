@@ -15,7 +15,16 @@ from src.dropout.quantum_dropout import sample_quantum_dropout
 
 
 class SupervisedTrainer:
-    """Trains EXAQC hybrid models using a fully batched execution path."""
+    """Trains EXAQC hybrid models using a fully batched execution path.
+
+    The trainer is task-agnostic: it drives ``genome.forward`` over the supplied
+    dataloaders and hands each batch's predictions and targets to the caller's
+    loss function and metrics. Targets reach the loss function exactly as the
+    dataloader yielded them, so the same trainer serves classification (integer
+    class indices with cross-entropy) and regression-style tasks such as
+    quantum-teacher imitation (float target vectors with an MSE/KL/fidelity
+    loss).
+    """
 
     def __init__(
         self,
@@ -27,7 +36,6 @@ class SupervisedTrainer:
         testing_dataloader: DataLoader | None = None,
         testing_loss_function: Callable[[Tensor, Tensor], Tensor] | None = None,
         device: str | None = None,
-        quantum_dropout: bool = False,
     ) -> None:
         """
         This creates a SupervisedTrainer object which can be (re)used to train circuit
@@ -50,11 +58,17 @@ class SupervisedTrainer:
             testing_dataloader: Optional held-out test dataloader.
             testing_loss_function: Optional held-out test loss function.
                 Defaults to the validation loss function.
-            quantum_dropout: Master switch for quantum dropout during training.
-                When ``False`` (the default) no quantum dropout is ever applied,
-                regardless of the ``quantum_dropout_type``/``quantum_dropout_rate``
-                genome hyperparameters. When ``True``, dropout is sampled and
-                applied per training batch according to those hyperparameters.
+
+        Note:
+            Quantum dropout is controlled per genome via its
+            ``quantum_dropout`` hyperparameter (read from
+            ``genome.hyperparameters`` at train time by :meth:`get_metrics`),
+            not by this trainer -- so the evolutionary search can carry and
+            mutate it per genome. When the ``quantum_dropout`` hyperparameter is
+            falsy (the default) no quantum dropout is ever applied, regardless
+            of the ``quantum_dropout_type``/``quantum_dropout_rate``
+            hyperparameters; when truthy, dropout is sampled and applied per
+            training batch according to those hyperparameters.
         """
 
         self.training_dataloader = training_dataloader
@@ -68,7 +82,6 @@ class SupervisedTrainer:
             else validation_loss_function
         )
         self.metrics = metrics
-        self.quantum_dropout = quantum_dropout
 
         self.device = torch.device(
             device
@@ -104,7 +117,11 @@ class SupervisedTrainer:
             genome: the circuit genome to evaluate (without updating weights)
                 on the validation data for this trainer.
             dataloader: a pytorch dataloader for the data to evaluate on.
-            loss_function: the loss function to use for data evaluation.
+            loss_function: the loss function to use for data evaluation. It is
+                called as ``loss_function(predictions, targets)`` with the
+                targets exactly as the dataloader yielded them, so it owns the
+                target dtype contract (integer class indices for cross-entropy,
+                float target vectors for regression-style tasks).
             optimizer: is the optimizer use to train the genome if provided. if not
                 provided metrics are just being gathered for inference/validation and
                 weights should not be updated.
@@ -117,7 +134,7 @@ class SupervisedTrainer:
 
         Raises:
             ValueError: If the model's predictions are not 2-D
-                ``[batch_size, n_classes]``, or if the prediction and target
+                ``[batch_size, n_outputs]``, or if the prediction and target
                 batch sizes differ.
         """
         is_training = optimizer is not None
@@ -138,7 +155,10 @@ class SupervisedTrainer:
 
                 if is_training:
                     optimizer.zero_grad(set_to_none=True)
-                    if self.quantum_dropout:
+                    # Quantum dropout is a per-genome hyperparameter (so the
+                    # evolutionary search can carry/mutate it), read from the
+                    # genome here rather than from trainer-level state.
+                    if genome.hyperparameters.get("quantum_dropout", False):
                         sample_quantum_dropout(genome)
                     else:
                         # Train on the complete evolved circuit; clear any stale
@@ -152,9 +172,8 @@ class SupervisedTrainer:
 
                 if predictions.ndim != 2:
                     raise ValueError(
-                        "Classification predictions must have shape "
-                        "[batch_size, n_classes], received "
-                        f"{tuple(predictions.shape)}."
+                        "Predictions must have shape [batch_size, n_outputs], "
+                        f"received {tuple(predictions.shape)}."
                     )
                 if predictions.shape[0] != y_batch.shape[0]:
                     raise ValueError(
@@ -162,7 +181,11 @@ class SupervisedTrainer:
                         f"{predictions.shape[0]} != {y_batch.shape[0]}."
                     )
 
-                loss = loss_function(predictions.float(), y_batch.long())
+                # Targets are passed through untouched so the loss function owns
+                # the dtype contract: classification supplies integer class
+                # indices for cross-entropy, while regression-style tasks (e.g.
+                # quantum-teacher imitation) supply float target vectors.
+                loss = loss_function(predictions.float(), y_batch)
 
                 # A parameterized gate can be disabled (structurally) or dropped
                 # (transiently, by quantum dropout) so that no enabled gate uses
@@ -181,7 +204,11 @@ class SupervisedTrainer:
                 with torch.no_grad():
                     for prediction, target in zip(predictions, y_batch):
                         for metric in self.metrics.values():
-                            metric.accumulate(prediction.float(), target.long())
+                            # As with the loss, targets reach the metric exactly
+                            # as the dataloader yielded them, so each metric owns
+                            # its own target contract (class indices for accuracy,
+                            # float target vectors for fidelity/KL/MSE).
+                            metric.accumulate(prediction.float(), target)
 
         genome.clear_quantum_dropout()
 
@@ -338,7 +365,7 @@ class SupervisedTrainer:
                 # get a copy of the current state dict of the hybrid model, this will be
                 # all the weights
                 best_parameters = genome.clone_state_dict()
-            elif epoch - best_epoch > improvement_cutoff:
+            elif improvement_cutoff > 0 and epoch - best_epoch > improvement_cutoff:
                 logger.info(
                     "Stopping at epoch {} because the last improvement "
                     "occurred at epoch {}.",

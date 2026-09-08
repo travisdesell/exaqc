@@ -57,26 +57,38 @@ def torch_simplex_crossover(
 
 def crossover_encoder_decoder(
     parents: list[CircuitGenome], r: float
-) -> tuple[Encoder, Decoder]:
+) -> tuple[Encoder | None, Decoder | None]:
     """
     Do crossover on encoders or decoders which are torch modules with
     parameters to also optimize.
 
+    A purely quantum genome has no classical stages, in which case the
+    corresponding stage is ``None`` and stays ``None`` in the child -- there is
+    nothing to recombine.
+
     Args:
         parents: is the list of circuit genomes from the crossover operation
         r: is the randomized line search value to use from the crossover operation
+
+    Returns:
+        A tuple ``(encoder, decoder)`` for the child, where either entry is
+        ``None`` when the parents carry no such stage.
     """
 
     encoder = None
     decoder = None
 
-    if isinstance(parents[0].encoder, torch.nn.Module):
+    if parents[0].encoder is None:
+        encoder = None
+    elif isinstance(parents[0].encoder, torch.nn.Module):
         encoders = [parent.encoder for parent in parents]
         encoder = torch_simplex_crossover(encoders, r)
     else:
         encoder = parents[0].encoder.copy()
 
-    if isinstance(parents[0].decoder, torch.nn.Module):
+    if parents[0].decoder is None:
+        decoder = None
+    elif isinstance(parents[0].decoder, torch.nn.Module):
         decoders = [parent.decoder for parent in parents]
         decoder = torch_simplex_crossover(decoders, r)
     else:

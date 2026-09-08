@@ -15,6 +15,7 @@ mock_master_worker_module.master_worker = MagicMock()
 sys.modules["src.evolution.master_worker"] = mock_master_worker_module
 
 import src.examples.classification as classification  # noqa
+from src.evolution.steady_state_population import SteadyStatePopulation  # noqa
 
 
 def make_image_loader(
@@ -185,6 +186,10 @@ def test_main_builds_cnn_encoder_for_image_data(
     mocked_initialize_decoder = MagicMock(return_value=mocked_decoder)
     mocked_master_worker = MagicMock()
     mocked_population_class = MagicMock(return_value=mocked_population)
+    # Only the *construction* of the population is mocked here; the parser still
+    # needs the strategy's real argument definitions, since build_parser() asks
+    # the class to register its own flags (e.g. --max_population_size).
+    mocked_population_class.initialize_parser = SteadyStatePopulation.initialize_parser
 
     monkeypatch.setattr(
         classification,
@@ -349,6 +354,7 @@ def test_main_builds_cnn_encoder_for_image_data(
         "batch_size": 4,
         "quantum_input_mode": "u3",
         "quantum_output_mode": "probs",
+        "quantum_dropout": False,
         "quantum_dropout_rate": 0.0,
         "quantum_dropout_type": "none",
     }

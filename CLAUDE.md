@@ -37,6 +37,20 @@ fully covered by their enclosing function's docstring may be left undocumented.
 - Format with `black` and keep `flake8 --max-line-length=200` clean.
 - Match the conventions of the file you are editing.
 
+### Parked files (leave alone)
+
+Some files are knowingly excluded from the standards above. Do not lint,
+reformat, refactor, "fix" or delete them, and do not report them as findings
+unless explicitly asked about them:
+
+- `src/analysis/plot_gptp_histogram.py` — not reachable from any entry point and
+  runs all of its work at import time (it has no `__main__` guard, so merely
+  importing it executes everything). Parked pending a decision on its future.
+  Already excluded in `.flake8` and in `[tool.black]` in `pyproject.toml`; keep
+  those exclusions in sync with this list.
+
+When auditing for dead or stale code, treat this list as expected and skip it.
+
 ## Keep the README entry-point scripts in sync (required)
 
 The `README.md` documents a set of runnable entry points and the wrapper
@@ -48,6 +62,17 @@ scripts in [`scripts/`](scripts) that invoke them:
 - **Reinforcement learning:** `python3 -m src.examples.reinforcement_learning`,
   wrapped by `scripts/run_cartpole.sh`, `scripts/run_frozenlake.sh`,
   `scripts/run_walker2d.sh`, and `scripts/run_mountaincar_continuous.sh`.
+- **Quantum teacher imitation:** `python3 -m src.examples.teacher`, wrapped by
+  `scripts/run_teacher.sh`. Unlike the other two this evolves *purely quantum*
+  genomes (no encoder or decoder), so it has no `--encoding`/`--decoding`
+  options and its `--teacher` / `--loss` choices come from
+  `src.circuits.teacher_circuits.TEACHER_NAMES` and
+  `src.metrics.teacher_losses.TEACHER_LOSS_NAMES`.
+- **Genome refinement:** `python3 -m src.examples.refine_genome`, which reloads
+  a single saved genome and trains it further. It has no wrapper script and
+  takes no task options: every genome records the `task` and `task_target` it
+  was evolved for (stamped by `EXAQC`), so changing those names, or the
+  hyperparameter keys a task records, changes what refinement can reload.
 - **Analysis:** `python3 -m src.analysis.analyze_genome_generation`.
 
 Whenever an edit would change **how any of these documented entry points

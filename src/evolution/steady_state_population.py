@@ -1,3 +1,4 @@
+import argparse
 import bisect
 import random
 
@@ -12,6 +13,29 @@ from src.utils.profiler import EXAQCProfiler
 
 
 class SteadyStatePopulation(PopulationStrategy):
+
+    @staticmethod
+    def initialize_parser(parser: argparse.ArgumentParser) -> None:
+        """Adds this population strategy's command-line arguments to a parser.
+
+        Entry points call this on the ``steady_state`` sub-parser so every
+        script exposes the same flags with the same defaults and help text,
+        rather than repeating them. Each argument corresponds to the
+        like-named :meth:`__init__` keyword.
+
+        Args:
+            parser: The (sub-)parser to add this strategy's arguments to.
+
+        Returns:
+            None. Mutates ``parser`` by adding ``--max_population_size``.
+        """
+
+        parser.add_argument(
+            "--max_population_size",
+            type=int,
+            default=30,
+            help="Maximum number of genomes retained in the steady-state population.",
+        )
 
     def __init__(
         self,
