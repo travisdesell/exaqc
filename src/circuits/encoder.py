@@ -535,6 +535,19 @@ class LinearEncoder(Encoder, torch.nn.Module):
         """
         return copy.deepcopy(self)
 
+class PiTanh(torch.nn.Module):
+    """Applies tanh activation scaled by pi."""
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        """Applies pi-scaled tanh activation.
+
+        Args:
+            inputs: Input tensor.
+
+        Returns:
+            Tensor with values bounded to [-pi, pi].
+        """
+        return torch.pi * torch.tanh(inputs)
 
 class CNNEncoder(Encoder, torch.nn.Module):
     """Configurable convolutional encoder for image classification.
@@ -636,6 +649,7 @@ class CNNEncoder(Encoder, torch.nn.Module):
             "silu": torch.nn.SiLU,
             "leaky_relu": torch.nn.LeakyReLU,
             "tanh": torch.nn.Tanh,
+            "pi_tanh": PiTanh,
             "sigmoid": torch.nn.Sigmoid,
             "identity": torch.nn.Identity,
         }

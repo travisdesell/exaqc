@@ -517,7 +517,7 @@ def main() -> None:
         n_decoder_inputs = 2**args.output_qubits
 
     encoder_config = None
-    if training_loader.is_image and args.encoding == "cnn":
+    if training_loader.is_image and args.encoding in ["cnn", "quantum_conv"]:
         channels, height, width = training_loader.input_shape
 
         encoder_config = load_encoder_config(args.encoder_config)

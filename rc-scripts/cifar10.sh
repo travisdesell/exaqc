@@ -2,8 +2,6 @@
 #SBATCH -J exaqc_cifar10
 #SBATCH -t 5-00:00:00
 #SBATCH -A cps -p tier3
-#SBATCH -o ./outs/cifar10/compare/output.o
-#SBATCH -e ./logs/cifar10/compare/error.e
 #SBATCH --nodes=1
 #SBATCH --ntasks=6
 #SBATCH --ntasks-per-node=6
@@ -18,10 +16,12 @@ source .venv/bin/activate
 DATASET="cifar10"
 QUBITS=8
 ENCODING="cnn"
-QUANTUM_ENC="ry"
+DECODING="linear"
+QUANTUM_ENC="u3"
 QUANTUM_OUT="probs"
 BATCH_SIZE=64
 N_GENOMES=1000
+MODEL_CONFIG="configs/cifar10_cnn_3.json"
 
 # if [[ "$DATASET" == "mnist" || "$DATASET" == "fashion_mnist" ]]; then
 #     HIDDEN_DIMS=64
@@ -37,6 +37,8 @@ N_GENOMES=1000
 # --validation_samples $TEST_SAMPLES \
 # --encoder_config configs/mnist_cnn_2.json \
 
+MODEL_FILENAME=$(basename "$MODEL_CONFIG" .json)
+
 MIN_COUNT=$1
 MAX_COUNT=$2
 
@@ -45,7 +47,7 @@ for i in $(seq $MIN_COUNT $MAX_COUNT); do
         --dataset $DATASET \
         --target pennylane \
         --encoding $ENCODING \
-        --decoding linear \
+        --decoding $DECODING \
         --encoder_config configs/cifar10_cnn_3.json \
         --input_qubits $QUBITS \
         --output_qubits $QUBITS \
@@ -60,7 +62,9 @@ for i in $(seq $MIN_COUNT $MAX_COUNT); do
         --mutation_strategy uniform 1 5 \
         --parent_strategy uniform 2 5 \
         --seed $((i + 40)) \
-        --out_dir artifacts/${DATASET}_${ENCODING}_${QUANTUM_ENC}_g${N_GENOMES}_q${QUBITS}_b${BATCH_SIZE}/runs/${i} \
+        --out_dir artifacts/${DATASET}_e${ENCODING}_d${DECODING}_f${MODEL_FILENAME}_${QUANTUM_ENC}_g${N_GENOMES}_q${QUBITS}_b${BATCH_SIZE}/runs/${i} \
         steady_state \
-        --max_population_size 30
+        --max_population_size 30 \
+        > ./outs/$DATASET/runs/${i}/output_${QUANTUM_ENC}_1.o \
+        2> ./logs/$DATASET/runs/${i}/error_${QUANTUM_ENC}_1.o
 done

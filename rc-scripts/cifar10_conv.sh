@@ -1,14 +1,12 @@
 #!/bin/bash -l
-#SBATCH -J exaqc_cifar10_qc
-#SBATCH -t 0-12:00:00
+#SBATCH -J exaqc_convu3_cifar10
+#SBATCH -t 0-06:00:00
 #SBATCH -A cps -p tier3
-#SBATCH -o ./outs/cifar10/quantum_conv/output.o
-#SBATCH -e ./logs/cifar10/quantum_conv/error.e
 #SBATCH --nodes=1
 #SBATCH --ntasks=6
 #SBATCH --ntasks-per-node=6
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=32GB
+#SBATCH --mem=16GB
 #SBATCH --gres=gpu:a100:1
 
 spack env activate default-ml-x86_64-25052701
@@ -16,14 +14,14 @@ spack env activate default-ml-x86_64-25052701
 source .venv/bin/activate
 
 DATASET="cifar10"
-QUBITS=8
+QUBITS=6
 ENCODING="quantum_conv"
 DECODING="quantum_conv"
-QUANTUM_ENC="ry"
+QUANTUM_ENC="u3"
 QUANTUM_OUT="expval"
 BATCH_SIZE=32
 N_GENOMES=1000
-MODEL_CONFIG="configs/cifar10_cnn_3.json"
+MODEL_CONFIG="configs/cifar10_qconv_u3.json"
 
 # if [[ "$DATASET" == "mnist" || "$DATASET" == "fashion_mnist" ]]; then
 #     HIDDEN_DIMS=64
@@ -66,5 +64,7 @@ for i in $(seq $MIN_COUNT $MAX_COUNT); do
         --seed $((i + 40)) \
         --out_dir artifacts/${DATASET}_e${ENCODING}_d${DECODING}_f${MODEL_FILENAME}_qe${QUANTUM_ENC}_qo${QUANTUM_OUT}_g${N_GENOMES}_q${QUBITS}_b${BATCH_SIZE}/runs/${i} \
         steady_state \
-        --max_population_size 30
+        --max_population_size 30 \
+        > ./outs/$DATASET/runs/${i}/output_${ENCODING}_${QUANTUM_ENC}_q${QUBITS}.o \
+        2> ./logs/$DATASET/runs/${i}/error_${ENCODING}_${QUANTUM_ENC}_q${QUBITS}.o
 done

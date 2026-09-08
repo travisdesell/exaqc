@@ -32,7 +32,7 @@
     }
   ],
   "adaptive_pool_size": [4, 4],
-  "fully_connected_layers": [128],
+  "fully_connected_layers": [256, 128],
   "dropout": 0.2,
   "output_activation": "tanh"
 }

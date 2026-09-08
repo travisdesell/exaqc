@@ -1,12 +1,12 @@
 #!/bin/bash -l
-#SBATCH -J exaqc_mnist_u3
+#SBATCH -J exaqc_mnist_amp
 #SBATCH -t 3-00:00:00
 #SBATCH -A cps -p tier3
 #SBATCH --nodes=1
 #SBATCH --ntasks=6
 #SBATCH --ntasks-per-node=6
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=32GB
+#SBATCH --mem=16GB
 #SBATCH --gres=gpu:a100:1
 
 spack env activate default-ml-x86_64-25052701
@@ -14,10 +14,11 @@ spack env activate default-ml-x86_64-25052701
 source .venv/bin/activate
 
 DATASET="mnist"
-QUBITS=6
+QUBITS=5
 ENCODING="cnn"
+DECODING="linear"
 MODEL_CONFIG="configs/mnist_fc.json"
-QUANTUM_ENC="u3"
+QUANTUM_ENC="amplitude"
 QUANTUM_OUT="probs"
 BATCH_SIZE=32
 N_GENOMES=800
@@ -66,7 +67,7 @@ for i in $(seq $MIN_COUNT $MAX_COUNT); do
         --dataset $DATASET \
         --target pennylane \
         --encoding $ENCODING \
-        --decoding linear \
+        --decoding $DECODING \
         --encoder_config ${MODEL_CONFIG} \
         --input_qubits $QUBITS \
         --output_qubits $QUBITS \
@@ -81,9 +82,9 @@ for i in $(seq $MIN_COUNT $MAX_COUNT); do
         --mutation_strategy uniform 1 5 \
         --parent_strategy uniform 2 5 \
         --seed $((i + 40)) \
-        --out_dir artifacts/${DATASET}_${ENCODING}_f${MODEL_FILENAME}_${QUANTUM_ENC}_${QUANTUM_OUT}_g${N_GENOMES}_q${QUBITS}_b${BATCH_SIZE}/runs/${i} \
+        --out_dir artifacts/${DATASET}_e${ENCODING}_d${DECODING}_f${MODEL_FILENAME}_${QUANTUM_ENC}_${QUANTUM_OUT}_g${N_GENOMES}_q${QUBITS}_b${BATCH_SIZE}/runs/${i} \
         steady_state \
         --max_population_size 30 \
-        > ./outs/$DATASET/runs/${i}/output_${QUANTUM_ENC}_1.o \
-        2> ./logs/$DATASET/runs/${i}/error_${QUANTUM_ENC}_1.o
+        > ./outs/$DATASET/runs/${i}/output_${QUANTUM_ENC}_q${QUBITS}.o \
+        2> ./logs/$DATASET/runs/${i}/error_${QUANTUM_ENC}_q${QUBITS}.o
 done
