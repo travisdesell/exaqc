@@ -46,7 +46,7 @@ classical layers train together with ordinary backpropagation and the standard P
     - [PPO](#ppo)
     - [Q-learning and SARSA](#q-learning-and-sarsa)
   - [Choosing trainer hyperparameters](#choosing-trainer-hyperparameters)
-- [Entry points](#entry-points)
+- [Examples](#examples)
   - [classification](#classification)
   - [teacher](#teacher)
   - [reinforcement_learning](#reinforcement_learning)
@@ -409,7 +409,7 @@ environment's reward scale and episode length.
 
 ---
 
-## Entry points
+## [`Examples`](./src/examples)
 
 All entry points live in [`src/examples/`](./src/examples). The three evolutionary ones
 (`classification`, `teacher`, `reinforcement_learning`) share the search and
@@ -425,7 +425,7 @@ Common to the evolutionary entry points:
 | `--seed` | `0` | Random seed |
 | `--logging_level` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
 
-### classification
+### [`classification`](./src/examples/classification.py)
 
 Evolves hybrid circuits to classify tabular or image datasets.
 
