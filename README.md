@@ -335,7 +335,7 @@ Shared arguments: `--episodes`, `--eval_episodes`, `--max_steps`, `--gamma`,
 `--learning_rate`, `--entropy_coef`, `--log_every`, `--improvement_cutoff`,
 `--ema_alpha`.
 
-#### REINFORCE
+#### [REINFORCE](./src/trainer/reinforce_trainer.py)
 
 Monte-Carlo policy gradient: run one episode, compute discounted returns, take
 one gradient step. Simplest and highest variance.
@@ -344,7 +344,7 @@ one gradient step. Simplest and highest variance.
 |---|---|---|
 | `--baseline` | `mean` | `mean` subtracts the batch-mean return to reduce variance; `none` disables it |
 
-#### Actor-critic (a2c)
+#### [Actor-critic (a2c)](./src/trainer/actor_critic_trainer.py)
 
 Adds a learned state-value baseline read from the extra decoder output, which
 lowers variance relative to REINFORCE.
@@ -353,7 +353,7 @@ lowers variance relative to REINFORCE.
 |---|---|---|
 | `--value_coef` | `0.5` | Weight on the value loss relative to the policy loss |
 
-#### PPO
+#### [PPO](./src/trainer/ppo_trainer.py)
 
 [Proximal Policy Optimization](https://arxiv.org/abs/1707.06347). The only
 algorithm whose outer iteration spans several episodes: it collects a rollout,
@@ -368,7 +368,7 @@ minibatch updates under a clipped objective.
 | `--ppo_clip` | `0.2` | Probability-ratio clip range |
 | `--gae_lambda` | `0.95` | GAE bias/variance trade-off |
 
-#### Q-learning and SARSA
+#### [Q-learning and SARSA](./src/trainer/q_learning_trainer.py)
 
 Semi-gradient temporal-difference learning that treats the circuit's outputs as
 action values `Q(s, ·)`, updating at *every environment step*. Actions are
