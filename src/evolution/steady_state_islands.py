@@ -262,7 +262,7 @@ class SteadyStateIslands(PopulationStrategy):
             "--genomes_for_next_extinction",
             type=int,
             default=200,
-            help="Number of genomes inserted between successive extinction events.",
+            help="Number of genomes that need to be inserted into an island before it can be repopulated again.",
         )
         parser.add_argument(
             "--islands_to_extinct",
@@ -293,7 +293,7 @@ class SteadyStateIslands(PopulationStrategy):
         compare: Callable[[CircuitGenome, CircuitGenome], int],
         intra_island_crossover_rate: float = 0.5,
         genomes_before_extinction: int = 50,
-        genomes_for_next_extinction: int = 200,
+        genomes_for_next_extinction: int = 100,
         islands_to_extinct: int = 2,
         primary_parent: str = "best",
         out_dir: str = None,
@@ -315,6 +315,8 @@ class SteadyStateIslands(PopulationStrategy):
             max_population_size: is the maximum number of genomes that the population will hold.
             genomes_before_extinction: is how many genomes are inserted into islands before an
                 extinction event happens, which clears out the worst islands and repopulates them
+            genomes_for_next_extinction: is how many genomes need to be added to an island before
+                it can be repopulated again.
             island_to_extinct: is how many islands to clear out in an extinction event
             primary_parent: can be `best` or `island`, and it determines how the primary parent
                 is selected when get_parents is called. If `best`, then the parent genomes are

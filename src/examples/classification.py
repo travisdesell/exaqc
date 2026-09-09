@@ -457,7 +457,7 @@ def load_encoder_config(
 
 
 def main() -> None:
-    """Runs the classification experiment."""
+    """Runs a classification experiment."""
     parser = build_parser()
     args = parser.parse_args()
 
