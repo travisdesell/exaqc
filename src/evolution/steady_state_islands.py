@@ -286,6 +286,23 @@ class SteadyStateIslands(PopulationStrategy):
             help="Fraction of an island's offspring produced by crossover within the same island.",
         )
 
+        parser.add_argument(
+            "--topology",
+            type=str,
+            nargs="+",
+            required=True,
+            help=(
+                "How islands are connected to each other, which determines which other islands "
+                "an island can select genomes from for inter-island crossover. Options are: " 
+                "'fully_connected' (default), 'ring', 'star' (all islands connected to one center), "
+                "'2d_mesh <x_dim> <y_dim>' (requires x_dim * y_dim == n_islands), "
+                "'tree <leaves per island>', 'random <min_edges> <max_edges>' (connects all islands "
+                "in a line, then randomly adds (uniform between (min_edges - 1) to max_edges other "
+                "edges from each island to another randomly selected island)."
+            ),
+        )
+
+
     def __init__(
         self,
         n_islands: int,
@@ -296,6 +313,7 @@ class SteadyStateIslands(PopulationStrategy):
         genomes_for_next_extinction: int = 100,
         islands_to_extinct: int = 2,
         primary_parent: str = "best",
+        toplogy: list[str] = ["fully_connected"],
         out_dir: str = None,
         profiler: Optional[EXAQCProfiler] = None,
         save_training_plot: bool = False,
@@ -322,6 +340,16 @@ class SteadyStateIslands(PopulationStrategy):
                 is selected when get_parents is called. If `best`, then the parent genomes are
                 sorted such that the first (primary) parent has the best fitness. if `island`
                 then the first genome is the one from the target island for the child.
+            toplogy: specifies hoislands are connected to each other, which determines which other
+                islands an island can select genomes from for inter-island crossover. Options are:
+                    'fully_connected' (default),
+                    'ring',
+                    'star' (all islands connected to one center),
+                    '2d_mesh <x_dim> <y_dim>' (requires x_dim * y_dim == n_islands),
+                    'tree <leaves per island>'
+                    'random <min_edges> <max_edges>' (connects all islands in a line, then randomly 
+                        adds (uniform between (min_edges - 1) to max_edges other edges from each 
+                        island to another randomly selected island).
             out_dir: is the directory to write out the best found genomes and log files, if not
                 specified log files will not be written.
             save_training_plot: when True, each saved genome also gets a
