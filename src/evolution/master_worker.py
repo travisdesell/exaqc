@@ -4,12 +4,8 @@ from mpi4py import MPI
 from mpi4py.MPI import Intracomm
 
 from src.circuits.circuit import CircuitGenome
-from src.circuits.decoder import Decoder
-from src.circuits.encoder import Encoder
-from src.circuits.gate_specifications import GateSpecifications
 from src.evolution.exaqc import EXAQC
 from src.evolution.objective import Objective
-from src.evolution.population_strategy import PopulationStrategy
 
 tag_ids = {
     "genome": 1,
@@ -121,108 +117,34 @@ def worker(
         comm.send(genome.to_dict(), dest=0, tag=tag_ids["genome_response"])
 
 
-def master_worker(
-    gate_specifications: GateSpecifications,
-    population: PopulationStrategy,
-    objective: Objective,
-    initial_encoder: Encoder,
-    initial_decoder: Decoder,
-    hyperparameters: dict[str, any],
-    mutation_strategy: list[str],
-    parent_strategy: list[str],
-    run_for: int,
-    binary_crossover_rate: float = 0.00,
-    n_ary_crossover_rate: float = 0.20,
-    exponential_crossover_rate: float = 0.10,
-    input_qubits: list[tuple[str, int]] = None,
-    input_registers: dict[str, int] = None,
-    output_registers: dict[str, int] = None,
-    output_qubits: list[tuple[str, int]] = None,
-    target: str = "pennylane",
-    task: str | None = None,
-    task_target: str | None = None,
-):
-    """
-    Creates an instance of Evolutionary Exploration of Augmenting Quantum Circuits given a
-    particular population strategy, allowing the given gates (if specified), and uses the main process
-    as the master in the master work strategy. Workers will asynchronously get new tasks (genomes)
-    to evaluate and send the results back to the master process.
+def master_worker(exaqc: EXAQC, run_for: int) -> None:
+    """Runs an MPI master/worker EXAQC search over a pre-built ``EXAQC``.
 
-    args:
-        gate_specifications: is an object containing the allowed gates specifications for the search
-            process, for either the pennylane or qiskit frameworks.
-        population: is an instance of a subclass of the PopulationStrategy interface, utilized to get
-            parents for mutation or crossover and insert children back into the population.
-        objective: an instantiated Objective which can be called with a CircuitGenome as an argument
-            to be trained and have its fitness evaluated.
-        initial_encoder: the initial encoder to use when initializing genomes, which may be later mutated
-            or have crossover performed on when generating new children.
-        initial_decoder: the initial decoder to use when initializing genomes, which may be later mutated
-            values before being passed into a loss function for training.
-        hyperparameters: a dict specifying which hyperparameters to use in the training process, and if
-            this is an additional search space to search over.
-        mutation_strategy: specifies how many mutations should be performed if mutation is selected. current
-            options are 'uniform <min> <max>' which will select a number of mutations uniformly at random
-            between min and max, inclusive of both endpoints, where min should be at least 1; or
-            'exponential <scale>' which will select the number of mutations using an exponential distribution
-            with the given scale plus 1 to ensure at least 1 mutation happens.
-        parent_strategy: specifies how many parents should be selected for n-ary crossover. current
-            options are 'uniform <min> <max>' which will select a number of parents uniformly at random
-            between min and max, inclusive of both endpoints, where min should be at least 2; or
-            'exponential <scale>' which will select the number of parents using an exponential distribution
-            with the given scale plus 2 to ensure at least 2 parents.
-        run_for: how many genomes to generate in the search process.
-        binary_crossover_rate: fraction of generated genomes (after the population is initialized) produced by
-            binary crossover.
-        n_ary_crossover_rate: fraction of generated genomes (after the population is initialized) produced by
-            n-ary crossover.
-        exponential_crossover_rate: fraction of generated genomes (after the population is initialized) produced
-            by exponential crossover. Whatever fraction remains is used for mutation.
-        input_registers: a dict of register names and sizes (the key is the qubit name, the value is its size). must
-            be specified if input_qubits is not specified.
-        input_qubits: a list of qubit tuples (name, register_index) which would be the expanded form of the
-            input_registers. Must be specified if input_registers is not specified.
-        output_registers: a dict of register names and sizes (the key is the qubit name, the value is its
-            size). must be specified if output_qubits is not specified. If output_registers and output_qubits
-            are None, they are set to the input registers/qubits.
-        output_qubits: a list of qubit tuples (name, register_index) which would be the expanded form of the
-            output_registers. Must be specified if output_registers is not specified. If output_registers
-            and output_qubits are None, they are set to the input_registers/qubits.
-        target: qiskit or pennylane
-        task: which kind of problem is being solved -- 'classification', 'teacher'
-            or 'reinforcement_learning'. Recorded on every generated genome.
-        task_target: what the task is run against -- the dataset, teacher circuit
-            or environment name. Also recorded on every generated genome, so a
-            saved genome can be reloaded and refined without being told what it
-            was trained on.
+    Rank 0 acts as the master: it uses ``exaqc`` to generate genomes and owns
+    the population. Every other rank is a worker that repeatedly requests a
+    genome, evaluates it with ``exaqc.objective``, and returns it. The search
+    stops once ``run_for`` genomes have been evaluated.
+
+    All search configuration -- the allowed gate set, initial encoder/decoder,
+    population strategy, mutation/parent strategies and crossover rates,
+    registers, backend target and task metadata -- lives on the passed-in
+    ``exaqc``; see :class:`~src.evolution.exaqc.EXAQC` for those parameters.
+
+    Args:
+        exaqc: A fully-constructed :class:`~src.evolution.exaqc.EXAQC` search.
+            It is built identically on every rank; only rank 0 drives it as the
+            master, while workers use its ``objective`` to evaluate genomes.
+        run_for: How many genomes to generate and evaluate before stopping.
+
+    Returns:
+        None. Runs the search to completion (all ranks return when it ends).
     """
 
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
 
     if rank == 0:
-        exaqc = EXAQC(
-            gate_specifications=gate_specifications,
-            population=population,
-            objective=objective,
-            initial_encoder=initial_encoder,
-            initial_decoder=initial_decoder,
-            hyperparameters=hyperparameters,
-            mutation_strategy=mutation_strategy,
-            parent_strategy=parent_strategy,
-            binary_crossover_rate=binary_crossover_rate,
-            n_ary_crossover_rate=n_ary_crossover_rate,
-            exponential_crossover_rate=exponential_crossover_rate,
-            input_registers=input_registers,
-            input_qubits=input_qubits,
-            output_registers=output_registers,
-            output_qubits=output_qubits,
-            target=target,
-            task=task,
-            task_target=task_target,
-        )
-
         master(comm=comm, rank=rank, exaqc=exaqc, run_for=run_for)
 
     else:
-        worker(comm=comm, rank=rank, objective=objective)
+        worker(comm=comm, rank=rank, objective=exaqc.objective)

@@ -836,6 +836,7 @@ def main() -> None:
             primary_parent=args.primary_parent,
             intra_island_crossover_rate=args.intra_island_crossover_rate,
             compare=compare,
+            topology=args.topology,
             out_dir=args.out_dir,
             save_training_plot=args.save_training_plot,
         )
@@ -854,7 +855,7 @@ def main() -> None:
         f"output_registers={{'input': {n_output_registers}}}"
     )
 
-    master_worker(
+    exaqc = EXAQC(
         gate_specifications=gate_specifications,
         population=population,
         objective=objective,
@@ -866,13 +867,14 @@ def main() -> None:
         binary_crossover_rate=args.binary_crossover_rate,
         n_ary_crossover_rate=args.n_ary_crossover_rate,
         exponential_crossover_rate=args.exponential_crossover_rate,
-        run_for=args.number_genomes,
         input_registers={"input": n_input_registers},
         output_registers={"input": n_output_registers},
         target=target,
         task="reinforcement_learning",
         task_target=args.env,
     )
+
+    master_worker(exaqc, run_for=args.number_genomes)
 
 
 if __name__ == "__main__":

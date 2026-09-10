@@ -185,6 +185,10 @@ def test_main_builds_cnn_encoder_for_image_data(
     mocked_initialize_encoder = MagicMock(return_value=mocked_encoder)
     mocked_initialize_decoder = MagicMock(return_value=mocked_decoder)
     mocked_master_worker = MagicMock()
+    mocked_exaqc = MagicMock(name="exaqc")
+    # build_parser() asks EXAQC to register the shared search flags, so keep the
+    # real classmethod on the mock; only EXAQC *construction* is stubbed out.
+    mocked_exaqc.initialize_parser = classification.EXAQC.initialize_parser
     mocked_population_class = MagicMock(return_value=mocked_population)
     # Only the *construction* of the population is mocked here; the parser still
     # needs the strategy's real argument definitions, since build_parser() asks
@@ -220,6 +224,14 @@ def test_main_builds_cnn_encoder_for_image_data(
         classification,
         "master_worker",
         mocked_master_worker,
+    )
+    # EXAQC is now constructed by main() (and handed to master_worker), so it is
+    # mocked here to capture that construction and to avoid its eager strategy
+    # validation running during this encoder-wiring test.
+    monkeypatch.setattr(
+        classification,
+        "EXAQC",
+        mocked_exaqc,
     )
 
     # Prevent tests from creating real log handlers.
@@ -329,24 +341,26 @@ def test_main_builds_cnn_encoder_for_image_data(
         save_training_plot=False,
     )
 
-    mocked_master_worker.assert_called_once()
+    # main() builds the EXAQC search from these pieces, so the population,
+    # encoder/decoder, registers and hyperparameters are asserted on the EXAQC
+    # construction rather than on the master_worker call.
+    mocked_exaqc.assert_called_once()
 
-    master_worker_call = mocked_master_worker.call_args.kwargs
+    exaqc_call = mocked_exaqc.call_args.kwargs
 
-    assert master_worker_call["population"] is mocked_population
-    assert master_worker_call["initial_encoder"] is mocked_encoder
-    assert master_worker_call["initial_decoder"] is mocked_decoder
-    assert master_worker_call["target"] == target
-    assert master_worker_call["run_for"] == 1
+    assert exaqc_call["population"] is mocked_population
+    assert exaqc_call["initial_encoder"] is mocked_encoder
+    assert exaqc_call["initial_decoder"] is mocked_decoder
+    assert exaqc_call["target"] == target
 
-    assert master_worker_call["input_registers"] == {
+    assert exaqc_call["input_registers"] == {
         "input": 2,
     }
-    assert master_worker_call["output_registers"] == {
+    assert exaqc_call["output_registers"] == {
         "input": 1,
     }
 
-    assert master_worker_call["hyperparameters"] == {
+    assert exaqc_call["hyperparameters"] == {
         "epochs": 1,
         "learning_rate": pytest.approx(5e-4),
         "weight_decay": pytest.approx(0.0),
@@ -358,6 +372,11 @@ def test_main_builds_cnn_encoder_for_image_data(
         "quantum_dropout_rate": 0.0,
         "quantum_dropout_type": "none",
     }
+
+    # the constructed search is handed to master_worker with the genome budget
+    mocked_master_worker.assert_called_once()
+    assert mocked_master_worker.call_args.args[0] is mocked_exaqc.return_value
+    assert mocked_master_worker.call_args.kwargs["run_for"] == 1
 
 
 @pytest.mark.skip(

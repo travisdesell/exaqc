@@ -131,7 +131,12 @@ def test_main_seeds_a_purely_quantum_search(monkeypatch, tmp_path) -> None:
     """
 
     mocked_master_worker = MagicMock()
+    mocked_exaqc = MagicMock()
+    # build_parser() asks EXAQC to register the shared search flags, so keep the
+    # real classmethod on the mock; only EXAQC *construction* is stubbed out.
+    mocked_exaqc.initialize_parser = teacher.EXAQC.initialize_parser
     monkeypatch.setattr(teacher, "master_worker", mocked_master_worker)
+    monkeypatch.setattr(teacher, "EXAQC", mocked_exaqc)
     monkeypatch.setattr(teacher.logger, "remove", MagicMock())
     monkeypatch.setattr(teacher.logger, "add", MagicMock())
     monkeypatch.setattr(
@@ -140,8 +145,10 @@ def test_main_seeds_a_purely_quantum_search(monkeypatch, tmp_path) -> None:
 
     teacher.main()
 
-    mocked_master_worker.assert_called_once()
-    call = mocked_master_worker.call_args.kwargs
+    # main() constructs the EXAQC search and hands it to master_worker, so the
+    # (no) encoder/decoder and wire wiring is asserted on the EXAQC construction.
+    mocked_exaqc.assert_called_once()
+    call = mocked_exaqc.call_args.kwargs
 
     # nothing classical is seeded
     assert call["initial_encoder"] is None
@@ -158,11 +165,15 @@ def test_main_seeds_a_purely_quantum_search(monkeypatch, tmp_path) -> None:
     ]
     assert set(call["input_qubits"]).isdisjoint(call["output_qubits"])
 
-    assert call["run_for"] == 1
     assert call["target"] == "pennylane"
     assert call["hyperparameters"]["quantum_input_mode"] == "ry"
     assert call["hyperparameters"]["quantum_output_mode"] == "probs"
     assert call["hyperparameters"]["epochs"] == 1
+
+    # the constructed search is handed to master_worker with the genome budget
+    mocked_master_worker.assert_called_once()
+    assert mocked_master_worker.call_args.args[0] is mocked_exaqc.return_value
+    assert mocked_master_worker.call_args.kwargs["run_for"] == 1
 
 
 def test_main_builds_loaders_sized_to_the_wires(monkeypatch, tmp_path) -> None:

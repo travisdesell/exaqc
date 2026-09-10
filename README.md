@@ -230,7 +230,7 @@ arguments:
 
 ```
 python3 -m src.examples.classification <options...> steady_state --max_population_size 30
-python3 -m src.examples.classification <options...> islands --n_islands 10 --max_island_size 10
+python3 -m src.examples.classification <options...> islands --n_islands 10 --max_island_size 10 --topology ring
 ```
 
 ### [`steady_state`](./src/evolution/steady_state_population.py)
@@ -261,6 +261,24 @@ island, spreading good genomes without overly collapsing diversity.
 | `--islands_to_extinct` | `1` | Worst islands cleared and repopulated each event |
 | `--primary_parent` | `best` | Which parent leads a crossover: `best` (highest fitness first) or `island` (the target island's genome first) |
 | `--intra_island_crossover_rate` | `0.5` | Fraction of an island's children bred within that island |
+| `--topology` | `fully_connected` | Inter-island connection topology; one of the values described below |
+
+Islands exchange genomes only with the neighbors defined by their **connection
+[topology](./src/evolution/topology.py)** (`--topology`, `fully_connected` by
+default). A sparser topology preserves diversity (good genomes spread more
+slowly); a denser one converges faster. The available values are:
+
+| `--topology` value | Meaning |
+|---|---|
+| `fully_connected` | Every island is connected to every other (densest). |
+| `ring` | Each island is linked to the previous and next, wrapping around. |
+| `star` | The first island is a hub connected to all others; the rest connect only to the hub. |
+| `2d_mesh <x_dim> <y_dim>` | A grid; each island joined to its up/down/left/right neighbors (requires `x_dim * y_dim == n_islands`). |
+| `tree <n_children>` | An n-ary tree: each island linked to its parent and up to `n_children` children. |
+| `random <min_edges> <max_edges>` | A **directed** graph: a seed ring guarantees every island is reachable, then each island gets extra random out-edges for a total out-degree in `[min_edges, max_edges]`. |
+
+Multi-word values take their arguments as separate tokens — for example
+`--topology 2d_mesh 3 4` arranges 12 islands in a 3×4 grid.
 
 ### Choosing a population strategy
 
@@ -272,6 +290,10 @@ island, spreading good genomes without overly collapsing diversity.
   increases how aggressively good material is shared.
 - **Total capacity is `n_islands × max_island_size`.** Keep that in the same
   range as a steady-state population you would otherwise use.
+- **`--topology` trades diversity against spread.** A sparse topology like
+  `ring` keeps islands distinct and resists premature convergence, while a dense
+  `fully_connected` topology spreads strong genomes fastest; `2d_mesh`, `tree`,
+  `star` and `random` sit in between.
 
 Background: island models are a standard technique in
 [evolutionary algorithms](https://en.wikipedia.org/wiki/Evolutionary_algorithm)
