@@ -1,0 +1,4 @@
+Genome 9
+Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
+
+0.047  cry  [('input', 3), ('output', 0)]  {'phi': 1.1054990506648021}

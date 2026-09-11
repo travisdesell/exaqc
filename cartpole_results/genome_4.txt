@@ -1,0 +1,4 @@
+Genome 4
+Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
+
+0.413  rzz  [('output', 1), ('input', 1)]  {'phi': -1.9502061659597587}
