@@ -1,18 +1,21 @@
 """Continue training a single evolved genome loaded from its JSON.
 
-The evolutionary search writes every genome it evaluates as JSON (see
-``CircuitGenome.to_dict``). This entry point loads one of those files back and
-trains it further -- useful for taking the best genome of a search and giving it
-a longer, more careful training run than the search itself could afford.
+The evolutionary search records every genome it evaluates as JSON (see
+``CircuitGenome.to_dict``) in its run's ``genomes.sqlar`` archive, and also
+writes the current best genomes as ``best_fitness.json`` and
+``best_target_metric.json``. This entry point loads one genome back -- from a
+JSON file, or from an archive by its genome number -- and trains it further,
+which is useful for taking the best genome of a search and giving it a longer,
+more careful training run than the search itself could afford.
 
-A genome file is self-describing. Besides its gates, qubit layout, target
-framework and classical stages, EXAQC stamps every genome it generates with the
-``task`` it was evolved for (``classification``, ``teacher`` or
-``reinforcement_learning``) and the ``task_target`` it was run against (the
-dataset, teacher circuit or environment name). Refining therefore needs nothing
-but the file::
+A genome is self-describing. Besides its gates, qubit layout, target framework
+and classical stages, EXAQC stamps every genome it generates with the ``task`` it
+was evolved for (``classification``, ``teacher`` or ``reinforcement_learning``)
+and the ``task_target`` it was run against (the dataset, teacher circuit or
+environment name). Refining therefore needs nothing but where the genome is::
 
-    python3 -m src.examples.refine_genome --genome best_genome.json
+    python3 -m src.examples.refine_genome --genome_json best_genome.json
+    python3 -m src.examples.refine_genome --archive ./artifacts/iris --genome_number 11
 
 The hyperparameters recorded in the file are reused unchanged, so a refinement
 run reproduces the original training setup unless something is explicitly
@@ -43,6 +46,11 @@ from src.examples.reinforcement_learning import (
 )
 from src.examples.teacher import TeacherObjective
 from src.metrics.mean_class_accuracy import MeanClassAccuracy
+from src.utils.genome_archive import (
+    add_genome_source_arguments,
+    check_genome_source_arguments,
+    load_genome_dict,
+)
 
 #: Defaults for the dataset-loading options that ``load_data`` reads but a
 #: genome file does not record. Only the batch size comes from the genome.
@@ -64,33 +72,47 @@ _CLASSIFICATION_DATA_DEFAULTS: dict[str, Any] = {
 _TEACHER_SAMPLES = 64
 
 
-def load_genome(path: str) -> CircuitGenome:
-    """Loads a genome from a JSON file written by the search.
+def load_genome(
+    json_path: str | None = None,
+    archive: str | None = None,
+    genome_number: int | None = None,
+) -> CircuitGenome:
+    """Loads a genome saved by the search, from a JSON file or a run's archive.
+
+    Give either ``json_path``, or ``archive`` together with ``genome_number``.
 
     Args:
-        path: Path to the genome's JSON file.
+        json_path: Path to a genome JSON file.
+        archive: A run's ``genomes.sqlar`` archive, or the run directory holding
+            it.
+        genome_number: The genome to load from ``archive``.
 
     Returns:
         The deserialized :class:`CircuitGenome`.
 
     Raises:
-        ValueError: If the file does not contain a serialized genome, or does
-            not record which task it was evolved for.
+        ValueError: If the source is not given correctly or the archive holds no
+            such genome (see :func:`~src.utils.genome_archive.load_genome_dict`),
+            or if what was loaded is not a serialized genome or does not record
+            which task it was evolved for.
+        OSError: If the file or archive cannot be read.
     """
 
-    with open(path, "r", encoding="utf-8") as genome_file:
-        serialized = json.load(genome_file)
+    source = (
+        json_path if json_path is not None else f"genome {genome_number} in {archive}"
+    )
+    serialized = load_genome_dict(json_path, archive, genome_number)
 
     if not isinstance(serialized, dict) or "gates" not in serialized:
         raise ValueError(
-            f"{path!r} does not look like a genome file (no 'gates' entry)."
+            f"{source!r} does not look like a genome file (no 'gates' entry)."
         )
 
     genome = CircuitGenome.from_dict(serialized)
 
     if not genome.task or not genome.task_target:
         raise ValueError(
-            f"{path!r} does not record the task it was evolved for "
+            f"{source!r} does not record the task it was evolved for "
             f"(task={genome.task!r}, task_target={genome.task_target!r}). It was "
             "probably written before those were recorded; re-run the search to "
             "produce a refinable genome."
@@ -317,16 +339,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Continue training a single evolved genome loaded from its JSON "
-            "file. The genome records the task and target it was evolved for, "
-            "so nothing else needs to be specified."
+            "file or from a run's genome archive. The genome records the task "
+            "and target it was evolved for, so nothing else needs to be "
+            "specified."
         )
     )
 
-    parser.add_argument(
-        "--genome",
-        type=str,
-        required=True,
-        help="Path to the genome JSON file written by the evolutionary search.",
+    # --genome_json or --archive (with --genome_number) chooses the genome.
+    add_genome_source_arguments(
+        parser,
+        json_help="Path to a genome JSON file written by the evolutionary search.",
     )
 
     parser.add_argument(
@@ -381,10 +403,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    """Loads a genome, trains it further, and writes the refined result."""
+    """Loads a genome, trains it further, and writes the refined result.
+
+    Returns:
+        None. Writes the refined genome's JSON (and, if requested, its diagram
+        and training plot) and a ``refine.log`` into ``--out_dir``.
+    """
 
     parser = build_parser()
     args = parser.parse_args()
+    check_genome_source_arguments(parser, args)
 
     os.makedirs(args.out_dir, exist_ok=True)
     logger.remove()
@@ -392,8 +420,8 @@ def main() -> None:
     logger.add(os.path.join(args.out_dir, "refine.log"))
 
     try:
-        genome = load_genome(args.genome)
-    except (OSError, ValueError, json.JSONDecodeError) as error:
+        genome = load_genome(args.genome_json, args.archive, args.genome_number)
+    except (OSError, ValueError) as error:
         parser.error(str(error))
 
     if genome.task not in OBJECTIVE_BUILDERS:
@@ -409,7 +437,7 @@ def main() -> None:
         genome.task_target,
         genome.target,
         len(genome.gates),
-        args.genome,
+        args.genome_json or f"{args.archive} (genome {args.genome_number})",
     )
     logger.info("starting fitness: {}", genome.fitness)
     logger.info("hyperparameters from the genome file: {}", genome.hyperparameters)

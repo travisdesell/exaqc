@@ -38,6 +38,7 @@ srun python3 -m src.examples.classification \
     --mutation_strategy uniform 1 5 \
     --parent_strategy uniform 2 5 \
     --seed 42 \
+    --shared_file_system \
     --out_dir artifacts/${DATASET}_${ENCODING}_${QUANTUM_ENC}_b${BATCH_SIZE} \
     steady_state \
     --max_population_size 30

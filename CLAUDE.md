@@ -76,8 +76,23 @@ documented there, and most are also wrapped by a script in
   a single saved genome and trains it further. It has no wrapper script and
   takes no task options: every genome records the `task` and `task_target` it
   was evolved for (stamped by `EXAQC`), so changing those names, or the
-  hyperparameter keys a task records, changes what refinement can reload.
+  hyperparameter keys a task records, changes what refinement can reload. Like
+  `evaluate` and `visualize_rl`, it takes the genome as `--genome_json` or as
+  `--archive` + `--genome_number` (shared helpers in
+  `src.utils.genome_archive`).
+- **EXAQC dashboard:** `python3 -m src.examples.exaqc_dashboard`, a local web page
+  over runs' `genomes.sqlar` archives, given as `--runs` or found by watching a
+  `--directory` (server and static app in `src/utils/artifact_viewer/`). It has
+  no wrapper script; it depends on the archive layout, the fitness keys, the
+  history CSV columns, and the insert types and `generated_by` operators its
+  insertion-rate tables count (mirroring
+  `src.analysis.analyze_genome_generation`).
 - **Analysis:** `python3 -m src.analysis.analyze_genome_generation`.
+
+A search's outputs (`--out_dir`, `--shared_file_system`, `genomes.sqlar`, the
+overwritten `best_*` files and `exaqc_history.csv`) are owned by
+`src.utils.genome_archive.GenomeArchive`, so changes to its layout affect every
+search entry point, the single-genome tools, the analysis scripts and the viewer.
 
 Whenever an edit would change **how any of these documented entry points
 operate** — not just edits to those files, but edits anywhere in the code they
@@ -155,8 +170,9 @@ import src.examples.<module> as m
 for a in m.build_parser()._actions: print(a.dest, a.default, a.choices)"
 ```
 
-`classification`, `teacher`, `reinforcement_learning`, `refine_genome` and
-`classical_image_classification` expose `build_parser()` alongside a `main()`,
+`classification`, `teacher`, `reinforcement_learning`, `refine_genome`,
+`exaqc_dashboard` and `classical_image_classification` expose `build_parser()`
+alongside a `main()`,
 which is the pattern to follow for any new entry point. The rest
 (`reinforcement_learning_fixed`, `evaluate`, `visualize_rl`) still build their
 parser inline under `if __name__ == "__main__":`, so read the source or run the
