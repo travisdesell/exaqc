@@ -5,11 +5,12 @@ Loads a circuit-genome JSON produced by ``src.examples.reinforcement_learning``
 it to the Gymnasium environment it was trained on, and rolls the greedy policy
 so you can *watch* the evolved circuit control the environment.
 
-The environment the genome was designed for is recorded in the genome's
-``fitness["env_id"]`` (e.g. ``"CartPole-v1"``), so it is auto-detected from the
-JSON; ``--env`` can override it. The genome's own ``encoder``/``decoder`` and
-gate parameters are restored from the JSON, so the policy plays exactly as it
-was evolved.
+The environment the genome was evolved for is recorded in the genome's
+``task_target`` (e.g. ``"cartpole"``, the friendly ``--env`` name stamped by
+:class:`~src.evolution.exaqc.EXAQC`), so it is auto-detected from the JSON;
+``--env`` can override it. The genome's own ``encoder``/``decoder`` and gate
+parameters are restored from the JSON, so the policy plays exactly as it was
+evolved.
 
 Two output modes:
 
@@ -38,15 +39,8 @@ import gymnasium as gym
 from loguru import logger
 
 from src.circuits.circuit import CircuitGenome
-from src.examples.reinforcement_learning import ENV_IDS, make_environment
+from src.examples.reinforcement_learning import ENV_CHOICES, make_environment
 from src.trainer.reinforcement_trainer import RLEnvironment, greedy_action
-
-#: Maps a Gymnasium environment id back to the friendly ``--env`` name, derived
-#: by reversing ``src.examples.reinforcement_learning.ENV_IDS`` (the single
-#: source of truth). Covers every supported environment -- discrete and
-#: continuous alike -- so a genome trained on any of them can be auto-detected
-#: from its recorded ``fitness["env_id"]``.
-ENV_ID_TO_NAME: dict[str, str] = {env_id: name for name, env_id in ENV_IDS.items()}
 
 
 def load_genome(json_path: str) -> CircuitGenome:
@@ -75,18 +69,19 @@ def resolve_environment(
     map_name: str = "4x4",
     is_slippery: bool = False,
 ) -> RLEnvironment:
-    """Rebuilds the :class:`RLEnvironment` the genome was designed for.
+    """Rebuilds the :class:`RLEnvironment` the genome was evolved for.
 
     The environment name is taken from ``env_name`` when given, otherwise
-    auto-detected from the genome's ``fitness["env_id"]``. The rebuilt
-    environment is validated against the genome's encoder so a mismatched
-    ``--env`` fails with a clear message rather than deep inside a forward
-    pass.
+    auto-detected from the genome's ``task_target`` -- the friendly ``--env``
+    name that :class:`~src.evolution.exaqc.EXAQC` stamps onto every genome. The
+    rebuilt environment is validated against the genome's encoder so a
+    mismatched ``--env`` fails with a clear message rather than deep inside a
+    forward pass.
 
     Args:
         genome: The loaded genome (used for auto-detection and validation).
         env_name: Friendly environment name (e.g. ``"cartpole"``), or ``None``
-            to auto-detect from the genome.
+            to auto-detect from the genome's ``task_target``.
         map_name: FrozenLake map (``"4x4"`` or ``"8x8"``); ignored otherwise.
         is_slippery: FrozenLake slipperiness; ignored otherwise.
 
@@ -94,25 +89,36 @@ def resolve_environment(
         A configured :class:`RLEnvironment`.
 
     Raises:
-        ValueError: If the environment cannot be determined, or the rebuilt
-            environment's observation size does not match the genome encoder.
+        ValueError: If the genome is not a reinforcement-learning genome, if the
+            environment cannot be determined, or if the rebuilt environment's
+            observation size does not match the genome encoder.
     """
 
+    # Only reinforcement-learning genomes carry an environment to play in.
+    if genome.task is not None and genome.task != "reinforcement_learning":
+        raise ValueError(
+            f"visualize_rl only handles reinforcement-learning genomes, but this "
+            f"genome records task={genome.task!r}."
+        )
+
     if env_name is None:
-        env_id = (genome.fitness or {}).get("env_id")
-        if env_id is None:
+        # EXAQC stamps the friendly --env name onto every genome as its
+        # task_target, so the environment is recovered directly rather than
+        # reverse-mapped from a recorded Gymnasium id.
+        env_name = genome.task_target
+        if env_name is None:
             raise ValueError(
-                "Could not determine the environment: the genome has no "
-                "fitness['env_id']. Pass --env explicitly."
+                "Could not determine the environment: the genome records no "
+                "task_target. Pass --env explicitly."
             )
-        if env_id not in ENV_ID_TO_NAME:
+        if env_name not in ENV_CHOICES:
             raise ValueError(
-                f"Genome was trained on env_id={env_id!r}, which has no known "
-                f"--env mapping (known: {sorted(ENV_ID_TO_NAME.values())}). "
-                "Pass --env explicitly."
+                f"Genome records task_target={env_name!r}, which is not a known "
+                f"--env (known: {sorted(ENV_CHOICES)}). Pass --env explicitly."
             )
-        env_name = ENV_ID_TO_NAME[env_id]
-        logger.info(f"auto-detected environment '{env_name}' (env_id={env_id})")
+        logger.info(
+            f"auto-detected environment '{env_name}' from the genome's task_target"
+        )
 
     environment = make_environment(env_name, map_name=map_name, is_slippery=is_slippery)
 
@@ -127,11 +133,10 @@ def resolve_environment(
             "trained on a different environment/configuration."
         )
 
-    recorded_env_id = (genome.fitness or {}).get("env_id")
-    if recorded_env_id is not None and recorded_env_id != environment.env_id:
+    if genome.task_target is not None and genome.task_target != env_name:
         logger.warning(
-            f"selected environment {environment.env_id} differs from the "
-            f"genome's recorded env_id {recorded_env_id}."
+            f"selected environment '{env_name}' differs from the genome's "
+            f"recorded task_target '{genome.task_target}'."
         )
 
     return environment
@@ -267,11 +272,12 @@ def main() -> None:
     parser.add_argument(
         "--genome_json",
         type=str,
+        required=True,
         help="Path to a genome JSON produced by the RL example script.",
     )
     parser.add_argument(
         "--env",
-        choices=sorted(ENV_ID_TO_NAME.values()),
+        choices=sorted(ENV_CHOICES),
         default=None,
         help="Environment to evaluate in (default: auto-detected from the genome).",
     )

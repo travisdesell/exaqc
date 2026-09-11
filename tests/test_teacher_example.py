@@ -6,8 +6,9 @@ to learn, so it seeds no encoder and no decoder and exposes no
 ``--encoding``/``--decoding`` options.
 
 These tests pin the wiring that the entry point is responsible for -- the wire
-layout, the fitness it records, the arguments it hands to ``master_worker``, and
-the configurations it refuses -- without running the MPI driver.
+layout, the fitness it records, the search it builds and hands to
+``run_evolution``, and the configurations it refuses -- without running the MPI
+driver.
 """
 
 from __future__ import annotations
@@ -123,15 +124,21 @@ def test_objective_records_loss_and_fidelity_fitness() -> None:
 
 
 def test_main_seeds_a_purely_quantum_search(monkeypatch, tmp_path) -> None:
-    """``main`` hands ``master_worker`` no encoder, no decoder, disjoint wires.
+    """``main`` builds a search with no encoder, no decoder, disjoint wires.
 
     Args:
-        monkeypatch: Used to replace ``master_worker`` and ``sys.argv``.
+        monkeypatch: Used to replace ``EXAQC`` and ``sys.argv``.
         tmp_path: pytest per-test temporary directory (auto-removed).
     """
 
-    mocked_master_worker = MagicMock()
-    monkeypatch.setattr(teacher, "master_worker", mocked_master_worker)
+    mocked_exaqc = MagicMock()
+    # build_parser() asks EXAQC to register the shared search flags, so keep the
+    # real classmethod on the mock; only EXAQC *construction* is stubbed out.
+    mocked_exaqc.initialize_parser = teacher.EXAQC.initialize_parser
+    # run_evolution is left real: this is a single process, so it takes the
+    # serial path -- calling build_exaqc (which constructs the mocked EXAQC) and
+    # then run_for on that mock -- letting us assert on both.
+    monkeypatch.setattr(teacher, "EXAQC", mocked_exaqc)
     monkeypatch.setattr(teacher.logger, "remove", MagicMock())
     monkeypatch.setattr(teacher.logger, "add", MagicMock())
     monkeypatch.setattr(
@@ -140,8 +147,10 @@ def test_main_seeds_a_purely_quantum_search(monkeypatch, tmp_path) -> None:
 
     teacher.main()
 
-    mocked_master_worker.assert_called_once()
-    call = mocked_master_worker.call_args.kwargs
+    # main()'s build_exaqc factory constructs the (mocked) EXAQC directly, so the
+    # (no) encoder/decoder and wire wiring is asserted on that construction.
+    mocked_exaqc.assert_called_once()
+    call = mocked_exaqc.call_args.kwargs
 
     # nothing classical is seeded
     assert call["initial_encoder"] is None
@@ -158,18 +167,24 @@ def test_main_seeds_a_purely_quantum_search(monkeypatch, tmp_path) -> None:
     ]
     assert set(call["input_qubits"]).isdisjoint(call["output_qubits"])
 
-    assert call["run_for"] == 1
-    assert call["target"] == "pennylane"
+    # The backend comes from the gate set built by GateSpecifications.from_args.
+    assert call["gate_specifications"].target == "pennylane"
+    assert call["task"] == "teacher"
+    assert call["task_target"] == "half_adder"
     assert call["hyperparameters"]["quantum_input_mode"] == "ry"
     assert call["hyperparameters"]["quantum_output_mode"] == "probs"
     assert call["hyperparameters"]["epochs"] == 1
+
+    # run_evolution runs serially in this single-process test: build_exaqc builds
+    # the (mocked) EXAQC and run_for is invoked with the genome budget.
+    mocked_exaqc.return_value.run_for.assert_called_once_with(1)
 
 
 def test_main_builds_loaders_sized_to_the_wires(monkeypatch, tmp_path) -> None:
     """The generated dataset matches the requested wire layout.
 
     Args:
-        monkeypatch: Used to replace ``master_worker`` and ``sys.argv``.
+        monkeypatch: Used to replace ``run_evolution`` and ``sys.argv``.
         tmp_path: pytest per-test temporary directory (auto-removed).
     """
 
@@ -180,7 +195,9 @@ def test_main_builds_loaders_sized_to_the_wires(monkeypatch, tmp_path) -> None:
         captured.update(kwargs)
         return MagicMock()
 
-    monkeypatch.setattr(teacher, "master_worker", MagicMock())
+    # Stubbing run_evolution keeps build_exaqc from running, so no real search
+    # is built; this test only cares about the objective's loaders.
+    monkeypatch.setattr(teacher, "run_evolution", MagicMock())
     monkeypatch.setattr(teacher, "TeacherObjective", capture_objective)
     monkeypatch.setattr(teacher.logger, "remove", MagicMock())
     monkeypatch.setattr(teacher.logger, "add", MagicMock())
@@ -212,7 +229,7 @@ def test_distribution_losses_require_probs(loss_name, monkeypatch, tmp_path) -> 
         tmp_path: pytest per-test temporary directory (auto-removed).
     """
 
-    monkeypatch.setattr(teacher, "master_worker", MagicMock())
+    monkeypatch.setattr(teacher, "run_evolution", MagicMock())
     monkeypatch.setattr(teacher.logger, "remove", MagicMock())
     monkeypatch.setattr(teacher.logger, "add", MagicMock())
     monkeypatch.setattr(
@@ -235,7 +252,7 @@ def test_teacher_that_cannot_fit_the_wires_is_reported(monkeypatch, tmp_path) ->
         tmp_path: pytest per-test temporary directory (auto-removed).
     """
 
-    monkeypatch.setattr(teacher, "master_worker", MagicMock())
+    monkeypatch.setattr(teacher, "run_evolution", MagicMock())
     monkeypatch.setattr(teacher.logger, "remove", MagicMock())
     monkeypatch.setattr(teacher.logger, "add", MagicMock())
     # half_adder needs two input and two output wires

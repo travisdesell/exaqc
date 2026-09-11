@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from src.evolution.steady_state_islands import Island, SteadyStateIslands
+from src.evolution.island import Island
+from src.evolution.steady_state_islands import SteadyStateIslands
 
 
 class MockGenome:

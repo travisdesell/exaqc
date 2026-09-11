@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import bisect
 import os
 import json
@@ -20,8 +21,8 @@ from qiskit_machine_learning.neural_networks import SamplerQNN
 from qiskit_machine_learning.connectors import TorchConnector
 
 from src.circuits.gate import Gate
-from src.circuits.decoder import Decoder
-from src.circuits.encoder import Encoder
+from src.circuits.decoder import DECODING_OPTIONS, Decoder
+from src.circuits.encoder import ENCODING_OPTIONS, Encoder
 from src.utils.draw_hybrid_model import draw_hybrid_model
 from src.utils import training_plots
 from src.dropout.quantum_dropout import apply_qubit_readout_dropout
@@ -50,6 +51,128 @@ QISKIT_CLASSICAL_REGISTER_NAME = "meas"
 
 
 class CircuitGenome:
+
+    @staticmethod
+    def initialize_parser(
+        parser: argparse.ArgumentParser,
+        *,
+        include_encoding_decoding: bool = True,
+        quantum_input_mode_choices: list[str] | tuple[str, ...] = tuple(
+            QUANTUM_INPUT_MODES
+        ),
+        quantum_input_mode_default: str = "u3",
+    ) -> None:
+        """Adds the circuit-genome command-line arguments to a parser.
+
+        Every entry point that evolves circuit genomes exposes the same qubit
+        layout, quantum input/output modes and quantum-dropout flags; this
+        registers them once (mirroring
+        :meth:`~src.evolution.exaqc.EXAQC.initialize_parser`) so the scripts
+        stay in sync. Each argument corresponds to a genome/hyperparameter
+        setting the entry point later reads off the parsed namespace. The qubit
+        counts are always required -- every entry point must state the circuit's
+        input and output width explicitly.
+
+        The pieces that legitimately differ between entry points are exposed as
+        keyword arguments so each keeps its own interface: a purely-quantum
+        search (the teacher) omits the encoder/decoder flags and restricts the
+        input mode to single-axis rotations.
+
+        Args:
+            parser: The parser (or sub-parser) to add the arguments to.
+            include_encoding_decoding: When True, add ``--encoding`` and
+                ``--decoding``. Set False for a purely-quantum search (the
+                teacher) that seeds no encoder or decoder.
+            quantum_input_mode_choices: Allowed values for
+                ``--quantum_input_mode``.
+            quantum_input_mode_default: Default for ``--quantum_input_mode``.
+
+        Returns:
+            None. Mutates ``parser`` by adding the required ``--input_qubits``
+            and ``--output_qubits``, plus ``--quantum_input_mode``/``-qim``,
+            ``--quantum_output_mode``/``-qom``, ``--quantum_dropout``,
+            ``--quantum_dropout_type``/``-qdt``,
+            ``--quantum_dropout_rate``/``-qdr`` and, when
+            ``include_encoding_decoding`` is True, ``--encoding`` and
+            ``--decoding``.
+        """
+
+        parser.add_argument(
+            "--input_qubits",
+            type=int,
+            required=True,
+            help="Number of input (data-encoding) qubits in each evolved circuit.",
+        )
+
+        parser.add_argument(
+            "--output_qubits",
+            type=int,
+            required=True,
+            help="Number of output (readout) qubits measured in each evolved circuit.",
+        )
+
+        parser.add_argument(
+            "--quantum_input_mode",
+            "-qim",
+            type=str,
+            choices=list(quantum_input_mode_choices),
+            default=quantum_input_mode_default,
+            help="Initial gate types whose parameters are set from the encoded inputs.",
+        )
+
+        parser.add_argument(
+            "--quantum_output_mode",
+            "-qom",
+            type=str,
+            choices=list(QUANTUM_OUTPUT_MODES),
+            default="probs",
+            help="Choose the output mode from the quantum circuit.",
+        )
+
+        if include_encoding_decoding:
+            parser.add_argument(
+                "--encoding",
+                type=str,
+                choices=list(ENCODING_OPTIONS),
+                default="linear",
+                help="How classical inputs are embedded into the circuit.",
+            )
+
+            parser.add_argument(
+                "--decoding",
+                type=str,
+                choices=list(DECODING_OPTIONS),
+                default="linear",
+                help="How circuit outputs are mapped to the task's outputs.",
+            )
+
+        parser.add_argument(
+            "--quantum_dropout",
+            action=argparse.BooleanOptionalAction,
+            default=False,
+            help=(
+                "Master switch for quantum dropout during training. Disabled by "
+                "default; when enabled, dropout is applied using "
+                "--quantum_dropout_type and --quantum_dropout_rate."
+            ),
+        )
+
+        parser.add_argument(
+            "--quantum_dropout_type",
+            "-qdt",
+            type=str,
+            default="none",
+            choices=["gate", "rotation", "entangling", "qubit", "innovation"],
+            help="Dropout type for quantum gates (used only when --quantum_dropout is set).",
+        )
+
+        parser.add_argument(
+            "--quantum_dropout_rate",
+            "-qdr",
+            type=float,
+            default=0.0,
+            help="Dropout rate for quantum gates (used only when --quantum_dropout is set).",
+        )
 
     def __init__(
         self,
@@ -300,7 +423,7 @@ class CircuitGenome:
         new_genome.hyperparameters = self.hyperparameters.copy()
 
         for gate in self.gates:
-            new_genome.add_existing_gate(gate)
+            new_genome.add_existing_gate(gate.copy())
 
         return new_genome
 

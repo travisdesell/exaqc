@@ -93,6 +93,8 @@ Action spaces
 
 from __future__ import annotations
 
+import argparse
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -640,6 +642,112 @@ class ReinforcementLearningTrainer(ABC):
 
     #: Whether the algorithm supports continuous (``Box``) action spaces.
     supports_continuous: bool = True
+
+    @staticmethod
+    def initialize_parser(parser: argparse.ArgumentParser) -> None:
+        """Adds the training-loop hyperparameters shared by every RL algorithm.
+
+        These knobs drive the base training scaffold in :meth:`train` (and the
+        per-algorithm updates), and become per-genome hyperparameters the search
+        can mutate. Each algorithm's own extras are added by that subclass's
+        ``initialize_parser`` (e.g.
+        :meth:`~src.trainer.ppo_trainer.PPOTrainer.initialize_parser`); the
+        reinforcement-learning entry point calls the base and every subclass so
+        the full flag set is available regardless of ``--algo``.
+
+        ``--entropy_coef`` and ``--value_coef`` are read only by the
+        policy-gradient algorithms, but live here (rather than being added by two
+        different subclasses) so they are registered exactly once.
+
+        Args:
+            parser: The parser to add the arguments to.
+
+        Returns:
+            None. Mutates ``parser`` by adding ``--episodes``,
+            ``--eval_episodes``, ``--max_steps``, ``--gamma``,
+            ``--learning_rate``/``-lr``, ``--entropy_coef``, ``--value_coef``,
+            ``--seed``, ``--log_every``, ``--ema_alpha`` and
+            ``--improvement_cutoff``.
+        """
+
+        parser.add_argument(
+            "--episodes",
+            type=int,
+            default=60,
+            help="Number of training episodes (outer-loop iterations) per genome.",
+        )
+
+        parser.add_argument(
+            "--eval_episodes",
+            type=int,
+            default=10,
+            help="Number of greedy episodes used to evaluate a genome's return.",
+        )
+
+        parser.add_argument(
+            "--max_steps",
+            type=int,
+            default=500,
+            help="Maximum number of environment steps per episode.",
+        )
+
+        parser.add_argument(
+            "--gamma",
+            type=float,
+            default=0.99,
+            help="Reward discount factor.",
+        )
+
+        parser.add_argument(
+            "--learning_rate",
+            "-lr",
+            type=float,
+            default=1e-2,
+            help="Adam learning rate used when training each genome.",
+        )
+
+        parser.add_argument(
+            "--entropy_coef",
+            type=float,
+            default=0.0,
+            help="Coefficient on the policy entropy bonus.",
+        )
+
+        parser.add_argument(
+            "--value_coef",
+            type=float,
+            default=0.5,
+            help="Weight on the value-function loss (actor-critic and PPO).",
+        )
+
+        parser.add_argument(
+            "--seed",
+            type=int,
+            default=0,
+            help="Base random seed for the environment, PyTorch, and NumPy.",
+        )
+
+        parser.add_argument(
+            "--log_every",
+            type=int,
+            default=10,
+            help="Evaluate and log every this many training episodes.",
+        )
+
+        parser.add_argument(
+            "--ema_alpha",
+            type=float,
+            default=0.05,
+            help="Smoothing factor for the exponential moving average of episode "
+            "returns reported as the training return mean.",
+        )
+
+        parser.add_argument(
+            "--improvement_cutoff",
+            type=int,
+            default=30,
+            help="Stop training a genome after this many episodes without an improved evaluation return.",
+        )
 
     # -- hooks for subclasses -------------------------------------------------
 

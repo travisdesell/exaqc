@@ -1,219 +1,46 @@
+"""Island-model steady-state population strategy for EXAQC.
+
+The search is split across several independent steady-state populations
+(:class:`Island`), each keeping its own fitness-sorted set of genomes. Children
+are produced by intra-island crossover (parents from one island) or
+inter-island crossover (parents drawn from an island's neighbors, as defined by
+a connection topology). Periodically the worst full islands undergo an
+extinction event and are repopulated, spreading strong genomes while preserving
+diversity. :class:`SteadyStateIslands` is the :class:`PopulationStrategy` that
+ties these together for the ``run_evolution`` driver.
+"""
+
+from __future__ import annotations
+
 import argparse
 import random
 
-import bisect
 from functools import cmp_to_key
 from typing import Callable, Optional
 
 from loguru import logger
 
 from src.circuits.circuit import CircuitGenome
+from src.evolution.island import Island
+from src.evolution.topology import assign_topology
 from src.evolution.population_strategy import PopulationStrategy
 from src.utils.profiler import EXAQCProfiler
 
 
-class Island:
-
-    def __init__(
-        self,
-        id: int,
-        max_size: int,
-        compare: Callable[[CircuitGenome, CircuitGenome], int],
-    ):
-        """
-        Creates an island which holds a single (sorted) set of genomes.
-
-        Args:
-            id: is the id for the island
-            max_size: is the maximum number of genomes for the island.
-            compare: a compare function used for sorting genomes. this should return 0 if both
-                genomes should be ranked the same, a negative value if the first genome should
-                come before the second genome, and a positive number otherwise
-        """
-
-        self.id = id
-        self.max_size = max_size
-        self.insertions = 0
-        self.compare = compare
-
-        self.population: list[CircuitGenome] = []
-        self.status = "initializing"
-        self.repopulation_genome_number = 0
-
-    def is_initializing(self) -> bool:
-        """
-        Returns:
-            True if the island is still initializing.
-        """
-
-        return self.status == "initializing"
-
-    def repopulate(self, repopulation_genome_number: int):
-        """
-        Removes all genomes from this island and sets its status
-        to repopulating. Also sets the repopulation genome number
-        so any genomes generated from before repopoulation are discarded
-        unless they are a new global best.
-        """
-
-        self.status = "repopulating"
-        self.repopulation_genome_number = repopulation_genome_number
-        self.population = []
-
-    def get_parent(self, **kwargs) -> CircuitGenome:
-        """
-        Used to get two or more parents to be used in mutation or
-        other operations to generate children.
-
-        Args:
-            **kwargs: is used to pass additional options to the method to get
-                a parent, e.g., specifying if it is for inter or intra-island
-                crossover, or to come from a particular island or species.
-
-        Returns:
-            A single CircuitGenome from the population. If the population is empty
-            it will return None.
-        """
-
-        if len(self.population) > 0:
-            return random.choice(self.population)
-        else:
-            return None
-
-    def get_parents(self, n_parents: int = 2, **kwargs) -> list[CircuitGenome]:
-        """
-        Used to get two or more parents to be used in crossover or
-        other operations to generate children.
-
-        Args:
-            n_parents: specifies how many parents to return by the method.
-            **kwargs: is used to pass additional options to the method to get
-                a parent, e.g., specifying if it is for inter or intra-island
-                crossover, or to come from a particular island or species.
-
-        Returns:
-            A list of unique (non-duplicate) CircuitGenomes. If the size of the population
-            is less than n_parents, it will return None.
-        """
-        if len(self.population) >= n_parents:
-            # sort the parents so the most fit is the first parent
-            parents = random.sample(self.population, n_parents)
-            parents.sort(key=cmp_to_key(self.compare))
-            return parents
-        else:
-            return None
-
-    def insert_genome(self, genome: CircuitGenome, **kwargs) -> bool:
-        """
-        Inserts a genome back into the population.
-
-        Args:
-            genome: is the genome to insert into the population.
-            **kwargs: is used to pass additional options to the method for
-                inserting the genome, such as an island or species it came from.
-
-        Returns:
-            True if it was inserted into the population, False otherwise.
-        """
-
-        if (
-            "insert_type" not in genome.metadata
-            or genome.metadata["insert_type"] != "global_best"
-        ):
-            # temporarily assign the insert type, if it doesn't yet exist as global best.
-            # set it to inserted which we can change later if it it a local best or gets discarded
-            genome.metadata["insert_type"] = "inserted"
-
-        if (
-            genome.genome_number < self.repopulation_genome_number
-            and genome.metadata["insert_type"] != "global_best"
-        ):
-            # discard genomes that were generated from before the island was repopulated unless they
-            # were a new global best
-            logger.info(
-                f"discarding genome with number {genome.genome_number} as it was less than "
-                f"the repopulation genome number: {self.repopulation_genome_number} and was "
-                f"not global best, metadata: {genome.metadata}"
-            )
-            genome.metadata["insert_type"] = "discarded"
-            return
-
-        # don't add duplicate genomes to the population
-        # if gate innovation numbers are the same, keep the genome with better fitness
-        for i in range(len(self.population)):
-            match_genome = self.population[i]
-            if match_genome.has_same_gates(genome):
-                # two genomes had the same enabled gates, keep the one with better fitness
-
-                if self.compare(match_genome, genome) > 0:
-                    # the new genome has a better fitness, so remove the old genome
-                    # and then the below bisect.insort will add it
-                    logger.info(
-                        f"removing genome from population because fitness: {match_genome.fitness} is"
-                        f"worse than the new genome fitness: {genome.fitness} where both have"
-                        "the same enabled gates."
-                    )
-                    logger.info(
-                        f"population genome gates: {match_genome.get_gate_innovations()}"
-                    )
-                    logger.info(
-                        f"new genome gates:        {genome.get_gate_innovations()}"
-                    )
-                    del self.population[i]
-                    break
-                else:
-                    # discard the new genome
-                    self.insertions += 1
-                    genome.metadata["insert_type"] = "discarded"
-                    return
-
-        bisect.insort(
-            self.population,
-            genome,
-            key=cmp_to_key(self.compare),
-        )
-
-        self.insertions += 1
-
-        if genome == self.population[0]:
-            # this was a new best genome for the island
-            self.last_new_best = self.insertions
-            if genome.metadata["insert_type"] != "global_best":
-                # if the genome was inserted at the front of the population it
-                # is a new local best unless it was already the global best
-                genome.metadata["insert_type"] = "local_best"
-
-            # this was a new global best genome
-            logger.success(
-                f"[local insertion {self.insertions}] island {self.id} found new LOCAL best "
-                f"genome with fitness: {genome.fitness}"
-            )
-
-        if len(self.population) >= self.max_size:
-            self.status = "full"
-
-        if len(self.population) > self.max_size:
-            # remove the last genome from the population
-            if genome == self.population[-1]:
-                # if the genome was inserted at the bottom of the population
-                # and we're going to remove it, set it to discarded
-                genome.metadata["insert_type"] = "discarded"
-
-            del self.population[-1]
-
-
 def island_compare(island1: Island, island2: Island) -> int:
     """
-    Used to sort genomes by fitness, even if there are multiple objectives, for population
-    management and crossover methods.
+    Compares two islands by the fitness of their best genome (slot 0), used to
+    rank islands (e.g. to find the worst full islands for extinction). Both
+    islands must be non-empty, since it reads ``population[0]`` of each.
 
     Args:
-        island1: will compare the best (genome in slot 0 of the island) of this island to the other island
-        island2: the second genome to comapre to
+        island1: the first island whose best genome is compared.
+        island2: the second island whose best genome is compared.
 
-    Returns: 0 if the two best genomes in the islands have equivalent fitnesses, a negative value if
-        island1.population[0] should be sorted before island2.population[0], and a positive value if
-        island2.population[0] should be sorted before island1.population[0]
+    Returns:
+        0 if the two islands' best genomes have equivalent fitness, a negative
+        value if ``island1``'s best should sort before ``island2``'s, and a
+        positive value otherwise.
     """
 
     return island1.compare(island1.population[0], island2.population[0])
@@ -246,30 +73,35 @@ class SteadyStateIslands(PopulationStrategy):
             default=10,
             help="Number of steady-state populations (islands) evolved in parallel.",
         )
+
         parser.add_argument(
             "--max_island_size",
             type=int,
             default=10,
             help="Maximum number of genomes retained in each island.",
         )
+
         parser.add_argument(
             "--genomes_before_extinction",
             type=int,
             default=100,
             help="Number of genomes inserted before the first island extinction event.",
         )
+
         parser.add_argument(
             "--genomes_for_next_extinction",
             type=int,
             default=200,
             help="Number of genomes that need to be inserted into an island before it can be repopulated again.",
         )
+
         parser.add_argument(
             "--islands_to_extinct",
             type=int,
             default=1,
             help="Number of worst islands cleared and repopulated at each extinction event.",
         )
+
         parser.add_argument(
             "--primary_parent",
             type=str,
@@ -279,11 +111,28 @@ class SteadyStateIslands(PopulationStrategy):
                 "parent first) or 'island' (the target island's genome first)."
             ),
         )
+
         parser.add_argument(
             "--intra_island_crossover_rate",
             type=float,
             default=0.5,
             help="Fraction of an island's offspring produced by crossover within the same island.",
+        )
+
+        parser.add_argument(
+            "--topology",
+            type=str,
+            nargs="+",
+            default=["fully_connected"],
+            help=(
+                "How islands are connected to each other, which determines which other islands "
+                "an island can select genomes from for inter-island crossover. Options are: "
+                "'fully_connected' (default), 'ring', 'star' (all islands connected to one center), "
+                "'2d_mesh <x_dim> <y_dim>' (requires x_dim * y_dim == n_islands), "
+                "'tree <children per node>', 'random <min_edges> <max_edges>' (connects all islands "
+                "in a line, then randomly adds (uniform between (min_edges - 1) to (max_edges - 1) other "
+                "edges from each island to another randomly selected island)."
+            ),
         )
 
     def __init__(
@@ -296,34 +145,53 @@ class SteadyStateIslands(PopulationStrategy):
         genomes_for_next_extinction: int = 100,
         islands_to_extinct: int = 2,
         primary_parent: str = "best",
+        topology: list[str] = ["fully_connected"],
         out_dir: str = None,
         profiler: Optional[EXAQCProfiler] = None,
         save_training_plot: bool = False,
     ):
         """
-        Creates a steady state population with the specified max population size.  The population
-        will be sorted in order by genome fitness. The get parent methods can be called at any
-        time to generate random parent selection.  Genomes will be inserted if the population size
-        is below the max population size, or if they are better than the least fit genome in the
-        population.  If adding a genome would cause the population size to be greater than the
-        max population size, the least fit genome will be removed to keep it under the max size.
+        Creates an island-model population of ``n_islands`` steady-state
+        populations, each holding up to ``max_island_size`` genomes sorted by
+        fitness. The islands are wired together with the requested ``topology``,
+        and the get-parent methods draw parents for intra- or inter-island
+        crossover. As genomes are inserted, the worst full islands are
+        periodically cleared and repopulated (extinction events).
 
         Args:
-            compare: a compare function used for sorting genomes. this should return 0 if both
-                genomes should be ranked the same, a negative value if the first genome should
-                come before the second genome, and a positive number otherwise
-            max_population_size: is the maximum number of genomes that the population will hold.
-            genomes_before_extinction: is how many genomes are inserted into islands before an
-                extinction event happens, which clears out the worst islands and repopulates them
-            genomes_for_next_extinction: is how many genomes need to be added to an island before
-                it can be repopulated again.
-            island_to_extinct: is how many islands to clear out in an extinction event
-            primary_parent: can be `best` or `island`, and it determines how the primary parent
-                is selected when get_parents is called. If `best`, then the parent genomes are
-                sorted such that the first (primary) parent has the best fitness. if `island`
-                then the first genome is the one from the target island for the child.
-            out_dir: is the directory to write out the best found genomes and log files, if not
-                specified log files will not be written.
+            n_islands: how many islands (steady-state populations) to evolve in
+                parallel.
+            max_island_size: the maximum number of genomes retained per island.
+            compare: a compare function used for sorting genomes. this should
+                return 0 if both genomes should be ranked the same, a negative
+                value if the first genome should come before the second genome,
+                and a positive number otherwise.
+            intra_island_crossover_rate: when both intra- and inter-island
+                crossover are possible, the probability of choosing intra-island.
+            genomes_before_extinction: how many genomes are inserted before an
+                extinction event happens, which clears out the worst islands and
+                repopulates them.
+            genomes_for_next_extinction: how many genomes need to be added to an
+                island before it can be repopulated again.
+            islands_to_extinct: how many islands to clear out in an extinction
+                event.
+            primary_parent: can be `best` or `island`, and it determines how the
+                primary parent is selected when get_parents is called. If `best`,
+                the parent genomes are sorted such that the first (primary)
+                parent has the best fitness; if `island` then the first genome is
+                the one from the target island for the child.
+            topology: how the islands are connected, which determines which other
+                islands an island can select genomes from for inter-island
+                crossover (see :func:`~src.evolution.topology.assign_topology`).
+                Options are: 'fully_connected' (default), 'ring',
+                'star' (all islands connected to one center),
+                '2d_mesh <x_dim> <y_dim>' (requires x_dim * y_dim == n_islands),
+                'tree <children per node>', and
+                'random <min_edges> <max_edges>'.
+            out_dir: the directory to write out the best found genomes and log
+                files; if not specified, files are not written.
+            profiler: an optional profiler to record per-insertion population
+                snapshots; created automatically from ``out_dir`` when omitted.
             save_training_plot: when True, each saved genome also gets a
                 training-history line plot written next to its diagram (see
                 :meth:`CircuitGenome.save_circuit`).
@@ -347,6 +215,8 @@ class SteadyStateIslands(PopulationStrategy):
             for i in range(self.n_islands)
         ]
         self.current_island = 0
+
+        assign_topology(self.islands, topology)
 
         self.global_best_genome = None
         self.metric_best_genome = None
@@ -379,16 +249,20 @@ class SteadyStateIslands(PopulationStrategy):
 
         return False
 
-    def increment_current_island(self):
+    def increment_current_island(self) -> None:
         """
-        Increments the current island in a round robin fashion.
+        Increments the current island index in a round robin fashion, wrapping
+        back to 0 after the last island.
+
+        Returns:
+            None. Advances ``self.current_island`` in place.
         """
 
         self.current_island += 1
         if self.current_island >= len(self.islands):
             self.current_island = 0
 
-    def get_best_genome(self) -> CircuitGenome:
+    def get_best_genome(self) -> CircuitGenome | None:
         """
         Returns:
             The best genome across all islands, if it exists. None otherwise.  It would
@@ -398,7 +272,9 @@ class SteadyStateIslands(PopulationStrategy):
 
         return self.global_best_genome
 
-    def get_parent(self, **kwargs) -> tuple[CircuitGenome, dict[str, any]]:
+    def get_parent(
+        self, **kwargs
+    ) -> tuple[CircuitGenome | None, dict[str, any] | None]:
         """
         Used to get a parent to be used in mutation or other operations to generate
         children. This will be generated from an island in a round robin fashion.
@@ -419,8 +295,10 @@ class SteadyStateIslands(PopulationStrategy):
                 crossover, or to come from a particular island or species.
 
         Returns:
-            A single CircuitGenome from the population and a dictionary of its
-            metadata. If the population is empty it will return None.
+            A tuple of a single CircuitGenome and a dictionary of its metadata
+            (carrying the ``target_island_id``). Returns ``(None, None)`` when no
+            parent can be selected -- i.e. the target island is repopulating and
+            none of its neighbors hold any genomes.
         """
 
         target_island = self.islands[self.current_island]
@@ -432,12 +310,12 @@ class SteadyStateIslands(PopulationStrategy):
             return random.choice(target_island.population), metadata
 
         if target_island.status == "repopulating":
-            if len(self.best_island.population) > 0:
-                # get parent from best island
-                return random.choice(self.best_island.population), metadata
+            best_neighbor = target_island.best_neighbor()
+
+            if best_neighbor is not None:
+                return random.choice(best_neighbor.population), metadata
             else:
-                # in case the global best island ended up being repopulated
-                return self.global_best_genome, metadata
+                return None, None
 
         else:
             logger.error(
@@ -450,13 +328,20 @@ class SteadyStateIslands(PopulationStrategy):
     ) -> tuple[list[CircuitGenome], dict[str, any]]:
         """
         Used to get two or more parents to be used in crossover or
-        other operations to generate children.
+        other operations to generate children, for a target island selected
+        in a round robin manner.
 
-        Steps:
-        1. Get target island in round robin fashion.
-        2. if target island initializing - can’t do this yet, fail with error
-        3. if target island repopulating - get global best and N-1 from other islands
-        4. else - get 1 genome from this island, N-1 from other islands
+        Will perform either intra- or inter-island crossover. It will perform
+        inter-island crossover if there are not enough parents on the target
+        island to perform intra-island crossover. Similarly, it will perform
+        intra-island crossover if there not enough genomes in neighboring island
+        populations to perform inter-island crossover.
+
+        If both can be performed, it will select inter or intra island crossover
+        randomly based on the intra_island_crossover_rate.
+
+        If the target island is repopulating, parents will be selected from its
+        best neighbor if it has enough genomes.
 
         Args:
             n_parents: specifies how many parents to return by the method.
@@ -482,10 +367,16 @@ class SteadyStateIslands(PopulationStrategy):
         # check to see if we have enough genomes on the target or best
         # island to do intra-island crossover.  if there is only one
         # island always do intra-island crossover.
+        # if we are supposed to do inter-island crossover but there are
+        # not enough neighbors, fall back to intra-island crossover
+
+        do_intra_island = random.uniform(0.0, 1.0) < self.intra_island_crossover_rate
 
         if (
-            len(self.islands) == 1
-            or random.uniform(0.0, 1.0) < self.intra_island_crossover_rate
+            n_parents > target_island.neighbor_population_size()
+            or (  # not enough neighbors for inter-island
+                do_intra_island and len(target_island.population) >= n_parents
+            )
         ):
             # try to do intra island crossover
             logger.info(
@@ -499,12 +390,12 @@ class SteadyStateIslands(PopulationStrategy):
                 parents = target_island.get_parents(n_parents)
 
             elif target_island.status == "repopulating":
-                if len(target_island.population) < n_parents:
-                    # try to get parents from best island if we dont have enough
-                    # in this repopulating island
-                    parents = self.best_island.get_parents(n_parents)
-                else:
-                    parents = target_island.get_parents(n_parents)
+                # get parents from our best neighboring island while we are
+                # still repopulating
+                best_neighbor = target_island.best_neighbor()
+
+                if best_neighbor is not None:
+                    parents = best_neighbor.get_parents(n_parents)
 
             else:
                 logger.error(
@@ -515,20 +406,19 @@ class SteadyStateIslands(PopulationStrategy):
         # there weren't enough parents at the target (or best) island to get
         # intra-island parents so fall back to inter-island parents
         if parents is None:
-            # do inter island crossover
+            # try inter island crossover
 
             # potential other parents can come from all other islands
             potential_parents = []
 
             metadata["crossover_type"] = "inter-island"
 
-            for island in self.islands:
-                if island != target_island:
-                    potential_parents.extend(island.population)
+            for island in target_island.neighbors:
+                potential_parents.extend(island.population)
 
             logger.info(
-                f"inter island crossover: potential parent length: {len(potential_parents)}, "
-                f"n_parents - 1: {n_parents - 1}"
+                f"inter island crossover: n neighbors: {len(target_island.neighbors)}, potential parent "
+                f"length: {len(potential_parents)}, n_parents - 1: {n_parents - 1}"
             )
 
             if len(potential_parents) < (n_parents - 1):
@@ -545,11 +435,10 @@ class SteadyStateIslands(PopulationStrategy):
                 parents = [random.choice(target_island.population)]
 
             elif target_island.status == "repopulating":
-                if len(self.best_island.population) > 0:
-                    parents = [random.choice(self.best_island.population)]
-                else:
-                    # in case the global best island ended up being repopulated
-                    parents = [self.global_best_genome]
+                best_neighbor = target_island.best_neighbor()
+
+                if best_neighbor is not None:
+                    parents = [random.choice(best_neighbor.population)]
 
             else:
                 logger.error(
@@ -574,47 +463,36 @@ class SteadyStateIslands(PopulationStrategy):
 
             return parents, metadata
 
-    def insert_genome(self, genome: CircuitGenome, **kwargs) -> bool:
+    def insert_genome(self, genome: CircuitGenome, **kwargs) -> None:
         """
-        Inserts a genome back into the population.
+        Inserts a genome into the island it was generated for, updates the
+        global/metric best genomes, and triggers extinction events periodically.
+
+        A genome carrying a ``target_island_id`` in its metadata is routed to
+        that island; one generated for initialization (no target) is routed to
+        one of the islands with the fewest genomes.
 
         Args:
             genome: is the genome to insert into the population.
-            **kwargs: is used to pass additional options to the method for
-                inserting the genome, such as an island or species it came from.
+            **kwargs: additional options for inserting the genome; must include
+                ``current_genome_number`` (used to gate extinction/repopulation).
 
         Returns:
-            True if it was inserted into the population, False otherwise.
+            None. Inserts the genome into an island and updates the strategy's
+            best-genome tracking and extinction state in place.
         """
 
         target_island = None
         current_genome_number = kwargs["current_genome_number"]
 
-        if not hasattr(genome.metadata, "target_island_id"):
+        if "target_island_id" not in genome.metadata:
             # genome was generated without metadata for a target island which
-            # means it was generated for initialization.
-
-            # insert it into the island with the least number of genomes
-
-            min_size = self.max_island_size
-            target_islands = []
-
-            for island in self.islands:
-                logger.debug(f"min_size: {min_size}")
-                if len(island.population) < min_size:
-                    # found a new smallest island so use this
-                    min_size = len(island.population)
-                    target_islands = [island]
-
-                elif len(island.population) == min_size:
-                    # this would be another island that would
-                    # be a potential target with the same minimal
-                    # number of genomes
-                    target_islands.append(island)
-
-            target_island_ids = [target_island.id for target_island in target_islands]
-            logger.debug(f"target island ids: {target_island_ids}")
-
+            # means it was generated for initialization: insert it into one of
+            # the islands that currently hold the fewest genomes.
+            min_size = min(len(island.population) for island in self.islands)
+            target_islands = [
+                island for island in self.islands if len(island.population) == min_size
+            ]
             target_island = random.choice(target_islands)
         else:
             # select the target island as the island it was generated for
@@ -652,7 +530,8 @@ class SteadyStateIslands(PopulationStrategy):
                     out_dir=self.out_dir,
                     save_training_plot=self.save_training_plot,
                 )
-                self.profiler.plot_single_run()
+                if self.profiler is not None:
+                    self.profiler.plot_single_run()
 
         if (
             self.global_best_genome is None
@@ -663,9 +542,6 @@ class SteadyStateIslands(PopulationStrategy):
             # on the chance it would be discarded due to being generated from before
             # the island was repopulated
             genome.metadata["insert_type"] = "global_best"
-
-            # update the best island to the island of this genome
-            self.best_island = target_island
 
             # this was a new global best genome
             logger.success(
@@ -679,7 +555,8 @@ class SteadyStateIslands(PopulationStrategy):
                     out_dir=self.out_dir,
                     save_training_plot=self.save_training_plot,
                 )
-                self.profiler.plot_single_run()
+                if self.profiler is not None:
+                    self.profiler.plot_single_run()
 
         # check to see if the genome was a new global best
         logger.debug(f"target island id: {target_island.id}")
