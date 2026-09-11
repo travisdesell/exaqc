@@ -16,35 +16,47 @@ qiskit_gate_specifications["ch"] = GateSpecification(
 )
 
 qiskit_gate_specifications["cp"] = GateSpecification(
+    cnot_count=2,
+    rot_count=3,
     name="Controlled Phase",
     parameters=["theta"],
     qubits=["control_qubit", "target_qubit"],
 )
 
 qiskit_gate_specifications["crx"] = GateSpecification(
+    cnot_count=2,
+    rot_count=2,
     name="Controlled RX",
     parameters=["theta"],
     qubits=["control_qubit", "target_qubit"],
 )
 
 qiskit_gate_specifications["cry"] = GateSpecification(
+    cnot_count=2,
+    rot_count=2,
     name="Controlled RY",
     parameters=["theta"],
     qubits=["control_qubit", "target_qubit"],
 )
 
 qiskit_gate_specifications["crz"] = GateSpecification(
+    cnot_count=2,
+    rot_count=2,
     name="Controlled RZ",
     parameters=["theta"],
     qubits=["control_qubit", "target_qubit"],
 )
 
 qiskit_gate_specifications["cs"] = GateSpecification(
+    cnot_count=2,
+    rot_count=3,
     name="Controlled S",
     qubits=["control_qubit", "target_qubit"],
 )
 
 qiskit_gate_specifications["csdg"] = GateSpecification(
+    cnot_count=2,
+    rot_count=3,
     name="Controlled S^dagger",
     qubits=["control_qubit", "target_qubit"],
 )
@@ -60,32 +72,44 @@ qiskit_gate_specifications["csx"] = GateSpecification(
 )
 
 qiskit_gate_specifications["cu"] = GateSpecification(
+    cnot_count=2,
+    rot_count=6,
     name="Controlled U",
     parameters=["theta", "phi", "lam", "gamma"],
     qubits=["control_qubit", "target_qubit"],
 )
 
 qiskit_gate_specifications["cx"] = GateSpecification(
+    cnot_count=1,
+    rot_count=0,
     name="Controlled X",
     qubits=["control_qubit", "target_qubit"],
 )
 
 qiskit_gate_specifications["cy"] = GateSpecification(
+    cnot_count=1,
+    rot_count=0,
     name="Controlled Y",
     qubits=["control_qubit", "target_qubit"],
 )
 
 qiskit_gate_specifications["cz"] = GateSpecification(
+    cnot_count=1,
+    rot_count=0,
     name="Controlled Z",
     qubits=["control_qubit", "target_qubit"],
 )
 
 qiskit_gate_specifications["dcx"] = GateSpecification(
+    cnot_count=2,
+    rot_count=0,
     name="Double CNOT",
     qubits=["qubit1", "qubit2"],
 )
 
 qiskit_gate_specifications["ecr"] = GateSpecification(
+    cnot_count=4,
+    rot_count=2,
     name="Echoed Cross-Resonance",
     qubits=["qubit1", "qubit2"],
 )
@@ -107,6 +131,8 @@ qiskit_gate_specifications["iswap"] = GateSpecification(
 )
 
 qiskit_gate_specifications["mcp"] = GateSpecification(
+    cnot_count=0,
+    rot_count=1,
     needs_validation=True,
     name="Multi-Controlled Phase",
     parameters=["lam"],
@@ -114,6 +140,8 @@ qiskit_gate_specifications["mcp"] = GateSpecification(
 )
 
 qiskit_gate_specifications["mcrx"] = GateSpecification(
+    cnot_count=0,
+    rot_count=1,
     needs_validation=True,
     name="Multi-Controlled X Rotation",
     parameters=["theta"],
@@ -121,6 +149,8 @@ qiskit_gate_specifications["mcrx"] = GateSpecification(
 )
 
 qiskit_gate_specifications["mcry"] = GateSpecification(
+    cnot_count=0,
+    rot_count=1,
     needs_validation=True,
     name="Multi-Controlled Y Rotation",
     parameters=["theta"],
@@ -128,6 +158,8 @@ qiskit_gate_specifications["mcry"] = GateSpecification(
 )
 
 qiskit_gate_specifications["mcrz"] = GateSpecification(
+    cnot_count=0,
+    rot_count=1,
     needs_validation=True,
     name="Multi-Controlled Z Rotation",
     parameters=["theta"],
@@ -142,6 +174,8 @@ qiskit_gate_specifications["mcx"] = GateSpecification(
 )
 
 qiskit_gate_specifications["ms"] = GateSpecification(
+    cnot_count=2,
+    rot_count=5,
     needs_validation=True,
     name="Mølmer–Sørensen",
     parameters=["theta"],
@@ -149,6 +183,8 @@ qiskit_gate_specifications["ms"] = GateSpecification(
 )
 
 qiskit_gate_specifications["p"] = GateSpecification(
+    cnot_count=0,
+    rot_count=1,
     name="Phase",
     parameters=["theta"],
     qubits=["qubit"],
@@ -162,22 +198,30 @@ qiskit_gate_specifications["pauli"] = GateSpecification(
 )
 
 qiskit_gate_specifications["r"] = GateSpecification(
+    cnot_count=0,
+    rot_count=1,
     name="R",
     parameters=["theta", "phi"],
     qubits=["qubit"],
 )
 
 qiskit_gate_specifications["rcccx"] = GateSpecification(
+    cnot_count=8,
+    rot_count=0,
     name="Simplified 3-Controlled Toffoli",
     qubits=["control_qubit1", "control_qubit2", "control_qubit3", "target_qubit"],
 )
 
 qiskit_gate_specifications["rccx"] = GateSpecification(
+    cnot_count=3,
+    rot_count=0,
     name="Simplified Toffoli (Margolus)",
     qubits=["control_qubit1", "control_qubit2", "target_qubit"],
 )
 
 qiskit_gate_specifications["rv"] = GateSpecification(
+    cnot_count=0,
+    rot_count=1,
     name="RV",
     parameters=["vx", "vy", "vz"],
     qubits=["qubit"],
@@ -191,42 +235,56 @@ qiskit_gate_specifications["rv"] = GateSpecification(
 )
 
 qiskit_gate_specifications["rx"] = GateSpecification(
+    cnot_count=0,
+    rot_count=1,
     name="RX",
     parameters=["theta"],
     qubits=["qubit"],
 )
 
 qiskit_gate_specifications["rxx"] = GateSpecification(
+    cnot_count=2,
+    rot_count=1,
     name="RXX",
     parameters=["theta"],
     qubits=["qubit1", "qubit2"],
 )
 
 qiskit_gate_specifications["ry"] = GateSpecification(
+    cnot_count=0,
+    rot_count=1,
     name="RY",
     parameters=["theta"],
     qubits=["qubit"],
 )
 
 qiskit_gate_specifications["ryy"] = GateSpecification(
+    cnot_count=2,
+    rot_count=1,
     name="RYY",
     parameters=["theta"],
     qubits=["qubit1", "qubit2"],
 )
 
 qiskit_gate_specifications["rz"] = GateSpecification(
+    cnot_count=0,
+    rot_count=1,
     name="RZ",
     parameters=["phi"],
     qubits=["qubit"],
 )
 
 qiskit_gate_specifications["rzx"] = GateSpecification(
+    cnot_count=2,
+    rot_count=1,
     name="RZX",
     parameters=["theta"],
     qubits=["qubit1", "qubit2"],
 )
 
 qiskit_gate_specifications["rzz"] = GateSpecification(
+    cnot_count=2,
+    rot_count=1,
     name="RZZ",
     parameters=["theta"],
     qubits=["qubit1", "qubit2"],
@@ -243,6 +301,8 @@ qiskit_gate_specifications["sdg"] = GateSpecification(
 )
 
 qiskit_gate_specifications["swap"] = GateSpecification(
+    cnot_count=3,
+    rot_count=0,
     name="SWAP",
     qubits=["qubit1", "qubit2"],
 )
@@ -268,6 +328,8 @@ qiskit_gate_specifications["tdg"] = GateSpecification(
 )
 
 qiskit_gate_specifications["u"] = GateSpecification(
+    cnot_count=0,
+    rot_count=1,
     name="U",
     parameters=["theta", "phi", "lam"],
     qubits=["qubit"],

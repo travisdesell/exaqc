@@ -1,24 +1,24 @@
 """Tests for the public RL-trainer hyperparameter API.
 
-``RLHyperparameters`` and
+``RL_HYPERPARAMETER_DEFAULTS`` and
 ``ReinforcementLearningTrainer.resolve_hyperparameters`` are public so callers
 (custom training loops, tests) can build the exact hyperparameters a single
 :meth:`~src.trainer.reinforcement_trainer.ReinforcementLearningTrainer.run_update`
 needs without reaching into private state. These tests pin that contract:
 
-* ``RLHyperparameters`` is a public dataclass with the expected fields; and
-* ``resolve_hyperparameters`` prefers per-genome overrides and otherwise
-  falls back to the trainer's construction defaults, returning a fresh,
-  independent instance each call.
+* ``RL_HYPERPARAMETER_DEFAULTS`` is a mapping carrying the expected keys; and
+* ``resolve_hyperparameters`` prefers per-genome overrides and otherwise falls
+  back to those defaults, returning a fresh, independent attribute bag each
+  call whose attributes cover exactly the default keys.
 """
 
 from __future__ import annotations
 
-from dataclasses import fields, is_dataclass
+from types import SimpleNamespace
 
 from src.circuits.circuit import CircuitGenome
 from src.circuits.registers import expand_registers
-from src.trainer.reinforcement_trainer import RLHyperparameters
+from src.trainer.reinforcement_trainer import RL_HYPERPARAMETER_DEFAULTS
 from src.trainer.reinforce_trainer import ReinforceTrainer
 
 
@@ -44,12 +44,12 @@ def _genome_with_hyperparameters(hyperparameters: dict[str, object]) -> CircuitG
     return genome
 
 
-def test_rl_hyperparameters_is_a_public_dataclass() -> None:
-    """``RLHyperparameters`` is a public dataclass with the expected fields."""
+def test_rl_hyperparameter_defaults_has_expected_keys() -> None:
+    """``RL_HYPERPARAMETER_DEFAULTS`` carries the expected keys and values."""
 
-    assert is_dataclass(RLHyperparameters)
+    assert isinstance(RL_HYPERPARAMETER_DEFAULTS, dict)
 
-    field_names = {field.name for field in fields(RLHyperparameters)}
+    keys = set(RL_HYPERPARAMETER_DEFAULTS)
     assert {
         "episodes",
         "learning_rate",
@@ -60,36 +60,49 @@ def test_rl_hyperparameters_is_a_public_dataclass() -> None:
         "ppo_passes",
         "ppo_minibatch",
         "epsilon",
-    } <= field_names
+        "improvement_cutoff",
+        "quantum_dropout",
+    } <= keys
     # the field was renamed from the PPO-literature "epochs" term
-    assert "ppo_epochs" not in field_names
+    assert "ppo_epochs" not in keys
 
-    defaults = RLHyperparameters()
-    assert defaults.episodes == 60
-    assert defaults.ppo_passes == 4
-    assert defaults.ema_alpha == 0.01
+    assert RL_HYPERPARAMETER_DEFAULTS["episodes"] == 60
+    assert RL_HYPERPARAMETER_DEFAULTS["ppo_passes"] == 4
+    assert RL_HYPERPARAMETER_DEFAULTS["ema_alpha"] == 0.01
+    assert RL_HYPERPARAMETER_DEFAULTS["improvement_cutoff"] == 30
+    assert RL_HYPERPARAMETER_DEFAULTS["quantum_dropout"] is False
 
 
-def test_resolve_hyperparameters_falls_back_to_trainer_defaults() -> None:
-    """A genome with no hyperparameters resolves to the trainer's defaults."""
+def test_resolve_hyperparameters_falls_back_to_defaults() -> None:
+    """A genome with no hyperparameters resolves to the module defaults."""
 
-    trainer = ReinforceTrainer(episodes=7, learning_rate=0.123, gamma=0.9)
+    trainer = ReinforceTrainer()
     genome = _genome_with_hyperparameters({})
 
     resolved = trainer.resolve_hyperparameters(genome)
 
-    assert isinstance(resolved, RLHyperparameters)
-    assert resolved.episodes == 7
-    assert resolved.learning_rate == 0.123
-    assert resolved.gamma == 0.9
+    assert isinstance(resolved, SimpleNamespace)
+    # every default key is present as an attribute, and only those keys
+    assert vars(resolved) == dict(RL_HYPERPARAMETER_DEFAULTS)
+    assert resolved.episodes == RL_HYPERPARAMETER_DEFAULTS["episodes"]
+    assert (
+        resolved.improvement_cutoff == RL_HYPERPARAMETER_DEFAULTS["improvement_cutoff"]
+    )
+    assert resolved.quantum_dropout is False
 
 
 def test_resolve_hyperparameters_prefers_genome_overrides() -> None:
-    """Per-genome values win; unspecified fields fall back to trainer defaults."""
+    """Per-genome values win; unspecified fields fall back to the defaults."""
 
-    trainer = ReinforceTrainer(episodes=7, gamma=0.9)
+    trainer = ReinforceTrainer()
     genome = _genome_with_hyperparameters(
-        {"episodes": 3, "gamma": 0.5, "unrelated_key": 123}
+        {
+            "episodes": 3,
+            "gamma": 0.5,
+            "improvement_cutoff": 2,
+            "quantum_dropout": True,
+            "unrelated_key": 123,
+        }
     )
 
     resolved = trainer.resolve_hyperparameters(genome)
@@ -97,9 +110,11 @@ def test_resolve_hyperparameters_prefers_genome_overrides() -> None:
     # overrides taken from the genome
     assert resolved.episodes == 3
     assert resolved.gamma == 0.5
-    # unspecified field falls back to the trainer's default
-    assert resolved.learning_rate == trainer.defaults.learning_rate
-    # keys that are not hyperparameter fields are ignored (no error, no attr)
+    assert resolved.improvement_cutoff == 2
+    assert resolved.quantum_dropout is True
+    # unspecified field falls back to the module default
+    assert resolved.learning_rate == RL_HYPERPARAMETER_DEFAULTS["learning_rate"]
+    # keys that are not hyperparameter defaults are ignored (no error, no attr)
     assert not hasattr(resolved, "unrelated_key")
 
 
@@ -116,5 +131,5 @@ def test_resolve_hyperparameters_returns_independent_instances() -> None:
 
     first.episodes = 999
     assert second.episodes != 999
-    # the trainer's stored defaults are also untouched by the mutation
-    assert trainer.defaults.episodes != 999
+    # the shared module defaults are also untouched by the mutation
+    assert RL_HYPERPARAMETER_DEFAULTS["episodes"] != 999

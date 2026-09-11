@@ -93,3 +93,77 @@ def test_example_circuit_full_stack(target: str):
     ), f"Expected output tensor of size {n_qubits}, got tensor of shape {output.shape}"
 
     print("\n✅ {target} example circuit executed successfully")
+
+
+def build_minimal_genome(target: str, quantum_output_mode: str) -> CircuitGenome:
+    """Builds a minimal purely quantum genome with the given readout mode.
+
+    Args:
+        target: ``"pennylane"`` or ``"qiskit"``.
+        quantum_output_mode: The readout mode to configure.
+
+    Returns:
+        An uninitialized :class:`CircuitGenome`.
+    """
+
+    genome = CircuitGenome(
+        genome_number=0,
+        target=target,
+        input_qubits=expand_registers({"q": 2}),
+    )
+    genome.hyperparameters = {
+        "quantum_input_mode": "ry",
+        "quantum_output_mode": quantum_output_mode,
+    }
+    genome.encoder = None
+    genome.decoder = None
+    genome.add_gate(depth=0.5, method_name="cx", qubits=[("q", 0), ("q", 1)])
+    return genome
+
+
+def test_qiskit_rejects_unimplemented_output_modes() -> None:
+    """The qiskit backend refuses readout modes it does not implement.
+
+    ``expval`` is a recognized mode that only pennylane builds a model for. The
+    backend used to leave ``torch_model`` unset for it, which surfaced much
+    later as an opaque ``AttributeError`` on a ``None`` model.
+    """
+
+    genome = build_minimal_genome("qiskit", "expval")
+
+    with pytest.raises(NotImplementedError, match="not implemented for the qiskit"):
+        genome.initialize_model()
+
+
+@pytest.mark.parametrize("target", ["pennylane", "qiskit"])
+def test_unknown_output_mode_is_rejected(target: str) -> None:
+    """An unrecognized readout mode is a ValueError, not a backend gap.
+
+    ``state`` is included because the full-statevector readout was removed: it
+    is now simply an unknown mode on both targets.
+
+    Args:
+        target: The quantum backend under test.
+    """
+
+    for quantum_output_mode in ("not_a_mode", "state"):
+        genome = build_minimal_genome(target, quantum_output_mode)
+
+        with pytest.raises(ValueError, match="nknown quantum_output_mode"):
+            genome.initialize_model()
+
+
+@pytest.mark.parametrize("target", ["pennylane", "qiskit"])
+def test_probs_output_mode_still_builds(target: str) -> None:
+    """The supported readout mode keeps working on both targets.
+
+    Args:
+        target: The quantum backend under test.
+    """
+
+    genome = build_minimal_genome(target, "probs")
+    genome.initialize_model()
+
+    output = genome.forward(torch.rand(genome.n_quantum_inputs()))
+
+    assert output.shape == (genome.n_quantum_outputs(),)

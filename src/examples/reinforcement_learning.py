@@ -10,7 +10,7 @@ building blocks:
   outputs to per-action values,
 * an :class:`~src.evolution.objective.Objective` that wraps a *trainer* and
   sets genome fitness,
-* the same ``master_worker`` evolutionary driver.
+* the same ``run_evolution`` evolutionary driver.
 
 The RL algorithms live in :mod:`src.trainer.reinforcement_trainer` as
 pluggable trainer classes (REINFORCE, actor-critic, PPO, Q-learning), exactly
@@ -19,13 +19,13 @@ classification objective. The environment is described by a pluggable
 :class:`~src.trainer.reinforcement_trainer.RLEnvironment`, which the
 :class:`ReinforcementLearningObjective` receives together with a trainer.
 
-Example (single-process smoke run is driven programmatically via the
-objective; the ``__main__`` block wires everything into ``master_worker`` for
-an MPI evolutionary search)::
+Example (single-process runs execute serially via ``EXAQC.run_for``; with more
+than one MPI rank :func:`main` runs a master/worker search -- both selected
+automatically by :func:`~src.evolution.master_worker.run_evolution`)::
 
     mpirun -n 4 python -m src.examples.reinforcement_learning \\
-        --env cartpole --algo ppo -ms "uniform 1 3" -ps "uniform 2 3" \\
-        --target pennylane --batch_placeholder steady_state
+        --env cartpole --algo ppo -ms uniform 1 3 -ps uniform 2 3 \\
+        --target pennylane steady_state
 """
 
 from __future__ import annotations
@@ -39,20 +39,14 @@ import numpy as np
 import gymnasium as gym
 from loguru import logger
 
-from src.circuits.circuit import (
-    CircuitGenome,
-    QUANTUM_INPUT_MODES,
-    QUANTUM_OUTPUT_MODES,
-)
-from src.circuits.decoder import initialize_decoder, DECODING_OPTIONS
-from src.circuits.encoder import initialize_encoder, ENCODING_OPTIONS
-from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
-from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
-
-from src.evolution.master_worker import master_worker
+from src.circuits.circuit import CircuitGenome
+from src.circuits.decoder import initialize_decoder
+from src.circuits.encoder import initialize_encoder
+from src.circuits.gate_specifications import GateSpecifications
+from src.evolution.exaqc import EXAQC
+from src.evolution.master_worker import run_evolution
 from src.evolution.objective import Objective
-from src.evolution.steady_state_islands import SteadyStateIslands
-from src.evolution.steady_state_population import SteadyStatePopulation
+from src.evolution.population_strategy import PopulationStrategy
 
 from src.trainer.reinforcement_trainer import (
     RLEnvironment,
@@ -60,6 +54,9 @@ from src.trainer.reinforcement_trainer import (
     box_observation_encoder,
     onehot_observation_encoder,
 )
+from src.trainer.ppo_trainer import PPOTrainer
+from src.trainer.q_learning_trainer import QLearningTrainer
+from src.trainer.reinforce_trainer import ReinforceTrainer
 from src.trainer.rl_trainer_registry import TRAINER_REGISTRY
 
 # ---------------------------------------------------------------------
@@ -76,6 +73,7 @@ ENV_IDS: dict[str, str] = {
     "cartpole": "CartPole-v1",
     "acrobot": "Acrobot-v1",
     "mountaincar": "MountainCar-v0",
+    "mountaincar_continuous": "MountainCarContinuous-v0",
     "frozenlake": "FrozenLake-v1",
     "pendulum": "Pendulum-v1",
     "hopper": "Hopper-v5",
@@ -86,13 +84,22 @@ ENV_IDS: dict[str, str] = {
 }
 
 #: The subset of :data:`ENV_IDS` that are continuous (``Box``-action) tasks.
-#: Pendulum is classic control; the rest are MuJoCo tasks (require
+#: MountainCarContinuous and Pendulum are classic control; the rest are MuJoCo
+#: tasks (require
 #: ``gymnasium[mujoco]``). Their observation size, action dimensionality, and
 #: action bounds are read from the environment at build time by
 #: :func:`make_continuous_environment` rather than hardcoded, since these
 #: differ across Gymnasium versions (e.g. Ant/Humanoid observation sizes).
 CONTINUOUS_ENVS: frozenset[str] = frozenset(
-    {"pendulum", "hopper", "walker2d", "halfcheetah", "ant", "humanoid"}
+    {
+        "mountaincar_continuous",
+        "pendulum",
+        "hopper",
+        "walker2d",
+        "halfcheetah",
+        "ant",
+        "humanoid",
+    }
 )
 
 #: All environment names understood by :func:`make_environment`, in the order
@@ -152,8 +159,9 @@ def make_environment(name: str, **kwargs) -> RLEnvironment:
         name: Environment name; one of :data:`ENV_CHOICES`. The discrete tasks
             are ``"cartpole"``, ``"acrobot"``, ``"mountaincar"`` and
             ``"frozenlake"``; the continuous (``Box``-action) tasks are the
-            members of :data:`CONTINUOUS_ENVS` (``"pendulum"``, ``"hopper"``,
-            ``"walker2d"``, ``"halfcheetah"``, ``"ant"``, ``"humanoid"``).
+            members of :data:`CONTINUOUS_ENVS` (``"mountaincar_continuous"``,
+            ``"pendulum"``, ``"hopper"``, ``"walker2d"``, ``"halfcheetah"``,
+            ``"ant"``, ``"humanoid"``).
         **kwargs: Environment-specific options (e.g. ``map_name`` and
             ``is_slippery`` for FrozenLake).
 
@@ -219,15 +227,18 @@ def make_environment(name: str, **kwargs) -> RLEnvironment:
     )
 
 
-def build_trainer(algo: str, **overrides) -> ReinforcementLearningTrainer:
+def build_trainer(algo: str) -> ReinforcementLearningTrainer:
     """Constructs a trainer for the requested algorithm.
+
+    Every training hyperparameter (including the quantum-dropout master switch)
+    is carried per genome in ``genome.hyperparameters`` and resolved by the
+    trainer at train time, so no hyperparameters are passed here -- the only
+    construction-time input is the algorithm choice itself, which also selects
+    the on-policy SARSA variant of the value-based trainer.
 
     Args:
         algo: Algorithm name; one of the keys of
-            ``src.trainer.reinforcement_trainer.TRAINER_REGISTRY``.
-        **overrides: Constructor keyword arguments forwarded to the trainer
-            (algorithm defaults; per-genome values from
-            ``genome.hyperparameters`` still take precedence at train time).
+            ``src.trainer.rl_trainer_registry.TRAINER_REGISTRY``.
 
     Returns:
         An instantiated :class:`ReinforcementLearningTrainer` subclass.
@@ -243,11 +254,12 @@ def build_trainer(algo: str, **overrides) -> ReinforcementLearningTrainer:
 
     trainer_class = TRAINER_REGISTRY[algo]
 
-    # SARSA is the on-policy variant of the value-based trainer.
+    # SARSA is the on-policy variant of the value-based trainer, selected by a
+    # constructor flag rather than a per-genome hyperparameter.
     if algo == "sarsa":
-        overrides.setdefault("sarsa", True)
+        return trainer_class(sarsa=True)
 
-    return trainer_class(**overrides)
+    return trainer_class()
 
 
 # ---------------------------------------------------------------------
@@ -296,9 +308,11 @@ class ReinforcementLearningObjective(Objective):
         self,
         environment: RLEnvironment,
         trainer: ReinforcementLearningTrainer,
+        train_vs_validation_bias: float = 0.1,
     ):
         self.environment = environment
         self.trainer = trainer
+        self.train_vs_validation_bias = train_vs_validation_bias
 
     def __call__(self, genome: CircuitGenome):
         """Trains and evaluates a genome, setting its fitness.
@@ -313,20 +327,19 @@ class ReinforcementLearningObjective(Objective):
         training_metrics = genome.metadata["best_training_metrics"]
         validation_metrics = genome.metadata["best_validation_metrics"]
 
-        """
         mean_return = (
-            validation_metrics["return_mean"] + training_metrics["return_mean"]
-        ) / 2.0
-        """
+            self.train_vs_validation_bias * validation_metrics["return_mean"]
+        ) + ((1.0 - self.train_vs_validation_bias) * training_metrics["return_mean"])
+
         # mean_return = validation_metrics["return_mean"]
-        mean_return = training_metrics["return_mean"]
+        # mean_return = training_metrics["return_mean"]
 
         # "loss" (lower is better) drives population sorting via compare();
         # the remaining keys mirror the RL fields used by save_circuit's tag
         # fallback and by downstream analysis.
         genome.fitness = {
             "loss": -mean_return,
-            "target_metric": mean_return,
+            "target_metric": validation_metrics["return_mean"],
             "eval_return_mean": validation_metrics["return_mean"],
             "eval_return_std": validation_metrics["return_std"],
             "train_return_mean": training_metrics["return_mean"],
@@ -345,160 +358,109 @@ class ReinforcementLearningObjective(Objective):
 
 
 # ---------------------------------------------------------------------
-# Main
+# Command-line interface
 # ---------------------------------------------------------------------
 
-if __name__ == "__main__":
-    p = argparse.ArgumentParser()
-    p.add_argument(
+
+def build_parser() -> argparse.ArgumentParser:
+    """Builds the command-line parser for the reinforcement-learning experiment.
+
+    Returns:
+        The configured :class:`argparse.ArgumentParser`.
+    """
+
+    parser = argparse.ArgumentParser(
+        description="Evolve quantum genomes for reinforcement learning with EXAQC."
+    )
+    parser.add_argument(
         "--env",
         choices=list(ENV_CHOICES),
         required=True,
+        help="Gymnasium environment to evolve policies on.",
     )
-    p.add_argument(
+
+    parser.add_argument(
         "--algo",
         choices=sorted(TRAINER_REGISTRY.keys()),
         required=True,
         default="reinforce",
+        help="Reinforcement-learning algorithm used to train each genome.",
     )
 
-    p.add_argument(
-        "--out_dir",
-        type=str,
-        default="artifacts",
-        help="Output directory to store results from runs",
-    )
+    # The evolutionary search's own flags -- mutation/parent strategies,
+    # crossover rates, the genome budget, --out_dir and --save_training_plot --
+    # are owned by EXAQC so every entry point stays in sync.
+    EXAQC.initialize_parser(parser)
 
-    p.add_argument(
-        "--mutation_strategy",
-        "-ms",
-        type=str,
-        nargs="+",
-        required=True,
-    )
-    p.add_argument(
-        "--parent_strategy",
-        "-ps",
-        type=str,
-        nargs="+",
-        required=True,
-    )
+    # The choice of population strategy (and each strategy's own flags) is owned
+    # by PopulationStrategy.
+    PopulationStrategy.initialize_parser(parser)
 
-    subparsers = p.add_subparsers(
-        dest="population_strategy",
-        help="Specify how genomes will be handled.",
-        required=True,
-    )
+    # The backend (--target) and optional gate-set restriction (--use_only) are
+    # owned by GateSpecifications.
+    GateSpecifications.initialize_parser(parser)
 
-    steady_state_parser = subparsers.add_parser(
-        "steady_state", help="Use a single steady state population."
-    )
-    steady_state_parser.add_argument("--max_population_size", type=int, default=30)
+    # The circuit-genome flags (qubit counts, quantum input/output modes,
+    # encoder/decoder, quantum dropout) are owned by CircuitGenome so every
+    # entry point stays in sync.
+    CircuitGenome.initialize_parser(parser)
 
-    islands_parser = subparsers.add_parser(
-        "islands", help="Use multiple islands of steady state populations."
-    )
-    islands_parser.add_argument("--n_islands", type=int, default=10)
-    islands_parser.add_argument("--max_island_size", type=int, default=10)
-    islands_parser.add_argument("--genomes_before_extinction", type=int, default=100)
-    islands_parser.add_argument("--genomes_for_next_extinction", type=int, default=200)
-    islands_parser.add_argument("--islands_to_extinct", type=int, default=1)
-    islands_parser.add_argument("--primary_parent", type=str, default="best")
-    islands_parser.add_argument(
-        "--intra_island_crossover_rate", type=float, default=0.5
-    )
-
-    # Evolution
-    p.add_argument("--number_genomes", type=int, default=500)
-    p.add_argument("--input_qubits", type=int, default=4)
-    p.add_argument("--output_qubits", type=int, default=None)
-
-    p.add_argument(
-        "--target", type=str, choices=["pennylane", "qiskit"], default="pennylane"
-    )
-
-    p.add_argument(
-        "--quantum_input_mode",
-        "-qim",
-        choices=QUANTUM_INPUT_MODES,
-        type=str,
-        default="u3",
-        help="Initial gate types whose parameters are set from the encoded observation.",
-    )
-    p.add_argument(
-        "--quantum_output_mode",
-        "-qom",
-        choices=QUANTUM_OUTPUT_MODES,
-        type=str,
-        default="probs",
-        help="Output mode from the quantum circuit.",
-    )
-    p.add_argument(
-        "--encoding",
-        choices=ENCODING_OPTIONS,
-        type=str,
-        default="linear",
-        help="Observation-to-circuit encoding.",
-    )
-    p.add_argument(
-        "--decoding",
-        choices=DECODING_OPTIONS,
-        type=str,
-        default="linear",
-        help="Circuit-output-to-action decoding.",
-    )
-
-    # RL hyperparameters (become genome.hyperparameters, mutable by the search)
-    p.add_argument("--episodes", type=int, default=60)
-    p.add_argument("--eval_episodes", type=int, default=10)
-    p.add_argument("--max_steps", type=int, default=500)
-    p.add_argument("--gamma", type=float, default=0.99)
-    p.add_argument("--learning_rate", "-lr", type=float, default=1e-2)
-    p.add_argument("--entropy_coef", type=float, default=0.0)
-    p.add_argument("--baseline", choices=["mean", "none"], default="mean")
-    p.add_argument("--value_coef", type=float, default=0.5)
-    p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--log_every", type=int, default=10)
-    p.add_argument(
-        "--ema_alpha",
-        type=float,
-        default=0.05,
-        help="Smoothing factor for the exponential moving average of episode "
-        "returns reported as the training return mean.",
-    )
-
-    # PPO extras
-    p.add_argument("--rollout_steps", type=int, default=512)
-    p.add_argument(
-        "--ppo_passes",
-        type=int,
-        default=4,
-        help="Passes over each PPO rollout (PPO literature calls these 'epochs').",
-    )
-    p.add_argument("--ppo_minibatch", type=int, default=128)
-    p.add_argument("--ppo_clip", type=float, default=0.2)
-    p.add_argument("--gae_lambda", type=float, default=0.95)
-
-    # Value-based extras
-    p.add_argument("--epsilon", type=float, default=0.2)
-    p.add_argument("--epsilon_min", type=float, default=0.05)
-    p.add_argument("--epsilon_decay", type=float, default=0.995)
+    # The training-loop hyperparameters are owned by the RL trainer classes so
+    # each flag lives with the code that reads it: the base trainer owns the
+    # knobs common to every algorithm (plus the policy-gradient entropy/value
+    # coefficients), and each algorithm's extras come from its own class. All of
+    # them are registered regardless of --algo so the full flag set is available.
+    ReinforcementLearningTrainer.initialize_parser(parser)
+    ReinforceTrainer.initialize_parser(parser)
+    PPOTrainer.initialize_parser(parser)
+    QLearningTrainer.initialize_parser(parser)
 
     # FrozenLake options
-    p.add_argument("--map_name", choices=["4x4", "8x8"], default="4x4")
-    p.add_argument("--is_slippery", action="store_true")
+    parser.add_argument(
+        "--map_name",
+        choices=["4x4", "8x8"],
+        default="4x4",
+        help="FrozenLake grid size (used only for the frozenlake environment).",
+    )
 
-    p.add_argument(
+    parser.add_argument(
+        "--is_slippery",
+        action="store_true",
+        help="Enable stochastic (slippery) transitions for the frozenlake environment.",
+    )
+
+    parser.add_argument(
+        "--train_vs_validation_bias",
+        "-tvb",
+        type=float,
+        default=0.01,
+        help="Weights how the loss is calculated as (<tvb> * train_return) + ((1.0 - <tvb>) * validation_return)).",
+    )
+
+    parser.add_argument(
         "--logging_level",
         type=str,
         default="INFO",
         help="DEBUG/INFO/WARNING/ERROR/CRITICAL",
     )
 
-    args = p.parse_args()
+    return parser
 
+
+# ---------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------
+
+
+def main() -> None:
+    """Runs a reinforcement-learning experiment."""
+
+    parser = build_parser()
+    args = parser.parse_args()
+
+    # The output directory is created by the EXAQC constructor; loguru creates
+    # the run.log parent directory as needed when the file sink is added.
     logger.remove()
-    os.makedirs(args.out_dir, exist_ok=True)
     logger.add(sys.stdout, level=args.logging_level)
     logger.add(os.path.join(args.out_dir, "run.log"))
 
@@ -518,157 +480,155 @@ if __name__ == "__main__":
             f"{args.eval_episodes} will be reduced to 1 during evaluation."
         )
 
-    trainer = build_trainer(
-        args.algo,
-        episodes=args.episodes,
-        learning_rate=args.learning_rate,
-        gamma=args.gamma,
-        max_steps=args.max_steps,
-        eval_episodes=args.eval_episodes,
-        seed=args.seed,
-        log_every=args.log_every,
-        ema_alpha=args.ema_alpha,
-        entropy_coef=args.entropy_coef,
-        baseline=args.baseline,
-        value_coef=args.value_coef,
-        gae_lambda=args.gae_lambda,
-        rollout_steps=args.rollout_steps,
-        ppo_passes=args.ppo_passes,
-        ppo_minibatch=args.ppo_minibatch,
-        ppo_clip=args.ppo_clip,
-        epsilon=args.epsilon,
-        epsilon_min=args.epsilon_min,
-        epsilon_decay=args.epsilon_decay,
-    )
+    # All training hyperparameters are carried per genome (see the
+    # ``hyperparameters`` dict below) and resolved by the trainer at train time,
+    # so the trainer itself is constructed with only the algorithm choice.
+    trainer = build_trainer(args.algo)
 
     # Value-based trainers (q_learning / sarsa) enumerate discrete actions and
     # cannot drive a continuous Box-action environment; fail fast with a clear
     # message rather than deep inside the first weight update.
     if environment.continuous and not trainer.supports_continuous:
-        p.error(
+        parser.error(
             f"algorithm {args.algo!r} does not support the continuous "
             f"environment {args.env!r}; use reinforce, actor_critic, or ppo."
         )
 
-    objective = ReinforcementLearningObjective(environment=environment, trainer=trainer)
-
-    # These become each genome's hyperparameters, so the evolutionary search
-    # can carry/mutate them per genome (mirroring the classification example).
-    hyperparameters = {
-        "quantum_input_mode": args.quantum_input_mode,
-        "quantum_output_mode": args.quantum_output_mode,
-        "episodes": args.episodes,
-        "eval_episodes": args.eval_episodes,
-        "max_steps": args.max_steps,
-        "gamma": args.gamma,
-        "learning_rate": args.learning_rate,
-        "entropy_coef": args.entropy_coef,
-        "baseline": args.baseline,
-        "value_coef": args.value_coef,
-        "gae_lambda": args.gae_lambda,
-        "rollout_steps": args.rollout_steps,
-        "ppo_passes": args.ppo_passes,
-        "ppo_minibatch": args.ppo_minibatch,
-        "ppo_clip": args.ppo_clip,
-        "epsilon": args.epsilon,
-        "epsilon_min": args.epsilon_min,
-        "epsilon_decay": args.epsilon_decay,
-        "seed": args.seed,
-        "log_every": args.log_every,
-        "ema_alpha": args.ema_alpha,
-    }
+    # The objective is built on every rank because worker ranks evaluate genomes
+    # with it; only the search machinery in build_exaqc is master/serial-only.
+    objective = ReinforcementLearningObjective(
+        environment=environment,
+        trainer=trainer,
+        train_vs_validation_bias=args.train_vs_validation_bias,
+    )
 
     target = args.target
 
-    # -----------------------------------------------------------------
-    # Encoder / decoder sizing (reuses the existing linear encoder/decoder)
-    # -----------------------------------------------------------------
-    n_input_registers = args.input_qubits
-    n_encoder_outputs = n_input_registers
-    if args.quantum_input_mode == "u3":
-        n_encoder_outputs *= 3
+    def build_exaqc() -> EXAQC:
+        """Builds the EXAQC search for the serial run or the MPI master.
 
-    # The policy occupies environment.n_policy_outputs decoder outputs: one per
-    # action for a discrete space, or a mean + log-std per action dimension for
-    # a continuous space. Size the quantum output register so it has at least as
-    # many features as the policy needs.
-    n_output_registers = (
-        int(args.output_qubits)
-        if args.output_qubits is not None
-        else max(1, int(np.ceil(np.log2(environment.n_policy_outputs))))
-    )
-    n_decoder_inputs = n_output_registers
-    if args.quantum_output_mode == "probs":
-        n_decoder_inputs = 2**n_output_registers
+        Worker ranks never call this, so the encoder/decoder sizing, population
+        strategy, gate set and the rest of the search machinery are only
+        constructed where they are actually driven.
 
-    # advantage methods (actor-critic, PPO) ask the decoder for one extra
-    # output holding the scalar state value, so the value function is part of
-    # the genome (evolved by crossover, preserved by serialization) rather
-    # than a separate head.
-    n_decoder_outputs = environment.n_policy_outputs + trainer.n_value_outputs
+        Returns:
+            The fully-configured :class:`~src.evolution.exaqc.EXAQC` search,
+            wrapping the ``objective`` and ``environment`` built above.
+        """
 
-    # encoder: encoded observation (n_observation_features) -> quantum inputs
-    initial_encoder = initialize_encoder(
-        target=target,
-        encoding_str=args.encoding,
-        n_inputs=environment.n_observation_features,
-        n_outputs=n_encoder_outputs,
-    )
-    # decoder: quantum outputs -> per-action values (policy logits / Q-values),
-    # plus an optional trailing state-value output for advantage methods.
-    initial_decoder = initialize_decoder(
-        target=target,
-        decoding_str=args.decoding,
-        n_inputs=n_decoder_inputs,
-        n_outputs=n_decoder_outputs,
-    )
+        # These become each genome's hyperparameters, so the evolutionary search
+        # can carry/mutate them per genome (mirroring the classification example).
+        hyperparameters = {
+            "quantum_input_mode": args.quantum_input_mode,
+            "quantum_output_mode": args.quantum_output_mode,
+            "algo": args.algo,
+            "quantum_dropout": args.quantum_dropout,
+            "quantum_dropout_type": args.quantum_dropout_type,
+            "quantum_dropout_rate": args.quantum_dropout_rate,
+            "episodes": args.episodes,
+            "eval_episodes": args.eval_episodes,
+            "max_steps": args.max_steps,
+            "gamma": args.gamma,
+            "learning_rate": args.learning_rate,
+            "entropy_coef": args.entropy_coef,
+            "baseline": args.baseline,
+            "value_coef": args.value_coef,
+            "gae_lambda": args.gae_lambda,
+            "rollout_steps": args.rollout_steps,
+            "ppo_passes": args.ppo_passes,
+            "ppo_minibatch": args.ppo_minibatch,
+            "ppo_clip": args.ppo_clip,
+            "epsilon": args.epsilon,
+            "epsilon_min": args.epsilon_min,
+            "epsilon_decay": args.epsilon_decay,
+            "seed": args.seed,
+            "log_every": args.log_every,
+            "ema_alpha": args.ema_alpha,
+            "improvement_cutoff": args.improvement_cutoff,
+        }
 
-    # -----------------------------------------------------------------
-    # Population strategy
-    # -----------------------------------------------------------------
-    if args.population_strategy == "steady_state":
-        population = SteadyStatePopulation(
-            max_population_size=args.max_population_size,
-            compare=compare,
-            out_dir=args.out_dir,
+        # -----------------------------------------------------------------
+        # Encoder / decoder sizing (reuses the existing linear encoder/decoder)
+        # -----------------------------------------------------------------
+        n_input_registers = args.input_qubits
+        if args.encoding == "identity":
+            # The identity encoder passes its input straight through, so its
+            # output size must equal its input size (the observation feature
+            # count) -- it does not resize or clip to the qubit count.
+            n_encoder_outputs = environment.n_observation_features
+        else:
+            n_encoder_outputs = n_input_registers
+            if args.quantum_input_mode == "u3":
+                n_encoder_outputs *= 3
+
+        # The policy occupies environment.n_policy_outputs decoder outputs: one
+        # per action for a discrete space, or a mean + log-std per action
+        # dimension for a continuous space. The output register must be wide
+        # enough to carry them; --output_qubits is required, so it is used as-is.
+        n_output_registers = int(args.output_qubits)
+        n_decoder_inputs = n_output_registers
+        if args.quantum_output_mode == "probs":
+            n_decoder_inputs = 2**n_output_registers
+
+        # advantage methods (actor-critic, PPO) ask the decoder for one extra
+        # output holding the scalar state value, so the value function is part of
+        # the genome (evolved by crossover, preserved by serialization) rather
+        # than a separate head.
+        n_decoder_outputs = environment.n_policy_outputs + trainer.n_value_outputs
+
+        # encoder: encoded observation (n_observation_features) -> quantum inputs
+        initial_encoder = initialize_encoder(
+            target=target,
+            encoding_str=args.encoding,
+            n_inputs=environment.n_observation_features,
+            n_outputs=n_encoder_outputs,
+            quantum_input_mode=args.quantum_input_mode,
+            n_input_qubits=n_input_registers,
         )
-    elif args.population_strategy == "islands":
-        population = SteadyStateIslands(
-            n_islands=args.n_islands,
-            max_island_size=args.max_island_size,
-            genomes_before_extinction=args.genomes_before_extinction,
-            genomes_for_next_extinction=args.genomes_for_next_extinction,
-            islands_to_extinct=args.islands_to_extinct,
-            primary_parent=args.primary_parent,
-            compare=compare,
-            out_dir=args.out_dir,
+        # decoder: quantum outputs -> per-action values (policy logits /
+        # Q-values), plus an optional trailing state-value output for advantage
+        # methods.
+        initial_decoder = initialize_decoder(
+            target=target,
+            decoding_str=args.decoding,
+            n_inputs=n_decoder_inputs,
+            n_outputs=n_decoder_outputs,
         )
-    else:
-        raise ValueError(args.population_strategy)
 
-    gate_specifications = (
-        pennylane_gate_specifications
-        if target == "pennylane"
-        else qiskit_gate_specifications
-    )
+        logger.info(
+            f"env={environment.env_id} algo={args.algo} target={target} "
+            f"input_registers={{'input': {n_input_registers}}} "
+            f"output_registers={{'input': {n_output_registers}}}"
+        )
 
-    logger.info(
-        f"env={environment.env_id} algo={args.algo} target={target} "
-        f"input_registers={{'input': {n_input_registers}}} "
-        f"output_registers={{'input': {n_output_registers}}}"
-    )
+        # The gate set and population strategy are built from `args` by their own
+        # factories (which every entry point shares); only the task-specific
+        # encoder/decoder sizing, hyperparameters and register layout are
+        # computed here.
+        return EXAQC(
+            gate_specifications=GateSpecifications.from_args(args),
+            population=PopulationStrategy.from_args(args, compare),
+            objective=objective,
+            initial_encoder=initial_encoder,
+            initial_decoder=initial_decoder,
+            hyperparameters=hyperparameters,
+            mutation_strategy=args.mutation_strategy,
+            parent_strategy=args.parent_strategy,
+            binary_crossover_rate=args.binary_crossover_rate,
+            n_ary_crossover_rate=args.n_ary_crossover_rate,
+            exponential_crossover_rate=args.exponential_crossover_rate,
+            input_registers={"input": n_input_registers},
+            output_registers={"input": n_output_registers},
+            task="reinforcement_learning",
+            task_target=args.env,
+        )
 
-    master_worker(
-        gate_specifications=gate_specifications,
-        population=population,
+    run_evolution(
         objective=objective,
-        initial_encoder=initial_encoder,
-        initial_decoder=initial_decoder,
-        hyperparameters=hyperparameters,
-        mutation_strategy=args.mutation_strategy,
-        parent_strategy=args.parent_strategy,
+        build_exaqc=build_exaqc,
         run_for=args.number_genomes,
-        input_registers={"input": n_input_registers},
-        output_registers={"input": n_output_registers},
-        target=target,
     )
+
+
+if __name__ == "__main__":
+    main()

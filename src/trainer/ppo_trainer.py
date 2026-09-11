@@ -6,6 +6,9 @@ and environment abstraction this trainer builds on.
 
 from __future__ import annotations
 
+import argparse
+
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -17,7 +20,6 @@ from src.circuits.circuit import CircuitGenome
 from src.trainer.reinforcement_trainer import (
     RLEnvironment,
     ReinforcementLearningTrainer,
-    RLHyperparameters,
     _normalize,
     action_distribution,
     distribution_entropy,
@@ -43,12 +45,60 @@ class PPOTrainer(ReinforcementLearningTrainer):
     #: Requires one extra decoder output for the scalar state value.
     n_value_outputs: int = 1
 
+    @staticmethod
+    def initialize_parser(parser: argparse.ArgumentParser) -> None:
+        """Adds PPO's own command-line arguments.
+
+        Args:
+            parser: The parser to add the arguments to.
+
+        Returns:
+            None. Mutates ``parser`` by adding ``--rollout_steps``,
+            ``--ppo_passes``, ``--ppo_minibatch``, ``--ppo_clip`` and
+            ``--gae_lambda``.
+        """
+
+        parser.add_argument(
+            "--rollout_steps",
+            type=int,
+            default=512,
+            help="Environment steps collected per PPO rollout before updating (PPO only).",
+        )
+
+        parser.add_argument(
+            "--ppo_passes",
+            type=int,
+            default=4,
+            help="Passes over each PPO rollout (PPO literature calls these 'epochs').",
+        )
+
+        parser.add_argument(
+            "--ppo_minibatch",
+            type=int,
+            default=128,
+            help="PPO minibatch size (transitions per weight update).",
+        )
+
+        parser.add_argument(
+            "--ppo_clip",
+            type=float,
+            default=0.2,
+            help="PPO clipped-surrogate probability-ratio clip range.",
+        )
+
+        parser.add_argument(
+            "--gae_lambda",
+            type=float,
+            default=0.95,
+            help="Generalized Advantage Estimation (GAE) lambda for PPO.",
+        )
+
     def _collect_rollout(
         self,
         genome: CircuitGenome,
         environment: RLEnvironment,
         episode_index: int,
-        hp: RLHyperparameters,
+        hp: SimpleNamespace,
     ) -> dict[str, Any]:
         """Collects a behavior-policy rollout spanning one or more episodes.
 
@@ -135,7 +185,7 @@ class PPOTrainer(ReinforcementLearningTrainer):
         environment: RLEnvironment,
         optimizer: torch.optim.Optimizer,
         episode_index: int,
-        hp: RLHyperparameters,
+        hp: SimpleNamespace,
     ) -> tuple[float, dict[str, float]]:
         """Collects a multi-episode rollout and performs the PPO epochs.
 
@@ -223,8 +273,13 @@ class PPOTrainer(ReinforcementLearningTrainer):
                 )
 
                 optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                # A genome whose only parameterized gates are disabled (or
+                # transiently dropped) produces outputs that are constant w.r.t.
+                # the circuit weights, so the loss has no grad_fn and backward()
+                # would raise. Skip the update for such a minibatch.
+                if loss.requires_grad:
+                    loss.backward()
+                    optimizer.step()
                 last_loss = float(loss.item())
 
         mean_return = (

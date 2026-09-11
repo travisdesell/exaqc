@@ -1,15 +1,13 @@
+from typing import Callable
+
 from loguru import logger
 
 from mpi4py import MPI
 from mpi4py.MPI import Intracomm
 
 from src.circuits.circuit import CircuitGenome
-from src.circuits.decoder import Decoder
-from src.circuits.encoder import Encoder
-from src.circuits.gate_specifications import GateSpecifications
 from src.evolution.exaqc import EXAQC
 from src.evolution.objective import Objective
-from src.evolution.population_strategy import PopulationStrategy
 
 tag_ids = {
     "genome": 1,
@@ -121,86 +119,55 @@ def worker(
         comm.send(genome.to_dict(), dest=0, tag=tag_ids["genome_response"])
 
 
-def master_worker(
-    gate_specifications: GateSpecifications,
-    population: PopulationStrategy,
+def run_evolution(
     objective: Objective,
-    initial_encoder: Encoder,
-    initial_decoder: Decoder,
-    hyperparameters: dict[str, any],
-    mutation_strategy: list[str],
-    parent_strategy: list[str],
+    build_exaqc: Callable[[], EXAQC],
     run_for: int,
-    input_qubits: list[tuple[str, int]] = None,
-    input_registers: dict[str, int] = None,
-    output_registers: dict[str, int] = None,
-    output_qubits: list[tuple[str, int]] = None,
-    target: str = "pennylane",
-):
-    """
-    Creates an instance of Evolutionary Exploration of Augmenting Quantum Circuits given a
-    particular population strategy, allowing the given gates (if specified), and uses the main process
-    as the master in the master work strategy. Workers will asynchronously get new tasks (genomes)
-    to evaluate and send the results back to the master process.
+) -> None:
+    """Runs an EXAQC search serially or across MPI ranks, as available.
 
-    args:
-        gate_specifications: is an object containing the allowed gates specifications for the search
-            process, for either the pennylane or qiskit frameworks.
-        population: is an instance of a subclass of the PopulationStrategy interface, utilized to get
-            parents for mutation or crossover and insert children back into the population.
-        objective: an instantiated Objective which can be called with a CircuitGenome as an argument
-            to be trained and have its fitness evaluated.
-        initial_encoder: the initial encoder to use when initializing genomes, which may be later mutated
-            or have crossover performed on when generating new children.
-        initial_decoder: the initial decoder to use when initializing genomes, which may be later mutated
-            values before being passed into a loss function for training.
-        hyperparameters: a dict specifying which hyperparameters to use in the training process, and if
-            this is an additional search space to search over.
-        mutation_strategy: specifies how many mutations should be performed if mutation is selected. current
-            options are 'uniform <min> <max>' which will select a number of mutations uniformly at random
-            between range(min, max), where min should be at least 1; or 'exponential <scale>' which will select the
-            number of mutations using an exponential distribution with the given scale plus 1 to ensure at least
-            1 mutation happens.
-        parent_strategy: specifies how many parents should be selected for n-ary crossover. current
-            options are 'uniform <min> <max>' which will select a number of mutations uniformly at random
-            between range(min, max), where min should be at least 2; or 'exponential <scale>' which will select the
-            number of mutations using an exponential distribution with the given scale plus 2 to ensure at least
-            2 mutation happens.
-        run_for: how many genomes to generate in the search process.
-        input_registers: a dict of register names and sizes (the key is the qubit name, the value is its size). must
-            be specified if input_qubits is not specified.
-        input_qubits: a list of qubit tuples (name, register_index) which would be the expanded form of the
-            input_registers. Must be specified if input_registers is not specified.
-        output_registers: a dict of register names and sizes (the key is the qubit name, the value is its
-            size). must be specified if output_qubits is not specified. If output_registers and output_qubits
-            are None, they are set to the input registers/qubits.
-        output_qubits: a list of qubit tuples (name, register_index) which would be the expanded form of the
-            output_registers. Must be specified if output_registers is not specified. If output_registers
-            and output_qubits are None, they are set to the input_registers/qubits.
-        target: qiskit or pennylane
+    The execution mode is chosen from ``MPI.COMM_WORLD``'s size so the same
+    entry point works with or without ``mpiexec``:
+
+    * **1 process** (run without ``mpiexec``, or a single rank): builds the
+      search and runs it in-process via :meth:`~src.evolution.exaqc.EXAQC.run_for`,
+      since there are no worker ranks to distribute genomes to.
+    * **more than 1 process**: rank 0 is the master that generates genomes and
+      owns the population; every other rank is a worker that evaluates genomes
+      with ``objective``.
+
+    Only the serial run and the master (rank 0) build the ``EXAQC`` object, so
+    worker ranks never construct the search machinery (gate set, encoder/decoder,
+    population). ``build_exaqc`` is therefore a deferred factory that is invoked
+    only on those ranks; the ``EXAQC`` it returns must wrap the same
+    ``objective`` passed here.
+
+    Args:
+        objective: The objective used to evaluate genomes; needed by every worker
+            rank (and by the ``EXAQC`` built for the serial/master run).
+        build_exaqc: A zero-argument factory returning the fully-configured
+            :class:`~src.evolution.exaqc.EXAQC` search. Called only on the serial
+            run and the MPI master, never on workers.
+        run_for: How many genomes to generate and evaluate before stopping.
+
+    Returns:
+        None. Runs the search to completion on this rank.
     """
 
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
+    size = comm.Get_size()
 
-    if rank == 0:
-        exaqc = EXAQC(
-            gate_specifications=gate_specifications,
-            population=population,
-            objective=objective,
-            initial_encoder=initial_encoder,
-            initial_decoder=initial_decoder,
-            hyperparameters=hyperparameters,
-            mutation_strategy=mutation_strategy,
-            parent_strategy=parent_strategy,
-            input_registers=input_registers,
-            input_qubits=input_qubits,
-            output_registers=output_registers,
-            output_qubits=output_qubits,
-            target=target,
-        )
-
-        master(comm=comm, rank=rank, exaqc=exaqc, run_for=run_for)
-
-    else:
+    if size > 1 and rank != 0:
+        # worker rank: only the objective is needed to evaluate genomes
         worker(comm=comm, rank=rank, objective=objective)
+        return
+
+    # serial run or MPI master: build the search machinery here (and only here)
+    exaqc = build_exaqc()
+
+    if size == 1:
+        # no worker ranks to distribute to, so run the search in-process
+        exaqc.run_for(run_for)
+    else:
+        master(comm=comm, rank=rank, exaqc=exaqc, run_for=run_for)

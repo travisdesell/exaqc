@@ -138,6 +138,12 @@ def qubit_swap(circuit: CircuitGenome, favor_enabled: bool = False) -> bool:
     for qubit in new_gate.qubits:
         selection_qubits.remove(qubit)
 
+    if len(selection_qubits) == 0:
+        # There are no possible qubits to swap in this gate, so we can't
+        # perform this mutation.
+        logger.debug("there is no qubit available to swap one of this gate's qubits to")
+        return False
+
     new_qubit = random.choice(selection_qubits)
     logger.debug(f"replacing qubit {replace_qubit} with {new_qubit}")
     logger.debug(f"gate qubits before replace {new_gate.qubits}")
@@ -273,6 +279,17 @@ def add_gate(
             possible_output_indexes
         )
 
+        if len(possible_indexes) == 0:
+            # No single qubit is both reachable from the inputs and able to
+            # affect the outputs, so a one-qubit gate cannot be effective here.
+            # This is normal when the input and output qubits are disjoint (as
+            # for teacher imitation) and the circuit does not yet connect them.
+            logger.debug(
+                "no qubit is both a possible input and a possible output, so a "
+                "single-qubit gate cannot be added here"
+            )
+            return False
+
         # select one of these qubits for the gate parameter
         gate_qubits[0] = circuit.qubits[random.choice(list(possible_indexes))]
 
@@ -330,17 +347,22 @@ def add_gate(
 
             if i not in gate_specification.output_qubit_indexes:
                 # this argument is a control qubit and needs to come from an input qubit
+                if len(possible_input_indexes) == 0:
+                    # This gate needs more distinct control qubits than the
+                    # circuit currently has reachable from its inputs -- e.g. a
+                    # two-control gate on a circuit with a single input wire.
+                    # Report failure so the caller retries with another gate.
+                    logger.debug(
+                        "ran out of possible input indexes while placing a control "
+                        "qubit, so this gate cannot be added here"
+                    )
+                    return False
+
                 index = random.choice(possible_input_indexes)
                 logger.debug(
                     f"\t\tselected index {index} for an input only to be put at index {i}"
                 )
                 gate_qubits[i] = circuit.qubits[index]
-
-                if index not in possible_input_indexes:
-                    logger.error(
-                        "There were not enough possible input indexes to add this gate. This shouldn't happen."
-                    )
-                    return False
 
                 # remove this as a possible selection
                 possible_input_indexes.remove(index)
@@ -363,6 +385,15 @@ def add_gate(
                     remaining_indexes = set(possible_input_indexes).union(
                         possible_output_indexes
                     )
+                    if len(remaining_indexes) == 0:
+                        # No qubits are left to fill this gate's remaining
+                        # arguments; retry with another gate.
+                        logger.debug(
+                            "ran out of possible qubits while placing gate argument "
+                            f"{i}, so this gate cannot be added here"
+                        )
+                        return False
+
                     index = random.choice(list(remaining_indexes))
 
                 logger.debug(

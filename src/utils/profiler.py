@@ -14,7 +14,19 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from src.circuits.circuit import CircuitGenome
-from src.utils.helpers import GATE_COMPLEXITY
+from src.circuits.gate_specifications import GateSpecifications
+from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
+from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
+
+#: Gate specifications per target framework. Each
+#: :class:`~src.circuits.gate_specifications.GateSpecification` carries the
+#: ``cnot_count``/``rot_count`` decomposition costs used to score a genome's
+#: circuit complexity, so those costs live beside the rest of a gate's
+#: definition rather than in a separate table that could drift out of sync.
+_GATE_SPECIFICATIONS: dict[str, GateSpecifications] = {
+    "pennylane": pennylane_gate_specifications,
+    "qiskit": qiskit_gate_specifications,
+}
 
 
 def _safe_float(x, default=np.nan) -> float:
@@ -34,13 +46,13 @@ def _safe_float(x, default=np.nan) -> float:
 
 
 def _gate_counts(genome: CircuitGenome) -> dict[str, float]:
-    """Compute simple enabled-gate statistics for a genome.
+    """Compute enabled-gate complexity statistics for a genome.
 
-    This helper attempts to extract:
-      - total enabled gate count
-      - count of CNOT-like gates (``cx``, ``cnot``)
-      - count of common parameterized single-qubit rotation gates
-        (``rx``, ``ry``, ``rz``, ``u``, ``u3``)
+    Each enabled gate contributes one to the total, plus the CNOT and rotation
+    costs its decomposition carries. Those per-gate costs are read from the
+    genome's own target gate specifications (``cnot_count``/``rot_count`` on
+    each :class:`~src.circuits.gate_specifications.GateSpecification`), so a
+    gate's complexity is defined in the same place as the rest of the gate.
 
     Args:
         genome: Circuit genome whose gates should be counted.
@@ -48,7 +60,18 @@ def _gate_counts(genome: CircuitGenome) -> dict[str, float]:
     Returns:
         A dictionary containing float-valued gate counts with keys:
         ``"gates_total"``, ``"gates_cnot"``, and ``"gates_rot"``.
+
+    Raises:
+        ValueError: If the genome's ``target`` has no known gate specifications.
     """
+    target = getattr(genome, "target", "pennylane")
+    if target not in _GATE_SPECIFICATIONS:
+        raise ValueError(
+            f"Unknown target {target!r} for gate complexity; "
+            f"choices: {sorted(_GATE_SPECIFICATIONS)}"
+        )
+    specifications = _GATE_SPECIFICATIONS[target]
+
     total = 0
     cnot = 0
     rot = 0
@@ -59,11 +82,11 @@ def _gate_counts(genome: CircuitGenome) -> dict[str, float]:
 
         name = str(getattr(gate, "method_name", "")).lower()
 
-        gate_specs = GATE_COMPLEXITY[name]
+        specification = specifications[name]
 
-        total += gate_specs["gate_count"]
-        cnot += gate_specs["cnot_count"]
-        rot += gate_specs["rot_count"]
+        total += 1
+        cnot += specification.cnot_count
+        rot += specification.rot_count
 
     return {
         "gates_total": float(total),
@@ -87,8 +110,10 @@ def _num_enabled_gates(genome: CircuitGenome) -> float:
 def _param_count(genome: CircuitGenome) -> float:
     """Count trainable genome parameters.
 
-    This uses ``genome_to_torch_params(...)`` so the reported count matches
-    the exact parameter set exposed to the PyTorch training code.
+    Sums the parameters of every enabled gate, which is the same set of scalar
+    circuit weights the PyTorch training code optimizes. This works on a genome
+    that has not had :meth:`~src.circuits.circuit.CircuitGenome.initialize_model`
+    called, so a genome can be profiled without building its hybrid model.
 
     Args:
         genome: Circuit genome to inspect.

@@ -13,6 +13,9 @@ The key for an entry is the method name to be used on the QuantumCircuit object.
 """
 
 from __future__ import annotations
+
+import argparse
+
 from loguru import logger
 
 
@@ -24,6 +27,8 @@ class GateSpecification:
         parameters: list[str] = [],
         needs_validation: bool = False,
         pennylane_op: str | None = None,
+        cnot_count: int = 0,
+        rot_count: int = 0,
     ):
         """
         Initializes a gate specification object which tracks the qiskit method name, formal name,
@@ -36,6 +41,14 @@ class GateSpecification:
             needs_validation: can be set to true for a gate method we know exists but we have not yet validated
                 how to use it correctly, so it will be turned off for testing and the EXAQC algorithm.
             pennylane_op: method name in pennylane
+            cnot_count: how many CNOT (two-qubit entangling) operations this gate costs once decomposed
+                into a hardware-native basis. Zero for gates that need no entangling operation. This is
+                decomposition cost, not the gate's own arity -- e.g. a controlled rotation is one gate but
+                decomposes into two CNOTs. Used by :mod:`src.utils.profiler` to score circuit complexity.
+            rot_count: how many parameterized rotation operations this gate costs once decomposed into a
+                hardware-native basis. Like ``cnot_count`` this is decomposition cost rather than the number
+                of parameters the gate itself accepts -- e.g. ``crx`` takes one parameter but decomposes into
+                two rotations.
         """
 
         self.name = name
@@ -43,6 +56,8 @@ class GateSpecification:
         self.parameters = parameters
         self.needs_validation = needs_validation
         self.pennylane_op = pennylane_op
+        self.cnot_count = cnot_count
+        self.rot_count = rot_count
 
         # this will be set when when the GateSpecification is added to a
         # GateSpecifications object in the __setitem__ method.
@@ -103,6 +118,78 @@ class GateSpecifications:
         self.target = target
 
         self.specifications = {}
+
+    @staticmethod
+    def initialize_parser(parser: argparse.ArgumentParser) -> None:
+        """Adds the gate-specification command-line arguments to a parser.
+
+        Every entry point that evolves circuits picks a backend framework and
+        may restrict the allowed gate set; this registers those flags once
+        (mirroring :meth:`~src.evolution.exaqc.EXAQC.initialize_parser`) so the
+        entry points stay in sync. :meth:`from_args` turns the parsed values
+        into the concrete :class:`GateSpecifications`.
+
+        Args:
+            parser: The parser to add the arguments to.
+
+        Returns:
+            None. Mutates ``parser`` by adding ``--target`` and ``--use_only``.
+        """
+
+        parser.add_argument(
+            "--target",
+            type=str,
+            choices=["pennylane", "qiskit"],
+            default="pennylane",
+            help="Quantum backend used to build and simulate the evolved circuits.",
+        )
+
+        parser.add_argument(
+            "--use_only",
+            type=str,
+            nargs="+",
+            default=None,
+            help=(
+                "Restrict the search to only these gate method names (e.g. 'cx "
+                "ry rz'). When omitted, every gate the backend supports is used."
+            ),
+        )
+
+    @staticmethod
+    def from_args(args: argparse.Namespace) -> GateSpecifications:
+        """Builds the backend :class:`GateSpecifications` from parsed arguments.
+
+        Selects the gate set for the requested backend (``--target``) and, when
+        ``--use_only`` is given, filters it down to just those gate methods via
+        :meth:`use_only`.
+
+        Args:
+            args: Parsed arguments carrying ``target`` and ``use_only`` (as added
+                by :meth:`initialize_parser`).
+
+        Returns:
+            The selected (and optionally filtered) :class:`GateSpecifications`.
+        """
+
+        # Imported lazily: the backend gate-set modules import this class, so a
+        # module-level import here would be circular.
+        from src.circuits.pennylane_gate_specifications import (
+            pennylane_gate_specifications,
+        )
+        from src.circuits.qiskit_gate_specifications import (
+            qiskit_gate_specifications,
+        )
+
+        gate_specifications = (
+            pennylane_gate_specifications
+            if args.target == "pennylane"
+            else qiskit_gate_specifications
+        )
+
+        if args.use_only:
+            gate_specifications = gate_specifications.use_only(args.use_only)
+
+        return gate_specifications
 
     def use_only(self, allowed_methods: list[str]) -> GateSpecifications:
         """

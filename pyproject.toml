@@ -56,7 +56,6 @@ dependencies = [
     "qiskit-aer",
     "torch",
     "torchvision",
-    "visualtorch==1.4.1",
     "matplotlib",
     "seaborn",
     "pytest",
@@ -69,3 +68,13 @@ dependencies = [
     "minigrid",
     "python-dotenv",
 ]
+
+[tool.black]
+# src/analysis/plot_gptp_histogram.py is parked: it is not reachable from any
+# entry point and runs all of its work at import time (no __main__ guard), so it
+# is left out of formatting for now rather than being touched.
+extend-exclude = '''
+/(
+  src/analysis/plot_gptp_histogram\.py
+)/?
+'''

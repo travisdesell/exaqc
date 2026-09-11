@@ -213,13 +213,7 @@ artifacts/
 outs/
 outputs/
 logs/
-
-# Data
 data/
-src/data/
-outputs/
 
-/notes/
-
-
+notes/
 

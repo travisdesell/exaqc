@@ -6,7 +6,9 @@ and environment abstraction this trainer builds on.
 
 from __future__ import annotations
 
-from typing import Any
+import argparse
+
+from types import SimpleNamespace
 
 import numpy as np
 import torch
@@ -17,7 +19,6 @@ from src.circuits.circuit import CircuitGenome
 from src.trainer.reinforcement_trainer import (
     RLEnvironment,
     ReinforcementLearningTrainer,
-    RLHyperparameters,
 )
 
 
@@ -45,23 +46,53 @@ class QLearningTrainer(ReinforcementLearningTrainer):
     Args:
         sarsa: If True, use the on-policy SARSA target; otherwise use the
             off-policy Q-learning (max) target.
-        **kwargs: Forwarded to :class:`ReinforcementLearningTrainer`.
     """
 
     #: Value-based action selection is discrete-only (argmax / epsilon-greedy).
     supports_continuous: bool = False
 
-    def __init__(self, *, sarsa: bool = False, **kwargs: Any) -> None:
+    @staticmethod
+    def initialize_parser(parser: argparse.ArgumentParser) -> None:
+        """Adds the value-based (Q-learning / SARSA) command-line arguments.
+
+        Args:
+            parser: The parser to add the arguments to.
+
+        Returns:
+            None. Mutates ``parser`` by adding ``--epsilon``, ``--epsilon_min``
+            and ``--epsilon_decay``.
+        """
+
+        parser.add_argument(
+            "--epsilon",
+            type=float,
+            default=0.2,
+            help="Initial epsilon for epsilon-greedy exploration (Q-learning / SARSA).",
+        )
+
+        parser.add_argument(
+            "--epsilon_min",
+            type=float,
+            default=0.05,
+            help="Minimum epsilon for epsilon-greedy exploration (Q-learning / SARSA).",
+        )
+
+        parser.add_argument(
+            "--epsilon_decay",
+            type=float,
+            default=0.995,
+            help="Per-episode multiplicative decay applied to epsilon (Q-learning / SARSA).",
+        )
+
+    def __init__(self, *, sarsa: bool = False) -> None:
         """Initializes the value-based trainer.
 
         Args:
             sarsa: If True, use the on-policy SARSA target; otherwise use the
                 off-policy Q-learning (max) target.
-            **kwargs: Forwarded to
-                :class:`~src.trainer.reinforcement_trainer.ReinforcementLearningTrainer`.
         """
 
-        super().__init__(**kwargs)
+        super().__init__()
         self.sarsa = sarsa
 
     def _epsilon_greedy(self, q_values: Tensor, epsilon: float) -> int:
@@ -85,7 +116,7 @@ class QLearningTrainer(ReinforcementLearningTrainer):
         environment: RLEnvironment,
         optimizer: torch.optim.Optimizer,
         episode_index: int,
-        hp: RLHyperparameters,
+        hp: SimpleNamespace,
     ) -> tuple[float, dict[str, float]]:
         """Runs one episode with a per-step temporal-difference update.
 

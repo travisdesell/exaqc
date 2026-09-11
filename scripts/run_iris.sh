@@ -4,6 +4,5 @@ LOSS=$3
 OUT_DIR=$4
 
 for i in $(seq $MIN_COUNT $MAX_COUNT); do
-    mpiexec --oversubscribe -n 12 python3 -m src.examples.pl_classification --logging_level INFO --dataset iris --number_genomes 1000 --input_qubits 4 --batch_size 3 --mutation_strategy uniform 1 3 --loss $LOSS --out_dir $OUT_DIR/iris_i30_$3_${i} steady_state --max_population_size 30
+    mpiexec --oversubscribe -n 12 python3 -m src.examples.classification --logging_level INFO --dataset iris --number_genomes 1000 --input_qubits 4 --output_qubits 2 --batch_size 3 --mutation_strategy uniform 1 3 --parent_strategy uniform 5 5 --binary_crossover_rate 0.1 --n_ary_crossover_rate 0.1 --exponential_crossover_rate 0.1 -qim amplitude -qom probs --encoding identity --decoding clipped --out_dir $OUT_DIR/iris_i30_$3_${i} steady_state --max_population_size 30
 done
-

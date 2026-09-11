@@ -362,8 +362,8 @@ if __name__ == "__main__":
         print("\n\n")
         print("all_best lists:")
         for group in args.groups:
-            print(f"{group} -- {all_bests[group]['test_acc']}")
-            group_points.append(all_bests[group]["test_acc"])
+            print(f"{group} -- {all_bests[group][args.metric]}")
+            group_points.append(all_bests[group][args.metric])
 
         fig, ax = plt.subplots()
         ax.set_ylabel("Accuracy (%)")

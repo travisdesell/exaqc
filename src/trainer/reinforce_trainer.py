@@ -6,6 +6,10 @@ and environment abstraction this trainer builds on.
 
 from __future__ import annotations
 
+import argparse
+
+from types import SimpleNamespace
+
 import torch
 
 from torch import Tensor
@@ -14,7 +18,6 @@ from src.circuits.circuit import CircuitGenome
 from src.trainer.reinforcement_trainer import (
     RLEnvironment,
     ReinforcementLearningTrainer,
-    RLHyperparameters,
     action_distribution,
     discounted_returns,
     distribution_entropy,
@@ -34,13 +37,31 @@ class ReinforceTrainer(ReinforcementLearningTrainer):
     the raw return.
     """
 
+    @staticmethod
+    def initialize_parser(parser: argparse.ArgumentParser) -> None:
+        """Adds REINFORCE's own command-line argument.
+
+        Args:
+            parser: The parser to add the argument to.
+
+        Returns:
+            None. Mutates ``parser`` by adding ``--baseline``.
+        """
+
+        parser.add_argument(
+            "--baseline",
+            choices=["mean", "none"],
+            default="mean",
+            help="REINFORCE advantage baseline ('mean' subtracts the batch-mean return).",
+        )
+
     def run_update(
         self,
         genome: CircuitGenome,
         environment: RLEnvironment,
         optimizer: torch.optim.Optimizer,
         episode_index: int,
-        hp: RLHyperparameters,
+        hp: SimpleNamespace,
     ) -> tuple[float, dict[str, float]]:
         """Runs one episode and performs one weight update (epoch).
 
@@ -102,7 +123,12 @@ class ReinforceTrainer(ReinforcementLearningTrainer):
         loss = policy_loss + (entropy_loss if isinstance(entropy_loss, Tensor) else 0.0)
 
         optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        # A genome whose only parameterized gates are disabled (or transiently
+        # dropped) produces a policy that is constant w.r.t. the circuit
+        # weights, so the loss has no grad_fn and backward() would raise. Skip
+        # the update for such a step.
+        if loss.requires_grad:
+            loss.backward()
+            optimizer.step()
 
         return episode_return, {"loss": float(loss.item())}
