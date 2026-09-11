@@ -64,6 +64,10 @@ class NSGA2(MultiObjectivePopulationBase):
         Args:
             population: Population containing the front.
             front: Genome indexes belonging to the Pareto front.
+
+        Returns:
+            ``None``. Writes ``crowding_distance`` into each genome's
+            metadata for the given front.
         """
         if not front:
             return
@@ -104,6 +108,13 @@ class NSGA2(MultiObjectivePopulationBase):
                 population[last_index],
                 self.objectives,
             )[objective_index]
+
+            # skip if min/max are non-finite (e.g. both +inf after NaN fitness gets mapped)
+            # otherwise ``inf - inf`` blows up to NaN.
+            if (not math.isfinite(float(minimum))) or (
+                not math.isfinite(float(maximum))
+            ):
+                continue
 
             objective_range = maximum - minimum
 
