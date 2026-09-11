@@ -28,7 +28,12 @@ matplotlib.use("Agg")
 
 import json  # noqa: E402
 import os  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+import matplotlib.pyplot as plt  # noqa: E402
 import pytest  # noqa: E402
+from matplotlib.figure import Figure  # noqa: E402
+from matplotlib.text import Text  # noqa: E402
 
 from src.circuits.circuit import CircuitGenome  # noqa: E402
 
@@ -310,3 +315,74 @@ def test_save_circuit_only_touches_out_dir(target: str, tmp_path, monkeypatch) -
     assert os.listdir(tmp_path / "nested") == ["run_output"]
     # and the output directory holds only the three expected artifacts
     assert set(_split_by_suffix(str(out_dir))) == {".json", ".txt", ".png"}
+
+
+# ---------------------------------------------------------------------
+# draw_circuit_figure
+# ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("target", TARGETS)
+def test_draw_circuit_figure_returns_an_open_titled_figure(
+    target: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``draw_circuit_figure`` hands back an open figure titled with the genome.
+
+    It only draws: saving (and closing) is up to the caller, so nothing is
+    written.
+
+    Args:
+        target: Either ``"pennylane"`` or ``"qiskit"``.
+        tmp_path: pytest per-test temporary directory (auto-removed), used as
+            the working directory so any stray write would show up in it.
+        monkeypatch: pytest fixture used to ``chdir`` into ``tmp_path``.
+    """
+
+    monkeypatch.chdir(tmp_path)
+
+    figure = _build_saveable_genome(target).draw_circuit_figure()
+    try:
+        assert isinstance(figure, Figure)
+        assert plt.fignum_exists(figure.number)
+        assert "Genome 7" in [text.get_text() for text in figure.findobj(Text)]
+        assert list(tmp_path.iterdir()) == []
+    finally:
+        plt.close(figure)
+
+
+@pytest.mark.parametrize("target", TARGETS)
+def test_draw_circuit_figure_generates_the_model_only_when_missing(
+    target: str,
+) -> None:
+    """An uninitialized genome gets a model; an initialized one keeps its own.
+
+    Regenerating an existing qiskit circuit corrupts its cached gate
+    parameters, so drawing an initialized genome, even repeatedly, must reuse
+    its model and circuit.
+
+    Args:
+        target: Either ``"pennylane"`` or ``"qiskit"``.
+    """
+
+    fresh = _build_saveable_genome(target, initialize=False)
+    assert getattr(fresh, "hybrid_model", None) is None
+    plt.close(fresh.draw_circuit_figure())
+    assert fresh.hybrid_model is not None
+
+    genome = _build_saveable_genome(target)
+    model = genome.hybrid_model
+    circuit = getattr(genome, "qiskit_circuit", None)
+    for _ in range(2):
+        plt.close(genome.draw_circuit_figure())
+    assert genome.hybrid_model is model
+    assert getattr(genome, "qiskit_circuit", None) is circuit
+
+
+def test_draw_circuit_figure_rejects_an_unknown_target() -> None:
+    """A genome whose target is neither pennylane nor qiskit cannot be drawn."""
+
+    genome = _build_saveable_genome("pennylane")
+    genome.target = "bogus"
+
+    with pytest.raises(ValueError, match="bogus"):
+        genome.draw_circuit_figure()

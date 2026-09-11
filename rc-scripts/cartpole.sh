@@ -25,6 +25,7 @@ for i in $(seq 1 10); do
   --input_qubits 4 \
   --output_qubits 2 \
   --episodes 80 \
+  --shared_file_system \
   --out_dir artifacts/cartpole_reinforce/runs/${i}
   echo "Completed run ${i}"
 done

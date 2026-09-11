@@ -54,6 +54,7 @@ from src.evolution.population_strategy import PopulationStrategy
 from src.metrics.teacher_losses import TEACHER_LOSS_NAMES, get_teacher_loss
 from src.metrics.teacher_metrics import build_teacher_metrics
 from src.trainer.supervised_trainer import SupervisedTrainer
+from src.utils.genome_archive import GenomeArchive
 
 
 def compare(
@@ -180,9 +181,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # The evolutionary search's own flags -- mutation/parent strategies,
-    # crossover rates, the genome budget, --out_dir and --save_training_plot --
-    # are owned by EXAQC so every entry point stays in sync.
+    # crossover rates and the genome budget -- are owned by EXAQC so every entry
+    # point stays in sync.
     EXAQC.initialize_parser(parser)
+
+    # Where and how the run's outputs are written (--out_dir,
+    # --shared_file_system) is owned by GenomeArchive.
+    GenomeArchive.initialize_parser(parser)
 
     # The choice of population strategy (and each strategy's own flags) is owned
     # by PopulationStrategy.
@@ -276,8 +281,9 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
-    # The output directory is created by the EXAQC constructor; loguru creates
-    # the run.log parent directory as needed when the file sink is added.
+    # The output directory is created by GenomeArchive.from_args (on the serial
+    # run or MPI master); loguru creates the run.log parent directory as needed
+    # when the file sink is added.
     logger.remove()
     logger.add(sys.stdout, level=args.logging_level)
     logger.add(os.path.join(args.out_dir, "run.log"))
@@ -374,6 +380,7 @@ def main() -> None:
         return EXAQC(
             gate_specifications=GateSpecifications.from_args(args),
             population=PopulationStrategy.from_args(args, compare),
+            archive=GenomeArchive.from_args(args),
             objective=objective,
             initial_encoder=None,
             initial_decoder=None,

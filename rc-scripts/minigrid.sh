@@ -28,6 +28,7 @@ for i in $(seq 1 1); do
     --ppo_minibatch 64 \
     --input_qubits 6 \
     --output_qubits 3 \
+    --shared_file_system \
     --out_dir artifacts/minigrid_empty/runs/${i}
     echo "Completed run ${i}"
 done

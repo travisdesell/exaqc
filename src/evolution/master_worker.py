@@ -151,7 +151,8 @@ def run_evolution(
         run_for: How many genomes to generate and evaluate before stopping.
 
     Returns:
-        None. Runs the search to completion on this rank.
+        None. Runs the search to completion on this rank; the serial run and the
+        master close the search's output archive when it ends, even on error.
     """
 
     comm = MPI.COMM_WORLD
@@ -166,8 +167,11 @@ def run_evolution(
     # serial run or MPI master: build the search machinery here (and only here)
     exaqc = build_exaqc()
 
-    if size == 1:
-        # no worker ranks to distribute to, so run the search in-process
-        exaqc.run_for(run_for)
-    else:
-        master(comm=comm, rank=rank, exaqc=exaqc, run_for=run_for)
+    try:
+        if size == 1:
+            # no worker ranks to distribute to, so run the search in-process
+            exaqc.run_for(run_for)
+        else:
+            master(comm=comm, rank=rank, exaqc=exaqc, run_for=run_for)
+    finally:
+        exaqc.close()

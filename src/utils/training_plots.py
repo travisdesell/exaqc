@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Callable
 import matplotlib.pyplot as plt
 from loguru import logger
 from matplotlib.axes import Axes
+from matplotlib.figure import Figure
 
 if TYPE_CHECKING:
     from src.circuits.circuit import CircuitGenome
@@ -43,12 +44,8 @@ _METRIC_COLORS = (
 _NON_METRIC_KEYS = frozenset({"epoch"})
 
 
-def save_training_plot(
-    out_dir: str,
-    genome: CircuitGenome,
-    filename: str,
-) -> None:
-    """Saves a per-epoch/episode training line plot for a trained genome.
+def build_training_figure(genome: CircuitGenome) -> Figure | None:
+    """Builds a per-epoch/episode training line plot for a trained genome.
 
     Which plot is drawn depends on the genome's task:
 
@@ -67,6 +64,39 @@ def save_training_plot(
     recorded still plots.
 
     Args:
+        genome: The trained genome whose metadata holds the training history.
+
+    Returns:
+        The plot's figure, which the caller owns and should close with
+        ``plt.close``; or ``None`` when no recognized metrics were recorded (a
+        warning is logged). Errors raised while drawing propagate.
+    """
+    metadata = getattr(genome, "metadata", {}) or {}
+    task = getattr(genome, "task", None)
+
+    plot = _PLOTS_BY_TASK.get(task) or _plot_for_metrics(metadata)
+
+    if plot is None:
+        logger.warning(
+            "No training metrics found for genome {}; skipping training plot.",
+            getattr(genome, "genome_number", "?"),
+        )
+        return None
+
+    return plot(genome, metadata)
+
+
+def save_training_plot(
+    out_dir: str,
+    genome: CircuitGenome,
+    filename: str,
+) -> None:
+    """Saves a per-epoch/episode training line plot for a trained genome.
+
+    The plot is built by :func:`build_training_figure`, which describes the plot
+    each task gets, and written into ``out_dir`` as a PNG.
+
+    Args:
         out_dir: Directory to write the plot into.
         genome: The trained genome whose metadata holds the training history.
         filename: File name (within ``out_dir``) for the saved PNG.
@@ -76,27 +106,31 @@ def save_training_plot(
         writing when no recognized metrics are present or plotting fails (the
         plot is best-effort and must never abort saving).
     """
-    metadata = getattr(genome, "metadata", {}) or {}
     genome_number = getattr(genome, "genome_number", "?")
-    task = getattr(genome, "task", None)
-
-    plot = _PLOTS_BY_TASK.get(task) or _plot_for_metrics(metadata)
-
-    if plot is None:
-        logger.warning(
-            "No training metrics found for genome {}; skipping training plot.",
-            genome_number,
-        )
-        return
 
     try:
-        plot(out_dir, genome, filename, metadata)
+        figure = build_training_figure(genome)
     except Exception as error:
         logger.warning(
             "Could not save training plot for genome {}: {}",
             genome_number,
             error,
         )
+        return
+
+    if figure is None:
+        return
+
+    try:
+        figure.savefig(os.path.join(out_dir, filename), dpi=200)
+    except Exception as error:
+        logger.warning(
+            "Could not save training plot for genome {}: {}",
+            genome_number,
+            error,
+        )
+    finally:
+        plt.close(figure)
 
 
 def _plot_rl_training_panel(
@@ -196,11 +230,9 @@ def _plot_rl_evaluation_panel(
 
 
 def _plot_reinforcement_learning(
-    out_dir: str,
     genome: CircuitGenome,
-    filename: str,
     metadata: dict[str, Any],
-) -> None:
+) -> Figure | None:
     """Draws the RL training (and, when present, evaluation) panels.
 
     The training panel shows return and loss per episode. When
@@ -209,16 +241,17 @@ def _plot_reinforcement_learning(
     std.
 
     Args:
-        out_dir: Directory to write the plot into.
         genome: The genome being plotted (used for the title).
-        filename: Output file name within ``out_dir``.
         metadata: The genome metadata containing ``training_episode_metrics``
             and (optionally) ``evaluation_episode_metrics``.
+
+    Returns:
+        The drawn figure, or ``None`` when there is nothing to draw.
     """
     episode_metrics = metadata.get("training_episode_metrics", [])
     evaluation_metrics = metadata.get("evaluation_episode_metrics", [])
     if not episode_metrics and not evaluation_metrics:
-        return
+        return None
 
     if evaluation_metrics:
         figure, (training_axis, evaluation_axis) = plt.subplots(1, 2, figsize=(14, 5))
@@ -230,11 +263,12 @@ def _plot_reinforcement_learning(
 
     figure.suptitle(f"Genome {genome.genome_number} Training", fontsize=13)
     figure.tight_layout()
-    figure.savefig(os.path.join(out_dir, filename), dpi=200)
-    plt.close(figure)
+    return figure
 
 
-def _plot_for_metrics(metadata: dict[str, Any]) -> Callable[..., None] | None:
+def _plot_for_metrics(
+    metadata: dict[str, Any],
+) -> Callable[[CircuitGenome, dict[str, Any]], Figure | None] | None:
     """Chooses a plot from the shape of the recorded metrics.
 
     Only needed for a genome that records no task -- one saved before the task
@@ -367,11 +401,9 @@ def _plot_metrics_panel(
 
 
 def _plot_all_metrics(
-    out_dir: str,
     genome: CircuitGenome,
-    filename: str,
     metadata: dict[str, Any],
-) -> None:
+) -> Figure | None:
     """Draws every recorded metric, as side-by-side training and validation panels.
 
     Used for tasks that report several measures per epoch -- quantum teacher
@@ -382,24 +414,21 @@ def _plot_all_metrics(
     same way the classification plot presents them.
 
     Args:
-        out_dir: Directory to write the plot into.
         genome: The genome being plotted (used for the title).
-        filename: Output file name within ``out_dir``.
         metadata: The genome metadata holding the per-epoch records.
 
     Returns:
-        None. Writes the plot, or returns without writing when there is nothing
-        to draw.
+        The drawn figure, or ``None`` when there is nothing to draw.
     """
 
     training = metadata.get("training_epoch_metrics", [])
     validation = metadata.get("validation_epoch_metrics", [])
     if not training and not validation:
-        return
+        return None
 
     names = _metric_names(training, validation)
     if not names:
-        return
+        return None
 
     # sharey so the two panels are directly comparable rather than each being
     # autoscaled to its own split
@@ -418,8 +447,7 @@ def _plot_all_metrics(
 
     figure.suptitle(f"Genome {genome.genome_number} Training", fontsize=13)
     figure.tight_layout()
-    figure.savefig(os.path.join(out_dir, filename), dpi=200)
-    plt.close(figure)
+    return figure
 
 
 def _plot_epoch_panel(
@@ -464,11 +492,9 @@ def _plot_epoch_panel(
 
 
 def _plot_classification(
-    out_dir: str,
     genome: CircuitGenome,
-    filename: str,
     metadata: dict[str, Any],
-) -> None:
+) -> Figure | None:
     """Draws side-by-side training and validation loss/accuracy-per-epoch panels.
 
     Two panels are drawn: the training metrics on the left and the validation
@@ -476,16 +502,17 @@ def _plot_classification(
     twin y-axes.
 
     Args:
-        out_dir: Directory to write the plot into.
         genome: The genome being plotted (used for the title).
-        filename: Output file name within ``out_dir``.
         metadata: The genome metadata containing ``training_epoch_metrics`` and
             ``validation_epoch_metrics``.
+
+    Returns:
+        The drawn figure, or ``None`` when there is nothing to draw.
     """
     training = metadata.get("training_epoch_metrics", [])
     validation = metadata.get("validation_epoch_metrics", [])
     if not training and not validation:
-        return
+        return None
 
     figure, (training_axis, validation_axis) = plt.subplots(1, 2, figsize=(14, 5))
     _plot_epoch_panel(training_axis, training, "Training")
@@ -493,14 +520,13 @@ def _plot_classification(
 
     figure.suptitle(f"Genome {genome.genome_number} Training", fontsize=13)
     figure.tight_layout()
-    figure.savefig(os.path.join(out_dir, filename), dpi=200)
-    plt.close(figure)
+    return figure
 
 
 #: Which plot each task gets. A genome carries its own ``task`` (stamped by
 #: EXAQC), so this is the whole of the routing; a genome without one falls back
 #: to :func:`_plot_for_metrics`.
-_PLOTS_BY_TASK: dict[str, Callable[..., None]] = {
+_PLOTS_BY_TASK: dict[str, Callable[[CircuitGenome, dict[str, Any]], Figure | None]] = {
     "classification": _plot_classification,
     "reinforcement_learning": _plot_reinforcement_learning,
     "teacher": _plot_all_metrics,

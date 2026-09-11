@@ -46,6 +46,10 @@ classical layers train together with ordinary backpropagation and the standard P
     - [PPO](#ppo)
     - [Q-learning and SARSA](#q-learning-and-sarsa)
   - [Choosing trainer hyperparameters](#choosing-trainer-hyperparameters)
+- [Run outputs (GenomeArchive)](#run-outputs-genomearchive)
+  - [Run output arguments](#run-output-arguments)
+  - [What a run directory holds](#what-a-run-directory-holds)
+  - [Working with a run's archive](#working-with-a-runs-archive)
 - [Examples](#examples)
   - [classification](#classification)
   - [teacher](#teacher)
@@ -53,6 +57,7 @@ classical layers train together with ordinary backpropagation and the standard P
   - [refine_genome](#refine_genome)
   - [evaluate](#evaluate)
   - [visualize_rl](#visualize_rl)
+  - [exaqc_artifacts](#exaqc_artifacts)
   - [classical_image_classification](#classical_image_classification)
   - [reinforcement_learning_fixed](#reinforcement_learning_fixed)
 - [Reproducing 2026 PPSN results](#reproducing-2026-ppsn-results)
@@ -108,6 +113,7 @@ command-line arguments group the same way:
 | **Population strategy** | Decides which genomes survive and become parents | [`steady_state`](#steady_state) / [`islands`](#islands) sub-command |
 | **Trainer** | Trains each genome once it is generated | [Trainers](#trainers) |
 | **Objective** | Calls the trainer for a genome and sets its `fitness` | The entry point itself |
+| **Genome archive** | Records every evaluated genome, the current best genomes and the search history | [Run outputs](#run-outputs-genomearchive) |
 
 Runs are parallelised with **MPI**: rank 0 is the master that generates genomes
 and owns the population, and every other rank is a worker that trains them.
@@ -432,18 +438,81 @@ environment's reward scale and episode length.
 
 ---
 
+## Run outputs (GenomeArchive)
+
+[`src/utils/genome_archive.py`](./src/utils/genome_archive.py) owns everything a
+search writes to disk. A search can evaluate tens of thousands of genomes, and
+writing several files for each one overwhelms the metadata servers of shared
+cluster file systems, so every evaluated genome is stored in a **single SQLite
+database**, `genomes.sqlar`, instead. Architecture diagrams and training plots are
+only drawn for the current best genomes; any other genome's images are drawn on
+demand by the [`exaqc_artifacts`](#exaqc_artifacts) viewer.
+
+### Run output arguments
+
+These are shared by [`classification`](#classification), [`teacher`](#teacher)
+and [`reinforcement_learning`](#reinforcement_learning), because all three call
+`GenomeArchive.initialize_parser()`.
+
+| Argument | Default | Description |
+|---|---|---|
+| `--out_dir` | `artifacts` | Directory the run's outputs are written into |
+| `--shared_file_system` | off | Use SQLite settings that are safe on a shared network file system (NFS, Lustre, GPFS): a persistent rollback journal instead of write-ahead logging |
+
+Pass `--shared_file_system` when `--out_dir` is on a cluster's shared file
+system. [Write-ahead logging](https://sqlite.org/wal.html), the default, does not
+work over network file systems, but on a local disk it lets the viewer read a run
+without ever delaying the search's writes.
+
+### What a run directory holds
+
+However many genomes a run evaluates, its directory holds the same files:
+
+| File | Contents |
+|---|---|
+| `genomes.sqlar` | Every evaluated genome's JSON, plus a summary and parent links for each, for sorting and tracing ancestry |
+| `best_fitness.json`, `best_fitness.png`, `best_fitness_training.png` | The best genome by the population's ranking (lowest `fitness["loss"]`): its JSON, architecture diagram and training plot, overwritten whenever it improves |
+| `best_target_metric.json`, `best_target_metric.png`, `best_target_metric_training.png` | The same for the highest `fitness["target_metric"]` |
+| `exaqc_history.csv`, `exaqc_curves.png` | Population fitness and size statistics after every insertion, and a plot of them |
+| `run.log` | The run's log |
+
+A genome rejected as a duplicate of a better genome already in a steady-state
+population is not recorded. Nor is genome 1, the empty seed circuit every initial
+genome is mutated from: it is never evaluated, so it has no fitness and does not
+count towards `--number_genomes` (the viewer labels it as the seed wherever it
+appears as a parent).
+
+### Working with a run's archive
+
+`genomes.sqlar` uses the standard
+[SQLite Archive](https://sqlite.org/sqlar.html) format, so the stock `sqlite3`
+shell can list it and extract the genomes as files. The extracted
+`all_genomes/genome_<n>.json` files are the same files older runs wrote:
+
+```
+sqlite3 ./artifacts/iris/genomes.sqlar -Atv
+sqlite3 ./artifacts/iris/genomes.sqlar -Ax
+```
+
+The single-genome tools ([`refine_genome`](#refine_genome), [`evaluate`](#evaluate)
+and [`visualize_rl`](#visualize_rl)) take a genome either as a JSON file
+(`--genome_json`) or straight from an archive (`--archive <run directory or
+genomes.sqlar> --genome_number <n>`), and the analysis scripts read archives as
+well as the `all_genomes/` directories of older runs.
+
+---
+
 ## [`Examples`](./src/examples)
 
 All entry points live in [`src/examples/`](./src/examples). The three evolutionary ones
-(`classification`, `teacher`, `reinforcement_learning`) share the search and
-population arguments described above; the rest are single-genome tools.
+(`classification`, `teacher`, `reinforcement_learning`) share the search,
+population and [run output](#run-output-arguments) arguments described above; the
+rest are single-genome tools and the run viewer.
 
 Common to the evolutionary entry points:
 
 | Argument | Default | Description |
 |---|---|---|
-| `--out_dir` | `artifacts` | Where per-genome JSON, diagrams, plots and logs are written |
-| `--save_training_plot` | off | Also write a training-history plot beside each saved diagram |
 | `--device` | `cpu` | PyTorch device |
 | `--seed` | `0` | Random seed |
 | `--logging_level` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
@@ -621,23 +690,26 @@ Reloads one saved genome and trains it further — useful for giving the best
 genome of a search a longer run than the search could afford.
 
 ```
-python3 -m src.examples.refine_genome --genome ./artifacts/iris/all_genomes/genome_11.json
+python3 -m src.examples.refine_genome --archive ./artifacts/iris --genome_number 11
 ```
 
-Genome files are self-describing: EXAQC stamps the `task` and `task_target` onto
-every genome it generates, so nothing but the path is needed. The stored
-hyperparameters are reused unchanged unless overridden.
+Genomes are self-describing: EXAQC stamps the `task` and `task_target` onto
+every genome it generates, so nothing but where the genome is needs to be given.
+The stored hyperparameters are reused unchanged unless overridden.
 
 | Argument | Default | Description |
 |---|---|---|
-| `--genome` | *required* | Genome JSON written by the search |
+| `--genome_json` | *one of `--genome_json` / `--archive` is required* | Genome JSON written by the search (e.g. `best_fitness.json`) |
+| `--archive` | *one of `--genome_json` / `--archive` is required* | A run's `genomes.sqlar`, or the run directory holding it |
+| `--genome_number` | — | Genome to load from `--archive` (required with it) |
 | `--set KEY=VALUE` | — | Override a stored hyperparameter; repeatable |
 | `--out_dir` | `artifacts` | Where the refined genome and diagram are written |
 | `--save_circuit` | on | Also write the architecture diagram |
 | `--save_training_plot` | off | Also write a training-history plot |
+| `--device` | `cpu` | PyTorch device |
 
 ```
-python3 -m src.examples.refine_genome --genome best_genome.json \
+python3 -m src.examples.refine_genome --genome_json ./artifacts/iris/best_fitness.json \
     --out_dir ./refined --set epochs=200 --set learning_rate=0.01
 ```
 
@@ -651,9 +723,15 @@ Genomes saved before task recording are refused with an explanatory message.
 Scores a saved classification genome on an image dataset's official test split
 (the search itself only ever sees training and validation data).
 
+```
+python3 -m src.examples.evaluate --archive ./artifacts/mnist --genome_number 42 --dataset mnist
+```
+
 | Argument | Default | Description |
 |---|---|---|
-| `--genome` | *required* | Genome JSON |
+| `--genome_json` | *one of `--genome_json` / `--archive` is required* | Genome JSON |
+| `--archive` | *one of `--genome_json` / `--archive` is required* | A run's `genomes.sqlar`, or the run directory holding it |
+| `--genome_number` | — | Genome to load from `--archive` (required with it) |
 | `--dataset` | *required* | `mnist`, `fashion_mnist`, `cifar10` |
 | `--data_dir` | `data` | Dataset location |
 | `--batch_size` | `32` | Evaluation batch size |
@@ -665,13 +743,15 @@ Replays a trained RL genome in its environment so you can *watch* the evolved
 circuit control it, optionally saving an animated GIF.
 
 ```
-python3 -m src.examples.visualize_rl --genome_json ./artifacts/cartpole/all_genomes/genome_42.json \
+python3 -m src.examples.visualize_rl --archive ./artifacts/cartpole --genome_number 42 \
     --episodes 3 --output_file cartpole.gif
 ```
 
 | Argument | Default | Description |
 |---|---|---|
-| `--genome_json` | *required* | Genome JSON from the RL entry point |
+| `--genome_json` | *one of `--genome_json` / `--archive` is required* | Genome JSON from the RL entry point (e.g. `best_fitness.json`) |
+| `--archive` | *one of `--genome_json` / `--archive` is required* | A run's `genomes.sqlar`, or the run directory holding it |
+| `--genome_number` | — | Genome to load from `--archive` (required with it) |
 | `--env` | from the genome | Override the environment |
 | `--episodes` | `3` | Episodes to play |
 | `--max_steps` | from the genome, else `500` | Step cap |
@@ -679,6 +759,62 @@ python3 -m src.examples.visualize_rl --genome_json ./artifacts/cartpole/all_geno
 | `--output_file` | — | Save the rollout as a GIF instead of rendering to screen |
 | `--fps` | `30` | GIF frame rate |
 | `--map_name` / `--is_slippery` | `4x4` / off | FrozenLake only |
+
+### [`exaqc_artifacts`](./src/examples/exaqc_artifacts.py)
+
+Serves a local web page for browsing runs: every genome's fitness, its
+architecture diagram and training plot (drawn on demand), its ancestry, and
+comparisons between genomes and between groups of runs. It reads runs straight
+from their archives, so a run can be watched while its search is still going.
+
+```
+python3 -m src.examples.exaqc_artifacts ./artifacts/iris
+```
+
+Then open `http://127.0.0.1:8000/` in a browser. The page has:
+
+- **Runs**: every run found, with its task, genome count, best `loss` and
+  `target_metric`, and whether it is still being written.
+- **A run's page**: on the left, a chart of every genome, with genome number
+  running down it and a chosen fitness key across it, better values to the right
+  (so `loss` runs high to low and `target_metric` low to high). Genomes are colored by
+  insert type, operator family or island, with a line joining the genomes that
+  improved the best value and every parent-to-child link in the run (links fade
+  as they crowd the chart, so runs of tens of thousands of genomes stay legible). The
+  **Progress** view emphasizes the best-so-far line and the **Genealogy** view the
+  links; either can highlight a genome's full lineage or hide genomes that had no
+  children. On the right, a sortable, filterable table of the genomes that loads
+  more genomes as you scroll (the chart's panel grows to match, with the chart
+  staying in view). Drag the divider between the chart and the table to widen one
+  and narrow the other (double-click it to go back to the default split); your
+  browser remembers the split. While a run is still being written the page checks for new
+  genomes every 5 seconds: they appear in the chart right away, and the table
+  counts them in a "new genomes · refresh" badge rather than reordering rows
+  under you. Selecting a genome (clicking it again, or clicking empty space
+  in the chart, clears the selection) opens its details above the
+  table: its diagram, training plot, fitness, gates,
+  parents, children, ancestry graph and ready-to-run `refine_genome` /
+  `visualize_rl` / `evaluate` commands.
+- **Compare genomes**: two genomes' diagrams, fitness, hyperparameters and gates
+  (matched by innovation number) side by side.
+- **Compare runs**: the mean and spread of each group's search history, each
+  group's best genomes, and how each operator's genomes were inserted.
+
+| Argument | Default | Description |
+|---|---|---|
+| `runs` | *required* | Run directories or `genomes.sqlar` files; directories are searched recursively, so a directory of many runs can be given |
+| `--groups` | — | Substrings grouping runs for comparison; a run joins every group whose substring appears in its path |
+| `--host` | `127.0.0.1` | Address to serve on |
+| `--port` | `8000` | Port to serve on (`0` picks a free port) |
+| `--open_browser` | off | Open the page in a web browser once it is running |
+| `--logging_level` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
+
+To view runs on a cluster, start the viewer there and forward its port from your
+own machine, then open the same address locally:
+
+```
+ssh -L 8000:localhost:8000 <cluster login node>
+```
 
 ### [`classical_image_classification`](./src/examples/classical_image_classification.py)
 
@@ -755,6 +891,12 @@ rates and statistics on the best found genomes:
 ```
 python3 -m src.analysis.analyze_genome_generation --input_directories ./2026_ppsn_exaqc/classification/* --groups iris seeds wine breast_cancer --metric target_metric
 python3 -m src.analysis.analyze_genome_generation --input_directories ./2026_ppsn_exaqc/rl/* --groups cartpole frozenlake walker2d mountaincar_continuous --metric target_metric
+```
+
+The same groups can be explored in the [`exaqc_artifacts`](#exaqc_artifacts) viewer:
+
+```
+python3 -m src.examples.exaqc_artifacts ./2026_ppsn_exaqc/classification --groups iris seeds wine breast_cancer
 ```
 
 ---
