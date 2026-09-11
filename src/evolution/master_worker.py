@@ -1,3 +1,5 @@
+from typing import Callable
+
 from loguru import logger
 
 from mpi4py import MPI
@@ -117,34 +119,55 @@ def worker(
         comm.send(genome.to_dict(), dest=0, tag=tag_ids["genome_response"])
 
 
-def master_worker(exaqc: EXAQC, run_for: int) -> None:
-    """Runs an MPI master/worker EXAQC search over a pre-built ``EXAQC``.
+def run_evolution(
+    objective: Objective,
+    build_exaqc: Callable[[], EXAQC],
+    run_for: int,
+) -> None:
+    """Runs an EXAQC search serially or across MPI ranks, as available.
 
-    Rank 0 acts as the master: it uses ``exaqc`` to generate genomes and owns
-    the population. Every other rank is a worker that repeatedly requests a
-    genome, evaluates it with ``exaqc.objective``, and returns it. The search
-    stops once ``run_for`` genomes have been evaluated.
+    The execution mode is chosen from ``MPI.COMM_WORLD``'s size so the same
+    entry point works with or without ``mpiexec``:
 
-    All search configuration -- the allowed gate set, initial encoder/decoder,
-    population strategy, mutation/parent strategies and crossover rates,
-    registers, backend target and task metadata -- lives on the passed-in
-    ``exaqc``; see :class:`~src.evolution.exaqc.EXAQC` for those parameters.
+    * **1 process** (run without ``mpiexec``, or a single rank): builds the
+      search and runs it in-process via :meth:`~src.evolution.exaqc.EXAQC.run_for`,
+      since there are no worker ranks to distribute genomes to.
+    * **more than 1 process**: rank 0 is the master that generates genomes and
+      owns the population; every other rank is a worker that evaluates genomes
+      with ``objective``.
+
+    Only the serial run and the master (rank 0) build the ``EXAQC`` object, so
+    worker ranks never construct the search machinery (gate set, encoder/decoder,
+    population). ``build_exaqc`` is therefore a deferred factory that is invoked
+    only on those ranks; the ``EXAQC`` it returns must wrap the same
+    ``objective`` passed here.
 
     Args:
-        exaqc: A fully-constructed :class:`~src.evolution.exaqc.EXAQC` search.
-            It is built identically on every rank; only rank 0 drives it as the
-            master, while workers use its ``objective`` to evaluate genomes.
+        objective: The objective used to evaluate genomes; needed by every worker
+            rank (and by the ``EXAQC`` built for the serial/master run).
+        build_exaqc: A zero-argument factory returning the fully-configured
+            :class:`~src.evolution.exaqc.EXAQC` search. Called only on the serial
+            run and the MPI master, never on workers.
         run_for: How many genomes to generate and evaluate before stopping.
 
     Returns:
-        None. Runs the search to completion (all ranks return when it ends).
+        None. Runs the search to completion on this rank.
     """
 
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
+    size = comm.Get_size()
 
-    if rank == 0:
-        master(comm=comm, rank=rank, exaqc=exaqc, run_for=run_for)
+    if size > 1 and rank != 0:
+        # worker rank: only the objective is needed to evaluate genomes
+        worker(comm=comm, rank=rank, objective=objective)
+        return
 
+    # serial run or MPI master: build the search machinery here (and only here)
+    exaqc = build_exaqc()
+
+    if size == 1:
+        # no worker ranks to distribute to, so run the search in-process
+        exaqc.run_for(run_for)
     else:
-        worker(comm=comm, rank=rank, objective=exaqc.objective)
+        master(comm=comm, rank=rank, exaqc=exaqc, run_for=run_for)

@@ -6,6 +6,8 @@ and environment abstraction this trainer builds on.
 
 from __future__ import annotations
 
+import argparse
+
 from types import SimpleNamespace
 
 import torch
@@ -34,6 +36,24 @@ class ReinforceTrainer(ReinforcementLearningTrainer):
     advantage is either the return minus its mean (``baseline="mean"``) or
     the raw return.
     """
+
+    @staticmethod
+    def initialize_parser(parser: argparse.ArgumentParser) -> None:
+        """Adds REINFORCE's own command-line argument.
+
+        Args:
+            parser: The parser to add the argument to.
+
+        Returns:
+            None. Mutates ``parser`` by adding ``--baseline``.
+        """
+
+        parser.add_argument(
+            "--baseline",
+            choices=["mean", "none"],
+            default="mean",
+            help="REINFORCE advantage baseline ('mean' subtracts the batch-mean return).",
+        )
 
     def run_update(
         self,

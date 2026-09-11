@@ -33,6 +33,7 @@ class Gate:
         parameters: dict[str, float] = {},
         innovation_number: int = None,
         target: str = "qiskit",
+        enabled: bool = True,
     ):
         """
         Initializes a gate element in an evolved quantum circuit.
@@ -50,6 +51,8 @@ class Gate:
                 quantum circuit it appears in. if a value is not provided, a new innovation number will be generated
                 for the gate.
             target: denotes whether you are adding qiskit or pennylane gates
+            enabled: specifies if the gate is enabled for use or not. In the copy method this will preserve the
+                enabled status from the gate being copied.
         """
 
         assert (depth > 0.0) and (depth < 1.0)
@@ -76,7 +79,7 @@ class Gate:
 
         assert len(self.parameters) == len(self.specs.parameters)
 
-        self.enabled = True
+        self.enabled = enabled
 
     def get_input_circuit_indexes(self, circuit: CircuitGenome) -> list[int]:
         """
@@ -168,9 +171,8 @@ class Gate:
             parameters=serialized["parameters"],
             innovation_number=serialized["innovation_number"],
             target=serialized["target"],
+            enabled=serialized["enabled"],
         )
-
-        new_gate.enabled = serialized["enabled"]
 
         return new_gate
 
@@ -198,6 +200,7 @@ class Gate:
             parameters=self.parameters.copy(),
             innovation_number=innovation_number,
             target=self.target,
+            enabled=self.enabled,
         )
 
     def add_to_qiskit_circuit(

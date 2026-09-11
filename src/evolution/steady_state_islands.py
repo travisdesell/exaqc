@@ -7,7 +7,7 @@ inter-island crossover (parents drawn from an island's neighbors, as defined by
 a connection topology). Periodically the worst full islands undergo an
 extinction event and are repopulated, spreading strong genomes while preserving
 diversity. :class:`SteadyStateIslands` is the :class:`PopulationStrategy` that
-ties these together for the ``master_worker`` driver.
+ties these together for the ``run_evolution`` driver.
 """
 
 from __future__ import annotations

@@ -2,20 +2,14 @@ from __future__ import annotations
 
 import json
 import sys
-from types import SimpleNamespace, ModuleType
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
-mock_master_worker_module = ModuleType("src.evolution.master_worker")
-mock_master_worker_module.master_worker = MagicMock()
-
-sys.modules["src.evolution.master_worker"] = mock_master_worker_module
-
 import src.examples.classification as classification  # noqa
-from src.evolution.steady_state_population import SteadyStatePopulation  # noqa
 
 
 def make_image_loader(
@@ -180,20 +174,13 @@ def test_main_builds_cnn_encoder_for_image_data(
 
     mocked_encoder = MagicMock(name="cnn_encoder")
     mocked_decoder = MagicMock(name="decoder")
-    mocked_population = MagicMock(name="population")
 
     mocked_initialize_encoder = MagicMock(return_value=mocked_encoder)
     mocked_initialize_decoder = MagicMock(return_value=mocked_decoder)
-    mocked_master_worker = MagicMock()
     mocked_exaqc = MagicMock(name="exaqc")
     # build_parser() asks EXAQC to register the shared search flags, so keep the
     # real classmethod on the mock; only EXAQC *construction* is stubbed out.
     mocked_exaqc.initialize_parser = classification.EXAQC.initialize_parser
-    mocked_population_class = MagicMock(return_value=mocked_population)
-    # Only the *construction* of the population is mocked here; the parser still
-    # needs the strategy's real argument definitions, since build_parser() asks
-    # the class to register its own flags (e.g. --max_population_size).
-    mocked_population_class.initialize_parser = SteadyStatePopulation.initialize_parser
 
     monkeypatch.setattr(
         classification,
@@ -215,19 +202,11 @@ def test_main_builds_cnn_encoder_for_image_data(
         "initialize_decoder",
         mocked_initialize_decoder,
     )
-    monkeypatch.setattr(
-        classification,
-        "SteadyStatePopulation",
-        mocked_population_class,
-    )
-    monkeypatch.setattr(
-        classification,
-        "master_worker",
-        mocked_master_worker,
-    )
-    # EXAQC is now constructed by main() (and handed to master_worker), so it is
-    # mocked here to capture that construction and to avoid its eager strategy
-    # validation running during this encoder-wiring test.
+    # EXAQC is constructed by main()'s build_exaqc factory (invoked by
+    # run_evolution, which runs serially here since the tests are a single
+    # process), so it is mocked to capture that construction and to avoid its
+    # eager strategy validation running during this encoder-wiring test. With
+    # EXAQC mocked, run_evolution's serial path just calls run_for on the mock.
     monkeypatch.setattr(
         classification,
         "EXAQC",
@@ -334,24 +313,20 @@ def test_main_builds_cnn_encoder_for_image_data(
         n_outputs=2,
     )
 
-    mocked_population_class.assert_called_once_with(
-        max_population_size=2,
-        compare=classification.compare,
-        out_dir=str(output_directory),
-        save_training_plot=False,
-    )
-
-    # main() builds the EXAQC search from these pieces, so the population,
-    # encoder/decoder, registers and hyperparameters are asserted on the EXAQC
-    # construction rather than on the master_worker call.
+    # main()'s build_exaqc factory constructs the (mocked) EXAQC directly from
+    # the pieces it computes plus the shared factories (GateSpecifications /
+    # PopulationStrategy, which run for real here), so the encoder/decoder,
+    # registers and hyperparameters are asserted on the EXAQC construction.
     mocked_exaqc.assert_called_once()
 
     exaqc_call = mocked_exaqc.call_args.kwargs
 
-    assert exaqc_call["population"] is mocked_population
     assert exaqc_call["initial_encoder"] is mocked_encoder
     assert exaqc_call["initial_decoder"] is mocked_decoder
-    assert exaqc_call["target"] == target
+    assert exaqc_call["task"] == "classification"
+    assert exaqc_call["task_target"] == "mnist"
+    # The backend comes from the gate set built by GateSpecifications.from_args.
+    assert exaqc_call["gate_specifications"].target == target
 
     assert exaqc_call["input_registers"] == {
         "input": 2,
@@ -362,9 +337,9 @@ def test_main_builds_cnn_encoder_for_image_data(
 
     assert exaqc_call["hyperparameters"] == {
         "epochs": 1,
-        "learning_rate": pytest.approx(5e-4),
+        "learning_rate": pytest.approx(5e-3),
         "weight_decay": pytest.approx(0.0),
-        "improvement_cutoff": 2,
+        "improvement_cutoff": 3,
         "batch_size": 4,
         "quantum_input_mode": "u3",
         "quantum_output_mode": "probs",
@@ -373,10 +348,9 @@ def test_main_builds_cnn_encoder_for_image_data(
         "quantum_dropout_type": "none",
     }
 
-    # the constructed search is handed to master_worker with the genome budget
-    mocked_master_worker.assert_called_once()
-    assert mocked_master_worker.call_args.args[0] is mocked_exaqc.return_value
-    assert mocked_master_worker.call_args.kwargs["run_for"] == 1
+    # run_evolution runs serially in the single-process test: build_exaqc builds
+    # the (mocked) EXAQC and run_for is invoked with the genome budget.
+    mocked_exaqc.return_value.run_for.assert_called_once_with(1)
 
 
 @pytest.mark.skip(

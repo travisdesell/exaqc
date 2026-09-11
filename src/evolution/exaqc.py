@@ -37,7 +37,8 @@ class EXAQC:
         Entry points call this so every script exposes the same evolutionary
         search flags with the same defaults and help text, rather than
         repeating them. Each argument corresponds to the like-named
-        :meth:`__init__` keyword and is validated by
+        :meth:`__init__` keyword (or, for ``--number_genomes``, the genome
+        budget passed to the driver) and is validated by
         :meth:`validate_mutation_strategy` / :meth:`validate_parent_strategy`
         once the search is constructed.
 
@@ -47,7 +48,8 @@ class EXAQC:
         Returns:
             None. Mutates ``parser`` by adding ``--mutation_strategy``/``-ms``,
             ``--parent_strategy``/``-ps``, ``--binary_crossover_rate``,
-            ``--n_ary_crossover_rate`` and ``--exponential_crossover_rate``.
+            ``--n_ary_crossover_rate``, ``--exponential_crossover_rate``,
+            ``--number_genomes``, ``--out_dir`` and ``--save_training_plot``.
         """
 
         parser.add_argument(
@@ -62,6 +64,7 @@ class EXAQC:
                 "(float)."
             ),
         )
+
         parser.add_argument(
             "--parent_strategy",
             "-ps",
@@ -74,23 +77,50 @@ class EXAQC:
                 "'exponential <scale>' (float)."
             ),
         )
+
         parser.add_argument(
             "--binary_crossover_rate",
             type=float,
             default=0.00,
             help="Fraction of genomes generated via binary crossover once the population is initialized.",
         )
+
         parser.add_argument(
             "--n_ary_crossover_rate",
             type=float,
             default=0.20,
             help="Fraction of genomes generated via n-ary crossover once the population is initialized.",
         )
+
         parser.add_argument(
             "--exponential_crossover_rate",
             type=float,
             default=0.10,
             help="Fraction of genomes generated via exponential crossover once the population is initialized.",
+        )
+
+        parser.add_argument(
+            "--number_genomes",
+            type=int,
+            default=1000,
+            help="Total number of genomes to evolve and evaluate before stopping.",
+        )
+
+        parser.add_argument(
+            "--out_dir",
+            type=str,
+            default="artifacts",
+            help="Directory to write per-genome artifacts (diagrams, plots, logs) into.",
+        )
+
+        parser.add_argument(
+            "--save_training_plot",
+            action=argparse.BooleanOptionalAction,
+            default=False,
+            help=(
+                "Also save a per-genome training-history plot next to each saved "
+                "genome's diagram."
+            ),
         )
 
     def __init__(
@@ -110,7 +140,6 @@ class EXAQC:
         input_registers: dict[str, int] = None,
         output_registers: dict[str, int] = None,
         output_qubits: list[tuple[str, int]] = None,
-        target: str = "pennylane",
         task: str | None = None,
         task_target: str | None = None,
     ):
@@ -158,7 +187,6 @@ class EXAQC:
             output_qubits: a list of qubit tuples (name, register_index) which would be the expanded form of the
                 output_registers. Must be specified if output_registers is not specified. If output_registers
                 and output_qubits are None, they are set to the input_registers/qubits.
-            target: qiskit or pennylane
             task: which kind of problem is being solved -- one of 'classification',
                 'teacher' or 'reinforcement_learning'. Stamped onto every genome
                 this search generates so a saved genome records what it was
@@ -173,7 +201,10 @@ class EXAQC:
         self.population = population
         self.objective = objective
         self.hyperparameters = hyperparameters
-        self.target = target
+        # The quantum backend (qiskit/pennylane) is a property of the gate set,
+        # so it is taken from there rather than passed separately, and stamped
+        # onto every genome this search creates.
+        self.target = gate_specifications.target
         self.task = task
         self.task_target = task_target
         self.inserted_genomes = 0
@@ -734,4 +765,7 @@ class EXAQC:
         while self.genome_number < number_genomes:
             child = self.generate_genome()
             self.objective(child)
-            self.population.insert_genome(child)
+            # use the same insertion path as the MPI master so serial and
+            # distributed runs behave identically (passes current_genome_number
+            # and updates the genome-insertion tracking).
+            self.insert_genome(child)

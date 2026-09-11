@@ -170,7 +170,7 @@ and [`reinforcement_learning`](#reinforcement_learning), because all three call
 | `--binary_crossover_rate` | `0.0` | Fraction of children made by two-parent crossover |
 | `--n_ary_crossover_rate` | `0.2` | Fraction of children made by multi-parent crossover |
 | `--exponential_crossover_rate` | `0.1` | Fraction of children made by depth-spliced crossover |
-| `--number_genomes` | `2000` (RL: `500`) | Total genomes to evaluate before stopping |
+| `--number_genomes` | `1000` | Total genomes to evaluate before stopping |
 
 The three crossover rates must sum to at most `1.0`; the remainder is the
 mutation rate. With the defaults, 70% of children come from mutation.
@@ -180,6 +180,7 @@ mutation rate. With the defaults, 70% of children come from mutation.
 | Argument | Default | Description |
 |---|---|---|
 | `--target` | `pennylane` | Backend: [`pennylane`](https://docs.pennylane.ai/en/stable/) or [`qiskit`](https://quantum.cloud.ibm.com/docs/en/guides) |
+| `--use_only` | all gates | Restrict the search to only these gate method names (e.g. `cx ry rz`) |
 | `--input_qubits` | *required* | Qubits the inputs are encoded onto |
 | `--output_qubits` | *required* | Qubits measured for the output |
 | `--quantum_input_mode`, `-qim` | `u3` | How classical values become circuit inputs: `u3`, `rx`, `ry`, `rz`, `basis`, `amplitude` |
@@ -412,8 +413,8 @@ are **discrete-only** and refuse continuous environments.
   run is too slow.
 - **Learning rate.** Quantum gate parameters are angles, so they tolerate larger
   steps than deep classical nets: `1e-2` is the RL default, while supervised
-  classification defaults to `5e-4`. If loss oscillates, lower it; if nothing
-  moves, raise it.
+  classification and teacher default to `5e-3`. If loss oscillates, lower it; if
+  nothing moves, raise it.
 - **`--gamma`** near `0.99` suits long-horizon control; lower it (`0.9`–`0.95`)
   for short episodes.
 - **`--entropy_coef`** above `0` (try `0.01`) if the policy collapses to one
@@ -472,10 +473,10 @@ mpiexec -n 12 python3 -m src.examples.classification \
 |---|---|---|
 | `--dataset` | *required* | One of the datasets above |
 | `--epochs` | `30` | Training epochs per genome |
-| `--learning_rate`, `-lr` | `5e-4` | Adam learning rate |
+| `--learning_rate`, `-lr` | `5e-3` | Adam learning rate |
 | `--weight_decay` | `0.0` | Adam L2 regularisation |
-| `--improvement_cutoff` | `2` | Epochs without validation improvement before stopping, 0 to disable |
-| `--batch_size` | `1` | Use `1` for small tabular data, larger for images |
+| `--improvement_cutoff` | `3` | Epochs without validation improvement before stopping, 0 to disable |
+| `--batch_size` | `5` | Samples per gradient step |
 | `--validation_batch_size` | = `--batch_size` | Validation batch size |
 | `--validation_fraction` | `0.1` | Held-out fraction when no fixed split exists |
 | `--normalization` | `minmax` | `none`, `zscore`, `minmax` |
@@ -530,10 +531,10 @@ Input wires are the first `--input_qubits` wires and readout wires are the
 | `--quantum_input_mode`, `-qim` | `ry` | `rx`, `ry`, `rz` (one value per input wire) |
 | `--n_training_samples` | `64` | Generated training samples |
 | `--n_validation_samples` | `64` | Generated validation samples |
-| `--batch_size` | `8` | Samples per gradient step |
+| `--batch_size` | `5` | Samples per gradient step |
 | `--epochs` | `30` | Training epochs per genome |
 | `--learning_rate`, `-lr` | `5e-3` | Adam learning rate |
-| `--improvement_cutoff` | `5` | Epochs without validation improvement before stopping, 0 to disable |
+| `--improvement_cutoff` | `3` | Epochs without validation improvement before stopping, 0 to disable |
 
 **Losses.** All four are reported every epoch regardless of which is optimized,
 so runs stay comparable.
@@ -594,9 +595,9 @@ environments work only with `reinforce`, `actor_critic`/`a2c` and `ppo`.
 |---|---|---|
 | `--env` | *required* | Environment above |
 | `--algo` | *required* | `reinforce`, `actor_critic`, `a2c`, `ppo`, `q_learning`, `sarsa` |
-| `--number_genomes` | `500` | Genomes to evaluate |
-| `--input_qubits` | `4` | Input qubits |
-| `--output_qubits` | from the environment | Readout qubits; defaults to the smallest register that fits the policy, `ceil(log2(n_policy_outputs))` — where a discrete policy needs one output per action and a continuous one two per action dimension |
+| `--number_genomes` | `1000` | Genomes to evaluate |
+| `--input_qubits` | *required* | Input qubits |
+| `--output_qubits` | *required* | Readout qubits. Must be wide enough to carry the policy's outputs — at least `ceil(log2(n_policy_outputs))`, where a discrete policy needs one output per action and a continuous one two per action dimension |
 | `--episodes` | `60` | Training episodes per genome |
 | `--eval_episodes` | `10` | Greedy episodes used to score a genome |
 | `--max_steps` | `500` | Step cap per episode |
