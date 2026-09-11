@@ -5,7 +5,7 @@ and :mod:`src.examples.reinforcement_learning`, and reuses the same building
 blocks: the genome's ``initialize_model`` / ``forward`` interface, the shared
 :class:`~src.trainer.supervised_trainer.SupervisedTrainer`, an
 :class:`~src.evolution.objective.Objective` that trains a genome and sets its
-fitness, the same population strategies, and the same ``master_worker``
+fitness, the same population strategies, and the same ``run_evolution``
 evolutionary driver.
 
 What differs from classification is that there is nothing classical to learn.
@@ -38,21 +38,18 @@ import torch
 from loguru import logger
 
 from src.circuits.circuit import CircuitGenome
-from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
-from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
+from src.circuits.gate_specifications import GateSpecifications
 from src.circuits.teacher_circuits import DEFAULT_REGISTER_NAME, TEACHER_NAMES
 
 from src.datasets.teacher_loaders import (
     TEACHER_INPUT_MODES,
-    TEACHER_OUTPUT_MODES,
     get_teacher_dataloaders,
 )
 
 from src.evolution.exaqc import EXAQC
-from src.evolution.master_worker import master_worker
+from src.evolution.master_worker import run_evolution
 from src.evolution.objective import Objective
-from src.evolution.steady_state_islands import SteadyStateIslands
-from src.evolution.steady_state_population import SteadyStatePopulation
+from src.evolution.population_strategy import PopulationStrategy
 
 from src.metrics.teacher_losses import TEACHER_LOSS_NAMES, get_teacher_loss
 from src.metrics.teacher_metrics import build_teacher_metrics
@@ -181,79 +178,32 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Reference circuit the evolved circuits are trained to imitate.",
     )
-    parser.add_argument(
-        "--out_dir",
-        type=str,
-        default="artifacts",
-        help="Directory to write per-genome artifacts (diagrams, plots, logs) into.",
-    )
 
-    # The evolutionary search's own flags (mutation/parent strategies and
-    # crossover rates) are owned by EXAQC so every entry point stays in sync.
+    # The evolutionary search's own flags -- mutation/parent strategies,
+    # crossover rates, the genome budget, --out_dir and --save_training_plot --
+    # are owned by EXAQC so every entry point stays in sync.
     EXAQC.initialize_parser(parser)
 
-    populations = parser.add_subparsers(
-        dest="population_strategy",
-        required=True,
-        help="Specify how genomes will be handled.",
-    )
-    # Each population strategy owns the flags for its own constructor.
-    SteadyStatePopulation.initialize_parser(
-        populations.add_parser(
-            "steady_state", help="Use a single steady state population."
-        )
-    )
-    SteadyStateIslands.initialize_parser(
-        populations.add_parser(
-            "islands", help="Use multiple islands of steady state populations."
-        )
+    # The choice of population strategy (and each strategy's own flags) is owned
+    # by PopulationStrategy.
+    PopulationStrategy.initialize_parser(parser)
+
+    # The backend (--target) and optional gate-set restriction (--use_only) are
+    # owned by GateSpecifications.
+    GateSpecifications.initialize_parser(parser)
+
+    # The circuit-genome flags (qubit counts, quantum input/output modes,
+    # quantum dropout) are owned by CircuitGenome so every entry point stays in
+    # sync. A teacher search is purely quantum: it seeds no encoder or decoder
+    # (so --encoding/--decoding are omitted) and feeds inputs straight in through
+    # a single-axis rotation.
+    CircuitGenome.initialize_parser(
+        parser,
+        include_encoding_decoding=False,
+        quantum_input_mode_choices=list(TEACHER_INPUT_MODES),
+        quantum_input_mode_default="ry",
     )
 
-    parser.add_argument(
-        "--input_qubits",
-        type=int,
-        required=True,
-        help=(
-            "Number of wires the generated inputs drive. With no encoder these "
-            "are fed straight into the circuit, so this is also the number of "
-            "input values per sample."
-        ),
-    )
-    parser.add_argument(
-        "--output_qubits",
-        type=int,
-        required=True,
-        help=(
-            "Number of wires read out. These are disjoint from the input wires, "
-            "so the circuit spans --input_qubits + --output_qubits wires."
-        ),
-    )
-    parser.add_argument(
-        "--target",
-        type=str,
-        choices=["pennylane", "qiskit"],
-        default="pennylane",
-        help="Quantum backend used to build and simulate the evolved circuits.",
-    )
-    parser.add_argument(
-        "--quantum_input_mode",
-        "-qim",
-        type=str,
-        choices=list(TEACHER_INPUT_MODES),
-        default="ry",
-        help=(
-            "How each input value is encoded onto its wire. The teacher and the "
-            "evolved circuits always share this encoding."
-        ),
-    )
-    parser.add_argument(
-        "--quantum_output_mode",
-        "-qom",
-        type=str,
-        choices=list(TEACHER_OUTPUT_MODES),
-        default="probs",
-        help="Choose the output mode from the quantum circuit.",
-    )
     parser.add_argument(
         "--loss",
         type=str,
@@ -268,49 +218,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        "--quantum_dropout",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help=(
-            "Master switch for quantum dropout during training. Disabled by "
-            "default; when enabled, dropout is applied per training batch using "
-            "--quantum_dropout_type and --quantum_dropout_rate."
-        ),
-    )
-    parser.add_argument(
-        "--quantum_dropout_type",
-        "-qdt",
-        type=str,
-        default="none",
-        choices=["gate", "rotation", "entangling", "qubit", "innovation"],
-        help="Choose the dropout type for quantum gates (used only when --quantum_dropout is set).",
-    )
-    parser.add_argument(
-        "--quantum_dropout_rate",
-        "-qdr",
-        type=float,
-        default=0.0,
-        help="Choose the dropout rate for quantum gates (used only when --quantum_dropout is set).",
-    )
-
-    parser.add_argument(
         "--n_training_samples",
         type=int,
         default=64,
         help="Number of teacher-labelled training samples to generate.",
     )
+
     parser.add_argument(
         "--n_validation_samples",
         type=int,
         default=64,
         help="Number of teacher-labelled validation samples to generate.",
     )
-    parser.add_argument(
-        "--batch_size",
-        type=int,
-        default=8,
-        help="Training batch size.",
-    )
+
     parser.add_argument(
         "--validation_batch_size",
         type=int,
@@ -318,37 +238,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Batch size for validation; defaults to --batch_size when unset.",
     )
 
-    parser.add_argument(
-        "--epochs",
-        type=int,
-        default=30,
-        help="Maximum number of training epochs per genome.",
-    )
-    parser.add_argument(
-        "--learning_rate",
-        "-lr",
-        type=float,
-        default=5e-3,
-        help="Adam learning rate used when training each genome.",
-    )
-    parser.add_argument(
-        "--weight_decay",
-        type=float,
-        default=0.0,
-        help="Adam weight decay (L2 regularization) used when training each genome.",
-    )
-    parser.add_argument(
-        "--improvement_cutoff",
-        type=int,
-        default=5,
-        help="Stop training a genome after this many epochs without validation improvement.",
-    )
-    parser.add_argument(
-        "--number_genomes",
-        type=int,
-        default=2000,
-        help="Total number of genomes to evolve and evaluate before stopping.",
-    )
+    # The supervised-training flags (epochs, learning rate, weight decay,
+    # improvement cutoff, batch size) are owned by SupervisedTrainer so the
+    # classification and teacher entry points stay in sync.
+    SupervisedTrainer.initialize_parser(parser)
 
     parser.add_argument(
         "--device",
@@ -359,21 +252,14 @@ def build_parser() -> argparse.ArgumentParser:
             "'cuda:0'. Defaults to CUDA when available."
         ),
     )
+
     parser.add_argument(
         "--seed",
         type=int,
         default=0,
         help="Random seed for the generated teacher dataset.",
     )
-    parser.add_argument(
-        "--save_training_plot",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help=(
-            "Also save a line plot of loss and fidelity per epoch next to each "
-            "saved genome's diagram."
-        ),
-    )
+
     parser.add_argument(
         "--logging_level",
         type=str,
@@ -390,7 +276,8 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
-    os.makedirs(args.out_dir, exist_ok=True)
+    # The output directory is created by the EXAQC constructor; loguru creates
+    # the run.log parent directory as needed when the file sink is added.
     logger.remove()
     logger.add(sys.stdout, level=args.logging_level)
     logger.add(os.path.join(args.out_dir, "run.log"))
@@ -433,6 +320,8 @@ def main() -> None:
     except ValueError as error:
         parser.error(str(error))
 
+    # The objective is built on every rank because worker ranks evaluate genomes
+    # with it; only the search machinery below is master/serial-only.
     objective = TeacherObjective(
         training_dataloader=training_loader,
         validation_dataloader=validation_loader,
@@ -440,78 +329,70 @@ def main() -> None:
         device=args.device,
     )
 
-    hyperparameters = {
-        "epochs": args.epochs,
-        "learning_rate": args.learning_rate,
-        "weight_decay": args.weight_decay,
-        "improvement_cutoff": args.improvement_cutoff,
-        "batch_size": args.batch_size,
-        "quantum_input_mode": args.quantum_input_mode,
-        "quantum_output_mode": args.quantum_output_mode,
-        "quantum_dropout": args.quantum_dropout,
-        "quantum_dropout_type": args.quantum_dropout_type,
-        "quantum_dropout_rate": args.quantum_dropout_rate,
-    }
+    def build_exaqc() -> EXAQC:
+        """Builds the EXAQC search for the serial run or the MPI master.
 
-    gate_specifications = (
-        pennylane_gate_specifications
-        if args.target == "pennylane"
-        else qiskit_gate_specifications
-    )
+        Worker ranks never call this, so the population strategy, gate set and
+        the rest of the search machinery are only constructed where they are
+        actually driven.
 
-    if args.population_strategy == "steady_state":
-        population = SteadyStatePopulation(
-            max_population_size=args.max_population_size,
-            compare=compare,
-            out_dir=args.out_dir,
-            save_training_plot=args.save_training_plot,
-        )
-    else:
-        population = SteadyStateIslands(
-            n_islands=args.n_islands,
-            max_island_size=args.max_island_size,
-            genomes_before_extinction=args.genomes_before_extinction,
-            genomes_for_next_extinction=args.genomes_for_next_extinction,
-            islands_to_extinct=args.islands_to_extinct,
-            primary_parent=args.primary_parent,
-            intra_island_crossover_rate=args.intra_island_crossover_rate,
-            compare=compare,
-            out_dir=args.out_dir,
-            save_training_plot=args.save_training_plot,
+        Returns:
+            The fully-configured :class:`~src.evolution.exaqc.EXAQC` search,
+            wrapping the ``objective`` built above.
+        """
+
+        hyperparameters = {
+            "epochs": args.epochs,
+            "learning_rate": args.learning_rate,
+            "weight_decay": args.weight_decay,
+            "improvement_cutoff": args.improvement_cutoff,
+            "batch_size": args.batch_size,
+            "quantum_input_mode": args.quantum_input_mode,
+            "quantum_output_mode": args.quantum_output_mode,
+            "quantum_dropout": args.quantum_dropout,
+            "quantum_dropout_type": args.quantum_dropout_type,
+            "quantum_dropout_rate": args.quantum_dropout_rate,
+        }
+
+        logger.info(
+            "Imitating teacher '{}' on {} with input wires {} and output wires {} "
+            "({} -> {}), optimizing {}.",
+            args.teacher,
+            args.target,
+            input_wires,
+            output_wires,
+            args.quantum_input_mode,
+            args.quantum_output_mode,
+            args.loss,
         )
 
-    logger.info(
-        "Imitating teacher '{}' on {} with input wires {} and output wires {} "
-        "({} -> {}), optimizing {}.",
-        args.teacher,
-        args.target,
-        input_wires,
-        output_wires,
-        args.quantum_input_mode,
-        args.quantum_output_mode,
-        args.loss,
-    )
+        # The gate set and population strategy are built from `args` by their own
+        # factories (which every entry point shares). A teacher-imitation genome
+        # is purely quantum: there is nothing classical to learn, so it carries
+        # no encoder and no decoder, and its input/output wires are given as
+        # explicit, disjoint qubit lists.
+        return EXAQC(
+            gate_specifications=GateSpecifications.from_args(args),
+            population=PopulationStrategy.from_args(args, compare),
+            objective=objective,
+            initial_encoder=None,
+            initial_decoder=None,
+            hyperparameters=hyperparameters,
+            mutation_strategy=args.mutation_strategy,
+            parent_strategy=args.parent_strategy,
+            binary_crossover_rate=args.binary_crossover_rate,
+            n_ary_crossover_rate=args.n_ary_crossover_rate,
+            exponential_crossover_rate=args.exponential_crossover_rate,
+            input_qubits=[(DEFAULT_REGISTER_NAME, wire) for wire in input_wires],
+            output_qubits=[(DEFAULT_REGISTER_NAME, wire) for wire in output_wires],
+            task="teacher",
+            task_target=args.teacher,
+        )
 
-    master_worker(
-        gate_specifications=gate_specifications,
-        population=population,
+    run_evolution(
         objective=objective,
-        # A teacher-imitation genome is purely quantum: there is nothing
-        # classical to learn, so it carries no encoder and no decoder.
-        initial_encoder=None,
-        initial_decoder=None,
-        hyperparameters=hyperparameters,
-        mutation_strategy=args.mutation_strategy,
-        parent_strategy=args.parent_strategy,
-        binary_crossover_rate=args.binary_crossover_rate,
-        n_ary_crossover_rate=args.n_ary_crossover_rate,
-        exponential_crossover_rate=args.exponential_crossover_rate,
+        build_exaqc=build_exaqc,
         run_for=args.number_genomes,
-        input_qubits=[(DEFAULT_REGISTER_NAME, wire) for wire in input_wires],
-        output_qubits=[(DEFAULT_REGISTER_NAME, wire) for wire in output_wires],
-        target=args.target,
-        task="teacher",
-        task_target=args.teacher,
     )
 
 

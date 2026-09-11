@@ -6,6 +6,8 @@ and environment abstraction this trainer builds on.
 
 from __future__ import annotations
 
+import argparse
+
 from types import SimpleNamespace
 
 import numpy as np
@@ -48,6 +50,39 @@ class QLearningTrainer(ReinforcementLearningTrainer):
 
     #: Value-based action selection is discrete-only (argmax / epsilon-greedy).
     supports_continuous: bool = False
+
+    @staticmethod
+    def initialize_parser(parser: argparse.ArgumentParser) -> None:
+        """Adds the value-based (Q-learning / SARSA) command-line arguments.
+
+        Args:
+            parser: The parser to add the arguments to.
+
+        Returns:
+            None. Mutates ``parser`` by adding ``--epsilon``, ``--epsilon_min``
+            and ``--epsilon_decay``.
+        """
+
+        parser.add_argument(
+            "--epsilon",
+            type=float,
+            default=0.2,
+            help="Initial epsilon for epsilon-greedy exploration (Q-learning / SARSA).",
+        )
+
+        parser.add_argument(
+            "--epsilon_min",
+            type=float,
+            default=0.05,
+            help="Minimum epsilon for epsilon-greedy exploration (Q-learning / SARSA).",
+        )
+
+        parser.add_argument(
+            "--epsilon_decay",
+            type=float,
+            default=0.995,
+            help="Per-episode multiplicative decay applied to epsilon (Q-learning / SARSA).",
+        )
 
     def __init__(self, *, sarsa: bool = False) -> None:
         """Initializes the value-based trainer.

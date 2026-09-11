@@ -328,12 +328,14 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Path to the genome JSON file written by the evolutionary search.",
     )
+
     parser.add_argument(
         "--out_dir",
         type=str,
         default="artifacts",
         help="Directory to write the refined genome (and its diagram) into.",
     )
+
     parser.add_argument(
         "--set",
         dest="overrides",
@@ -346,24 +348,28 @@ def build_parser() -> argparse.ArgumentParser:
             "hyperparameters stored in the genome file are used unchanged."
         ),
     )
+
     parser.add_argument(
         "--save_circuit",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Also write the refined genome's architecture diagram.",
     )
+
     parser.add_argument(
         "--save_training_plot",
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Also write a training-history plot beside the refined diagram.",
     )
+
     parser.add_argument(
         "--device",
         type=str,
         default="cpu",
         help="PyTorch device to train on, e.g. 'cpu', 'cuda', or 'cuda:0'.",
     )
+
     parser.add_argument(
         "--logging_level",
         type=str,

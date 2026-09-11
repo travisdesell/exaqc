@@ -331,7 +331,6 @@ def test_exaqc_stamps_generated_genomes(tmp_path) -> None:
         parent_strategy=["uniform", "2", "3"],
         input_registers={"input": 2},
         output_registers={"input": 2},
-        target="pennylane",
         task="classification",
         task_target="iris",
     )

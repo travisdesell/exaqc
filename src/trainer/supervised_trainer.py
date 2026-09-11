@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import math
 from collections.abc import Callable
 from typing import Any
@@ -25,6 +26,63 @@ class SupervisedTrainer:
     quantum-teacher imitation (float target vectors with an MSE/KL/fidelity
     loss).
     """
+
+    @staticmethod
+    def initialize_parser(parser: argparse.ArgumentParser) -> None:
+        """Adds the supervised-training command-line arguments to a parser.
+
+        The classification and teacher entry points both train genomes with a
+        :class:`SupervisedTrainer`, so they share the same training-loop knobs.
+        Registering them here (mirroring
+        :meth:`~src.evolution.exaqc.EXAQC.initialize_parser` and
+        :meth:`~src.circuits.circuit.CircuitGenome.initialize_parser`) keeps the
+        two entry points in sync. The values become per-genome hyperparameters
+        the trainer reads at train time.
+
+        Args:
+            parser: The parser to add the arguments to.
+
+        Returns:
+            None. Mutates ``parser`` by adding ``--epochs``,
+            ``--learning_rate``/``-lr``, ``--weight_decay``,
+            ``--improvement_cutoff`` and ``--batch_size``.
+        """
+
+        parser.add_argument(
+            "--epochs",
+            type=int,
+            default=30,
+            help="Maximum number of training epochs per genome.",
+        )
+
+        parser.add_argument(
+            "--learning_rate",
+            "-lr",
+            type=float,
+            default=5e-3,
+            help="Adam learning rate used when training each genome.",
+        )
+
+        parser.add_argument(
+            "--weight_decay",
+            type=float,
+            default=0.0,
+            help="Adam weight decay (L2 regularization) used when training each genome.",
+        )
+
+        parser.add_argument(
+            "--improvement_cutoff",
+            type=int,
+            default=3,
+            help="Stop training a genome after this many epochs without validation improvement.",
+        )
+
+        parser.add_argument(
+            "--batch_size",
+            type=int,
+            default=5,
+            help="Training batch size.",
+        )
 
     def __init__(
         self,

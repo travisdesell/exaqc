@@ -170,7 +170,7 @@ and [`reinforcement_learning`](#reinforcement_learning), because all three call
 | `--binary_crossover_rate` | `0.0` | Fraction of children made by two-parent crossover |
 | `--n_ary_crossover_rate` | `0.2` | Fraction of children made by multi-parent crossover |
 | `--exponential_crossover_rate` | `0.1` | Fraction of children made by depth-spliced crossover |
-| `--number_genomes` | `2000` (RL: `500`) | Total genomes to evaluate before stopping |
+| `--number_genomes` | `1000` | Total genomes to evaluate before stopping |
 
 The three crossover rates must sum to at most `1.0`; the remainder is the
 mutation rate. With the defaults, 70% of children come from mutation.
@@ -180,6 +180,7 @@ mutation rate. With the defaults, 70% of children come from mutation.
 | Argument | Default | Description |
 |---|---|---|
 | `--target` | `pennylane` | Backend: [`pennylane`](https://docs.pennylane.ai/en/stable/) or [`qiskit`](https://quantum.cloud.ibm.com/docs/en/guides) |
+| `--use_only` | all gates | Restrict the search to only these gate method names (e.g. `cx ry rz`) |
 | `--input_qubits` | *required* | Qubits the inputs are encoded onto |
 | `--output_qubits` | *required* | Qubits measured for the output |
 | `--quantum_input_mode`, `-qim` | `u3` | How classical values become circuit inputs: `u3`, `rx`, `ry`, `rz`, `basis`, `amplitude` |
@@ -230,7 +231,7 @@ arguments:
 
 ```
 python3 -m src.examples.classification <options...> steady_state --max_population_size 30
-python3 -m src.examples.classification <options...> islands --n_islands 10 --max_island_size 10
+python3 -m src.examples.classification <options...> islands --n_islands 10 --max_island_size 10 --topology ring
 ```
 
 ### [`steady_state`](./src/evolution/steady_state_population.py)
@@ -261,6 +262,24 @@ island, spreading good genomes without overly collapsing diversity.
 | `--islands_to_extinct` | `1` | Worst islands cleared and repopulated each event |
 | `--primary_parent` | `best` | Which parent leads a crossover: `best` (highest fitness first) or `island` (the target island's genome first) |
 | `--intra_island_crossover_rate` | `0.5` | Fraction of an island's children bred within that island |
+| `--topology` | `fully_connected` | Inter-island connection topology; one of the values described below |
+
+Islands exchange genomes only with the neighbors defined by their **connection
+[topology](./src/evolution/topology.py)** (`--topology`, `fully_connected` by
+default). A sparser topology preserves diversity (good genomes spread more
+slowly); a denser one converges faster. The available values are:
+
+| `--topology` value | Meaning |
+|---|---|
+| `fully_connected` | Every island is connected to every other (densest). |
+| `ring` | Each island is linked to the previous and next, wrapping around. |
+| `star` | The first island is a hub connected to all others; the rest connect only to the hub. |
+| `2d_mesh <x_dim> <y_dim>` | A grid; each island joined to its up/down/left/right neighbors (requires `x_dim * y_dim == n_islands`). |
+| `tree <n_children>` | An n-ary tree: each island linked to its parent and up to `n_children` children. |
+| `random <min_edges> <max_edges>` | A **directed** graph: a seed ring guarantees every island is reachable, then each island gets extra random out-edges for a total out-degree in `[min_edges, max_edges]`. |
+
+Multi-word values take their arguments as separate tokens — for example
+`--topology 2d_mesh 3 4` arranges 12 islands in a 3×4 grid.
 
 ### Choosing a population strategy
 
@@ -272,6 +291,10 @@ island, spreading good genomes without overly collapsing diversity.
   increases how aggressively good material is shared.
 - **Total capacity is `n_islands × max_island_size`.** Keep that in the same
   range as a steady-state population you would otherwise use.
+- **`--topology` trades diversity against spread.** A sparse topology like
+  `ring` keeps islands distinct and resists premature convergence, while a dense
+  `fully_connected` topology spreads strong genomes fastest; `2d_mesh`, `tree`,
+  `star` and `random` sit in between.
 
 Background: island models are a standard technique in
 [evolutionary algorithms](https://en.wikipedia.org/wiki/Evolutionary_algorithm)
@@ -390,8 +413,8 @@ are **discrete-only** and refuse continuous environments.
   run is too slow.
 - **Learning rate.** Quantum gate parameters are angles, so they tolerate larger
   steps than deep classical nets: `1e-2` is the RL default, while supervised
-  classification defaults to `5e-4`. If loss oscillates, lower it; if nothing
-  moves, raise it.
+  classification and teacher default to `5e-3`. If loss oscillates, lower it; if
+  nothing moves, raise it.
 - **`--gamma`** near `0.99` suits long-horizon control; lower it (`0.9`–`0.95`)
   for short episodes.
 - **`--entropy_coef`** above `0` (try `0.01`) if the policy collapses to one
@@ -450,10 +473,10 @@ mpiexec -n 12 python3 -m src.examples.classification \
 |---|---|---|
 | `--dataset` | *required* | One of the datasets above |
 | `--epochs` | `30` | Training epochs per genome |
-| `--learning_rate`, `-lr` | `5e-4` | Adam learning rate |
+| `--learning_rate`, `-lr` | `5e-3` | Adam learning rate |
 | `--weight_decay` | `0.0` | Adam L2 regularisation |
-| `--improvement_cutoff` | `2` | Epochs without validation improvement before stopping, 0 to disable |
-| `--batch_size` | `1` | Use `1` for small tabular data, larger for images |
+| `--improvement_cutoff` | `3` | Epochs without validation improvement before stopping, 0 to disable |
+| `--batch_size` | `5` | Samples per gradient step |
 | `--validation_batch_size` | = `--batch_size` | Validation batch size |
 | `--validation_fraction` | `0.1` | Held-out fraction when no fixed split exists |
 | `--normalization` | `minmax` | `none`, `zscore`, `minmax` |
@@ -508,10 +531,10 @@ Input wires are the first `--input_qubits` wires and readout wires are the
 | `--quantum_input_mode`, `-qim` | `ry` | `rx`, `ry`, `rz` (one value per input wire) |
 | `--n_training_samples` | `64` | Generated training samples |
 | `--n_validation_samples` | `64` | Generated validation samples |
-| `--batch_size` | `8` | Samples per gradient step |
+| `--batch_size` | `5` | Samples per gradient step |
 | `--epochs` | `30` | Training epochs per genome |
 | `--learning_rate`, `-lr` | `5e-3` | Adam learning rate |
-| `--improvement_cutoff` | `5` | Epochs without validation improvement before stopping, 0 to disable |
+| `--improvement_cutoff` | `3` | Epochs without validation improvement before stopping, 0 to disable |
 
 **Losses.** All four are reported every epoch regardless of which is optimized,
 so runs stay comparable.
@@ -572,9 +595,9 @@ environments work only with `reinforce`, `actor_critic`/`a2c` and `ppo`.
 |---|---|---|
 | `--env` | *required* | Environment above |
 | `--algo` | *required* | `reinforce`, `actor_critic`, `a2c`, `ppo`, `q_learning`, `sarsa` |
-| `--number_genomes` | `500` | Genomes to evaluate |
-| `--input_qubits` | `4` | Input qubits |
-| `--output_qubits` | from the environment | Readout qubits; defaults to the smallest register that fits the policy, `ceil(log2(n_policy_outputs))` — where a discrete policy needs one output per action and a continuous one two per action dimension |
+| `--number_genomes` | `1000` | Genomes to evaluate |
+| `--input_qubits` | *required* | Input qubits |
+| `--output_qubits` | *required* | Readout qubits. Must be wide enough to carry the policy's outputs — at least `ceil(log2(n_policy_outputs))`, where a discrete policy needs one output per action and a continuous one two per action dimension |
 | `--episodes` | `60` | Training episodes per genome |
 | `--eval_episodes` | `10` | Greedy episodes used to score a genome |
 | `--max_steps` | `500` | Step cap per episode |
