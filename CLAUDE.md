@@ -80,10 +80,13 @@ documented there, and most are also wrapped by a script in
   `evaluate` and `visualize_rl`, it takes the genome as `--genome_json` or as
   `--archive` + `--genome_number` (shared helpers in
   `src.utils.genome_archive`).
-- **Artifact viewer:** `python3 -m src.examples.exaqc_artifacts`, a local web
-  page over one or more runs' `genomes.sqlar` archives (server and static app in
-  `src/utils/artifact_viewer/`). It has no wrapper script; it depends on the
-  archive layout, the fitness keys and the history CSV columns.
+- **EXAQC dashboard:** `python3 -m src.examples.exaqc_dashboard`, a local web page
+  over runs' `genomes.sqlar` archives, given as `--runs` or found by watching a
+  `--directory` (server and static app in `src/utils/artifact_viewer/`). It has
+  no wrapper script; it depends on the archive layout, the fitness keys, the
+  history CSV columns, and the insert types and `generated_by` operators its
+  insertion-rate tables count (mirroring
+  `src.analysis.analyze_genome_generation`).
 - **Analysis:** `python3 -m src.analysis.analyze_genome_generation`.
 
 A search's outputs (`--out_dir`, `--shared_file_system`, `genomes.sqlar`, the
@@ -168,7 +171,7 @@ for a in m.build_parser()._actions: print(a.dest, a.default, a.choices)"
 ```
 
 `classification`, `teacher`, `reinforcement_learning`, `refine_genome`,
-`exaqc_artifacts` and `classical_image_classification` expose `build_parser()`
+`exaqc_dashboard` and `classical_image_classification` expose `build_parser()`
 alongside a `main()`,
 which is the pattern to follow for any new entry point. The rest
 (`reinforcement_learning_fixed`, `evaluate`, `visualize_rl`) still build their

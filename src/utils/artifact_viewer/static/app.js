@@ -1,12 +1,15 @@
 /*
- * EXAQC Artifacts viewer.
+ * EXAQC Dashboard.
  *
- * A dependency-free single-page app over the viewer's read-only JSON API
+ * A dependency-free single-page app over the dashboard's read-only JSON API
  * (src/utils/artifact_viewer/server.py). Charts are drawn with the vendored
  * uPlot. Pages are chosen by the URL hash:
  *
  *   #/                          the run list
  *   #/groups                    compare runs (grouped by --groups)
+ *   #/insertions                insertion rates of every group side by side
+ *   #/insertions/run/<run>      ... of one run
+ *   #/insertions/group/<name>   ... of one group, and of each of its runs
  *   #/run/<run>                 a run: progress/genealogy chart, genome table
  *   #/run/<run>/genome/<n>      ... with genome <n> open in the detail panel
  *   #/run/<run>/compare/<a>/<b> two genomes side by side
@@ -909,6 +912,8 @@
         if (changedVisibility && points) render();
         else if (plot) plot.redraw(false, false);
       },
+      /** Re-fits the chart to the space left for it, e.g. after content above it changes height. */
+      resize,
       destroy() {
         resizeObserver.disconnect();
         window.removeEventListener("resize", resize);
@@ -986,14 +991,22 @@
       const payload = await api("/api/runs");
       if (destroyed) return;
       const runs = payload.runs;
+      const source = payload.source || {};
       const header = h(
         "div",
         { class: "page-header" },
         h("h1", { text: "Runs" }),
         h("span", { class: "meta", text: `${runs.length} run${runs.length === 1 ? "" : "s"}` }),
+        source.directory ? h("span", { class: "meta", title: "Runs started below this directory appear here once they write their genomes.sqlar" }, "watching ", h("b", { text: source.directory })) : null,
         h("span", { class: "spacer" }),
+        runs.length ? h("a", { href: insertionHref({ kind: "all" }), text: "Insertion rates →" }) : null,
         runs.length > 1 || payload.groups.length ? h("a", { href: "#/groups", text: "Compare runs →" }) : null
       );
+      const waiting = source.waiting && source.waiting.length ? notice(`Waiting for genomes.sqlar to be written in ${source.waiting.join(", ")}.`) : null;
+      if (!runs.length) {
+        setChildren(content, header, waiting || notice(source.directory ? `No runs below ${source.directory} yet: runs appear here as soon as they write their genomes.sqlar.` : "There are no runs to show yet."));
+        return;
+      }
 
       const rows = runs.map((run) =>
         h(
@@ -1012,6 +1025,7 @@
 
       setChildren(content,
         header,
+        waiting,
         h(
           "div",
           { class: "card table-wrap" },
@@ -1062,7 +1076,7 @@
       encoding: "insert_type",
       hideDeadEnds: false,
       highlightLineage: true,
-      showHistory: false,
+      showHistory: true,
       sort: keys.includes("loss") ? "loss" : "genome_number",
       desc: !keys.includes("loss"),
       filters: { insert_type: "", generated_by: "", crossover_type: "", island: "" },
@@ -1080,13 +1094,15 @@
     let destroyed = false;
     let timer = null;
     let historyChart = null;
+    let historyRequest = 0;
     let detailRequest = 0;
 
     const headerNode = h("div", { class: "page-header" });
     const filterRow = h("div", { class: "toolbar" });
     const chartControls = h("div", { class: "toolbar" });
     const chartNode = h("div");
-    const historyNode = h("div");
+    // the run's search progress, shown above the genome chart
+    const historyNode = h("div", { class: "search-progress" });
     historyNode.hidden = true;
     const tableToolbar = h("div", { class: "toolbar" });
     const tableNode = h("div", { class: "table-wrap" });
@@ -1099,7 +1115,7 @@
     // The two columns always share one height; as the table grows the chart panel
     // stretches with it, and the chart stays in view inside it. The divider
     // between them trades width between the columns.
-    const chartPanel = h("section", { class: "card chart-panel", "aria-label": "Genome chart" }, h("div", { class: "chart-sticky" }, chartControls, chartNode, historyNode));
+    const chartPanel = h("section", { class: "card chart-panel", "aria-label": "Genome chart" }, h("div", { class: "chart-sticky" }, chartControls, historyNode, chartNode));
     const runBody = h("div", { class: "run-body" }, chartPanel);
     const columnResizer = createColumnResizer(runBody, chartPanel);
     runBody.append(columnResizer.node, h("div", { class: "run-main" }, detailNode, h("section", { class: "card table-card", "aria-label": "Genome table" }, tableToolbar, tableNode, tableStatus)));
@@ -1131,7 +1147,8 @@
           h("span", {}, "strategy ", h("b", { text: summary.population_strategy ?? "—" })),
           h("span", {}, h("b", { text: formatNumber(summary.genomes) }), " genomes"),
           h("span", { title: formatTime(summary.last_saved_at) }, "updated ", h("b", { text: formatAgo(summary.last_saved_at) })),
-          h("span", { text: `started ${formatTime(summary.start_time)}` })
+          h("span", { text: `started ${formatTime(summary.start_time)}` }),
+          h("a", { href: insertionHref({ kind: "run", index }), text: "insertion rates →" })
         ),
         summary.command_line ? h("details", {}, h("summary", { text: "Command line" }), h("div", { class: "command" }, h("pre", { text: summary.command_line }), copyButton(summary.command_line))) : null
       );
@@ -1216,7 +1233,7 @@
         ),
         checkbox("hide dead ends", state.hideDeadEnds, (value) => ((state.hideDeadEnds = value), chart.setOptions({ hideDeadEnds: value }))),
         checkbox("highlight selected lineage", state.highlightLineage, (value) => ((state.highlightLineage = value), chart.setOptions({ highlightLineage: value }))),
-        run.has_history ? checkbox("search history", state.showHistory, (value) => ((state.showHistory = value), loadHistory())) : null,
+        run.has_history ? checkbox("search progress", state.showHistory, (value) => ((state.showHistory = value), loadHistory())) : null,
         h("span", { class: "meta", text: "drag to zoom · double-click to reset · click a point to open or close it · click empty space to clear" })
       );
     }
@@ -1237,21 +1254,42 @@
       }
     }
 
+    /**
+     * Re-fits the genome chart to the height left below the search progress:
+     * now, and again once uPlot has finished sizing a newly drawn chart (it
+     * sizes its canvases in a microtask, after the chart is created).
+     */
+    function refitChart() {
+      chart.resize();
+      setTimeout(() => destroyed || chart.resize(), 0);
+    }
+
+    /**
+     * Shows or hides the run's search progress chart above the genome chart
+     * (when the run recorded a search history), re-fitting the genome chart to
+     * the space left below it.
+     */
     async function loadHistory() {
+      const request = ++historyRequest;
       if (historyChart) {
         historyChart.destroy();
         historyChart = null;
       }
-      historyNode.hidden = !state.showHistory;
-      if (!state.showHistory) return;
+      const shown = state.showHistory && run.has_history;
+      historyNode.hidden = !shown;
+      if (!shown) {
+        refitChart();
+        return;
+      }
       try {
         const { columns } = await api(`/api/runs/${index}/history`);
+        if (destroyed || request !== historyRequest) return;
         const lines = [
           ["best", "best", 1],
           ["top5_mean", "top-k mean", 2],
           ["pop_mean", "population mean", 3],
         ].filter(([column]) => columns[column]);
-        setChildren(historyNode, h("h3", { text: "Search history (population fitness as recorded by the profiler, per insertion)" }));
+        setChildren(historyNode, h("h3", { text: "Search progress (population fitness as recorded by the profiler, per insertion)" }));
         const chartHost = h("div");
         historyNode.append(chartHost);
         historyChart = createLineChart(chartHost, {
@@ -1262,8 +1300,10 @@
           height: 240,
         });
       } catch (error) {
-        setChildren(historyNode, notice(`Could not load the search history: ${error.message}`, true));
+        if (destroyed || request !== historyRequest) return;
+        setChildren(historyNode, notice(`Could not load the search progress: ${error.message}`, true));
       }
+      refitChart();
     }
 
     // -------------------------- genome table (loads more as it is scrolled) --------------------------
@@ -1795,7 +1835,13 @@
     renderFilters();
     renderChartControls();
     renderTableToolbar();
-    await Promise.all([loadChart(), resetTable({ scrollToTable: false })]);
+    // The genome chart takes the height left below the search progress. Besides the re-fits when the
+    // panel is shown, hidden or redrawn, this catches any other change in its height (such as its legend
+    // wrapping when the columns are resized).
+    const historyObserver = new ResizeObserver(() => chart.resize());
+    historyObserver.observe(historyNode);
+
+    await Promise.all([loadChart(), resetTable({ scrollToTable: false }), loadHistory()]);
     if (initialGenome !== null && initialGenome !== undefined) selectGenome(initialGenome);
     timer = setInterval(() => poll().catch(() => {}), POLL_INTERVAL_MS);
 
@@ -1808,6 +1854,7 @@
         clearInterval(timer);
         rowObserver.disconnect();
         columnResizer.destroy();
+        historyObserver.disconnect();
         chart.destroy();
         if (historyChart) historyChart.destroy();
       },
@@ -1960,7 +2007,6 @@
       };
 
       const stats = (values) => (values && values.n ? `${formatNumber(values.mean)} ± ${formatNumber(values.std)} (min ${formatNumber(values.min)}, max ${formatNumber(values.max)})` : "—");
-      const insertTypes = [...new Set(payload.groups.flatMap((group) => Object.values(group.operators).flatMap((counts) => Object.keys(counts))))].sort();
 
       const controls = h(
         "div",
@@ -1980,7 +2026,9 @@
             (conf) => ((settings.conf = conf), load()),
             "Band"
           )
-        )
+        ),
+        h("span", { class: "spacer" }),
+        h("a", { href: insertionHref({ kind: "all" }), text: "Insertion rates →" })
       );
 
       const chartNode = h("div");
@@ -2010,7 +2058,12 @@
                 h(
                   "tr",
                   {},
-                  h("td", {}, charted.includes(group) ? legendItem(slotColor(charted.indexOf(group) + 1), group.name, true) : group.name),
+                  h(
+                    "td",
+                    {},
+                    charted.includes(group) ? legendItem(slotColor(charted.indexOf(group) + 1), group.name, true) : group.name,
+                    h("a", { class: "inline-link", href: group.kind === "run" ? insertionHref({ kind: "run", index: group.runs[0].index }) : insertionHref({ kind: "group", name: group.name }), text: "insertion rates" })
+                  ),
                   h("td", {}, group.runs.map((run, i) => [i ? ", " : "", h("a", { href: `#/run/${run.index}`, text: run.name })])),
                   h("td", { text: stats(group.best_loss) }),
                   h("td", { text: stats(group.best_target_metric) }),
@@ -2019,44 +2072,6 @@
               )
             )
           )
-        ),
-        h(
-          "section",
-          { class: "card" },
-          h("h2", { text: "How each operator's genomes were inserted" }),
-          payload.groups.map((group) => {
-            const operators = Object.entries(group.operators).sort(([x], [y]) => x.localeCompare(y));
-            return h(
-              "details",
-              { open: payload.groups.length <= 3 },
-              h("summary", { text: group.name }),
-              operators.length
-                ? h(
-                    "div",
-                    { class: "table-wrap" },
-                    h(
-                      "table",
-                      {},
-                      h("thead", {}, h("tr", {}, h("th", { text: "operator" }), h("th", { class: "number", text: "total" }), insertTypes.map((type) => h("th", { class: "number", text: label(type) })))),
-                      h(
-                        "tbody",
-                        {},
-                        operators.map(([operator, counts]) => {
-                          const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
-                          return h(
-                            "tr",
-                            {},
-                            h("td", { text: label(operator) }),
-                            h("td", { class: "number", text: total.toLocaleString() }),
-                            insertTypes.map((type) => h("td", { class: "number", text: counts[type] ? `${counts[type].toLocaleString()} (${((100 * counts[type]) / total).toFixed(1)}%)` : "—" }))
-                          );
-                        })
-                      )
-                    )
-                  )
-                : notice("No genomes recorded.")
-            );
-          })
         )
       );
 
@@ -2081,6 +2096,155 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Insertion rates
+  // ---------------------------------------------------------------------------
+
+  /** The address of the insertion-rate page for every group (`kind` "all"), one run (`index`) or one group (`name`). */
+  function insertionHref({ kind, index, name }) {
+    if (kind === "run") return `#/insertions/run/${index}`;
+    if (kind === "group") return `#/insertions/group/${encodeURIComponent(name)}`;
+    return "#/insertions";
+  }
+
+  /**
+   * Shows how the genomes each operator generated were inserted: the share of
+   * that operator's genomes that became a global best or a local best, were
+   * inserted or were discarded. It is the table analyze_genome_generation
+   * prints -- a block of rows per operator and a column per group or run -- and
+   * its LaTeX source, refreshed while runs are still being written.
+   *
+   * @param {object} target What to tabulate: `kind` "all", "run" (with `index`) or "group" (with `name`).
+   */
+  async function showInsertionRatesPage(target) {
+    const query = target.kind === "run" ? `?run=${target.index}` : target.kind === "group" ? `?group=${encodeURIComponent(target.name)}` : "";
+    const [first, runList] = await Promise.all([api(`/api/insertion_rates${query}`), api("/api/runs")]);
+    let destroyed = false;
+    let shown = null;
+
+    const scope = first.scope;
+    const scopeName = scope.kind === "run" ? scope.name : scope.kind === "group" ? `group ${scope.name}` : runList.groups.length ? "every group" : "every run";
+    setBreadcrumbs([{ label: "Runs", href: "#/" }, ...(scope.kind === "run" ? [{ label: scope.name, href: `#/run/${scope.index}` }] : []), { label: "Insertion rates" }]);
+
+    const scopeOptions = [
+      [insertionHref({ kind: "all" }), runList.groups.length ? "every group side by side" : "every run side by side"],
+      ...runList.groups.map((name) => [insertionHref({ kind: "group", name }), `group: ${name}`]),
+      ...runList.runs.map((run) => [insertionHref({ kind: "run", index: run.index }), `run: ${run.name}`]),
+    ];
+
+    const summaryNode = h("span", { class: "meta" });
+    const errorNode = h("div");
+    const tableNode = h("div", { class: "table-wrap" });
+    const latexNode = h("div");
+
+    setChildren(
+      app,
+      h(
+        "div",
+        { class: "page-header" },
+        h("h1", { text: `Insertion rates · ${scopeName}` }),
+        summaryNode,
+        h("span", { class: "spacer" }),
+        h("label", { class: "inline-label" }, "show", select(scopeOptions, insertionHref(scope), (href) => (location.hash = href), "Runs to tabulate"))
+      ),
+      h(
+        "p",
+        { class: "explanation" },
+        "For each operator, the share of the genomes it generated that became a global best or a local best, were inserted into the population, or were discarded; the count is in brackets. A genome generated by several operators counts once for each. These are the rates ",
+        h("code", { text: "src.analysis.analyze_genome_generation" }),
+        " tabulates, and its LaTeX table is below."
+      ),
+      errorNode,
+      h("section", { class: "card" }, tableNode),
+      h("section", { class: "card" }, h("details", {}, h("summary", { text: "LaTeX table (as printed by analyze_genome_generation)" }), latexNode))
+    );
+
+    /** A rate cell: the share of an operator's genomes with this outcome, shaded by it, and their count. */
+    function rateCell(counts, outcome) {
+      if (!counts) return h("td", { class: "number muted-cell", text: "–", title: "No genomes from this operator" });
+      const count = counts[outcome] || 0;
+      const share = count / counts.total;
+      return h(
+        "td",
+        { class: "number", style: share > 0 ? `background:${withAlpha(token("--accent"), 0.06 + 0.3 * share)}` : null, title: `${count.toLocaleString()} of ${counts.total.toLocaleString()} genomes` },
+        `${(100 * share).toFixed(1)}%`,
+        h("span", { class: "count", text: ` (${count.toLocaleString()})` })
+      );
+    }
+
+    /** A column heading: the group (linking to its own table) or run (linking to its page), with its size. */
+    function columnHeader(column) {
+      const runs = column.runs.length;
+      return h(
+        "th",
+        { class: "number" },
+        column.kind === "run" ? h("a", { href: `#/run/${column.runs[0].index}`, text: column.label }) : h("a", { href: insertionHref({ kind: "group", name: column.label }), text: column.label }),
+        h("div", { class: "count", text: column.kind === "group" ? `${runs} run${runs === 1 ? "" : "s"} · ${column.genomes.toLocaleString()} genomes` : `${column.genomes.toLocaleString()} genomes` })
+      );
+    }
+
+    /** Draws the table and its LaTeX for a payload, unless nothing changed since the last one. */
+    function render(payload) {
+      const serialized = JSON.stringify(payload);
+      if (serialized === shown) return;
+      shown = serialized;
+
+      const { columns, operators, outcomes } = payload;
+      const runCount = new Set(columns.flatMap((column) => column.runs.map((run) => run.index))).size;
+      setChildren(summaryNode, `${runCount.toLocaleString()} run${runCount === 1 ? "" : "s"}`);
+      setChildren(errorNode, payload.errors.length ? notice(`Could not read ${payload.errors.map((error) => `${error.name} (${error.error})`).join(", ")}.`, true) : null);
+
+      if (!operators.length) {
+        setChildren(tableNode, notice(columns.length ? "No generated genomes have been recorded yet." : "There are no runs to tabulate yet."));
+      } else {
+        setChildren(
+          tableNode,
+          h(
+            "table",
+            { class: "rates" },
+            h("thead", {}, h("tr", {}, h("th", { text: "operator" }), h("th", { text: "outcome" }), columns.map(columnHeader))),
+            operators.map((operator) =>
+              h(
+                "tbody",
+                {},
+                outcomes.map((outcome, i) =>
+                  h(
+                    "tr",
+                    {},
+                    i === 0 ? h("th", { class: "operator", scope: "rowgroup", rowspan: outcomes.length + 1, text: label(operator) }) : null,
+                    h("td", { text: label(outcome) }),
+                    columns.map((column) => rateCell(column.counts[operator], outcome))
+                  )
+                ),
+                h("tr", { class: "operator-total" }, h("td", { text: "genomes" }), columns.map((column) => h("td", { class: "number", text: column.counts[operator] ? column.counts[operator].total.toLocaleString() : "–" })))
+              )
+            )
+          )
+        );
+      }
+
+      setChildren(latexNode, h("div", { class: "command" }, h("pre", { text: payload.latex }), copyButton(payload.latex)));
+    }
+
+    render(first);
+    const timer = setInterval(async () => {
+      try {
+        const payload = await api(`/api/insertion_rates${query}`);
+        if (!destroyed) render(payload);
+      } catch {
+        // a failed refresh keeps the last table; the next poll tries again
+      }
+    }, POLL_INTERVAL_MS);
+
+    return {
+      kind: "insertions",
+      destroy() {
+        destroyed = true;
+        clearInterval(timer);
+      },
+    };
+  }
+
+  // ---------------------------------------------------------------------------
   // Routing
   // ---------------------------------------------------------------------------
 
@@ -2088,6 +2252,19 @@
     const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
     const number = (value) => (value !== undefined && /^\d+$/.test(value) ? Number(value) : null);
     if (parts[0] === "groups") return { page: "groups" };
+    if (parts[0] === "insertions") {
+      if (parts[1] === "run" && number(parts[2]) !== null) return { page: "insertions", kind: "run", index: number(parts[2]) };
+      if (parts[1] === "group" && parts[2] !== undefined) {
+        let name = parts[2];
+        try {
+          name = decodeURIComponent(name);
+        } catch {
+          // a malformed escape is used as written
+        }
+        return { page: "insertions", kind: "group", name };
+      }
+      return { page: "insertions", kind: "all" };
+    }
     if (parts[0] === "run" && number(parts[1]) !== null) {
       const index = number(parts[1]);
       if (parts[2] === "compare" && number(parts[3]) !== null && number(parts[4]) !== null) return { page: "compare", index, a: number(parts[3]), b: number(parts[4]) };
@@ -2106,6 +2283,7 @@
     currentPage = null;
     try {
       if (target.page === "groups") currentPage = await showGroupsPage();
+      else if (target.page === "insertions") currentPage = await showInsertionRatesPage(target);
       else if (target.page === "run") currentPage = await showRunPage(target.index, target.genome);
       else if (target.page === "compare") currentPage = await showComparePage(target.index, target.a, target.b);
       else currentPage = await showRunsPage();

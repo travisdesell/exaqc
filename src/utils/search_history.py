@@ -3,7 +3,7 @@
 Every run records a row in ``exaqc_history.csv`` after each genome is inserted
 (see :class:`~src.utils.profiler.EXAQCProfiler`). This module only reads those
 files, and deliberately imports nothing from the quantum stack, so lightweight
-tools such as the artifact viewer can load and aggregate histories without
+tools such as the EXAQC dashboard can load and aggregate histories without
 paying for the profiler's dependencies.
 """
 

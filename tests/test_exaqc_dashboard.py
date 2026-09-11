@@ -1,10 +1,12 @@
-"""Tests for the artifact viewer (``python3 -m src.examples.exaqc_artifacts``).
+"""Tests for the EXAQC dashboard (``python3 -m src.examples.exaqc_dashboard``).
 
-The viewer serves a single-page app and a read-only JSON API over one or more
-runs' ``genomes.sqlar`` archives. These tests build small archives, start the
-real HTTP server on a free port, and check the parser, run discovery and
-grouping, every API route, image rendering and caching, and that static files
-cannot escape their directory.
+The dashboard serves a single-page app and a read-only JSON API over runs'
+``genomes.sqlar`` archives, given as run directories or found by watching a
+directory. These tests build small archives, start the real HTTP server on a
+free port, and check the parser, finding and grouping runs (including runs
+written after the dashboard started), every API route, the insertion-rate tables
+and their LaTeX, image rendering and caching, and that static files cannot
+escape their directory.
 """
 
 from __future__ import annotations
@@ -14,19 +16,23 @@ import threading
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from src.examples import exaqc_artifacts
+from src.examples import exaqc_dashboard
 from src.utils.artifact_viewer import server
 from src.utils.artifact_viewer.server import (
     ArtifactViewer,
     ArtifactViewerServer,
     RenderService,
+    RunRegistry,
     assign_groups,
     compare_gates,
-    discover_runs,
+    find_archives,
+    insertion_rates_latex,
 )
 from src.utils.genome_archive import ARCHIVE_FILENAME, GenomeArchive
 
@@ -220,12 +226,40 @@ def viewer_url(tmp_path, monkeypatch) -> Iterator[str]:
     build_run(tmp_path / "runs" / "iris_1", standard_genomes())
     build_run(tmp_path / "runs" / "iris_2", standard_genomes()[:2])
 
-    runs = discover_runs([str(tmp_path / "runs")])
-    groups = assign_groups(runs, ["iris"])
+    registry = RunRegistry(
+        run_directories=[
+            str(tmp_path / "runs" / "iris_1"),
+            str(tmp_path / "runs" / "iris_2"),
+        ],
+        groups=["iris"],
+    )
     httpd = ArtifactViewerServer(
-        ("127.0.0.1", 0), ArtifactViewer(runs, groups, RenderService(processes=0))
+        ("127.0.0.1", 0), ArtifactViewer(registry, RenderService(processes=0))
     )
     httpd.rendered = rendered
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{httpd.server_address[1]}"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+@contextmanager
+def serving(registry: RunRegistry) -> Iterator[str]:
+    """Serves a registry's runs on a free port for the duration of a block.
+
+    Args:
+        registry: The runs to serve.
+
+    Yields:
+        The base URL, e.g. ``http://127.0.0.1:54321``.
+    """
+
+    httpd = ArtifactViewerServer(
+        ("127.0.0.1", 0), ArtifactViewer(registry, RenderService(processes=0))
+    )
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     try:
@@ -268,23 +302,39 @@ def get_json(url: str) -> Any:
 
 
 def test_parser_defaults() -> None:
-    """The viewer's arguments and defaults match the documentation."""
+    """The dashboard's arguments and defaults match the documentation."""
 
-    args = exaqc_artifacts.build_parser().parse_args(["runs/iris"])
+    args = exaqc_dashboard.build_parser().parse_args(
+        ["--runs", "runs/iris_1", "runs/iris_2"]
+    )
 
-    assert args.runs == ["runs/iris"]
+    assert args.runs == ["runs/iris_1", "runs/iris_2"]
+    assert args.directory is None
     assert args.groups is None
     assert args.host == "127.0.0.1"
     assert args.port == 8000
     assert args.open_browser is False
     assert args.logging_level == "INFO"
 
-    with pytest.raises(SystemExit):
-        exaqc_artifacts.build_parser().parse_args([])
+    watching = exaqc_dashboard.build_parser().parse_args(["--directory", "runs"])
+    assert watching.directory == "runs"
+    assert watching.runs is None
+
+    # one of --runs and --directory is required, but not both (and no positional runs)
+    for arguments in ([], ["--runs", "a", "--directory", "b"], ["runs/iris"]):
+        with pytest.raises(SystemExit):
+            exaqc_dashboard.build_parser().parse_args(arguments)
 
 
-def test_discover_runs_searches_directories_and_names_runs(tmp_path) -> None:
-    """Run directories, directories of runs and archive files are all found once.
+def test_registry_serves_given_run_directories_as_their_archives_appear(
+    tmp_path: Path,
+) -> None:
+    """Given run directories are served, and one not written yet joins once it is.
+
+    Runs are named from the directories' common parent, an archive file can be
+    given for its directory, and a directory whose search has not written its
+    archive yet (or not even created the directory) is reported as waiting,
+    then appended after the runs already found once its archive appears.
 
     Args:
         tmp_path: pytest per-test temporary directory (auto-removed).
@@ -294,17 +344,131 @@ def test_discover_runs_searches_directories_and_names_runs(tmp_path) -> None:
     build_run(
         tmp_path / "exp" / "nested" / "wine_2", standard_genomes()[:1], history=False
     )
+    (tmp_path / "exp" / "wine_3").mkdir()
 
-    runs = discover_runs(
-        [str(tmp_path / "exp"), str(tmp_path / "exp" / "wine_1" / ARCHIVE_FILENAME)]
+    registry = RunRegistry(
+        run_directories=[
+            str(tmp_path / "exp" / "wine_3"),
+            str(tmp_path / "exp" / "nested" / "wine_2" / ARCHIVE_FILENAME),
+            str(tmp_path / "exp" / "wine_1"),
+            str(tmp_path / "exp" / "wine_1"),
+        ],
+        rescan_interval=3600,
     )
 
-    assert [run.name for run in runs] == ["nested/wine_2", "wine_1"]
-    assert [run.index for run in runs] == [0, 1]
-    assert discover_runs([str(tmp_path / "exp" / "wine_1")])[0].name == "wine_1"
+    assert [(run.index, run.name) for run in registry.runs] == [
+        (0, "nested/wine_2"),
+        (1, "wine_1"),
+    ]
+    assert registry.source() == {
+        "directory": None,
+        "waiting": [str(tmp_path / "exp" / "wine_3")],
+    }
 
+    build_run(tmp_path / "exp" / "wine_3", standard_genomes()[:1], history=False)
+    assert registry.refresh() is False  # the last scan was too recent
+    assert registry.refresh(force=True) is True
+    assert [(run.index, run.name) for run in registry.runs] == [
+        (0, "nested/wine_2"),
+        (1, "wine_1"),
+        (2, "wine_3"),
+    ]
+    assert registry.source()["waiting"] == []
+
+    # a run directory that does not exist yet (its search has not started) is waited for too
+    later = RunRegistry(
+        run_directories=[str(tmp_path / "later_run")], rescan_interval=3600
+    )
+    assert later.runs == []
+    assert later.source()["waiting"] == [str(tmp_path / "later_run")]
+    build_run(tmp_path / "later_run", standard_genomes()[:1], history=False)
+    assert later.refresh(force=True) is True
+    assert [run.name for run in later.runs] == ["later_run"]
+
+    with pytest.raises(ValueError):
+        RunRegistry(
+            run_directories=[str(tmp_path / "exp" / "wine_1")],
+            watch_directory=str(tmp_path / "exp"),
+        )
+    with pytest.raises(ValueError):
+        RunRegistry()
+
+
+def test_registry_watches_a_directory_for_new_runs(tmp_path: Path) -> None:
+    """Every run below a watched directory is served, including runs added later.
+
+    Runs are found at any depth and named relative to the watched directory,
+    legacy ``all_genomes`` directories are not searched, and a run added later
+    is appended (earlier runs keep their indexes) and joins its groups.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    watched = tmp_path / "experiments"
+    build_run(watched / "wine_i30_2", standard_genomes()[:1], history=False)
+    build_run(watched / "deep" / "wine_i10_1", standard_genomes()[:1], history=False)
+    # an archive inside a legacy per-genome directory is not a run
+    build_run(
+        watched / "legacy" / "all_genomes" / "stray",
+        standard_genomes()[:1],
+        history=False,
+    )
+
+    registry = RunRegistry(
+        watch_directory=str(watched), groups=["i30"], rescan_interval=3600
+    )
+    assert [run.name for run in registry.runs] == ["deep/wine_i10_1", "wine_i30_2"]
+    assert registry.groups == {"i30": [1]}
+    assert registry.source() == {"directory": str(watched), "waiting": []}
+
+    build_run(watched / "wine_i30_1", standard_genomes()[:1], history=False)
+    assert registry.refresh(force=True) is True
+    assert [(run.index, run.name) for run in registry.runs] == [
+        (0, "deep/wine_i10_1"),
+        (1, "wine_i30_2"),
+        (2, "wine_i30_1"),
+    ]
+    assert registry.groups == {"i30": [1, 2]}
+    assert registry.run(2).groups == ["i30"]
+    assert len(find_archives(str(watched))) == 3
+
+    with pytest.raises(KeyError):
+        registry.run(3)
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert RunRegistry(watch_directory=str(empty)).runs == []
     with pytest.raises(FileNotFoundError):
-        discover_runs([str(tmp_path / "missing")])
+        RunRegistry(watch_directory=str(tmp_path / "missing"))
+    with pytest.raises(NotADirectoryError):
+        RunRegistry(watch_directory=str(watched / "wine_i30_1" / ARCHIVE_FILENAME))
+
+
+def test_the_run_list_picks_up_runs_started_later(tmp_path: Path) -> None:
+    """A watched directory's new runs appear in the run list and can be opened.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    watched = tmp_path / "experiments"
+    watched.mkdir()
+    with serving(RunRegistry(watch_directory=str(watched), rescan_interval=0)) as url:
+        payload = get_json(f"{url}/api/runs")
+        assert payload["runs"] == []
+        assert payload["source"] == {"directory": str(watched), "waiting": []}
+        assert get(f"{url}/api/runs/0")[0] == 404
+
+        build_run(watched / "first_run", standard_genomes()[:2])
+        assert [run["name"] for run in get_json(f"{url}/api/runs")["runs"]] == [
+            "first_run"
+        ]
+        assert get_json(f"{url}/api/runs/0")["genomes"] == 2
+
+        # a run's page can be opened before the run list has been reloaded
+        build_run(watched / "second_run", standard_genomes()[:1])
+        assert get_json(f"{url}/api/runs/1")["name"] == "second_run"
 
 
 def test_assign_groups_uses_path_substrings(tmp_path) -> None:
@@ -316,7 +480,7 @@ def test_assign_groups_uses_path_substrings(tmp_path) -> None:
 
     for name in ("iris_i30_1", "iris_i10_1", "wine_i30_1"):
         build_run(tmp_path / name, standard_genomes()[:1], history=False)
-    runs = discover_runs([str(tmp_path)])
+    runs = RunRegistry(watch_directory=str(tmp_path)).runs
 
     groups = assign_groups(runs, ["i30", "iris"])
 
@@ -597,9 +761,95 @@ def test_operators_history_and_groups(viewer_url: str) -> None:
     assert iris["history"]["n_runs"] == 2
     assert iris["best_loss"]["n"] == 2
     assert iris["best_loss"]["min"] == pytest.approx(0.3)
-    assert iris["operators"]["add_gate"] == {"global_best": 2, "inserted": 2}
+    assert iris["kind"] == "group"
+    # operator insertion counts moved to the insertion-rate tables
+    assert "operators" not in iris
 
     assert get(f"{viewer_url}/api/groups?conf=wide")[0] == 400
+
+
+def test_insertion_rates_for_a_run_a_group_and_every_group(viewer_url: str) -> None:
+    """Insertion counts are tabulated for one run, one group and every group.
+
+    Args:
+        viewer_url: The test server's base URL.
+    """
+
+    single = get_json(f"{viewer_url}/api/insertion_rates?run=0")
+    assert single["scope"] == {"kind": "run", "index": 0, "name": "iris_1"}
+    assert single["outcomes"] == ["global_best", "local_best", "inserted", "discarded"]
+    assert single["operators"] == ["add_gate", "clone", "n_ary_crossover", "qubit_swap"]
+    (column,) = single["columns"]
+    assert (column["label"], column["kind"], column["genomes"]) == ("iris_1", "run", 4)
+    # genome 2 was generated by both add_gate and clone, so it counts once for each
+    assert column["counts"]["add_gate"] == {"inserted": 1, "global_best": 1, "total": 2}
+    assert column["counts"]["clone"] == {"global_best": 1, "total": 1}
+    assert column["counts"]["qubit_swap"] == {"discarded": 1, "total": 1}
+
+    group = get_json(f"{viewer_url}/api/insertion_rates?group=iris")
+    assert group["scope"] == {"kind": "group", "name": "iris"}
+    assert [(column["label"], column["kind"]) for column in group["columns"]] == [
+        ("iris", "group"),
+        ("iris_1", "run"),
+        ("iris_2", "run"),
+    ]
+    summed = group["columns"][0]
+    assert summed["genomes"] == 6
+    assert summed["counts"]["add_gate"] == {"inserted": 2, "global_best": 2, "total": 4}
+    assert "qubit_swap" not in group["columns"][2]["counts"]
+
+    every = get_json(f"{viewer_url}/api/insertion_rates")
+    assert every["scope"] == {"kind": "all"}
+    assert [column["label"] for column in every["columns"]] == ["iris"]
+    assert every["latex"] == insertion_rates_latex([("iris", summed["counts"])])
+    assert every["errors"] == []
+
+    assert get(f"{viewer_url}/api/insertion_rates?group=wine")[0] == 404
+    assert get(f"{viewer_url}/api/insertion_rates?run=9")[0] == 404
+    assert get(f"{viewer_url}/api/insertion_rates?run=0&group=iris")[0] == 400
+
+
+def test_insertion_rates_latex_matches_analyze_genome_generation() -> None:
+    """The LaTeX table is laid out exactly as analyze_genome_generation prints it.
+
+    The expected text follows that script's print statements: a column per
+    group (underscores escaped), each operator's rows in global best, local
+    best, inserted, discarded order (the inserted row with no space before its
+    line break), shares to three decimals, and ``-`` for a group that has no
+    genomes from the operator.
+    """
+
+    latex = insertion_rates_latex(
+        [
+            (
+                "i30_p2",
+                {
+                    "add_gate": {"inserted": 3, "discarded": 1, "total": 4},
+                    "n_ary_crossover": {"global_best": 1, "local_best": 1, "total": 2},
+                },
+            ),
+            ("i10", {"add_gate": {"global_best": 1, "total": 1}}),
+        ]
+    )
+
+    assert latex == (
+        "\\begin{tabular}{lp{2cm}p{1.5cm}p{1.5cm}}\n"
+        "\\toprule\n"
+        " &\n"
+        " & {\\bf i30\\_p2 } & {\\bf i10 }\\\\\n"
+        "\\midrule\n"
+        "\\multirowcell{4}{add\\\\gate} & global best & 0.000 & 1.000 \\\\\n"
+        "& local best & 0.000 & 0.000 \\\\\n"
+        "& inserted & 0.750 & 0.000\\\\\n"
+        "& discarded & 0.250 & 0.000 \\\\\n"
+        "\\hline\n"
+        "\\multirowcell{4}{n-ary\\\\crossover} & global best & 0.500 & - \\\\\n"
+        "& local best & 0.500 & - \\\\\n"
+        "& inserted & 0.000 & -\\\\\n"
+        "& discarded & 0.000 & - \\\\\n"
+        "\\hline\n"
+        "\\end{tabular}\n"
+    )
 
 
 def test_static_files_are_served_safely(viewer_url: str) -> None:

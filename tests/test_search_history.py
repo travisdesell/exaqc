@@ -1,7 +1,7 @@
 """Tests for :mod:`src.utils.search_history`.
 
 Runs record their progress in ``exaqc_history.csv``. The profiler's multi-run
-plots and the artifact viewer's run comparison both aggregate those files with
+plots and the EXAQC dashboard's run comparison both aggregate those files with
 :func:`~src.utils.search_history.aggregate_history`, so these tests pin its
 alignment and statistics.
 """

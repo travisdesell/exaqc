@@ -1,12 +1,13 @@
-"""Local web server behind ``python3 -m src.examples.exaqc_artifacts``.
+"""Local web server behind ``python3 -m src.examples.exaqc_dashboard``.
 
-It serves a single-page viewer (the files in ``static/``) and a small read-only
-JSON API over one or more EXAQC runs. Every request reads a run straight from
-its ``genomes.sqlar`` archive with short read-only queries, so a run can be
-browsed while its search is still writing to it. Architecture diagrams and
-training plots are rendered on demand in a background worker process -- which
-keeps matplotlib and the quantum frameworks out of the request threads -- and
-cached in memory.
+It serves a single-page app (the files in ``static/``) and a small read-only
+JSON API over EXAQC runs: either given run directories, or every run found below
+a watched directory, re-scanned so that runs started later join in. Every
+request reads a run straight from its ``genomes.sqlar`` archive with short
+read-only queries, so a run can be browsed while its search is still writing to
+it. Architecture diagrams and training plots are rendered on demand in a
+background worker process -- which keeps matplotlib and the quantum frameworks
+out of the request threads -- and cached in memory.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import shlex
 import sqlite3
 import statistics
 import threading
+import time
 import webbrowser
 from collections import OrderedDict
 from concurrent.futures import Future, ProcessPoolExecutor
@@ -57,6 +59,18 @@ MAX_PAGE_SIZE = 500
 #: and at most.
 DEFAULT_ANCESTRY_DEPTH = 5
 MAX_ANCESTRY_DEPTH = 20
+
+#: The least time between scans for newly written run archives, in seconds.
+#: Pages poll every few seconds, so this bounds how often the disk is searched.
+RESCAN_INTERVAL_SECONDS = 5.0
+
+#: Directories never searched for runs: a legacy run's per-genome JSON files,
+#: which can number in the tens of thousands.
+_SKIPPED_DIRECTORIES = frozenset({"all_genomes"})
+
+#: The insert types each operator's insertion rates are broken down into, in the
+#: order ``src.analysis.analyze_genome_generation`` tabulates them.
+INSERTION_OUTCOMES = ("global_best", "local_best", "inserted", "discarded")
 
 #: Gate fields compared when two genomes are diffed.
 GATE_FIELDS = ("method_name", "qubits", "depth", "parameters", "enabled")
@@ -147,7 +161,8 @@ class Run:
 
     Attributes:
         index: The run's position in the viewer's run list, used in URLs.
-        name: A short display name (its path relative to the served runs).
+        name: A short display name: its path relative to the watched directory,
+            or to the given run directories' common parent.
         directory: The run's output directory.
         archive_path: The path of its ``genomes.sqlar``.
         groups: The ``--groups`` substrings found in its path.
@@ -160,52 +175,48 @@ class Run:
     groups: list[str] = field(default_factory=list)
 
 
-def discover_runs(paths: list[str]) -> list[Run]:
-    """Finds the runs to serve.
+def find_archives(directory: str) -> list[str]:
+    """Finds every run archive below a directory, at any depth.
 
-    An archive file is served as given. A directory is searched recursively, so
-    a run directory, or a directory of many runs (e.g. ten repeats of an
-    experiment), can be passed.
+    A directory holding an archive is a run, so its subdirectories are not
+    searched further, and neither are legacy ``all_genomes`` directories; this
+    keeps re-scanning a large experiment directory cheap.
 
     Args:
-        paths: Archive files and directories.
+        directory: The directory to search.
 
     Returns:
-        The runs found, without duplicates, sorted by path.
-
-    Raises:
-        FileNotFoundError: If a path does not exist.
+        The absolute paths of the archives found, sorted.
     """
 
-    archives: set[str] = set()
-    for path in paths:
-        if os.path.isfile(path):
-            archives.add(os.path.abspath(path))
-        elif os.path.isdir(path):
-            for root, directories, files in os.walk(path):
-                directories.sort()
-                if ARCHIVE_FILENAME in files:
-                    archives.add(os.path.abspath(os.path.join(root, ARCHIVE_FILENAME)))
+    archives = []
+    for root, directories, files in os.walk(directory):
+        if ARCHIVE_FILENAME in files:
+            archives.append(os.path.abspath(os.path.join(root, ARCHIVE_FILENAME)))
+            directories.clear()
         else:
-            raise FileNotFoundError(f"{path!r} does not exist.")
+            directories[:] = sorted(
+                name for name in directories if name not in _SKIPPED_DIRECTORIES
+            )
+    return sorted(archives)
 
-    ordered = sorted(archives)
-    directories = [os.path.dirname(archive) for archive in ordered]
-    common = os.path.commonpath(directories) if len(directories) > 1 else ""
 
-    runs = []
-    for index, (archive_path, directory) in enumerate(zip(ordered, directories)):
-        name = (
-            os.path.relpath(directory, common)
-            if common
-            else os.path.basename(directory)
-        )
-        if name in ("", "."):
-            name = os.path.basename(directory) or directory
-        runs.append(
-            Run(index=index, name=name, directory=directory, archive_path=archive_path)
-        )
-    return runs
+def _run_name(directory: str, base: str) -> str:
+    """Names a run by its directory's path relative to a base directory.
+
+    Args:
+        directory: The run's output directory.
+        base: The directory names are relative to, or ``""`` to name the run by
+            its directory's own name.
+
+    Returns:
+        The display name.
+    """
+
+    name = os.path.relpath(directory, base) if base else os.path.basename(directory)
+    if name in ("", "."):
+        name = os.path.basename(directory) or directory
+    return name
 
 
 def assign_groups(runs: list[Run], groups: list[str] | None) -> dict[str, list[int]]:
@@ -214,21 +225,218 @@ def assign_groups(runs: list[Run], groups: list[str] | None) -> dict[str, list[i
     A run joins every group whose substring appears in its directory path.
 
     Args:
-        runs: The runs being served; each run's ``groups`` list is filled in.
+        runs: The runs being served; each run's ``groups`` list is set.
         groups: The group substrings, or ``None`` for no groups.
 
     Returns:
         The indexes of each group's runs, keyed by group, in the order given.
     """
 
-    members: dict[str, list[int]] = {}
-    for group in groups or []:
-        members[group] = []
-        for run in runs:
-            if group in run.directory:
-                run.groups.append(group)
-                members[group].append(run.index)
+    members: dict[str, list[int]] = {group: [] for group in groups or []}
+    for run in runs:
+        run.groups = [group for group in members if group in run.directory]
+        for group in run.groups:
+            members[group].append(run.index)
     return members
+
+
+class RunRegistry:
+    """The runs the dashboard serves, picked up as their archives are written.
+
+    Runs come either from a list of run output directories or from a watched
+    directory, where every archive below it is a run -- including runs started
+    after the dashboard. Both are re-scanned (at most every ``rescan_interval``
+    seconds), so a run whose search has not written its archive yet -- or has
+    not even started -- appears once it has. A run keeps the index (used in the
+    page's URLs) and the name it was first found with: new runs are appended,
+    and a run whose archive later
+    disappears stays listed, reported as unreadable.
+
+    Attributes:
+        watch_directory: The watched directory, or ``None`` when serving given
+            run directories.
+        group_names: The ``--groups`` substrings runs are grouped by.
+        rescan_interval: The least time between scans, in seconds.
+    """
+
+    def __init__(
+        self,
+        run_directories: list[str] | None = None,
+        watch_directory: str | None = None,
+        groups: list[str] | None = None,
+        rescan_interval: float = RESCAN_INTERVAL_SECONDS,
+    ) -> None:
+        """Checks the run sources and finds the runs already written.
+
+        Args:
+            run_directories: Run output directories, or their archive files, to
+                serve. They need not exist yet: a run that has not been started
+                is waited for like one that has not written its archive.
+            watch_directory: A directory whose runs, at any depth, are served.
+            groups: Substrings grouping runs for comparison.
+            rescan_interval: The least time between scans, in seconds.
+
+        Raises:
+            ValueError: If both or neither of ``run_directories`` and
+                ``watch_directory`` are given.
+            FileNotFoundError: If the watched directory does not exist.
+            NotADirectoryError: If the watched path is not a directory.
+        """
+
+        if (run_directories is None) == (watch_directory is None):
+            raise ValueError(
+                "Give either run directories or a directory to watch, but not both."
+            )
+
+        self.group_names = list(groups or [])
+        self.rescan_interval = rescan_interval
+        self.watch_directory: str | None = None
+        # given runs, written or not: (archive path, run directory, name)
+        self._given: list[tuple[str, str, str]] = []
+
+        if watch_directory is not None:
+            if not os.path.exists(watch_directory):
+                raise FileNotFoundError(f"{watch_directory!r} does not exist.")
+            if not os.path.isdir(watch_directory):
+                raise NotADirectoryError(f"{watch_directory!r} is not a directory.")
+            self.watch_directory = os.path.abspath(watch_directory)
+        else:
+            sources: dict[str, str] = {}
+            for path in run_directories or []:
+                if os.path.isfile(path) or (
+                    not os.path.exists(path) and path.endswith(".sqlar")
+                ):
+                    archive = os.path.abspath(path)
+                    sources.setdefault(archive, os.path.dirname(archive))
+                else:
+                    # a run directory, which need not exist yet if its search has not started
+                    directory = os.path.abspath(path)
+                    sources.setdefault(
+                        os.path.join(directory, ARCHIVE_FILENAME), directory
+                    )
+            directories = list(sources.values())
+            common = os.path.commonpath(directories) if len(directories) > 1 else ""
+            self._given = [
+                (archive, directory, _run_name(directory, common))
+                for archive, directory in sources.items()
+            ]
+
+        self._lock = threading.Lock()
+        self._runs: list[Run] = []
+        self._groups: dict[str, list[int]] = assign_groups([], self.group_names)
+        self._last_scan: float | None = None
+        self.refresh(force=True)
+
+    def refresh(self, force: bool = False) -> bool:
+        """Adds the runs whose archives have been written since the last scan.
+
+        Pages poll often, so unless forced a scan happens at most once every
+        ``rescan_interval`` seconds.
+
+        Args:
+            force: Scan even if the last scan was recent.
+
+        Returns:
+            Whether any run was added.
+        """
+
+        with self._lock:
+            now = time.monotonic()
+            if (
+                not force
+                and self._last_scan is not None
+                and now - self._last_scan < self.rescan_interval
+            ):
+                return False
+            self._last_scan = now
+
+            if self.watch_directory is not None:
+                found = [
+                    (
+                        archive,
+                        os.path.dirname(archive),
+                        _run_name(os.path.dirname(archive), self.watch_directory),
+                    )
+                    for archive in find_archives(self.watch_directory)
+                ]
+            else:
+                found = [given for given in self._given if os.path.isfile(given[0])]
+
+            known = {run.archive_path for run in self._runs}
+            added = [entry for entry in found if entry[0] not in known]
+            for archive, directory, name in added:
+                self._runs.append(
+                    Run(
+                        index=len(self._runs),
+                        name=name,
+                        directory=directory,
+                        archive_path=archive,
+                    )
+                )
+                logger.info("Found run {} ({}).", name, directory)
+            if added:
+                self._groups = assign_groups(self._runs, self.group_names)
+            return bool(added)
+
+    @property
+    def runs(self) -> list[Run]:
+        """The runs found so far, in index order.
+
+        Returns:
+            A copy of the run list.
+        """
+
+        with self._lock:
+            return list(self._runs)
+
+    @property
+    def groups(self) -> dict[str, list[int]]:
+        """The indexes of each group's runs.
+
+        Returns:
+            A copy of the member indexes, keyed by group in ``--groups`` order.
+        """
+
+        with self._lock:
+            return {group: list(members) for group, members in self._groups.items()}
+
+    def run(self, index: int) -> Run:
+        """Looks up a run, re-scanning (when due) if the index is not known yet.
+
+        Args:
+            index: The run's index.
+
+        Returns:
+            The run.
+
+        Raises:
+            KeyError: If there is no run with that index.
+        """
+
+        for attempt in range(2):
+            with self._lock:
+                if 0 <= index < len(self._runs):
+                    return self._runs[index]
+            if attempt == 0 and not self.refresh():
+                break
+        raise KeyError(f"There is no run {index}.")
+
+    def source(self) -> dict[str, Any]:
+        """Describes where the runs come from, for the run list.
+
+        Returns:
+            ``directory`` (the watched directory, or ``None``) and ``waiting``
+            (the given run directories whose archive has not been written yet).
+        """
+
+        return {
+            "directory": self.watch_directory,
+            "waiting": [
+                directory
+                for archive, directory, _name in self._given
+                if not os.path.isfile(archive)
+            ],
+        }
 
 
 def render_genome_image(
@@ -482,6 +690,63 @@ def genome_commands(run: Run, genome: dict[str, Any]) -> dict[str, str]:
     return commands
 
 
+def insertion_rates_latex(
+    columns: list[tuple[str, dict[str, dict[str, int]]]],
+) -> str:
+    """Writes insertion rates as the LaTeX table ``analyze_genome_generation`` prints.
+
+    Each operator gets a block of rows -- the share of its genomes that became a
+    global best, a local best, were inserted and were discarded, to three
+    decimals -- with a column per group or run, and ``-`` where a column has no
+    genomes from that operator. The text matches the script's output line for
+    line (its spacing included), so a table can stand in for one it printed.
+
+    Args:
+        columns: Each column's label and its insert-type counts keyed by
+            operator, each operator's counts including a ``total``.
+
+    Returns:
+        The ``tabular``'s LaTeX source, ending in a newline.
+    """
+
+    lines = [
+        "\\begin{tabular}{lp{2cm}" + "p{1.5cm}" * len(columns) + "}",
+        "\\toprule",
+        " &",
+        "".join(" & {\\bf " + label.replace("_", "\\_") + " }" for label, _ in columns)
+        + "\\\\",
+        "\\midrule",
+    ]
+
+    operators = sorted({operator for _, counts in columns for operator in counts})
+    for operator in operators:
+        cells: dict[str, str] = {outcome: "" for outcome in INSERTION_OUTCOMES}
+        for _, counts in columns:
+            operator_counts = counts.get(operator)
+            for outcome in INSERTION_OUTCOMES:
+                if operator_counts:
+                    share = operator_counts.get(outcome, 0) / operator_counts["total"]
+                    cells[outcome] += f" & {share:.3f}"
+                else:
+                    cells[outcome] += " & -"
+
+        cleaned = operator.replace("n_ary", "n-ary").replace("_", "\\\\")
+        lines += [
+            "\\multirowcell{4}{"
+            + cleaned
+            + "} & global best"
+            + cells["global_best"]
+            + " \\\\",
+            "& local best" + cells["local_best"] + " \\\\",
+            "& inserted" + cells["inserted"] + "\\\\",
+            "& discarded" + cells["discarded"] + " \\\\",
+            "\\hline",
+        ]
+
+    lines.append("\\end{tabular}")
+    return "\n".join(lines) + "\n"
+
+
 def _query_int(
     query: dict[str, str],
     name: str,
@@ -517,27 +782,22 @@ def _query_int(
 
 
 class ArtifactViewer:
-    """The data behind the viewer's JSON API.
+    """The data behind the dashboard's JSON API.
 
     Attributes:
-        runs: The runs being served, indexed by ``Run.index``.
-        groups: The run indexes in each ``--groups`` group.
+        registry: The runs being served.
         renderer: Renders genome images.
     """
 
-    def __init__(
-        self, runs: list[Run], groups: dict[str, list[int]], renderer: RenderService
-    ) -> None:
+    def __init__(self, registry: RunRegistry, renderer: RenderService) -> None:
         """Creates the viewer.
 
         Args:
-            runs: The runs to serve.
-            groups: The run indexes in each group (see :func:`assign_groups`).
+            registry: The runs to serve.
             renderer: The image render service.
         """
 
-        self.runs = runs
-        self.groups = groups
+        self.registry = registry
         self.renderer = renderer
 
     def run(self, index: int) -> Run:
@@ -553,9 +813,7 @@ class ArtifactViewer:
             KeyError: If there is no run with that index.
         """
 
-        if not 0 <= index < len(self.runs):
-            raise KeyError(f"There is no run {index}.")
-        return self.runs[index]
+        return self.registry.run(index)
 
     def _summary(self, run: Run) -> dict[str, Any]:
         """Summarizes a run for the run list.
@@ -601,15 +859,18 @@ class ArtifactViewer:
         return summary
 
     def runs_payload(self) -> dict[str, Any]:
-        """Lists every served run.
+        """Lists every served run, first picking up any newly written runs.
 
         Returns:
-            ``runs`` (each run's summary) and ``groups`` (the group names).
+            ``runs`` (each run's summary), ``groups`` (the group names) and
+            ``source`` (see :meth:`RunRegistry.source`).
         """
 
+        self.registry.refresh()
         return {
-            "runs": [self._summary(run) for run in self.runs],
-            "groups": list(self.groups),
+            "runs": [self._summary(run) for run in self.registry.runs],
+            "groups": list(self.registry.groups),
+            "source": self.registry.source(),
         }
 
     def run_payload(self, index: int) -> dict[str, Any]:
@@ -900,6 +1161,27 @@ class ArtifactViewer:
             ),
         }
 
+    def _comparison_entries(self) -> list[tuple[str, str, list[Run]]]:
+        """Lists what run comparisons compare: each group, then each ungrouped run.
+
+        Returns:
+            ``(name, kind, runs)`` for every ``--groups`` group (``kind``
+            ``"group"``, in order, possibly with no runs), followed by every run
+            that belongs to no group, on its own (``kind`` ``"run"``).
+        """
+
+        runs = self.registry.runs
+        groups = self.registry.groups
+        grouped = {index for members in groups.values() for index in members}
+        entries: list[tuple[str, str, list[Run]]] = [
+            (name, "group", [runs[index] for index in members])
+            for name, members in groups.items()
+        ]
+        entries += [
+            (run.name, "run", [run]) for run in runs if run.index not in grouped
+        ]
+        return entries
+
     def groups_payload(self, metric: str = "best", conf: str = "std") -> dict[str, Any]:
         """Compares groups of runs.
 
@@ -912,9 +1194,10 @@ class ArtifactViewer:
 
         Returns:
             ``metric``, ``conf``, the history ``metrics`` available, and per group
-            its ``runs``, aggregated ``history`` (or ``history_error``), summary
-            statistics of each run's best ``loss`` and ``target_metric``, and the
-            summed ``operators`` counts.
+            its ``name``, ``kind`` (``"group"``, or ``"run"`` for a run in no
+            group), ``runs``, aggregated ``history`` (or ``history_error``) and
+            summary statistics of each run's best ``loss`` and
+            ``target_metric``.
 
         Raises:
             ValueError: If ``conf`` is not ``"std"`` or ``"95ci"``.
@@ -923,15 +1206,10 @@ class ArtifactViewer:
         if conf not in ("std", "95ci"):
             raise ValueError("conf must be 'std' or '95ci'.")
 
-        grouped = {index for members in self.groups.values() for index in members}
-        entries = list(self.groups.items()) + [
-            (run.name, [run.index]) for run in self.runs if run.index not in grouped
-        ]
-
+        self.registry.refresh()
         available_metrics: set[str] = set()
         groups = []
-        for name, members in entries:
-            runs = [self.runs[index] for index in members]
+        for name, kind, runs in self._comparison_entries():
             csv_paths = [
                 path
                 for path in (
@@ -967,7 +1245,6 @@ class ArtifactViewer:
 
             best_losses: list[float] = []
             best_targets: list[float] = []
-            operators: dict[str, dict[str, int]] = {}
             for run in runs:
                 try:
                     with GenomeArchive.open_readonly(run.archive_path) as reader:
@@ -975,7 +1252,6 @@ class ArtifactViewer:
                         best_target = reader.best_value(
                             "target_metric", higher_is_better=True
                         )
-                        run_operators = reader.operator_counts()
                 except sqlite3.DatabaseError as error:
                     logger.warning("Could not read {}: {}", run.archive_path, error)
                     continue
@@ -983,20 +1259,16 @@ class ArtifactViewer:
                     best_losses.append(best_loss["value"])
                 if best_target is not None:
                     best_targets.append(best_target["value"])
-                for operator, counts in run_operators.items():
-                    totals = operators.setdefault(operator, {})
-                    for insert_type, count in counts.items():
-                        totals[insert_type] = totals.get(insert_type, 0) + count
 
             groups.append(
                 {
                     "name": name,
+                    "kind": kind,
                     "runs": [{"index": run.index, "name": run.name} for run in runs],
                     "history": history,
                     "history_error": history_error,
                     "best_loss": summary_statistics(best_losses),
                     "best_target_metric": summary_statistics(best_targets),
-                    "operators": operators,
                 }
             )
 
@@ -1007,11 +1279,135 @@ class ArtifactViewer:
             "groups": groups,
         }
 
+    def insertion_rates_payload(
+        self, run_index: int | None = None, group: str | None = None
+    ) -> dict[str, Any]:
+        """Tabulates how the genomes each operator generated were inserted.
+
+        Counting follows ``src.analysis.analyze_genome_generation``: a genome
+        counts once, under its insert type, for every operator that generated
+        it, and an operator's rates are shares of the genomes it generated. The
+        columns depend on what is asked for: one run; one group (summed over
+        its runs) followed by each of its runs; or, by default, every group and
+        then every run that belongs to no group, as the script's ``--groups``
+        table does.
+
+        Args:
+            run_index: The run to tabulate, if any.
+            group: The group to tabulate, if any.
+
+        Returns:
+            ``scope`` (``kind`` ``"run"`` with the run's ``index`` and ``name``,
+            ``"group"`` with its ``name``, or ``"all"``), ``outcomes`` (the
+            standard insert types, then any others recorded), ``operators``
+            (sorted), ``columns`` (each with a ``label``, ``kind``, its ``runs``,
+            their ``genomes`` count and the insert-type ``counts`` keyed by
+            operator, each including a ``total``), ``latex`` (see
+            :func:`insertion_rates_latex`; for every group it has only the group
+            columns, as the script's ``--groups`` table does, unless there are
+            no groups) and ``errors`` (runs whose archive could not be read).
+
+        Raises:
+            ValueError: If both a run and a group are given.
+            KeyError: If there is no such run or group.
+        """
+
+        if run_index is not None and group is not None:
+            raise ValueError("Give a run or a group, not both.")
+
+        scope: dict[str, Any]
+        specs: list[tuple[str, str, list[Run]]]
+        if run_index is not None:
+            run = self.run(run_index)
+            scope = {"kind": "run", "index": run.index, "name": run.name}
+            specs = [(run.name, "run", [run])]
+        elif group is not None:
+            self.registry.refresh()
+            groups = self.registry.groups
+            if group not in groups:
+                raise KeyError(f"There is no group {group!r}.")
+            all_runs = self.registry.runs
+            members = [all_runs[index] for index in groups[group]]
+            scope = {"kind": "group", "name": group}
+            specs = [(group, "group", members)]
+            specs += [(member.name, "run", [member]) for member in members]
+        else:
+            self.registry.refresh()
+            scope = {"kind": "all"}
+            specs = self._comparison_entries()
+
+        # each run is read once, even when it appears in more than one column
+        read: dict[int, tuple[int, dict[str, dict[str, int]]] | None] = {}
+        errors: list[dict[str, Any]] = []
+        columns: list[dict[str, Any]] = []
+        for label, kind, runs in specs:
+            genomes = 0
+            counts: dict[str, dict[str, int]] = {}
+            for run in runs:
+                if run.index not in read:
+                    try:
+                        with GenomeArchive.open_readonly(run.archive_path) as reader:
+                            read[run.index] = (reader.count(), reader.operator_counts())
+                    except sqlite3.DatabaseError as error:
+                        logger.warning("Could not read {}: {}", run.archive_path, error)
+                        errors.append(
+                            {"index": run.index, "name": run.name, "error": str(error)}
+                        )
+                        read[run.index] = None
+                entry = read[run.index]
+                if entry is None:
+                    continue
+                genomes += entry[0]
+                for operator, outcomes in entry[1].items():
+                    totals = counts.setdefault(operator, {})
+                    for outcome, count in outcomes.items():
+                        totals[outcome] = totals.get(outcome, 0) + count
+            for totals in counts.values():
+                totals["total"] = sum(totals.values())
+            columns.append(
+                {
+                    "label": label,
+                    "kind": kind,
+                    "runs": [{"index": run.index, "name": run.name} for run in runs],
+                    "genomes": genomes,
+                    "counts": counts,
+                }
+            )
+
+        recorded = {
+            outcome
+            for column in columns
+            for outcomes in column["counts"].values()
+            for outcome in outcomes
+        }
+        # like the script's --groups table, a table of every group leaves out runs in no group
+        latex_columns = [
+            column
+            for column in columns
+            if scope["kind"] != "all"
+            or column["kind"] == "group"
+            or not self.registry.group_names
+        ]
+        return {
+            "scope": scope,
+            "outcomes": list(INSERTION_OUTCOMES)
+            + sorted(recorded - set(INSERTION_OUTCOMES) - {"total"}),
+            "operators": sorted(
+                {operator for column in columns for operator in column["counts"]}
+            ),
+            "columns": columns,
+            "latex": insertion_rates_latex(
+                [(column["label"], column["counts"]) for column in latex_columns]
+            ),
+            "errors": errors,
+        }
+
 
 #: API routes: a path pattern and the handler method serving it.
 _ROUTES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"/api/runs"), "_api_runs"),
     (re.compile(r"/api/groups"), "_api_groups"),
+    (re.compile(r"/api/insertion_rates"), "_api_insertion_rates"),
     (re.compile(r"/api/runs/(\d+)"), "_api_run"),
     (re.compile(r"/api/runs/(\d+)/genomes"), "_api_genomes"),
     (re.compile(r"/api/runs/(\d+)/points"), "_api_points"),
@@ -1033,7 +1429,7 @@ class ViewerRequestHandler(BaseHTTPRequestHandler):
     """Serves the viewer's static files and JSON API (GET requests only)."""
 
     server: ArtifactViewerServer
-    server_version = "EXAQCArtifacts/1"
+    server_version = "EXAQCMonitor/1"
 
     def do_GET(self) -> None:
         """Handles a GET request, turning lookup and parameter errors into 404/400.
@@ -1132,6 +1528,26 @@ class ViewerRequestHandler(BaseHTTPRequestHandler):
         self._send_json(
             self.server.viewer.groups_payload(
                 query.get("metric") or "best", query.get("conf") or "std"
+            )
+        )
+
+    def _api_insertion_rates(self, match: re.Match[str], query: dict[str, str]) -> None:
+        """Serves insertion rates for a ``run`` (index), a ``group`` (name) or every group.
+
+        Args:
+            match: The matched route.
+            query: The query parameters.
+
+        Returns:
+            None.
+        """
+
+        run_index = (
+            _query_int(query, "run", -1, minimum=0) if query.get("run") else None
+        )
+        self._send_json(
+            self.server.viewer.insertion_rates_payload(
+                run_index=run_index, group=query.get("group") or None
             )
         )
 
@@ -1440,54 +1856,80 @@ class ArtifactViewerServer(ThreadingHTTPServer):
 
 
 def serve(
-    runs: list[str],
+    runs: list[str] | None = None,
+    directory: str | None = None,
     groups: list[str] | None = None,
     host: str = "127.0.0.1",
     port: int = 8000,
     open_browser: bool = False,
     render_processes: int = 1,
+    rescan_interval: float = RESCAN_INTERVAL_SECONDS,
 ) -> None:
-    """Serves the viewer until interrupted.
+    """Serves the dashboard until interrupted.
 
     Args:
-        runs: Run directories, directories of runs, or archive files.
+        runs: Run output directories (or their archive files) to serve; a run
+            whose archive has not been written yet (even one whose directory
+            does not exist yet) appears once it is.
+        directory: A directory to watch instead: every run below it is served,
+            including runs started while the dashboard is running.
         groups: Substrings grouping runs for comparison.
         host: The address to listen on.
         port: The port to listen on (``0`` picks a free port).
-        open_browser: Whether to open the viewer in a web browser.
+        open_browser: Whether to open the dashboard in a web browser.
         render_processes: Worker processes rendering images.
+        rescan_interval: The least time between scans for new runs, in seconds.
 
     Returns:
         None. Runs until interrupted with Ctrl+C.
 
     Raises:
-        FileNotFoundError: If a path does not exist or no runs are found.
+        ValueError: If both or neither of ``runs`` and ``directory`` are given.
+        FileNotFoundError: If the watched directory does not exist.
+        NotADirectoryError: If the watched path is not a directory.
         OSError: If the server cannot listen on ``host:port``.
     """
 
-    discovered = discover_runs(runs)
-    if not discovered:
-        raise FileNotFoundError(
-            f"No {ARCHIVE_FILENAME} archives were found in {', '.join(runs)}."
-        )
-    group_members = assign_groups(discovered, groups)
+    registry = RunRegistry(
+        run_directories=runs,
+        watch_directory=directory,
+        groups=groups,
+        rescan_interval=rescan_interval,
+    )
 
     renderer = RenderService(processes=render_processes)
-    server = ArtifactViewerServer(
-        (host, port), ArtifactViewer(discovered, group_members, renderer)
-    )
+    try:
+        server = ArtifactViewerServer((host, port), ArtifactViewer(registry, renderer))
+    except OSError:
+        renderer.close()
+        raise
     url = f"http://{host}:{server.server_address[1]}/"
 
-    logger.info(
-        "Serving {} run(s) at {} -- press Ctrl+C to stop.", len(discovered), url
-    )
+    if registry.watch_directory is not None:
+        logger.info(
+            "Watching {} for runs ({} found so far), serving at {} -- press Ctrl+C to stop.",
+            registry.watch_directory,
+            len(registry.runs),
+            url,
+        )
+    else:
+        logger.info(
+            "Serving {} run(s) at {} -- press Ctrl+C to stop.", len(registry.runs), url
+        )
+        waiting = registry.source()["waiting"]
+        if waiting:
+            logger.info(
+                "Waiting for {} to be written in: {}",
+                ARCHIVE_FILENAME,
+                ", ".join(waiting),
+            )
     if open_browser:
         webbrowser.open(url)
 
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        logger.info("Stopping the viewer.")
+        logger.info("Stopping the dashboard.")
     finally:
         server.server_close()
         renderer.close()

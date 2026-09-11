@@ -1,7 +1,7 @@
 """Round-trip tests: a genome read back from the archive is identical to the one written.
 
 Every tool that reloads a genome -- refinement, evaluation, RL visualization,
-the artifact viewer and the analysis scripts -- now reads it out of a run's
+the EXAQC dashboard and the analysis scripts -- now reads it out of a run's
 ``genomes.sqlar`` instead of a loose JSON file. These tests build real
 :class:`~src.circuits.circuit.CircuitGenome` objects for both quantum backends,
 write them into an archive, read them back out, and check that nothing was

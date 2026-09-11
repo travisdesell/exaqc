@@ -1,4 +1,4 @@
-/* EXAQC Artifacts viewer styles.
+/* EXAQC Dashboard styles.
  *
  * Colors come from the data-viz reference palette: a chart surface and ink
  * tokens, and eight categorical slots used in a fixed order. Dark mode uses the
@@ -472,6 +472,15 @@ tr.different td {
   top: 60px;
 }
 
+/* the run's search progress, above the genome chart */
+.search-progress {
+  margin-bottom: 12px;
+}
+
+.search-progress h3 {
+  margin-top: 0;
+}
+
 .table-status {
   padding-top: 8px;
 }
@@ -638,4 +647,46 @@ details summary {
   cursor: pointer;
   color: var(--text-secondary);
   margin: 6px 0;
+}
+
+/* ---------- insertion rates ---------- */
+
+.explanation {
+  color: var(--text-secondary);
+  max-width: 90ch;
+  margin: 0 0 12px;
+}
+
+.inline-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+
+.inline-link {
+  margin-left: 8px;
+  font-size: 12px;
+}
+
+/* each operator's block of rows starts with a heavier rule; its name spans the block */
+table.rates tbody th.operator {
+  position: static;
+  vertical-align: top;
+  color: var(--text-primary);
+}
+
+table.rates tbody + tbody tr:first-child > * {
+  border-top: 2px solid var(--baseline);
+}
+
+table.rates .count,
+table.rates tr.operator-total td,
+table.rates .muted-cell {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+table.rates thead .count {
+  font-weight: 400;
 }
