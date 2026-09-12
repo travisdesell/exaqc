@@ -58,32 +58,18 @@ import torch
 from loguru import logger
 from torch.utils.data import DataLoader
 
-from src.circuits.circuit import (
-    CircuitGenome,
-    QUANTUM_INPUT_MODES,
-    QUANTUM_OUTPUT_MODES,
-)
-from src.circuits.decoder import (
-    DECODING_OPTIONS,
-    initialize_decoder,
-)
-from src.circuits.encoder import (
-    ENCODING_OPTIONS,
-    initialize_encoder,
-)
-from src.circuits.pennylane_gate_specifications import (
-    pennylane_gate_specifications,
-)
-from src.circuits.qiskit_gate_specifications import (
-    qiskit_gate_specifications,
-)
+from src.circuits.circuit import CircuitGenome
+from src.circuits.decoder import initialize_decoder
+from src.circuits.encoder import initialize_encoder
+from src.circuits.gate_specifications import GateSpecifications
 from src.datasets.classification_loaders import (
     CLASSIFICATION_DATASETS,
     IMAGE_DATASETS,
     get_image_dataloaders,
     get_uci_dataloaders,
 )
-from src.evolution.master_worker import master_worker
+from src.evolution.exaqc import EXAQC
+from src.evolution.master_worker import run_evolution
 from src.evolution.moo.islands import (
     MultiObjectiveSteadyStateIslands,
 )
@@ -94,7 +80,6 @@ from src.evolution.objective import Objective
 from src.metrics.mean_class_accuracy import MeanClassAccuracy
 from src.metrics.metric import Metric
 from src.trainer.supervised_trainer import SupervisedTrainer
-
 
 STRUCTURAL_OBJECTIVES = {
     "n_parameters",
@@ -337,6 +322,17 @@ def add_island_arguments(
         default="best",
     )
 
+    parser.add_argument(
+        "--topology",
+        type=str,
+        nargs="+",
+        default=["fully_connected"],
+        help=(
+            "Island connection topology used for inter-island crossover. "
+            "Same choices as the single-objective islands strategy."
+        ),
+    )
+
 
 def build_parser() -> argparse.ArgumentParser:
     """Create the multi-objective classification command-line parser.
@@ -355,29 +351,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--dataset",
         choices=CLASSIFICATION_DATASETS,
         required=True,
+        help="Dataset to evolve classifiers on (a UCI tabular or image dataset).",
     )
 
-    parser.add_argument(
-        "--out_dir",
-        type=str,
-        default="artifacts",
-    )
-
-    parser.add_argument(
-        "--mutation_strategy",
-        "-ms",
-        type=str,
-        nargs="+",
-        required=True,
-    )
-
-    parser.add_argument(
-        "--parent_strategy",
-        "-ps",
-        type=str,
-        nargs="+",
-        required=True,
-    )
+    # Shared search / training / circuit / backend flags (same factories as
+    # classification.py). PopulationStrategy.initialize_parser is not used
+    # because MOO exposes its own NSGA / island sub-commands.
+    EXAQC.initialize_parser(parser)
+    SupervisedTrainer.initialize_parser(parser)
+    GateSpecifications.initialize_parser(parser)
+    CircuitGenome.initialize_parser(parser)
 
     parser.add_argument(
         "--objectives",
@@ -395,168 +378,55 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        "--epochs",
-        type=int,
-        default=30,
-    )
-
-    parser.add_argument(
-        "--learning_rate",
-        "-lr",
-        type=float,
-        default=5e-4,
-    )
-
-    parser.add_argument(
-        "--weight_decay",
-        type=float,
-        default=0.0,
-    )
-
-    parser.add_argument(
-        "--improvement_cutoff",
-        type=int,
-        default=2,
-    )
-
-    parser.add_argument(
-        "--number_genomes",
-        type=int,
-        default=2000,
-    )
-
-    parser.add_argument(
-        "--input_qubits",
-        type=int,
-        required=True,
-    )
-
-    parser.add_argument(
-        "--output_qubits",
-        type=int,
-        required=True,
-    )
-
-    parser.add_argument(
-        "--target",
-        type=str,
-        choices=[
-            "pennylane",
-            "qiskit",
-        ],
-        default="pennylane",
-    )
-
-    parser.add_argument(
-        "--quantum_input_mode",
-        "-qim",
-        choices=QUANTUM_INPUT_MODES,
-        default="u3",
-        help=(
-            "Choose the initial gate type whose parameters are set "
-            "from classical inputs."
-        ),
-    )
-
-    parser.add_argument(
-        "--quantum_output_mode",
-        "-qom",
-        type=str,
-        choices=QUANTUM_OUTPUT_MODES,
-        default="probs",
-        help="Choose the output mode from the quantum circuit.",
-    )
-
-    parser.add_argument(
-        "--quantum_dropout_type",
-        "-qdt",
-        type=str,
-        default="none",
-        choices=[
-            "none",
-            "gate",
-            "rotation",
-            "entangling",
-            "qubit",
-            "innovation",
-        ],
-        help="Choose the dropout type for quantum gates.",
-    )
-
-    parser.add_argument(
-        "--quantum_dropout_rate",
-        "-qdr",
-        type=float,
-        default=0.0,
-        help="Choose the dropout rate for quantum gates.",
-    )
-
-    parser.add_argument(
-        "--encoding",
-        type=str,
-        choices=ENCODING_OPTIONS,
-        default="linear",
-        help="Choose the classical-to-quantum encoding.",
-    )
-
-    parser.add_argument(
         "--encoder_config",
         type=str,
         default="configs",
-    )
-
-    parser.add_argument(
-        "--decoding",
-        type=str,
-        choices=DECODING_OPTIONS,
-        default="linear",
-        help="Choose the quantum-to-classical decoding.",
-    )
-
-    parser.add_argument(
-        "--batch_size",
-        type=int,
-        default=1,
-        help=(
-            "Batch size for every dataset. Use 1 for per-sample UCI "
-            "execution and larger values for image datasets."
-        ),
+        help="Path to a JSON file of encoder configuration options.",
     )
 
     parser.add_argument(
         "--validation_batch_size",
         type=int,
         default=None,
+        help="Batch size for validation/testing; defaults to --batch_size when unset.",
     )
 
     parser.add_argument(
         "--data_dir",
         type=str,
         default="data",
+        help="Directory where datasets are stored (and downloaded to).",
     )
 
     parser.add_argument(
         "--download_dataset",
         action=argparse.BooleanOptionalAction,
         default=True,
+        help="Download the dataset if it is not already present in --data_dir.",
     )
 
     parser.add_argument(
         "--validation_fraction",
         type=float,
         default=0.1,
+        help=(
+            "Fraction of the training data held out for validation when no "
+            "fixed split exists."
+        ),
     )
 
     parser.add_argument(
         "--training_samples",
         type=int,
         default=None,
+        help="Cap the training set to this many samples (use all when unset).",
     )
 
     parser.add_argument(
         "--validation_samples",
         type=int,
         default=None,
+        help="Cap the validation set to this many samples (use all when unset).",
     )
 
     parser.add_argument(
@@ -572,12 +442,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--num_workers",
         type=int,
         default=0,
+        help="Number of worker processes used by the PyTorch DataLoaders.",
     )
 
     parser.add_argument(
         "--pin_memory",
         action=argparse.BooleanOptionalAction,
         default=False,
+        help=(
+            "Use pinned (page-locked) host memory in the DataLoaders for "
+            "faster GPU transfers."
+        ),
     )
 
     parser.add_argument(
@@ -585,18 +460,27 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         nargs=2,
         default=[16, 32],
+        help=(
+            "Output channel counts for the two CNN encoder convolution "
+            "layers (image datasets)."
+        ),
     )
 
     parser.add_argument(
         "--cnn_pooled_size",
         type=int,
         default=4,
+        help=(
+            "Spatial size (height = width) the CNN encoder pools its "
+            "feature maps down to."
+        ),
     )
 
     parser.add_argument(
         "--cnn_dropout",
         type=float,
         default=0.0,
+        help="Dropout rate applied inside the CNN encoder.",
     )
 
     parser.add_argument(
@@ -608,12 +492,14 @@ def build_parser() -> argparse.ArgumentParser:
             "minmax",
         ],
         default="minmax",
+        help="Feature normalization applied to tabular datasets before encoding.",
     )
 
     parser.add_argument(
         "--seed",
         type=int,
         default=0,
+        help="Random seed for reproducible dataset splits and evolution.",
     )
 
     parser.add_argument(
@@ -906,7 +792,12 @@ def build_population(
             genomes_for_next_extinction=(args.genomes_for_next_extinction),
             islands_to_extinct=(args.islands_to_extinct),
             primary_parent=(args.primary_parent),
+            topology=args.topology,
             out_dir=args.out_dir,
+            save_training_plot=(args.save_training_plot),
+            population_kwargs={
+                "out_dir": args.out_dir,
+            },
         )
 
     if args.population_strategy == "nsga3_islands":
@@ -921,8 +812,11 @@ def build_population(
             genomes_for_next_extinction=(args.genomes_for_next_extinction),
             islands_to_extinct=(args.islands_to_extinct),
             primary_parent=(args.primary_parent),
+            topology=args.topology,
             out_dir=args.out_dir,
+            save_training_plot=(args.save_training_plot),
             population_kwargs={
+                "out_dir": args.out_dir,
                 "reference_divisions": (args.reference_divisions),
             },
         )
@@ -934,11 +828,6 @@ def main() -> None:
     """Run the multi-objective classification experiment."""
     parser = build_parser()
     args = parser.parse_args()
-
-    os.makedirs(
-        args.out_dir,
-        exist_ok=True,
-    )
 
     logger.remove()
 
@@ -954,12 +843,11 @@ def main() -> None:
         )
     )
 
-    device = args.device
-    if device is None:
-        if torch.cuda.is_available():
-            device = "cuda"
-        else:
-            device = "cpu"
+    device = (
+        args.device
+        if args.device is not None
+        else ("cuda" if torch.cuda.is_available() else "cpu")
+    )
 
     logger.info(
         "Using PyTorch device: {}",
@@ -971,18 +859,10 @@ def main() -> None:
         args.population_strategy,
     )
 
-    # ------------------------------------------------------------------
-    # Load dataset.
-    # ------------------------------------------------------------------
-
     training_loader, validation_loader = load_data(args)
 
     if not training_loader.is_image and args.encoding == "cnn":
         parser.error("CNN encoding is only valid for image datasets.")
-
-    # ------------------------------------------------------------------
-    # Metrics and MOO objectives.
-    # ------------------------------------------------------------------
 
     metrics = build_metrics(training_loader)
 
@@ -1006,10 +886,6 @@ def main() -> None:
             objective_spec.sign,
         )
 
-    # ------------------------------------------------------------------
-    # Training objective.
-    # ------------------------------------------------------------------
-
     objective = MultiObjectiveClassificationObjective(
         training_dataloader=(training_loader),
         validation_dataloader=(validation_loader),
@@ -1030,117 +906,99 @@ def main() -> None:
         device=device,
     )
 
-    # ------------------------------------------------------------------
-    # Encoder dimensions.
-    # ------------------------------------------------------------------
+    def build_exaqc() -> EXAQC:
+        """Build the EXAQC search for the serial run or MPI master.
 
-    n_encoder_outputs = args.input_qubits
+        Returns:
+            Fully configured :class:`EXAQC` wrapping ``objective``.
+        """
+        if args.encoding == "identity":
+            n_encoder_outputs = training_loader.n_features
+        else:
+            n_encoder_outputs = args.input_qubits
+            if args.quantum_input_mode == "u3":
+                n_encoder_outputs *= 3
 
-    if args.quantum_input_mode == "u3":
-        n_encoder_outputs *= 3
+        n_decoder_inputs = args.output_qubits
+        if args.quantum_output_mode == "probs":
+            n_decoder_inputs = 2**args.output_qubits
 
-    # ------------------------------------------------------------------
-    # Decoder dimensions.
-    # ------------------------------------------------------------------
+        encoder_config = None
+        if training_loader.is_image and args.encoding == "cnn":
+            channels, height, width = training_loader.input_shape
+            encoder_config = load_encoder_config(args.encoder_config)
+            encoder_config.update(
+                {
+                    "input_channels": channels,
+                    "input_height": height,
+                    "input_width": width,
+                    "hidden_channels": (args.cnn_channels),
+                    "pooled_size": (args.cnn_pooled_size),
+                    "dropout": (args.cnn_dropout),
+                }
+            )
 
-    n_decoder_inputs = args.output_qubits
-
-    if args.quantum_output_mode == "probs":
-        n_decoder_inputs = 2**args.output_qubits
-
-    # ------------------------------------------------------------------
-    # Build optional CNN encoder configuration.
-    # ------------------------------------------------------------------
-
-    encoder_config = None
-
-    if training_loader.is_image and args.encoding == "cnn":
-        channels, height, width = training_loader.input_shape
-
-        encoder_config = load_encoder_config(args.encoder_config)
-
-        encoder_config.update(
-            {
-                "input_channels": channels,
-                "input_height": height,
-                "input_width": width,
-                "hidden_channels": (args.cnn_channels),
-                "pooled_size": (args.cnn_pooled_size),
-                "dropout": (args.cnn_dropout),
-            }
+        initial_encoder = initialize_encoder(
+            target=args.target,
+            encoding_str=args.encoding,
+            n_inputs=(training_loader.n_features),
+            n_outputs=n_encoder_outputs,
+            config=encoder_config,
+            quantum_input_mode=(args.quantum_input_mode),
+            n_input_qubits=args.input_qubits,
         )
 
-    # ------------------------------------------------------------------
-    # Encoder and decoder.
-    # ------------------------------------------------------------------
+        initial_decoder = initialize_decoder(
+            target=args.target,
+            decoding_str=args.decoding,
+            n_inputs=n_decoder_inputs,
+            n_outputs=(training_loader.n_labels),
+        )
 
-    initial_encoder = initialize_encoder(
-        target=args.target,
-        encoding_str=args.encoding,
-        n_inputs=(training_loader.n_features),
-        n_outputs=n_encoder_outputs,
-        config=encoder_config,
-    )
+        population = build_population(
+            args,
+            objectives,
+        )
 
-    initial_decoder = initialize_decoder(
-        target=args.target,
-        decoding_str=args.decoding,
-        n_inputs=n_decoder_inputs,
-        n_outputs=(training_loader.n_labels),
-    )
+        hyperparameters = {
+            "epochs": args.epochs,
+            "learning_rate": (args.learning_rate),
+            "weight_decay": (args.weight_decay),
+            "improvement_cutoff": (args.improvement_cutoff),
+            "batch_size": (args.batch_size),
+            "quantum_input_mode": (args.quantum_input_mode),
+            "quantum_output_mode": (args.quantum_output_mode),
+            "quantum_dropout": (args.quantum_dropout),
+            "quantum_dropout_type": (args.quantum_dropout_type),
+            "quantum_dropout_rate": (args.quantum_dropout_rate),
+        }
 
-    # ------------------------------------------------------------------
-    # MOO population.
-    # ------------------------------------------------------------------
+        return EXAQC(
+            gate_specifications=(GateSpecifications.from_args(args)),
+            population=population,
+            objective=objective,
+            initial_encoder=(initial_encoder),
+            initial_decoder=(initial_decoder),
+            hyperparameters=(hyperparameters),
+            mutation_strategy=(args.mutation_strategy),
+            parent_strategy=(args.parent_strategy),
+            binary_crossover_rate=(args.binary_crossover_rate),
+            n_ary_crossover_rate=(args.n_ary_crossover_rate),
+            exponential_crossover_rate=(args.exponential_crossover_rate),
+            input_registers={
+                "input": args.input_qubits,
+            },
+            output_registers={
+                "input": args.output_qubits,
+            },
+            task="classification",
+            task_target=args.dataset,
+        )
 
-    population = build_population(
-        args,
-        objectives,
-    )
-
-    # ------------------------------------------------------------------
-    # Genome training hyperparameters.
-    # ------------------------------------------------------------------
-
-    hyperparameters = {
-        "epochs": args.epochs,
-        "learning_rate": (args.learning_rate),
-        "weight_decay": (args.weight_decay),
-        "improvement_cutoff": (args.improvement_cutoff),
-        "batch_size": (args.batch_size),
-        "quantum_input_mode": (args.quantum_input_mode),
-        "quantum_output_mode": (args.quantum_output_mode),
-        "quantum_dropout_type": (args.quantum_dropout_type),
-        "quantum_dropout_rate": (args.quantum_dropout_rate),
-    }
-
-    gate_specifications = (
-        pennylane_gate_specifications
-        if args.target == "pennylane"
-        else qiskit_gate_specifications
-    )
-
-    # ------------------------------------------------------------------
-    # Run asynchronous EXAQC evolution.
-    # ------------------------------------------------------------------
-
-    master_worker(
-        gate_specifications=(gate_specifications),
-        population=population,
+    run_evolution(
         objective=objective,
-        initial_encoder=(initial_encoder),
-        initial_decoder=(initial_decoder),
-        hyperparameters=(hyperparameters),
-        mutation_strategy=(args.mutation_strategy),
-        parent_strategy=(args.parent_strategy),
-        run_for=(args.number_genomes),
-        input_registers={
-            "input": args.input_qubits,
-        },
-        output_registers={
-            "input": args.output_qubits,
-        },
-        target=args.target,
+        build_exaqc=build_exaqc,
+        run_for=args.number_genomes,
     )
 
 

@@ -153,7 +153,6 @@ class Gate:
         serialized["innovation_number"] = self.innovation_number
         serialized["target"] = self.target
         serialized["enabled"] = self.enabled
-        serialized["metadata"] = self.metadata.copy()
         return serialized
 
     @classmethod
