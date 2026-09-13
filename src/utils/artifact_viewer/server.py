@@ -16,21 +16,15 @@ import json
 import math
 import multiprocessing
 import os
-import re
 import shlex
 import sqlite3
 import statistics
 import threading
 import time
-import webbrowser
 from collections import OrderedDict
 from concurrent.futures import Future, ProcessPoolExecutor
 from dataclasses import dataclass, field
-from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
 
 from loguru import logger
 
@@ -41,9 +35,6 @@ from src.utils.search_history import (
     history_columns,
     load_history_csv,
 )
-
-#: Directory holding the viewer's HTML, JavaScript, CSS and vendored uPlot.
-STATIC_DIRECTORY = Path(__file__).resolve().parent / "static"
 
 #: The images a genome can be rendered as.
 IMAGE_KINDS = ("diagram", "training")
@@ -77,14 +68,6 @@ GATE_FIELDS = ("method_name", "qubits", "depth", "parameters", "enabled")
 
 #: History CSV columns that describe the row rather than the search's progress.
 _HISTORY_INDEX_COLUMNS = frozenset({"step", "current_time", "inserted_genomes"})
-
-_CONTENT_TYPES = {
-    ".html": "text/html; charset=utf-8",
-    ".js": "text/javascript; charset=utf-8",
-    ".css": "text/css; charset=utf-8",
-}
-
-_STATIC_NAME = re.compile(r"[A-Za-z0-9_.-]+")
 
 
 def higher_is_better(key: str) -> bool:
@@ -747,7 +730,7 @@ def insertion_rates_latex(
     return "\n".join(lines) + "\n"
 
 
-def _query_int(
+def query_int(
     query: dict[str, str],
     name: str,
     default: int,
@@ -925,10 +908,10 @@ class ArtifactViewer:
         """
 
         run = self.run(index)
-        offset = _query_int(query, "offset", 0, minimum=0)
-        limit = _query_int(query, "limit", 50, minimum=1, maximum=MAX_PAGE_SIZE)
+        offset = query_int(query, "offset", 0, minimum=0)
+        limit = query_int(query, "limit", 50, minimum=1, maximum=MAX_PAGE_SIZE)
         max_genome = (
-            _query_int(query, "max_genome", -1, minimum=0)
+            query_int(query, "max_genome", -1, minimum=0)
             if query.get("max_genome")
             else None
         )
@@ -937,7 +920,7 @@ class ArtifactViewer:
             "generated_by": query.get("generated_by") or None,
             "crossover_type": query.get("crossover_type") or None,
             "island": (
-                _query_int(query, "island", -1, minimum=0)
+                query_int(query, "island", -1, minimum=0)
                 if query.get("island")
                 else None
             ),
@@ -1002,18 +985,28 @@ class ArtifactViewer:
     def history_payload(self, index: int) -> dict[str, Any]:
         """Returns a run's search-progress history.
 
+        Archives at format version 2 record the history beside the genomes, so a
+        finished run is a single self-contained file. Runs written before that
+        kept it only in ``exaqc_history.csv``, which is read when the archive has
+        no history of its own.
+
         Args:
             index: The run's index.
 
         Returns:
-            ``columns``: each history CSV column's values, keyed by column name
-            (empty when the run recorded no history).
+            ``columns``: each recorded metric's values, keyed by name (empty when
+            the run recorded no history at all).
 
         Raises:
             KeyError: If there is no such run.
         """
 
-        path = os.path.join(self.run(index).directory, HISTORY_FILENAME)
+        run = self.run(index)
+        recorded = self._archive_history(run)
+        if recorded:
+            return {"columns": recorded}
+
+        path = os.path.join(run.directory, HISTORY_FILENAME)
         if not os.path.isfile(path):
             return {"columns": {}}
         rows = load_history_csv(path)
@@ -1022,6 +1015,45 @@ class ArtifactViewer:
                 name: [row.get(name) for row in rows] for name in history_columns(path)
             }
         }
+
+    def _archive_history(self, run: Run) -> dict[str, list[Any]]:
+        """Reads the history rows a format-version-2 archive stores.
+
+        Args:
+            run: The run to read.
+
+        Returns:
+            Each metric's values keyed by name, in the order the profiler records
+            them; empty when the archive predates the history table, recorded
+            nothing, or cannot be read.
+        """
+
+        try:
+            with GenomeArchive.open_readonly(run.archive_path) as reader:
+                tables = {
+                    row[0]
+                    for row in reader.connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    )
+                }
+                if "history" not in tables:
+                    return {}
+                rows = [
+                    json.loads(metrics)
+                    for (metrics,) in reader.connection.execute(
+                        "SELECT metrics FROM history ORDER BY step"
+                    )
+                ]
+        except (sqlite3.DatabaseError, ValueError) as error:
+            logger.warning("Could not read {}'s stored history: {}", run.name, error)
+            return {}
+
+        names: list[str] = []
+        for row in rows:
+            for name in row:
+                if name not in names:
+                    names.append(name)
+        return {name: [row.get(name) for row in rows] for name in names}
 
     def operators_payload(self, index: int) -> dict[str, Any]:
         """Counts, per generating operator, how the genomes it made were inserted.
@@ -1401,535 +1433,3 @@ class ArtifactViewer:
             ),
             "errors": errors,
         }
-
-
-#: API routes: a path pattern and the handler method serving it.
-_ROUTES: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"/api/runs"), "_api_runs"),
-    (re.compile(r"/api/groups"), "_api_groups"),
-    (re.compile(r"/api/insertion_rates"), "_api_insertion_rates"),
-    (re.compile(r"/api/runs/(\d+)"), "_api_run"),
-    (re.compile(r"/api/runs/(\d+)/genomes"), "_api_genomes"),
-    (re.compile(r"/api/runs/(\d+)/points"), "_api_points"),
-    (re.compile(r"/api/runs/(\d+)/genealogy"), "_api_genealogy"),
-    (re.compile(r"/api/runs/(\d+)/history"), "_api_history"),
-    (re.compile(r"/api/runs/(\d+)/operators"), "_api_operators"),
-    (re.compile(r"/api/runs/(\d+)/compare"), "_api_compare"),
-    (re.compile(r"/api/runs/(\d+)/genomes/(\d+)"), "_api_genome"),
-    (re.compile(r"/api/runs/(\d+)/genomes/(\d+)\.json"), "_api_genome_json"),
-    (
-        re.compile(r"/api/runs/(\d+)/genomes/(\d+)/(diagram|training)\.png"),
-        "_api_genome_image",
-    ),
-    (re.compile(r"/api/runs/(\d+)/genomes/(\d+)/ancestry"), "_api_ancestry"),
-]
-
-
-class ViewerRequestHandler(BaseHTTPRequestHandler):
-    """Serves the viewer's static files and JSON API (GET requests only)."""
-
-    server: ArtifactViewerServer
-    server_version = "EXAQCMonitor/1"
-
-    def do_GET(self) -> None:
-        """Handles a GET request, turning lookup and parameter errors into 404/400.
-
-        Returns:
-            None. Writes the response.
-        """
-
-        parts = urlsplit(self.path)
-        query = {name: values[-1] for name, values in parse_qs(parts.query).items()}
-
-        try:
-            self._route(parts.path, query)
-        except KeyError as error:
-            self._send_error(
-                HTTPStatus.NOT_FOUND, str(error.args[0]) if error.args else "Not found."
-            )
-        except ValueError as error:
-            self._send_error(HTTPStatus.BAD_REQUEST, str(error))
-        except (BrokenPipeError, ConnectionResetError):
-            pass
-        except Exception as error:
-            logger.exception("Error serving {}", self.path)
-            self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(error))
-
-    def log_message(self, format: str, *args: Any) -> None:
-        """Sends the server's access log to the debug log instead of stderr.
-
-        Args:
-            format: The log message format string.
-            *args: Values for ``format``.
-
-        Returns:
-            None.
-        """
-
-        logger.debug("{} - {}", self.address_string(), format % args)
-
-    def _route(self, path: str, query: dict[str, str]) -> None:
-        """Dispatches a request path to the static files or an API handler.
-
-        Args:
-            path: The request path.
-            query: The request's query parameters.
-
-        Returns:
-            None. Writes the response.
-
-        Raises:
-            KeyError: If nothing is served at ``path``.
-        """
-
-        if path in ("/", "/index.html"):
-            self._send_static("index.html")
-            return
-        if path.startswith("/static/"):
-            self._send_static(path[len("/static/") :])
-            return
-
-        for pattern, handler_name in _ROUTES:
-            match = pattern.fullmatch(path)
-            if match:
-                getattr(self, handler_name)(match, query)
-                return
-
-        raise KeyError(f"Nothing is served at {path}.")
-
-    # ------------------------------------------------------------------
-    # API handlers
-    # ------------------------------------------------------------------
-
-    def _api_runs(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves the run list.
-
-        Args:
-            match: The matched route.
-            query: The query parameters.
-
-        Returns:
-            None.
-        """
-
-        self._send_json(self.server.viewer.runs_payload())
-
-    def _api_groups(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves the run-group comparison (``metric`` and ``conf`` parameters).
-
-        Args:
-            match: The matched route.
-            query: The query parameters.
-
-        Returns:
-            None.
-        """
-
-        self._send_json(
-            self.server.viewer.groups_payload(
-                query.get("metric") or "best", query.get("conf") or "std"
-            )
-        )
-
-    def _api_insertion_rates(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves insertion rates for a ``run`` (index), a ``group`` (name) or every group.
-
-        Args:
-            match: The matched route.
-            query: The query parameters.
-
-        Returns:
-            None.
-        """
-
-        run_index = (
-            _query_int(query, "run", -1, minimum=0) if query.get("run") else None
-        )
-        self._send_json(
-            self.server.viewer.insertion_rates_payload(
-                run_index=run_index, group=query.get("group") or None
-            )
-        )
-
-    def _api_run(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves one run's description.
-
-        Args:
-            match: The matched route (the run index).
-            query: The query parameters.
-
-        Returns:
-            None.
-        """
-
-        self._send_json(self.server.viewer.run_payload(int(match.group(1))))
-
-    def _api_genomes(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves a page of a run's genomes.
-
-        Args:
-            match: The matched route (the run index).
-            query: Sort, paging and filter parameters.
-
-        Returns:
-            None.
-        """
-
-        self._send_json(self.server.viewer.genomes_payload(int(match.group(1)), query))
-
-    def _api_points(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves a run's progress-chart points (``y`` parameter).
-
-        Args:
-            match: The matched route (the run index).
-            query: The query parameters.
-
-        Returns:
-            None.
-        """
-
-        self._send_json(
-            self.server.viewer.points_payload(
-                int(match.group(1)), query.get("y") or "loss"
-            )
-        )
-
-    def _api_genealogy(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves a run's points and parent links (``y`` parameter).
-
-        Args:
-            match: The matched route (the run index).
-            query: The query parameters.
-
-        Returns:
-            None.
-        """
-
-        self._send_json(
-            self.server.viewer.genealogy_payload(
-                int(match.group(1)), query.get("y") or "loss"
-            )
-        )
-
-    def _api_history(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves a run's search-progress history.
-
-        Args:
-            match: The matched route (the run index).
-            query: The query parameters.
-
-        Returns:
-            None.
-        """
-
-        self._send_json(self.server.viewer.history_payload(int(match.group(1))))
-
-    def _api_operators(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves a run's operator insert-type counts.
-
-        Args:
-            match: The matched route (the run index).
-            query: The query parameters.
-
-        Returns:
-            None.
-        """
-
-        self._send_json(self.server.viewer.operators_payload(int(match.group(1))))
-
-    def _api_compare(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves a comparison of genomes ``a`` and ``b``.
-
-        Args:
-            match: The matched route (the run index).
-            query: The query parameters, which must include ``a`` and ``b``.
-
-        Returns:
-            None.
-
-        Raises:
-            ValueError: If ``a`` or ``b`` is missing.
-        """
-
-        if not query.get("a") or not query.get("b"):
-            raise ValueError(
-                "Give the two genomes to compare as ?a=<number>&b=<number>."
-            )
-        genome_a = _query_int(query, "a", 0, minimum=0)
-        genome_b = _query_int(query, "b", 0, minimum=0)
-        self._send_json(
-            self.server.viewer.compare_payload(int(match.group(1)), genome_a, genome_b)
-        )
-
-    def _api_genome(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves one genome's details.
-
-        Args:
-            match: The matched route (run index and genome number).
-            query: The query parameters.
-
-        Returns:
-            None.
-        """
-
-        self._send_json(
-            self.server.viewer.genome_payload(int(match.group(1)), int(match.group(2)))
-        )
-
-    def _api_genome_json(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves a genome's JSON as a file download.
-
-        Args:
-            match: The matched route (run index and genome number).
-            query: The query parameters.
-
-        Returns:
-            None.
-        """
-
-        genome_number = int(match.group(2))
-        body = self.server.viewer.genome_json(int(match.group(1)), genome_number)
-        self._send_bytes(
-            body, "application/json", filename=f"genome_{genome_number}.json"
-        )
-
-    def _api_genome_image(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves a genome's rendered diagram or training plot.
-
-        Args:
-            match: The matched route (run index, genome number and image kind).
-            query: The query parameters.
-
-        Returns:
-            None.
-
-        Raises:
-            KeyError: If the image could not be drawn.
-        """
-
-        kind = match.group(3)
-        image = self.server.viewer.image(int(match.group(1)), int(match.group(2)), kind)
-        if image is None:
-            if kind == "training":
-                raise KeyError("This genome recorded no training metrics to plot.")
-            raise KeyError("This genome's diagram could not be drawn.")
-        self._send_bytes(image, "image/png", cache=True)
-
-    def _api_ancestry(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves a genome's ancestry graph (``depth`` parameter).
-
-        Args:
-            match: The matched route (run index and genome number).
-            query: The query parameters.
-
-        Returns:
-            None.
-        """
-
-        depth = _query_int(
-            query,
-            "depth",
-            DEFAULT_ANCESTRY_DEPTH,
-            minimum=1,
-            maximum=MAX_ANCESTRY_DEPTH,
-        )
-        self._send_json(
-            self.server.viewer.ancestry_payload(
-                int(match.group(1)), int(match.group(2)), depth
-            )
-        )
-
-    # ------------------------------------------------------------------
-    # Responses
-    # ------------------------------------------------------------------
-
-    def _send_static(self, name: str) -> None:
-        """Serves a file from the static directory.
-
-        Args:
-            name: The file name (no directories).
-
-        Returns:
-            None.
-
-        Raises:
-            KeyError: If there is no such static file.
-        """
-
-        path = STATIC_DIRECTORY / name
-        if not _STATIC_NAME.fullmatch(name) or not path.is_file():
-            raise KeyError(f"There is no static file {name!r}.")
-        self._send_bytes(
-            path.read_bytes(),
-            _CONTENT_TYPES.get(path.suffix, "text/plain; charset=utf-8"),
-        )
-
-    def _send_json(self, payload: Any, status: HTTPStatus = HTTPStatus.OK) -> None:
-        """Sends a JSON response.
-
-        Args:
-            payload: The value to encode (see :func:`json_safe`).
-            status: The HTTP status.
-
-        Returns:
-            None.
-        """
-
-        body = json.dumps(json_safe(payload), allow_nan=False).encode("utf-8")
-        self._send_bytes(body, "application/json", status=status)
-
-    def _send_error(self, status: HTTPStatus, message: str) -> None:
-        """Sends an error, as JSON for API requests and plain text otherwise.
-
-        Args:
-            status: The HTTP status.
-            message: What went wrong.
-
-        Returns:
-            None.
-        """
-
-        try:
-            if self.path.startswith("/api/"):
-                self._send_json({"error": message}, status=status)
-            else:
-                self._send_bytes(
-                    message.encode("utf-8"), "text/plain; charset=utf-8", status=status
-                )
-        except (BrokenPipeError, ConnectionResetError):
-            pass
-
-    def _send_bytes(
-        self,
-        body: bytes,
-        content_type: str,
-        status: HTTPStatus = HTTPStatus.OK,
-        filename: str | None = None,
-        cache: bool = False,
-    ) -> None:
-        """Sends a response body.
-
-        Args:
-            body: The response bytes.
-            content_type: The ``Content-Type`` header.
-            status: The HTTP status.
-            filename: When given, the response is offered as a download with this
-                file name.
-            cache: Whether the browser may cache the response.
-
-        Returns:
-            None.
-        """
-
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "max-age=3600" if cache else "no-store")
-        if filename is not None:
-            self.send_header(
-                "Content-Disposition", f'attachment; filename="{filename}"'
-            )
-        self.end_headers()
-        self.wfile.write(body)
-
-
-class ArtifactViewerServer(ThreadingHTTPServer):
-    """The viewer's HTTP server, carrying the :class:`ArtifactViewer` it serves.
-
-    Attributes:
-        viewer: The data served by the API.
-    """
-
-    daemon_threads = True
-
-    def __init__(self, address: tuple[str, int], viewer: ArtifactViewer) -> None:
-        """Binds the server.
-
-        Args:
-            address: The ``(host, port)`` to listen on; port ``0`` picks a free
-                port.
-            viewer: The data to serve.
-        """
-
-        super().__init__(address, ViewerRequestHandler)
-        self.viewer = viewer
-
-
-def serve(
-    runs: list[str] | None = None,
-    directory: str | None = None,
-    groups: list[str] | None = None,
-    host: str = "127.0.0.1",
-    port: int = 8000,
-    open_browser: bool = False,
-    render_processes: int = 1,
-    rescan_interval: float = RESCAN_INTERVAL_SECONDS,
-) -> None:
-    """Serves the dashboard until interrupted.
-
-    Args:
-        runs: Run output directories (or their archive files) to serve; a run
-            whose archive has not been written yet (even one whose directory
-            does not exist yet) appears once it is.
-        directory: A directory to watch instead: every run below it is served,
-            including runs started while the dashboard is running.
-        groups: Substrings grouping runs for comparison.
-        host: The address to listen on.
-        port: The port to listen on (``0`` picks a free port).
-        open_browser: Whether to open the dashboard in a web browser.
-        render_processes: Worker processes rendering images.
-        rescan_interval: The least time between scans for new runs, in seconds.
-
-    Returns:
-        None. Runs until interrupted with Ctrl+C.
-
-    Raises:
-        ValueError: If both or neither of ``runs`` and ``directory`` are given.
-        FileNotFoundError: If the watched directory does not exist.
-        NotADirectoryError: If the watched path is not a directory.
-        OSError: If the server cannot listen on ``host:port``.
-    """
-
-    registry = RunRegistry(
-        run_directories=runs,
-        watch_directory=directory,
-        groups=groups,
-        rescan_interval=rescan_interval,
-    )
-
-    renderer = RenderService(processes=render_processes)
-    try:
-        server = ArtifactViewerServer((host, port), ArtifactViewer(registry, renderer))
-    except OSError:
-        renderer.close()
-        raise
-    url = f"http://{host}:{server.server_address[1]}/"
-
-    if registry.watch_directory is not None:
-        logger.info(
-            "Watching {} for runs ({} found so far), serving at {} -- press Ctrl+C to stop.",
-            registry.watch_directory,
-            len(registry.runs),
-            url,
-        )
-    else:
-        logger.info(
-            "Serving {} run(s) at {} -- press Ctrl+C to stop.", len(registry.runs), url
-        )
-        waiting = registry.source()["waiting"]
-        if waiting:
-            logger.info(
-                "Waiting for {} to be written in: {}",
-                ARCHIVE_FILENAME,
-                ", ".join(waiting),
-            )
-    if open_browser:
-        webbrowser.open(url)
-
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        logger.info("Stopping the dashboard.")
-    finally:
-        server.server_close()
-        renderer.close()

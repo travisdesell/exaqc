@@ -22,11 +22,15 @@ whenever the search improves, and the search-progress history written by
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import math
 import os
+import platform
 import re
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import time
 import zlib
@@ -45,7 +49,7 @@ if TYPE_CHECKING:
 ARCHIVE_FILENAME = "genomes.sqlar"
 
 #: Version of the archive layout, recorded in ``run_info``.
-ARCHIVE_FORMAT_VERSION = 1
+ARCHIVE_FORMAT_VERSION = 2
 
 #: The kinds of current-best genome files kept in the output directory: the best
 #: genome by the search's own ranking and the best by ``fitness["target_metric"]``.
@@ -114,7 +118,15 @@ CREATE TABLE IF NOT EXISTS genomes(
     n_gates INTEGER,
     n_enabled_gates INTEGER,
     n_parameters INTEGER,
-    fitness TEXT
+    fitness TEXT,
+    loss REAL GENERATED ALWAYS AS (json_extract(fitness, '$.loss')) VIRTUAL,
+    target_metric REAL GENERATED ALWAYS AS
+        (json_extract(fitness, '$.target_metric')) VIRTUAL
+);
+CREATE TABLE IF NOT EXISTS history(
+    step INTEGER PRIMARY KEY,
+    recorded_at REAL,
+    metrics TEXT
 );
 CREATE TABLE IF NOT EXISTS genome_parents(
     child INTEGER NOT NULL,
@@ -127,6 +139,72 @@ CREATE TABLE IF NOT EXISTS run_info(
     value TEXT
 );
 """
+
+
+def _index_fitness_columns(connection: sqlite3.Connection) -> bool:
+    """Indexes the generated ``loss`` and ``target_metric`` columns when present.
+
+    Archives written before those columns existed (format version 1) do not have
+    them, and SQLite cannot add a generated column to a table that already holds
+    rows, so such an archive keeps working unindexed rather than being rewritten.
+
+    Generated columns are hidden from ``PRAGMA table_info``, so the check uses
+    ``PRAGMA table_xinfo``, which lists them.
+
+    Args:
+        connection: The archive's connection, open for writing.
+
+    Returns:
+        Whether the archive has the generated fitness columns; the indexes are
+        created when it does.
+    """
+
+    columns = {
+        row[1] for row in connection.execute("PRAGMA table_xinfo(genomes)").fetchall()
+    }
+    generated = {"loss", "target_metric"} <= columns
+    if generated:
+        for column in ("loss", "target_metric"):
+            connection.execute(
+                f"CREATE INDEX IF NOT EXISTS genomes_{column} ON genomes({column})"
+            )
+    return generated
+
+
+def _provenance() -> dict[str, Any]:
+    """Collects what produced a run, so results can be traced back to code.
+
+    Returns:
+        The git commit (when the search runs from a checkout), the host, the
+        platform and the versions of Python and the quantum frameworks. Anything
+        that cannot be determined is left out rather than guessed.
+    """
+
+    facts: dict[str, Any] = {
+        "host": platform.node(),
+        "platform": platform.platform(),
+        "python_version": platform.python_version(),
+    }
+
+    try:
+        facts["git_commit"] = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    for package in ("qiskit", "pennylane", "torch", "numpy"):
+        module = sys.modules.get(package)
+        version = getattr(module, "__version__", None)
+        if version is not None:
+            facts[f"{package}_version"] = str(version)
+
+    return facts
 
 
 def genome_member_name(genome_number: int) -> str:
@@ -650,6 +728,7 @@ class GenomeArchive:
         )
         connection.execute("PRAGMA synchronous=NORMAL")
         connection.executescript(_SCHEMA)
+        has_fitness_columns = _index_fitness_columns(connection)
 
         archive = cls(
             path,
@@ -667,7 +746,14 @@ class GenomeArchive:
                 existing,
             )
 
-        archive.set_run_info(format_version=ARCHIVE_FORMAT_VERSION)
+        # An archive first written by an older version keeps its original genomes
+        # table, so whether the generated fitness columns exist is recorded rather
+        # than inferred from the format version.
+        archive.set_run_info(
+            format_version=ARCHIVE_FORMAT_VERSION,
+            has_fitness_columns=has_fitness_columns,
+            **_provenance(),
+        )
         return archive
 
     @classmethod
@@ -964,8 +1050,27 @@ class GenomeArchive:
         """
 
         self._require_writable()
-        if self.profiler is not None:
-            self.profiler.record(step=step, population=population)
+        if self.profiler is None:
+            return
+
+        self.profiler.record(step=step, population=population)
+        if not self.profiler.history:
+            return
+
+        # Store the row the profiler just computed, so a finished run's progress
+        # can be queried from the archive alone rather than from the CSV beside it.
+        point = dataclasses.asdict(self.profiler.history[-1])
+
+        def store(connection: sqlite3.Connection) -> None:
+            """Writes the history row for this step."""
+
+            connection.execute(
+                "INSERT OR REPLACE INTO history(step, recorded_at, metrics) "
+                "VALUES (?, ?, ?)",
+                (int(step), time.time(), json.dumps(_finite_or_none(point))),
+            )
+
+        self._write(f"history step {step}", store)
 
     def plot_history(self) -> None:
         """Redraws the search-progress curves (``exaqc_curves.png``).

@@ -58,6 +58,7 @@ classical layers train together with ordinary backpropagation and the standard P
   - [evaluate](#evaluate)
   - [visualize_rl](#visualize_rl)
   - [exaqc_dashboard](#exaqc_dashboard)
+  - [exaqc_mcp](#exaqc_mcp)
   - [classical_image_classification](#classical_image_classification)
   - [reinforcement_learning_fixed](#reinforcement_learning_fixed)
 - [Reproducing 2026 PPSN results](#reproducing-2026-ppsn-results)
@@ -470,7 +471,7 @@ However many genomes a run evaluates, its directory holds the same files:
 
 | File | Contents |
 |---|---|
-| `genomes.sqlar` | Every evaluated genome's JSON, plus a summary and parent links for each, for sorting and tracing ancestry |
+| `genomes.sqlar` | Every evaluated genome's JSON, plus a summary and parent links for each (for sorting and tracing ancestry), the search's progress history, and what produced the run: its command line, git commit, host and library versions |
 | `best_fitness.json`, `best_fitness.png`, `best_fitness_training.png` | The best genome by the population's ranking (lowest `fitness["loss"]`): its JSON, architecture diagram and training plot, overwritten whenever it improves |
 | `best_target_metric.json`, `best_target_metric.png`, `best_target_metric_training.png` | The same for the highest `fitness["target_metric"]` |
 | `exaqc_history.csv`, `exaqc_curves.png` | Population fitness and size statistics after every insertion, and a plot of them |
@@ -499,6 +500,19 @@ and [`visualize_rl`](#visualize_rl)) take a genome either as a JSON file
 (`--genome_json`) or straight from an archive (`--archive <run directory or
 genomes.sqlar> --genome_number <n>`), and the analysis scripts read archives as
 well as the `all_genomes/` directories of older runs.
+
+An archive is also an ordinary database, so a run can be queried directly. Each
+genome's `loss` and `target_metric` are indexed columns generated from its stored
+fitness, which keeps ranking queries fast however long the run is:
+
+```
+sqlite3 ./artifacts/iris/genomes.sqlar "select genome_number, loss from genomes order by loss limit 5"
+sqlite3 ./artifacts/iris/genomes.sqlar "select step, json_extract(metrics, '$.best') from history"
+```
+
+Archives written before those columns existed are still read by every tool; they
+simply lack the generated columns, which the tools detect rather than assume.
+[`exaqc_mcp`](#exaqc_mcp) exposes the same queries to an agent.
 
 ---
 
@@ -827,6 +841,7 @@ Then open `http://127.0.0.1:8000/` in a browser. The page has:
 | `--host` | `127.0.0.1` | Address to serve on |
 | `--port` | `8000` | Port to serve on (`0` picks a free port) |
 | `--open_browser` | off | Open the page in a web browser once it is running |
+| `--mcp` | on | Also serve the [MCP interface](#exaqc_mcp) at `/mcp`, so an agent can query the same runs over the same port (`--no-mcp` turns it off) |
 | `--logging_level` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
 
 To view runs on a cluster, start the dashboard there and forward its port from your
@@ -834,6 +849,51 @@ own machine, then open the same address locally:
 
 ```
 ssh -L 8000:localhost:8000 <cluster login node>
+```
+
+The same tunnel carries the MCP endpoint, so an agent on your laptop can analyze
+runs on the cluster by pointing at `http://localhost:8000/mcp`.
+
+### [`exaqc_mcp`](./src/examples/exaqc_mcp.py)
+
+Serves the dashboard's analysis tools to an agent over the
+[Model Context Protocol](https://modelcontextprotocol.io), so a language model
+can query runs, compute statistics and assemble tables without a script being
+written for each question. It is the same tool layer the dashboard mounts at
+`/mcp`; this entry point runs it on standard input and output instead, for an
+agent running on the same machine as the archives.
+
+```
+python3 -m src.examples.exaqc_mcp --runs ./artifacts/iris
+python3 -m src.examples.exaqc_mcp --directory ./2026_ppsn_exaqc --groups iris wine
+```
+
+Everything is **read-only**: archives are opened read-only, and no tool writes to
+a run, so it is safe to point at a search that is still running.
+
+The tools are `list_runs`, `describe_run`, `list_genomes`, `get_genome`,
+`compare_genomes`, `genome_lineage`, `fitness_summary`,
+`operator_insertion_rates`, `progress_series`, `gate_statistics`, `compare_runs`,
+`describe_schema` and `query_sql`. The first twelve answer common questions with
+typed arguments; `query_sql` runs a single read-only `SELECT` against one run's
+archive, or against several runs rolled into one table with a `run` column, for
+questions the typed tools do not cover. Results are capped (at most 200 rows,
+series downsampled) and each carries a link into the dashboard showing the same
+view.
+
+| Argument | Default | Description |
+|---|---|---|
+| `--runs` | one of `--runs` / `--directory` is required | Run output directories (or their `genomes.sqlar` files) to serve |
+| `--directory` | one of `--runs` / `--directory` is required | A directory to watch: every run below it is served, including runs started later |
+| `--groups` | — | Substrings grouping runs for comparison, as in the analysis scripts |
+| `--dashboard_url` | `http://127.0.0.1:8000` | Base URL used for the dashboard links in results |
+| `--logging_level` | `WARNING` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`; logs go to stderr, since stdout carries the protocol |
+
+To use it from Claude Code, register it as an MCP server running this command
+from the repository root:
+
+```
+claude mcp add exaqc -- python3 -m src.examples.exaqc_mcp --directory ./artifacts
 ```
 
 ### [`classical_image_classification`](./src/examples/classical_image_classification.py)

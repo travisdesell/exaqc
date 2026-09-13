@@ -12,7 +12,9 @@ escape their directory.
 from __future__ import annotations
 
 import json
+import socket
 import threading
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
@@ -21,12 +23,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import uvicorn
 
 from src.examples import exaqc_dashboard
 from src.utils.artifact_viewer import server
+from src.utils.artifact_viewer.app import create_app
 from src.utils.artifact_viewer.server import (
     ArtifactViewer,
-    ArtifactViewerServer,
     RenderService,
     RunRegistry,
     assign_groups,
@@ -200,6 +203,43 @@ def standard_genomes() -> list[FakeGenome]:
     ]
 
 
+@contextmanager
+def _running_server(registry: RunRegistry) -> Iterator[str]:
+    """Serves a registry's runs with uvicorn on a free port, for a block's duration.
+
+    The socket is bound here rather than by uvicorn so the port is known before
+    the server starts.
+
+    Args:
+        registry: The runs to serve.
+
+    Yields:
+        The base URL, e.g. ``http://127.0.0.1:54321``.
+    """
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    port = listener.getsockname()[1]
+
+    application = create_app(ArtifactViewer(registry, RenderService(processes=0)))
+    running = uvicorn.Server(uvicorn.Config(application, log_level="error"))
+    thread = threading.Thread(
+        target=running.run, kwargs={"sockets": [listener]}, daemon=True
+    )
+    thread.start()
+    deadline = time.monotonic() + 10
+    while not running.started and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        running.should_exit = True
+        thread.join(timeout=10)
+        listener.close()
+
+
 @pytest.fixture
 def viewer_url(tmp_path, monkeypatch) -> Iterator[str]:
     """Serves two runs (grouped as ``iris``) and yields the server's base URL.
@@ -233,17 +273,8 @@ def viewer_url(tmp_path, monkeypatch) -> Iterator[str]:
         ],
         groups=["iris"],
     )
-    httpd = ArtifactViewerServer(
-        ("127.0.0.1", 0), ArtifactViewer(registry, RenderService(processes=0))
-    )
-    httpd.rendered = rendered
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{httpd.server_address[1]}"
-    finally:
-        httpd.shutdown()
-        httpd.server_close()
+    with _running_server(registry) as url:
+        yield url
 
 
 @contextmanager
@@ -257,16 +288,24 @@ def serving(registry: RunRegistry) -> Iterator[str]:
         The base URL, e.g. ``http://127.0.0.1:54321``.
     """
 
-    httpd = ArtifactViewerServer(
-        ("127.0.0.1", 0), ArtifactViewer(registry, RenderService(processes=0))
-    )
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{httpd.server_address[1]}"
-    finally:
-        httpd.shutdown()
-        httpd.server_close()
+    with _running_server(registry) as url:
+        yield url
+
+
+def _headers(response: Any) -> dict[str, str]:
+    """Collects a response's headers under lower-case names.
+
+    HTTP header names are case-insensitive and servers choose their own casing,
+    so tests compare against lower-case names rather than one server's spelling.
+
+    Args:
+        response: The response (or error) whose headers are read.
+
+    Returns:
+        The headers, keyed by lower-case name.
+    """
+
+    return {name.lower(): value for name, value in response.headers.items()}
 
 
 def get(url: str) -> tuple[int, dict[str, str], bytes]:
@@ -276,14 +315,14 @@ def get(url: str) -> tuple[int, dict[str, str], bytes]:
         url: The URL to fetch.
 
     Returns:
-        The status code, headers and body.
+        The status code, the headers (keyed by lower-case name) and the body.
     """
 
     try:
         with urllib.request.urlopen(url) as response:
-            return response.status, dict(response.headers), response.read()
+            return response.status, _headers(response), response.read()
     except urllib.error.HTTPError as error:
-        return error.code, dict(error.headers), error.read()
+        return error.code, _headers(error), error.read()
 
 
 def get_json(url: str) -> Any:
@@ -630,7 +669,7 @@ def test_genome_detail_json_and_commands(viewer_url: str) -> None:
 
     status, headers, body = get(f"{viewer_url}/api/runs/0/genomes/3.json")
     assert status == 200
-    assert "genome_3.json" in headers["Content-Disposition"]
+    assert "genome_3.json" in headers["content-disposition"]
     assert json.loads(body) == detail["genome"]
 
     assert get(f"{viewer_url}/api/runs/0/genomes/99")[0] == 404
@@ -646,7 +685,7 @@ def test_images_are_rendered_once_and_missing_ones_are_404(viewer_url: str) -> N
     for _ in range(2):
         status, headers, body = get(f"{viewer_url}/api/runs/0/genomes/2/diagram.png")
         assert status == 200
-        assert headers["Content-Type"] == "image/png"
+        assert headers["content-type"] == "image/png"
         assert body.startswith(_PNG_MAGIC)
 
     status, _, body = get(f"{viewer_url}/api/runs/0/genomes/2/training.png")
@@ -861,7 +900,7 @@ def test_static_files_are_served_safely(viewer_url: str) -> None:
 
     status, headers, body = get(f"{viewer_url}/")
     assert status == 200
-    assert headers["Content-Type"].startswith("text/html")
+    assert headers["content-type"].startswith("text/html")
     assert b"/static/app.js" in body
 
     for name in ("app.js", "app.css", "uPlot.iife.min.js", "uPlot.min.css"):

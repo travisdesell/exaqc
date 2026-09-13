@@ -22,7 +22,7 @@ import sys
 
 from loguru import logger
 
-from src.utils.artifact_viewer.server import serve
+from src.utils.artifact_viewer.app import serve
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -93,6 +93,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--mcp",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Serve the MCP interface at /mcp, so an agent can query the same runs over the "
+            "same port as the dashboard."
+        ),
+    )
+
+    parser.add_argument(
         "--logging_level",
         type=str,
         default="INFO",
@@ -123,6 +133,7 @@ def main() -> None:
             host=args.host,
             port=args.port,
             open_browser=args.open_browser,
+            mcp=args.mcp,
         )
     except (OSError, ValueError) as error:
         parser.error(str(error))

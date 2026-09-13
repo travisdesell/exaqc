@@ -87,6 +87,13 @@ documented there, and most are also wrapped by a script in
   history CSV columns, and the insert types and `generated_by` operators its
   insertion-rate tables count (mirroring
   `src.analysis.analyze_genome_generation`).
+- **MCP interface:** `python3 -m src.examples.exaqc_mcp`, which serves the
+  dashboard's analysis tools to an agent over stdio; the dashboard mounts the
+  same tool layer at `/mcp` unless `--no-mcp` is passed. Tools live in
+  `src/utils/artifact_viewer/mcp_tools.py` and are registered in `mcp_app.py`,
+  so a new tool needs a README row and an entry in `tests/test_exaqc_mcp.py`'s
+  `EXPECTED_TOOLS`. Everything it does is read-only, and `query_sql` must stay
+  that way: it is guarded by a single-statement check *and* a SQLite authorizer.
 - **Analysis:** `python3 -m src.analysis.analyze_genome_generation`.
 
 A search's outputs (`--out_dir`, `--shared_file_system`, `genomes.sqlar`, the
@@ -171,7 +178,7 @@ for a in m.build_parser()._actions: print(a.dest, a.default, a.choices)"
 ```
 
 `classification`, `teacher`, `reinforcement_learning`, `refine_genome`,
-`exaqc_dashboard` and `classical_image_classification` expose `build_parser()`
+`exaqc_dashboard`, `exaqc_mcp` and `classical_image_classification` expose `build_parser()`
 alongside a `main()`,
 which is the pattern to follow for any new entry point. The rest
 (`reinforcement_learning_fixed`, `evaluate`, `visualize_rl`) still build their
