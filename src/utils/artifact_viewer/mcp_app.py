@@ -153,6 +153,29 @@ def build_mcp_server(
         return tools.get_genome(run, genome_number)
 
     @server.tool(
+        description=(
+            "Return the per-epoch or per-episode metrics a genome recorded during "
+            "training (loss, accuracies, returns, fidelities -- whatever its task "
+            "records), each series keyed by its own epoch or episode column."
+        )
+    )
+    def genome_metrics(
+        run: str, genome_number: int, series: str | None = None
+    ) -> dict[str, Any]:
+        """Returns a genome's training history.
+
+        Args:
+            run: A run index or name.
+            genome_number: The genome whose history is read.
+            series: Only return this series, e.g. "validation_epoch_metrics".
+
+        Returns:
+            Each recorded series, with its step column, metrics and records.
+        """
+
+        return tools.genome_metrics(run, genome_number, series)
+
+    @server.tool(
         description="Compare two genomes of a run: their gates by innovation number, fitness and hyperparameters."
     )
     def compare_genomes(run: str, a: int, b: int) -> dict[str, Any]:

@@ -29,12 +29,6 @@ from typing import Any
 from loguru import logger
 
 from src.utils.genome_archive import ARCHIVE_FILENAME, GenomeArchive
-from src.utils.search_history import (
-    HISTORY_FILENAME,
-    aggregate_history,
-    history_columns,
-    load_history_csv,
-)
 
 #: The images a genome can be rendered as.
 IMAGE_KINDS = ("diagram", "training")
@@ -66,8 +60,66 @@ INSERTION_OUTCOMES = ("global_best", "local_best", "inserted", "discarded")
 #: Gate fields compared when two genomes are diffed.
 GATE_FIELDS = ("method_name", "qubits", "depth", "parameters", "enabled")
 
-#: History CSV columns that describe the row rather than the search's progress.
-_HISTORY_INDEX_COLUMNS = frozenset({"step", "current_time", "inserted_genomes"})
+
+def _aggregate_series(
+    series: list[dict[str, list[Any]]], conf: str
+) -> dict[str, Any] | None:
+    """Summarizes one metric across several runs at the steps they share.
+
+    Runs rarely record the same number of steps, so they are aligned on the
+    steps every one of them reached; a run contributes nothing beyond its own
+    end rather than being extrapolated.
+
+    Args:
+        series: Each run's population series, as
+            :meth:`~src.utils.genome_archive.GenomeArchive.population_series`
+            returns them.
+        conf: The band around the mean: ``"std"`` for one standard deviation, or
+            ``"95ci"`` for 1.96 standard errors.
+
+    Returns:
+        The shared ``step`` values with the ``mean``, ``low`` and ``high`` at
+        each and the ``n_runs`` summarized, or ``None`` if the runs share no
+        step at which any of them has a value.
+    """
+
+    by_step = [
+        {
+            step: value
+            for step, value in zip(run["step"], run["best"])
+            if value is not None
+        }
+        for run in series
+    ]
+    shared = sorted(set.intersection(*(set(run) for run in by_step)) if by_step else [])
+    if not shared:
+        return None
+
+    steps: list[int] = []
+    means: list[float] = []
+    lows: list[float] = []
+    highs: list[float] = []
+    for step in shared:
+        values = [run[step] for run in by_step]
+        mean = statistics.fmean(values)
+        deviation = statistics.pstdev(values) if len(values) > 1 else 0.0
+        spread = (
+            deviation
+            if conf == "std"
+            else 1.96 * deviation / math.sqrt(max(len(values), 1))
+        )
+        steps.append(step)
+        means.append(mean)
+        lows.append(mean - spread)
+        highs.append(mean + spread)
+
+    return {
+        "step": steps,
+        "mean": means,
+        "low": lows,
+        "high": highs,
+        "n_runs": len(series),
+    }
 
 
 def higher_is_better(key: str) -> bool:
@@ -878,10 +930,30 @@ class ArtifactViewer:
             payload["fitness_keys"] = reader.fitness_keys()
             payload["filter_options"] = reader.filter_options()
             payload["unarchived_parents"] = reader.unarchived_parents()
-        payload["has_history"] = os.path.isfile(
-            os.path.join(run.directory, HISTORY_FILENAME)
-        )
+        payload["has_history"] = self._recorded_steps(run) > 0
         return payload
+
+    def _recorded_steps(self, run: Run) -> int:
+        """Counts the population changes a run recorded.
+
+        Args:
+            run: The run to read.
+
+        Returns:
+            How many steps its archive holds, and zero when the archive cannot
+            be read.
+        """
+
+        try:
+            with GenomeArchive.open_readonly(run.archive_path) as reader:
+                return int(
+                    reader.connection.execute(
+                        "SELECT count(*) FROM population_events"
+                    ).fetchone()[0]
+                )
+        except sqlite3.DatabaseError as error:
+            logger.warning("Could not read {}'s population events: {}", run.name, error)
+            return 0
 
     def genomes_payload(self, index: int, query: dict[str, str]) -> dict[str, Any]:
         """Lists a page of a run's genomes.
@@ -982,78 +1054,52 @@ class ArtifactViewer:
         with GenomeArchive.open_readonly(self.run(index).archive_path) as reader:
             return {"points": reader.points(y_key), "links": reader.parent_links()}
 
-    def history_payload(self, index: int) -> dict[str, Any]:
-        """Returns a run's search-progress history.
+    def history_payload(self, index: int, metric: str | None = None) -> dict[str, Any]:
+        """Returns a run's search progress, recomputed from its archive.
 
-        Archives at format version 2 record the history beside the genomes, so a
-        finished run is a single self-contained file. Runs written before that
-        kept it only in ``exaqc_history.csv``, which is read when the archive has
-        no history of its own.
+        The statistics are not stored: the population's membership is replayed
+        from the recorded changes and summarized over whichever genomes were
+        alive at each step. That is what lets any metric a run's genomes recorded
+        be charted -- a loss, a return, a fidelity, a gate count -- rather than
+        only a fixed set decided while the search was running.
 
         Args:
             index: The run's index.
+            metric: The metric to summarize; ``loss`` when the run recorded it,
+                otherwise the first available, when not given.
 
         Returns:
-            ``columns``: each recorded metric's values, keyed by name (empty when
-            the run recorded no history at all).
+            ``columns`` (``step``, ``population_size``, ``best``, ``mean`` and
+            ``worst``, empty when the run recorded no population changes),
+            ``metric`` (the one summarized, ``None`` when there is nothing to
+            summarize) and ``metrics`` (everything that could be charted).
 
         Raises:
             KeyError: If there is no such run.
+            ValueError: If ``metric`` was not recorded by the run's genomes.
         """
 
         run = self.run(index)
-        recorded = self._archive_history(run)
-        if recorded:
-            return {"columns": recorded}
-
-        path = os.path.join(run.directory, HISTORY_FILENAME)
-        if not os.path.isfile(path):
-            return {"columns": {}}
-        rows = load_history_csv(path)
-        return {
-            "columns": {
-                name: [row.get(name) for row in rows] for name in history_columns(path)
-            }
-        }
-
-    def _archive_history(self, run: Run) -> dict[str, list[Any]]:
-        """Reads the history rows a format-version-2 archive stores.
-
-        Args:
-            run: The run to read.
-
-        Returns:
-            Each metric's values keyed by name, in the order the profiler records
-            them; empty when the archive predates the history table, recorded
-            nothing, or cannot be read.
-        """
+        empty: dict[str, Any] = {"columns": {}, "metric": None, "metrics": []}
 
         try:
             with GenomeArchive.open_readonly(run.archive_path) as reader:
-                tables = {
-                    row[0]
-                    for row in reader.connection.execute(
-                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                available = reader.series_metrics()
+                if not available:
+                    return empty
+                chosen = metric or ("loss" if "loss" in available else available[0])
+                if chosen not in available:
+                    raise ValueError(
+                        f"{chosen!r} was not recorded; available: {', '.join(available)}."
                     )
-                }
-                if "history" not in tables:
-                    return {}
-                rows = [
-                    json.loads(metrics)
-                    for (metrics,) in reader.connection.execute(
-                        "SELECT metrics FROM history ORDER BY step"
-                    )
-                ]
-        except (sqlite3.DatabaseError, ValueError) as error:
-            logger.warning("Could not read {}'s stored history: {}", run.name, error)
-            return {}
+                columns = reader.population_series(
+                    chosen, higher_is_better=higher_is_better(chosen)
+                )
+        except sqlite3.DatabaseError as error:
+            logger.warning("Could not read {}'s search progress: {}", run.name, error)
+            return empty
 
-        names: list[str] = []
-        for row in rows:
-            for name in row:
-                if name not in names:
-                    names.append(name)
-        return {name: [row.get(name) for row in rows] for name in names}
+        return {"columns": columns, "metric": chosen, "metrics": available}
 
     def operators_payload(self, index: int) -> dict[str, Any]:
         """Counts, per generating operator, how the genomes it made were inserted.
@@ -1214,21 +1260,24 @@ class ArtifactViewer:
         ]
         return entries
 
-    def groups_payload(self, metric: str = "best", conf: str = "std") -> dict[str, Any]:
+    def groups_payload(self, metric: str = "loss", conf: str = "std") -> dict[str, Any]:
         """Compares groups of runs.
 
         Each ``--groups`` group is compared, and so is every run that belongs to
-        no group, on its own.
+        no group, on its own. Every group's curve is recomputed from its runs'
+        archives, so any metric the runs' genomes recorded can be compared.
 
         Args:
-            metric: The history column whose mean and band are charted.
+            metric: The metric whose mean and band are charted, as
+                :meth:`~src.utils.genome_archive.GenomeArchive.series_metrics`
+                lists them.
             conf: The band: ``"std"`` or ``"95ci"``.
 
         Returns:
-            ``metric``, ``conf``, the history ``metrics`` available, and per group
-            its ``name``, ``kind`` (``"group"``, or ``"run"`` for a run in no
-            group), ``runs``, aggregated ``history`` (or ``history_error``) and
-            summary statistics of each run's best ``loss`` and
+            ``metric``, ``conf``, the ``metrics`` available across the runs, and
+            per group its ``name``, ``kind`` (``"group"``, or ``"run"`` for a run
+            in no group), ``runs``, aggregated ``history`` (or ``history_error``)
+            and summary statistics of each run's best ``loss`` and
             ``target_metric``.
 
         Raises:
@@ -1242,38 +1291,33 @@ class ArtifactViewer:
         available_metrics: set[str] = set()
         groups = []
         for name, kind, runs in self._comparison_entries():
-            csv_paths = [
-                path
-                for path in (
-                    os.path.join(run.directory, HISTORY_FILENAME) for run in runs
-                )
-                if os.path.isfile(path)
-            ]
-            for path in csv_paths:
-                available_metrics.update(
-                    column
-                    for column in history_columns(path)
-                    if column not in _HISTORY_INDEX_COLUMNS
-                )
+            series: list[dict[str, list[Any]]] = []
+            for run in runs:
+                try:
+                    with GenomeArchive.open_readonly(run.archive_path) as reader:
+                        recorded = reader.series_metrics()
+                        available_metrics.update(recorded)
+                        if metric not in recorded:
+                            continue
+                        series.append(
+                            reader.population_series(
+                                metric, higher_is_better=higher_is_better(metric)
+                            )
+                        )
+                except sqlite3.DatabaseError as error:
+                    logger.warning("Could not read {}: {}", run.archive_path, error)
 
             history = None
             history_error = None
-            if csv_paths:
-                try:
-                    steps, mean, low, high = aggregate_history(
-                        csv_paths, metric=metric, conf=conf
+            if series:
+                history = _aggregate_series(series, conf)
+                if history is None:
+                    history_error = (
+                        "The runs have no steps in common. Try comparing runs of "
+                        "a similar length."
                     )
-                    history = {
-                        "step": steps,
-                        "mean": mean,
-                        "low": low,
-                        "high": high,
-                        "n_runs": len(csv_paths),
-                    }
-                except RuntimeError as error:
-                    history_error = str(error)
             else:
-                history_error = "No search history was recorded."
+                history_error = f"No run recorded {metric!r}."
 
             best_losses: list[float] = []
             best_targets: list[float] = []

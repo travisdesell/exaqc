@@ -22,6 +22,7 @@ Two constraints shape the design, both measured on a 20k-genome archive:
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import statistics
 import time
@@ -36,7 +37,6 @@ from src.utils.artifact_viewer.server import (
     higher_is_better,
 )
 from src.utils.genome_archive import GenomeArchive
-from src.utils.search_history import HISTORY_FILENAME
 
 #: Rows a listing returns when the caller does not say, and the most it may ask
 #: for: 50 rows is roughly 4k tokens, 200 roughly 16k.
@@ -87,6 +87,37 @@ _ROLLUP_COLUMNS = (
     "loss",
     "target_metric",
 )
+
+
+#: Metadata entries holding a per-epoch or per-episode metric series. Which of
+#: these a genome has depends on its task, so they are discovered, not assumed.
+_METRIC_SERIES = re.compile(r"_(epoch|episode)_metrics$")
+
+
+def _flatten_metrics(record: dict[str, Any], prefix: str = "") -> dict[str, float]:
+    """Flattens one epoch's or episode's metrics into ``path -> number`` pairs.
+
+    A metric is recorded as a bare number (``loss``), as a wrapper around a mean
+    (``fidelity: {"mean": ...}``), or as a nested breakdown (a per-class accuracy
+    holding ``acc``, ``correct`` and ``total`` per class as well as a ``mean``),
+    so the record is walked to whatever depth it has.
+
+    Args:
+        record: One epoch's or episode's metrics.
+        prefix: The dotted path this record sits under, when recursing.
+
+    Returns:
+        The numeric values, keyed by dotted path.
+    """
+
+    flattened: dict[str, float] = {}
+    for name, value in (record or {}).items():
+        path = f"{prefix}.{name}" if prefix else name
+        if isinstance(value, dict):
+            flattened.update(_flatten_metrics(value, path))
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            flattened[path] = value
+    return flattened
 
 
 def _markdown_table(columns: list[str], rows: list[list[Any]]) -> str:
@@ -526,6 +557,76 @@ class DashboardTools:
         )
         return payload
 
+    def genome_metrics(
+        self, run: int | str, genome_number: int, series: str | None = None
+    ) -> dict[str, Any]:
+        """Returns the per-epoch or per-episode metrics a genome recorded.
+
+        What a genome records depends on its task, so nothing is assumed: every
+        metadata entry named ``*_epoch_metrics`` or ``*_episode_metrics`` is
+        returned as its own series, keyed by the ``epoch`` or ``episode`` column
+        it carries. Reinforcement-learning genomes record their training and
+        evaluation series at different cadences, so the series are kept separate
+        rather than merged. Nested values (a per-class accuracy breakdown, or a
+        metric wrapped in a ``mean``) are flattened to dotted paths.
+
+        Args:
+            run: A run index or name.
+            genome_number: The genome whose training history is read.
+            series: Only return this series, e.g. ``"validation_epoch_metrics"``.
+
+        Returns:
+            ``series`` (each with its ``step`` column, ``metrics`` and ``records``),
+            the ``available`` series names, and a ``dashboard_url``.
+
+        Raises:
+            KeyError: If there is no such run or genome.
+            ValueError: If the genome recorded no such series.
+        """
+
+        resolved = self._resolve(run)
+        with GenomeArchive.open_readonly(resolved.archive_path) as reader:
+            metadata = reader.get_genome_dict(int(genome_number)).get("metadata") or {}
+
+        available = [
+            name
+            for name, value in metadata.items()
+            if _METRIC_SERIES.search(name) and isinstance(value, list) and value
+        ]
+        if series is not None and series not in available:
+            raise ValueError(
+                f"{series!r} was not recorded; available: {', '.join(available) or 'none'}."
+            )
+
+        recorded = []
+        for name in available if series is None else [series]:
+            records = [_flatten_metrics(record) for record in metadata[name]]
+            step = "episode" if name.endswith("_episode_metrics") else "epoch"
+            metrics = sorted(
+                {key for record in records for key in record if key != step}
+            )
+            recorded.append(
+                {
+                    "name": name,
+                    "step": step,
+                    "metrics": metrics,
+                    "records": records,
+                }
+            )
+
+        return self._fit(
+            {
+                "run": resolved.name,
+                "genome_number": int(genome_number),
+                "available": available,
+                "series": recorded,
+                "dashboard_url": self._url(
+                    f"/run/{resolved.index}/genome/{int(genome_number)}"
+                ),
+            },
+            "series",
+        )
+
     def compare_genomes(self, run: int | str, a: int, b: int) -> dict[str, Any]:
         """Compares two genomes of a run gate by gate and value by value.
 
@@ -726,7 +827,8 @@ class DashboardTools:
 
         Args:
             run: A run index or name.
-            metric: The history column to return, e.g. ``best`` or ``pop_mean``.
+            metric: The series to return, one of ``best``, ``mean``, ``worst`` or
+                ``population_size``.
             max_points: The most points to return, at most
                 :data:`MAX_SERIES_POINTS`.
 
@@ -747,7 +849,7 @@ class DashboardTools:
                 "step": [],
                 "value": [],
                 "metrics": [],
-                "note": f"This run recorded no {HISTORY_FILENAME}.",
+                "note": "This run recorded no search progress.",
                 "dashboard_url": self._url(f"/run/{resolved.index}"),
             }
         if metric not in columns:

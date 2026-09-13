@@ -471,10 +471,9 @@ However many genomes a run evaluates, its directory holds the same files:
 
 | File | Contents |
 |---|---|
-| `genomes.sqlar` | Every evaluated genome's JSON, plus a summary and parent links for each (for sorting and tracing ancestry), the search's progress history, and what produced the run: its command line, git commit, host and library versions |
+| `genomes.sqlar` | Every evaluated genome's JSON, plus a summary and parent links for each (for sorting and tracing ancestry), how the population changed after every insertion, and what produced the run: its command line, git commit, host and library versions |
 | `best_fitness.json`, `best_fitness.png`, `best_fitness_training.png` | The best genome by the population's ranking (lowest `fitness["loss"]`): its JSON, architecture diagram and training plot, overwritten whenever it improves |
 | `best_target_metric.json`, `best_target_metric.png`, `best_target_metric_training.png` | The same for the highest `fitness["target_metric"]` |
-| `exaqc_history.csv`, `exaqc_curves.png` | Population fitness and size statistics after every insertion, and a plot of them |
 | `run.log` | The run's log |
 
 A genome rejected as a duplicate of a better genome already in a steady-state
@@ -507,12 +506,19 @@ fitness, which keeps ranking queries fast however long the run is:
 
 ```
 sqlite3 ./artifacts/iris/genomes.sqlar "select genome_number, loss from genomes order by loss limit 5"
-sqlite3 ./artifacts/iris/genomes.sqlar "select step, json_extract(metrics, '$.best') from history"
+sqlite3 ./artifacts/iris/genomes.sqlar "select step, added, removed from population_events"
 ```
 
-Archives written before those columns existed are still read by every tool; they
-simply lack the generated columns, which the tools detect rather than assume.
-[`exaqc_mcp`](#exaqc_mcp) exposes the same queries to an agent.
+The search's progress is not stored as a fixed set of statistics. `population_events`
+records only which genomes entered and left the population at each insertion, so the
+population at any step is everything added up to it minus everything removed. Every
+population statistic is then recomputed from the genomes themselves, which is what
+lets progress be charted against any metric a run recorded -- a loss, a return, a
+fidelity, a gate count -- rather than only the few a profiler would have chosen while
+the search was running. Each genome's summary row also carries `n_cnot` and `n_rot`
+(its circuit complexity once decomposed) and `final_metrics` (the last value of every
+per-epoch or per-episode metric it recorded). [`exaqc_mcp`](#exaqc_mcp) exposes the
+same queries to an agent.
 
 ---
 
@@ -820,7 +826,14 @@ Then open `http://127.0.0.1:8000/` in a browser. The page has:
   in the chart, clears the selection) opens its details above the
   table: its diagram, training plot, fitness, gates,
   parents, children, ancestry graph and ready-to-run `refine_genome` /
-  `visualize_rl` / `evaluate` commands.
+  `visualize_rl` / `evaluate` commands, with a **Download JSON** button for the
+  genome itself. A **Metrics** tab lists whatever the genome recorded while
+  training, one table per series: per-epoch training and validation metrics for
+  classification and teacher genomes, per-episode training and evaluation
+  metrics for reinforcement learning. Nothing is hard-coded per task — nested
+  values such as a per-class accuracy breakdown are flattened into columns like
+  `mean_class_accuracy.mean`, and long histories show their first and last rows
+  with a toggle for the rest.
 - **Insertion rates**: for one run, one group (summed over its runs, then each
   run on its own) or every group side by side, the share of each operator's
   genomes that became a global best or a local best, were inserted or were
@@ -872,10 +885,12 @@ Everything is **read-only**: archives are opened read-only, and no tool writes t
 a run, so it is safe to point at a search that is still running.
 
 The tools are `list_runs`, `describe_run`, `list_genomes`, `get_genome`,
-`compare_genomes`, `genome_lineage`, `fitness_summary`,
+`genome_metrics`, `compare_genomes`, `genome_lineage`, `fitness_summary`,
 `operator_insertion_rates`, `progress_series`, `gate_statistics`, `compare_runs`,
-`describe_schema` and `query_sql`. The first twelve answer common questions with
-typed arguments; `query_sql` runs a single read-only `SELECT` against one run's
+`describe_schema` and `query_sql`. The first thirteen answer common questions with
+typed arguments (`genome_metrics` returns a genome's recorded training history,
+each series keyed by its own epoch or episode column); `query_sql` runs a single
+read-only `SELECT` against one run's
 archive, or against several runs rolled into one table with a `run` column, for
 questions the typed tools do not cover. Results are capped (at most 200 rows,
 series downsampled) and each carries a link into the dashboard showing the same

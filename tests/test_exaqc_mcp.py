@@ -43,6 +43,7 @@ EXPECTED_TOOLS = {
     "describe_run",
     "list_genomes",
     "get_genome",
+    "genome_metrics",
     "compare_genomes",
     "genome_lineage",
     "fitness_summary",
@@ -207,6 +208,78 @@ def test_genome_detail_comparison_and_lineage(tools: DashboardTools) -> None:
     }
     assert generations == {4: 0, 3: 1, 1: 2, 2: 2, 0: 3}
     assert lineage["children"] == []
+
+
+def test_genome_metrics_keeps_each_recorded_series_separate(tmp_path: Path) -> None:
+    """Training histories are returned per series, flattened, keyed by their own step.
+
+    What a genome records depends on its task: classification and teacher
+    genomes record per-epoch series, reinforcement learning records per-episode
+    ones whose training and evaluation halves run at different cadences and
+    carry different metrics. Nothing may be merged or assumed.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    genomes = standard_genomes()
+    genomes[0].serialized["metadata"]["training_epoch_metrics"] = [
+        {
+            "epoch": epoch,
+            "loss": 1.0 / (epoch + 1),
+            "mean_class_accuracy": {"0": {"acc": 0.9, "correct": 9}, "mean": 0.95},
+        }
+        for epoch in range(3)
+    ]
+    genomes[0].serialized["metadata"]["validation_epoch_metrics"] = [
+        {"epoch": epoch, "loss": 1.1 / (epoch + 1)} for epoch in range(3)
+    ]
+    genomes[1].serialized["metadata"]["training_episode_metrics"] = [
+        {"episode": episode, "return": float(episode), "loss": 0.5}
+        for episode in range(6)
+    ]
+    genomes[1].serialized["metadata"]["evaluation_episode_metrics"] = [
+        {"episode": 0, "return_mean": 1.0, "return_std": 0.1}
+    ]
+    build_run(tmp_path / "metrics_run", genomes)
+    tools = DashboardTools(
+        RunRegistry(run_directories=[str(tmp_path / "metrics_run")]),
+        RenderService(processes=0),
+    )
+
+    epochs = tools.genome_metrics(0, 1)
+    assert epochs["available"] == [
+        "training_epoch_metrics",
+        "validation_epoch_metrics",
+    ]
+    training = next(
+        entry for entry in epochs["series"] if entry["name"] == "training_epoch_metrics"
+    )
+    assert training["step"] == "epoch"
+    # the nested per-class breakdown is flattened rather than dropped or stringified
+    assert "mean_class_accuracy.0.acc" in training["metrics"]
+    assert "mean_class_accuracy.mean" in training["metrics"]
+    assert training["records"][0]["mean_class_accuracy.mean"] == 0.95
+
+    episodes = tools.genome_metrics(0, 2)
+    by_name = {entry["name"]: entry for entry in episodes["series"]}
+    assert set(by_name) == {"training_episode_metrics", "evaluation_episode_metrics"}
+    assert by_name["training_episode_metrics"]["step"] == "episode"
+    # the two series are recorded at different cadences, so they stay separate
+    assert len(by_name["training_episode_metrics"]["records"]) == 6
+    assert len(by_name["evaluation_episode_metrics"]["records"]) == 1
+    assert by_name["evaluation_episode_metrics"]["metrics"] == [
+        "return_mean",
+        "return_std",
+    ]
+
+    one = tools.genome_metrics(0, 2, series="evaluation_episode_metrics")
+    assert [entry["name"] for entry in one["series"]] == ["evaluation_episode_metrics"]
+    with pytest.raises(ValueError, match="not recorded"):
+        tools.genome_metrics(0, 2, series="nope")
+
+    # a genome that recorded nothing says so rather than failing
+    assert tools.genome_metrics(0, 4)["series"] == []
 
 
 def test_aggregates_summarize_fitness_and_operators(tools: DashboardTools) -> None:

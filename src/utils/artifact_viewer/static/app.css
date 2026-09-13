@@ -649,6 +649,29 @@ details summary {
   margin: 6px 0;
 }
 
+/* the genome panel's download link, styled as one of its buttons */
+a.download-json {
+  border: 1px solid var(--baseline);
+  border-radius: 6px;
+  padding: 4px 8px;
+  color: var(--text-primary);
+  background: var(--surface-1);
+}
+
+a.download-json:hover {
+  background: var(--surface-2);
+  text-decoration: none;
+}
+
+/* per-epoch metric tables: many narrow numeric columns */
+.detail-panel .table-wrap table {
+  font-variant-numeric: tabular-nums;
+}
+
+.detail-panel .table-wrap th {
+  white-space: nowrap;
+}
+
 /* ---------- insertion rates ---------- */
 
 .explanation {

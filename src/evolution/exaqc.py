@@ -763,9 +763,9 @@ class EXAQC:
         This is the single insertion path for both serial and MPI runs. Once the
         population strategy accepts the genome, it is written to the run's
         archive, the current-best genome files are rewritten if it improved the
-        best genome by fitness or by ``target_metric``, and the search history is
-        recorded. A genome the population rejects as a duplicate of a better one
-        is not recorded.
+        best genome by fitness or by ``target_metric``, and the change to the
+        population is recorded. A genome the population rejects as a duplicate of
+        a better one is not recorded.
 
         Args:
             genome: The evaluated genome to insert.
@@ -806,11 +806,9 @@ class EXAQC:
         if new_target_metric_best:
             self.archive.write_current_best(genome, "target_metric")
 
-        self.archive.record_history(
+        self.archive.record_population(
             step=self.inserted_genomes, population=self.population.get_population()
         )
-        if new_fitness_best or new_target_metric_best:
-            self.archive.plot_history()
 
     def update_target_metric_best(self, genome: CircuitGenome) -> bool:
         """Tracks the best genome by ``fitness["target_metric"]``.

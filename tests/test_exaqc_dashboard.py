@@ -125,12 +125,13 @@ def gate(
 
 
 def build_run(directory, genomes: list[FakeGenome], history: bool = True) -> str:
-    """Writes a run directory holding an archive (and optionally a history CSV).
+    """Writes a run directory holding an archive, and its search progress.
 
     Args:
         directory: The run directory to create.
         genomes: The genomes to store, in insertion order.
-        history: Whether to write an ``exaqc_history.csv``.
+        history: Whether to record the population changes a search would, which
+            is what the progress charts are recomputed from.
 
     Returns:
         The run directory, as a string.
@@ -145,15 +146,12 @@ def build_run(directory, genomes: list[FakeGenome], history: bool = True) -> str
         for insertion, genome in enumerate(genomes, start=1):
             archive.add_genome(genome, insertion=insertion)
 
-    history_path = directory / "exaqc_history.csv"
-    if history:
-        best = min(genome.serialized["fitness"]["loss"] for genome in genomes)
-        history_path.write_text(
-            "step,best,top5_mean\n"
-            + "".join(f"{step},{best + 1 / step},{best * 2}\n" for step in range(1, 4))
-        )
-    elif history_path.exists():
-        history_path.unlink()
+        if history:
+            # Three steps, growing the population one genome at a time, so a
+            # run's series has the same shape a real search would produce.
+            for step in range(1, 4):
+                archive.record_population(step=step, population=genomes[:step])
+
     return str(directory)
 
 
@@ -788,15 +786,21 @@ def test_operators_history_and_groups(viewer_url: str) -> None:
     assert operators["add_gate"] == {"global_best": 1, "inserted": 1}
     assert operators["qubit_swap"] == {"discarded": 1}
 
-    history = get_json(f"{viewer_url}/api/runs/0/history")["columns"]
-    assert history["step"] == [1.0, 2.0, 3.0]
+    progress = get_json(f"{viewer_url}/api/runs/0/history")
+    assert progress["columns"]["step"] == [1, 2, 3]
+    assert progress["columns"]["population_size"] == [1, 2, 3]
+    # the series is recomputed from the archive, so it is charted per metric
+    assert progress["metric"] == "loss"
+    assert "n_gates" in progress["metrics"] and "loss" in progress["metrics"]
 
-    groups = get_json(f"{viewer_url}/api/groups?metric=top5_mean&conf=95ci")
-    assert groups["metrics"] == ["best", "top5_mean"]
+    groups = get_json(f"{viewer_url}/api/groups?metric=loss&conf=95ci")
+    assert "loss" in groups["metrics"] and "n_enabled_gates" in groups["metrics"]
     (iris,) = groups["groups"]
     assert iris["name"] == "iris"
     assert [run["name"] for run in iris["runs"]] == ["iris_1", "iris_2"]
-    assert iris["history"]["step"] == [1, 2, 3]
+    # iris_2 holds two genomes, so its population stops changing after step 2 and
+    # it records no third step; the groups are aligned on the steps they share
+    assert iris["history"]["step"] == [1, 2]
     assert iris["history"]["n_runs"] == 2
     assert iris["best_loss"]["n"] == 2
     assert iris["best_loss"]["min"] == pytest.approx(0.3)

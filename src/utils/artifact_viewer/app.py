@@ -171,7 +171,7 @@ def create_app(viewer: ArtifactViewer, mcp_server: Any | None = None) -> Starlet
         query = _query(request)
         return _json(
             viewer.groups_payload(
-                query.get("metric") or "best", query.get("conf") or "std"
+                query.get("metric") or "loss", query.get("conf") or "std"
             )
         )
 
@@ -212,8 +212,12 @@ def create_app(viewer: ArtifactViewer, mcp_server: Any | None = None) -> Starlet
         )
 
     def api_history(request: Request) -> Response:
-        """Returns a run's search-progress history."""
-        return _json(viewer.history_payload(request.path_params["run"]))
+        """Returns a run's search progress (optional ``metric`` parameter)."""
+        return _json(
+            viewer.history_payload(
+                request.path_params["run"], _query(request).get("metric") or None
+            )
+        )
 
     def api_operators(request: Request) -> Response:
         """Returns a run's operator insert-type counts."""

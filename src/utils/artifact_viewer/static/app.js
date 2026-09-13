@@ -1548,9 +1548,11 @@
       const number = genome.genome_number;
       const tabContent = h("div");
 
+      const series = metricSeries(genome);
       const tabs = [
         ["diagram", "Diagram"],
         ["training", "Training"],
+        ...(series.length ? [["metrics", "Metrics"]] : []),
         ["fitness", "Fitness"],
         ["gates", `Gates (${summary.n_enabled_gates}/${summary.n_gates})`],
         ["lineage", "Lineage"],
@@ -1580,6 +1582,7 @@
           image.src = `/api/runs/${index}/genomes/${number}/${tab}.png`;
           return [frame];
         }
+        if (tab === "metrics") return renderMetrics(series);
         if (tab === "fitness") return renderFitness(summary, genome);
         if (tab === "gates") return renderGates(genome);
         if (tab === "lineage") return renderLineage(summary, genome, children);
@@ -1615,6 +1618,7 @@
           h("h2", { text: `Genome ${number}` }),
           legendItem(insertColor, label(summary.insert_type)),
           h("span", { class: "spacer" }),
+          h("a", { class: "download-json", href: `/api/runs/${index}/genomes/${number}.json`, download: `genome_${number}.json`, text: "Download JSON" }),
           h("button", { type: "button", text: "Close", onclick: () => (location.hash = `#/run/${index}`) })
         ),
         h(
@@ -1627,6 +1631,128 @@
         tabContent
       );
       showTab(state.tab);
+    }
+
+    /**
+     * Finds the per-epoch (or per-episode) metric series a genome recorded.
+     *
+     * Tasks record different things under different names, and at different
+     * cadences: classification and teacher genomes keep `training_epoch_metrics`
+     * and `validation_epoch_metrics` keyed by `epoch`, while reinforcement
+     * learning keeps `training_episode_metrics` and `evaluation_episode_metrics`
+     * keyed by `episode`, with the evaluation series recorded far less often
+     * than the training one. Nothing is assumed about which exist or what they
+     * contain: any metadata entry named `*_epoch_metrics` or `*_episode_metrics`
+     * becomes a series, and each keeps its own step column rather than being
+     * merged with the others.
+     *
+     * @param {object} genome The serialized genome.
+     * @returns {Array} One entry per series: its `name`, the `step` column it is
+     *   keyed by, the flattened metric `columns` and its `records`.
+     */
+    function metricSeries(genome) {
+      const metadata = genome.metadata || {};
+      return Object.keys(metadata)
+        .filter((key) => /_(epoch|episode)_metrics$/.test(key) && Array.isArray(metadata[key]) && metadata[key].length)
+        .map((key) => {
+          const records = metadata[key].map((record) => flattenMetrics(record));
+          const step = key.endsWith("_episode_metrics") ? "episode" : "epoch";
+          const columns = [];
+          for (const record of records) {
+            for (const name of Object.keys(record)) {
+              if (name !== step && !columns.includes(name)) columns.push(name);
+            }
+          }
+          return { name: key.replace(/_/g, " ").replace(/ metrics$/, ""), key, step, columns, records };
+        });
+    }
+
+    /**
+     * Flattens one metric record into `path -> number` pairs.
+     *
+     * A recorded metric is a bare number (`loss`), a wrapper around a mean
+     * (`fidelity: {mean}`), or a nested breakdown (`mean_class_accuracy` holding
+     * a per-class `{acc, correct, total}` as well as a `mean`), so the record is
+     * walked to whatever depth it has rather than being unwrapped one level.
+     *
+     * @param {object} record One epoch's or episode's metrics.
+     * @returns {object} The numeric values, keyed by dotted path.
+     */
+    function flattenMetrics(record, prefix = "", into = {}) {
+      for (const [name, value] of Object.entries(record || {})) {
+        const path = prefix ? `${prefix}.${name}` : name;
+        if (value !== null && typeof value === "object" && !Array.isArray(value)) flattenMetrics(value, path, into);
+        else if (typeof value === "number") into[path] = value;
+      }
+      return into;
+    }
+
+    /** How many rows of a metric series are shown before the "show all" toggle. */
+    const METRIC_ROWS_SHOWN = 20;
+
+    /**
+     * Renders each recorded metric series as its own table, newest rows included.
+     *
+     * Long histories (a walker2d genome records over 160 episodes) are trimmed to
+     * the first and last rows with a toggle, so the panel stays readable without
+     * hiding where a run ended up.
+     *
+     * @param {Array} series The series from `metricSeries`.
+     * @returns {Array} The nodes for the Metrics tab.
+     */
+    function renderMetrics(series) {
+      return series.flatMap((entry) => {
+        const body = h("div", { class: "table-wrap" });
+        let expanded = false;
+
+        const draw = () => {
+          const trimmed = expanded || entry.records.length <= METRIC_ROWS_SHOWN;
+          const head = trimmed ? entry.records : entry.records.slice(0, METRIC_ROWS_SHOWN / 2);
+          const tail = trimmed ? [] : entry.records.slice(-METRIC_ROWS_SHOWN / 2);
+          const gap = entry.records.length - head.length - tail.length;
+          const row = (record) =>
+            h(
+              "tr",
+              {},
+              h("td", { class: "number", text: formatNumber(record[entry.step]) }),
+              entry.columns.map((name) => h("td", { class: "number", text: formatNumber(record[name]) }))
+            );
+          setChildren(
+            body,
+            h(
+              "table",
+              {},
+              h("thead", {}, h("tr", {}, h("th", { class: "number", text: entry.step }), entry.columns.map((name) => h("th", { class: "number", text: name })))),
+              h(
+                "tbody",
+                {},
+                head.map(row),
+                gap > 0 ? h("tr", {}, h("td", { class: "meta", colspan: entry.columns.length + 1, text: `… ${gap.toLocaleString()} more ${entry.step}s …` })) : null,
+                tail.map(row)
+              )
+            )
+          );
+        };
+
+        draw();
+        const toggle =
+          entry.records.length > METRIC_ROWS_SHOWN
+            ? h("button", {
+                type: "button",
+                text: `Show all ${entry.records.length.toLocaleString()}`,
+                onclick: (event) => {
+                  expanded = !expanded;
+                  event.target.textContent = expanded ? "Show fewer" : `Show all ${entry.records.length.toLocaleString()}`;
+                  draw();
+                },
+              })
+            : null;
+
+        return [
+          h("div", { class: "toolbar" }, h("h3", { text: label(entry.name) }), h("span", { class: "meta", text: `${entry.records.length.toLocaleString()} ${entry.step}s · ${entry.columns.length} metrics` }), h("span", { class: "spacer" }), toggle),
+          body,
+        ];
+      });
     }
 
     function factsList(entries) {

@@ -172,7 +172,7 @@ def test_run_info_is_recorded_when_the_search_starts() -> None:
 
 
 def test_inserted_genomes_are_archived_in_insertion_order() -> None:
-    """Every recorded genome is archived, with a history row after each."""
+    """Every recorded genome is archived, with a population delta after each."""
 
     archive = MagicMock()
     search = build_search(
@@ -191,9 +191,9 @@ def test_inserted_genomes_are_archived_in_insertion_order() -> None:
         call(genomes[1], insertion=2, island=None),
     ]
     assert [
-        recorded.kwargs["step"] for recorded in archive.record_history.call_args_list
+        recorded.kwargs["step"] for recorded in archive.record_population.call_args_list
     ] == [1, 2]
-    snapshot = archive.record_history.call_args_list[-1].kwargs["population"]
+    snapshot = archive.record_population.call_args_list[-1].kwargs["population"]
     assert [genome.genome_number for genome in snapshot] == [2, 1]
 
 
@@ -207,12 +207,10 @@ def test_best_files_are_rewritten_only_when_a_best_changes() -> None:
 
     search.insert_genome(FakeGenome(1, loss=1.0, target_metric=0.5))
     assert best_writes(archive) == [(1, "fitness"), (1, "target_metric")]
-    assert archive.plot_history.call_count == 1
 
     archive.reset_mock()
     search.insert_genome(FakeGenome(2, loss=2.0, target_metric=0.4))
     assert best_writes(archive) == []
-    archive.plot_history.assert_not_called()
 
     archive.reset_mock()
     search.insert_genome(FakeGenome(3, loss=0.5, target_metric=0.3))
@@ -243,7 +241,7 @@ def test_rejected_duplicates_are_not_archived() -> None:
 
     archive.add_genome.assert_not_called()
     archive.write_current_best.assert_not_called()
-    archive.record_history.assert_not_called()
+    archive.record_population.assert_not_called()
     assert search.inserted_genomes == 2
     assert search.target_metric_best_genome.genome_number == 1
     assert [genome.genome_number for genome in population.get_population()] == [1]
@@ -269,8 +267,8 @@ def test_island_genomes_are_archived_with_their_island() -> None:
     assert sorted(islands) == [0, 0, 1, 1]
     assert [genome.metadata["island_id"] for genome in genomes] == islands
 
-    # the history snapshot merges the islands into one ranking, best first
-    snapshot = archive.record_history.call_args_list[-1].kwargs["population"]
+    # the population snapshot merges the islands into one ranking, best first
+    snapshot = archive.record_population.call_args_list[-1].kwargs["population"]
     assert [genome.genome_number for genome in snapshot] == [1, 2, 3, 4]
 
 
@@ -387,8 +385,6 @@ def test_a_real_search_writes_a_fixed_set_of_files(tmp_path) -> None:
         "best_fitness.png",
         "best_target_metric.json",
         "best_target_metric.png",
-        "exaqc_history.csv",
-        "exaqc_curves.png",
     }
 
     with GenomeArchive.open_readonly(str(run_dir)) as reader:
