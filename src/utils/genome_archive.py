@@ -602,18 +602,24 @@ def _sort_expression(sort_key: str) -> tuple[str, list[Any]]:
     """Builds the SQL expression a genome listing is ordered by.
 
     Args:
-        sort_key: A summary column (see :data:`SORTABLE_COLUMNS`) or a key of the
-            genomes' fitness dicts.
+        sort_key: A summary column (see :data:`SORTABLE_COLUMNS`), a key of the
+            genomes' fitness dicts, or a recorded training metric.
 
     Returns:
         The SQL expression and the parameters it binds.
 
     Raises:
-        ValueError: If ``sort_key`` is neither a column nor a plain identifier.
+        ValueError: If ``sort_key`` is none of those.
     """
 
     if sort_key in SORTABLE_COLUMNS:
         return sort_key, []
+    if "." in sort_key:
+        # Training metrics are always keyed ``<series>.<metric>``, so a dotted
+        # key can only be one of those. The path is quoted rather than spliced
+        # in bare, because the key's own dots would otherwise read as steps
+        # into the JSON.
+        return "json_extract(final_metrics, ?)", [f'$."{sort_key}"']
     if re.fullmatch(r"[A-Za-z0-9_]+", sort_key):
         return "json_extract(fitness, ?)", [f"$.{sort_key}"]
     raise ValueError(f"Cannot sort genomes by {sort_key!r}.")
@@ -1223,6 +1229,28 @@ class GenomeArchive:
 
         return [*_NUMERIC_COLUMNS, *self.fitness_keys(), *self.final_metric_keys()]
 
+    def primary_series_metrics(self) -> list[str]:
+        """Lists the metrics worth offering ahead of the long tail.
+
+        A task that records a per-class breakdown contributes one key per class
+        per statistic, which on a ten-class dataset buries the handful of metrics
+        anyone actually charts under dozens of per-class counts. Nothing is
+        hidden -- :meth:`series_metrics` still lists everything, and a query can
+        ask for any of it -- this is just the shorter list to show first: the
+        numeric columns, the fitness keys, and each series' own values together
+        with any ``mean`` that already summarizes a breakdown.
+
+        Returns:
+            The subset of :meth:`series_metrics` to offer before the rest.
+        """
+
+        primary = [*_NUMERIC_COLUMNS, *self.fitness_keys()]
+        for key in self.final_metric_keys():
+            _, _, leaf = key.partition(".")
+            if "." not in leaf or (leaf.count(".") == 1 and leaf.endswith(".mean")):
+                primary.append(key)
+        return primary
+
     def _metric_values(self, metric: str) -> dict[int, float]:
         """Reads one value per genome, whatever kind of metric is asked for.
 
@@ -1243,19 +1271,12 @@ class GenomeArchive:
                 training metric.
         """
 
-        if metric in _NUMERIC_COLUMNS:
-            expression, parameters = metric, []
-        elif metric in self.fitness_keys():
-            expression, parameters = "json_extract(fitness, ?)", [f"$.{metric}"]
-        elif metric in self.final_metric_keys():
-            # Training-metric keys carry the series they came from, so they hold
-            # dots and must be quoted rather than spliced into the path bare.
-            expression, parameters = (
-                "json_extract(final_metrics, ?)",
-                [f'$."{metric}"'],
-            )
-        else:
+        # Checked against what the run actually recorded, rather than resolved
+        # permissively: charting a metric no genome has would otherwise draw an
+        # empty series instead of saying so.
+        if metric not in self.series_metrics():
             raise ValueError(f"{metric!r} was not recorded by this run's genomes.")
+        expression, parameters = _sort_expression(metric)
 
         return {
             int(number): float(value)

@@ -25,6 +25,7 @@ class FakeGenome:
         loss: float,
         gates: list[str],
         returns: list[float] | None = None,
+        accuracies: list[float] | None = None,
     ) -> None:
         """Builds a genome that serializes like a real one.
 
@@ -33,6 +34,9 @@ class FakeGenome:
             loss: Its ``fitness["loss"]``; ``target_metric`` mirrors it.
             gates: The method names of its enabled gates.
             returns: The per-episode returns it recorded while training, if any.
+            accuracies: Per-class accuracies recorded each validation epoch, if
+                any, stored in the nested shape a classification run writes: one
+                entry per class beside a ``mean`` over them.
         """
 
         self.genome_number = genome_number
@@ -54,6 +58,15 @@ class FakeGenome:
             self.serialized["metadata"]["training_episode_metrics"] = [
                 {"episode": episode, "return": value}
                 for episode, value in enumerate(returns)
+            ]
+        if accuracies is not None:
+            breakdown: dict[str, Any] = {
+                str(index): {"acc": value, "correct": int(value * 10), "total": 10}
+                for index, value in enumerate(accuracies)
+            }
+            breakdown["mean"] = sum(accuracies) / len(accuracies)
+            self.serialized["metadata"]["validation_epoch_metrics"] = [
+                {"epoch": 0, "loss": loss, "mean_class_accuracy": breakdown}
             ]
 
     def to_dict(self) -> dict[str, Any]:
@@ -244,6 +257,70 @@ def test_circuit_complexity_is_recorded_for_each_genome(tmp_path) -> None:
         "SELECT genome_number, n_cnot FROM genomes ORDER BY genome_number"
     ).fetchall()
     assert recorded == [(1, 0), (2, 2)]
+    archive.close()
+
+
+def test_primary_metrics_leave_out_the_per_class_long_tail(tmp_path) -> None:
+    """A per-class breakdown stays queryable without burying the picker.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    archive = build_archive(
+        tmp_path / "run", [FakeGenome(1, loss=0.5, gates=["h"], accuracies=[1.0, 0.5])]
+    )
+
+    everything = archive.series_metrics()
+    primary = archive.primary_series_metrics()
+
+    # every class's own numbers are recorded, so a query can still reach them
+    assert "validation_epoch_metrics.mean_class_accuracy.0.acc" in everything
+    assert "validation_epoch_metrics.mean_class_accuracy.0.total" in everything
+    # but the shorter list is not one entry per class per statistic
+    assert "validation_epoch_metrics.mean_class_accuracy.0.acc" not in primary
+    assert "validation_epoch_metrics.mean_class_accuracy.mean" in primary
+    assert "validation_epoch_metrics.loss" in primary
+    assert "loss" in primary and "n_cnot" in primary
+    archive.close()
+
+
+def test_training_and_validation_metrics_are_offered_separately(tmp_path) -> None:
+    """Each series keeps its own identity, so either can be charted.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    archive = build_archive(
+        tmp_path / "run",
+        [FakeGenome(1, loss=0.5, gates=["h"], returns=[1.0], accuracies=[1.0, 0.0])],
+    )
+
+    primary = archive.primary_series_metrics()
+    assert "training_episode_metrics.return" in primary
+    assert "validation_epoch_metrics.loss" in primary
+    archive.close()
+
+
+def test_genomes_can_be_plotted_by_a_training_metric(tmp_path) -> None:
+    """A dotted metric key is resolved against the recorded final metrics.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    archive = build_archive(
+        tmp_path / "run",
+        [
+            FakeGenome(1, loss=0.9, gates=["h"], accuracies=[0.25, 0.25]),
+            FakeGenome(2, loss=0.1, gates=["h"], accuracies=[1.0, 0.5]),
+        ],
+    )
+
+    points = archive.points("validation_epoch_metrics.mean_class_accuracy.mean")
+    assert points["genome_number"] == [1, 2]
+    assert points["y"] == pytest.approx([0.25, 0.75])
     archive.close()
 
 

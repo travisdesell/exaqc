@@ -171,7 +171,7 @@ def create_app(viewer: ArtifactViewer, mcp_server: Any | None = None) -> Starlet
         query = _query(request)
         return _json(
             viewer.groups_payload(
-                query.get("metric") or "loss", query.get("conf") or "std"
+                query.get("metric") or None, query.get("conf") or "std"
             )
         )
 

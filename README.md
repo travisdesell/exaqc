@@ -514,8 +514,8 @@ records only which genomes entered and left the population at each insertion, so
 population at any step is everything added up to it minus everything removed. Every
 population statistic is then recomputed from the genomes themselves, which is what
 lets progress be charted against any metric a run recorded -- a loss, a return, a
-fidelity, a gate count -- rather than only the few a profiler would have chosen while
-the search was running. Each genome's summary row also carries `n_cnot` and `n_rot`
+fidelity, a gate count -- rather than only the handful a search would have had to
+choose in advance, while it was still running. Each genome's summary row also carries `n_cnot` and `n_rot`
 (its circuit complexity once decomposed) and `final_metrics` (the last value of every
 per-epoch or per-episode metric it recorded). [`exaqc_mcp`](#exaqc_mcp) exposes the
 same queries to an agent.
@@ -805,11 +805,20 @@ Then open `http://127.0.0.1:8000/` in a browser. The page has:
 
 - **Runs**: every run found, with its task, genome count, best `loss` and
   `target_metric`, and whether it is still being written.
-- **A run's page**: on the left, the run's search progress (the population's
-  best, top-k mean and mean fitness per insertion, when the run recorded them;
-  untick *search progress* to hide it) above a chart of every genome, with genome number
-  running down it and a chosen fitness key across it, better values to the right
-  (so `loss` runs high to low and `target_metric` low to high). Genomes are colored by
+- **A run's page**: on the left, the run's search progress (the best, mean and
+  worst of a chosen metric across the population at each insertion; untick
+  *search progress* to hide it) above a chart of every genome, with genome number
+  running down it and a chosen metric across it, better values to the right
+  (so `loss` runs high to low and `target_metric` low to high). Neither chart is
+  limited to fitness: both pick from the run's fitness keys, its genomes' circuit
+  size and complexity (`n_enabled_gates`, `n_cnot`, `n_rot`) and any metric its
+  task recorded while training, so a classification run can be charted by
+  validation loss or mean class accuracy and a reinforcement-learning one by
+  episode return. Training and validation series stay separate. A task that
+  records a per-class breakdown contributes one entry per class per statistic,
+  which would bury the handful of metrics anyone charts, so the pickers offer the
+  shorter list until *all metrics* asks for the rest — nothing is hidden from a
+  query, only from the dropdown. Genomes are colored by
   insert type, operator family or island, with a line joining the genomes that
   improved the best value and every parent-to-child link in the run (links fade
   as they crowd the chart, so runs of tens of thousands of genomes stay legible). The
@@ -843,8 +852,18 @@ Then open `http://127.0.0.1:8000/` in a browser. The page has:
   page and the run comparison.
 - **Compare genomes**: two genomes' diagrams, fitness, hyperparameters and gates
   (matched by innovation number) side by side.
-- **Compare runs**: the mean and spread of each group's search history, and a
-  summary of each group's best genomes.
+- **Compare runs**: the mean and spread of each group's progress on a chosen
+  metric — `target_metric` unless the runs did not record it, then `loss` —
+  offering the same shorter metric list, and *all metrics* toggle, as a run's
+  page. Also a summary of each group's best genomes. A run records a step only
+  when its population changed, so runs are not aligned on the steps they happen
+  to share (which for long runs is almost none): every step is kept and each run
+  carries its last value forward, which is exact rather than interpolated -- a
+  step with no row is a step where that run's population did not change. Each run
+  counts only across its own lifetime, joining the average as it reaches a step
+  and dropping out past the last step it recorded, so a search still in progress
+  is never averaged in as though it had levelled off at an insertion it has not
+  reached.
 
 | Argument | Default | Description |
 |---|---|---|
@@ -887,14 +906,24 @@ a run, so it is safe to point at a search that is still running.
 The tools are `list_runs`, `describe_run`, `list_genomes`, `get_genome`,
 `genome_metrics`, `compare_genomes`, `genome_lineage`, `fitness_summary`,
 `operator_insertion_rates`, `progress_series`, `gate_statistics`, `compare_runs`,
-`describe_schema` and `query_sql`. The first thirteen answer common questions with
-typed arguments (`genome_metrics` returns a genome's recorded training history,
-each series keyed by its own epoch or episode column); `query_sql` runs a single
-read-only `SELECT` against one run's
-archive, or against several runs rolled into one table with a `run` column, for
-questions the typed tools do not cover. Results are capped (at most 200 rows,
-series downsampled) and each carries a link into the dashboard showing the same
-view.
+`describe_schema`, `query_sql` and `export_query`. The first thirteen answer
+common questions with typed arguments (`genome_metrics` returns a genome's
+recorded training history, each series keyed by its own epoch or episode column;
+`list_runs` leaves out each run's command line unless `include_command_line` is
+set, while `describe_run` always shows it); `query_sql` runs a single read-only
+`SELECT` against one run's archive, or against several runs rolled into one
+database, for questions the typed tools do not cover. A roll-up holds each run's
+`genomes`, `genome_parents`, `population_events` and `run_info`, every table with
+a `run` column, and both kinds of query can read a `genome_operators` view with
+one row per operator that generated a genome. Results are capped (at most 200
+rows, series downsampled) and most carry a link into the dashboard showing the
+same view. `export_query` is the exception to the cap: it runs the same
+statements for a client collecting data to analyze itself, returning pages of up
+to 50,000 rows as CSV or JSON, each with the `next_offset` to request next.
+A run's `run_info` also records `operator_selection` -- the mutation weights,
+crossover rates and mutation/parent count strategies its search drew operators
+with -- so the operator rates its genomes show can be compared against what was
+configured (runs archived before this was added do not have it).
 
 | Argument | Default | Description |
 |---|---|---|

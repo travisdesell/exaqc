@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import socket
+import sqlite3
 import threading
 import time
 import urllib.request
@@ -27,14 +28,17 @@ import uvicorn
 from mcp import Client
 
 from src.examples import exaqc_mcp
+from src.utils.artifact_viewer import mcp_tools
 from src.utils.artifact_viewer.app import create_app
 from src.utils.artifact_viewer.mcp_app import build_mcp_server
 from src.utils.artifact_viewer.mcp_tools import (
+    MAX_EXPORT_ROWS,
     MAX_ROWS,
     MAX_SERIES_POINTS,
     DashboardTools,
 )
 from src.utils.artifact_viewer.server import ArtifactViewer, RenderService, RunRegistry
+from src.utils.genome_archive import ARCHIVE_FILENAME
 from tests.test_exaqc_dashboard import build_run, standard_genomes
 
 #: The tools the interface is expected to expose.
@@ -53,6 +57,7 @@ EXPECTED_TOOLS = {
     "compare_runs",
     "describe_schema",
     "query_sql",
+    "export_query",
 }
 
 
@@ -156,6 +161,17 @@ def test_every_tool_is_registered_with_a_schema(tools: DashboardTools) -> None:
         "limit",
     }
     assert by_name["query_sql"].input_schema["required"] == ["sql"]
+    assert set(by_name["export_query"].input_schema["properties"]) == {
+        "sql",
+        "run",
+        "runs",
+        "group",
+        "format",
+        "limit",
+        "offset",
+    }
+    assert by_name["export_query"].input_schema["required"] == ["sql"]
+    assert "include_command_line" in by_name["list_runs"].input_schema["properties"]
     assert all(tool.description for tool in registered)
 
 
@@ -171,6 +187,10 @@ def test_runs_and_genomes_are_listed_with_deep_links(tools: DashboardTools) -> N
     assert [row["name"] for row in runs["rows"]] == ["iris_1", "iris_2"]
     assert runs["dashboard_url"] == "http://dash.test:8000/#/"
     assert "| run |" in runs["table"]
+    # command lines are long and repeated across a group, so they are opt-in
+    assert all("command_line" not in row for row in runs["rows"])
+    verbose = tools.list_runs(include_command_line=True)
+    assert all("command_line" in row for row in verbose["rows"])
 
     described = tools.describe_run("iris_1")
     assert described["fitness_keys"] == ["loss", "target_metric"]
@@ -319,14 +339,24 @@ def test_series_are_downsampled_rather_than_returned_whole(
         tools: The tool layer fixture.
     """
 
-    series = tools.progress_series("iris_1", metric="best", max_points=2)
+    series = tools.progress_series(
+        "iris_1", metric="loss", statistic="best", max_points=2
+    )
+    assert series["metric"] == "loss"
+    assert series["statistic"] == "best"
     assert series["returned_points"] <= 2
     assert series["recorded_points"] >= series["returned_points"]
     assert len(series["step"]) == len(series["value"])
-    assert "best" in series["metrics"]
+    # what is offered to chart is what the genomes recorded, not the statistics
+    # computed from one of them
+    assert "loss" in series["metrics"]
+    assert "best" in series["statistics"] and "loss" not in series["statistics"]
 
     with pytest.raises(ValueError, match="not recorded"):
         tools.progress_series("iris_1", metric="nonexistent")
+
+    with pytest.raises(ValueError, match="not a statistic"):
+        tools.progress_series("iris_1", statistic="best_ever")
 
     capped = tools.progress_series("iris_1", max_points=10_000)
     assert capped["returned_points"] <= MAX_SERIES_POINTS
@@ -409,6 +439,20 @@ def test_query_sql_enforces_read_only_access(tools: DashboardTools) -> None:
     )
     assert [row[0] for row in allowed["rows"]] == [3, 2]
 
+    # a semicolon inside a string literal or a comment does not end the statement
+    separated = tools.query_sql(
+        "select group_concat(genome_number, ';') from "
+        "(select genome_number from genomes order by genome_number)",
+        run="iris_1",
+    )
+    assert separated["rows"] == [["1;2;3;4"]]
+
+    # nor does a trailing comment swallow the enforced limit
+    commented = tools.query_sql(
+        "select count(*) from genomes -- trailing; comment", run="iris_1"
+    )
+    assert commented["rows"] == [[4]]
+
     # the archive is untouched by a query
     assert tools.list_genomes("iris_1")["total"] == 4
 
@@ -432,6 +476,172 @@ def test_query_sql_limits_rows(tools: DashboardTools) -> None:
     assert clamped["row_limit"] == MAX_ROWS
 
 
+def test_a_table_repeating_the_rows_is_dropped_before_any_row(
+    tools: DashboardTools,
+) -> None:
+    """A result over the response budget loses its Markdown table, not its data.
+
+    The table repeats rows the result already holds, so dropping it first can
+    make a result fit that would otherwise have lost half its rows.
+
+    Args:
+        tools: The tool layer fixture.
+    """
+
+    result = tools.query_sql(
+        "with recursive n(i) as (select 1 union all select i + 1 from n where i < 50) "
+        "select i, hex(zeroblob(350)) as filler from n",
+        run="iris_1",
+    )
+    assert len(result["rows"]) == 50
+    assert "truncated" not in result
+    assert result["table"].startswith("_table omitted")
+
+
+def test_cross_run_sql_reaches_parents_population_events_and_run_info(
+    tools: DashboardTools,
+) -> None:
+    """A roll-up carries every per-run table, each with a run column.
+
+    Offspring questions join genomes to their parents, and those joins have to
+    span a group of runs, not be repeated one run at a time.
+
+    Args:
+        tools: The tool layer fixture.
+    """
+
+    for table in ("genome_parents", "population_events", "run_info"):
+        counts = {
+            name: tools.query_sql(f"select count(*) from {table}", run=name)["rows"][0][
+                0
+            ]
+            for name in ("iris_1", "iris_2")
+        }
+        assert counts["iris_1"] > 0, table
+        rolled = tools.query_sql(
+            f"select run, count(*) from {table} group by run order by run", group="iris"
+        )
+        assert rolled["rows"] == [
+            [name, count] for name, count in counts.items() if count
+        ], table
+
+    parents = tools.query_sql(
+        "select run, child, parent from genome_parents order by run, child, parent",
+        runs=["iris_1", "iris_2"],
+    )
+    assert ["iris_1", 3, 1] in parents["rows"]
+    assert ["iris_1", 3, 2] in parents["rows"]
+
+    schema = tools.describe_schema()["cross_run"]
+    for table in (
+        "genome_parents",
+        "population_events",
+        "run_info",
+        "genome_operators",
+    ):
+        assert schema[table].startswith("run, "), table
+
+
+def test_genome_operators_unnests_generated_by(tools: DashboardTools) -> None:
+    """The genome_operators view gives one row per operator, in one run or many.
+
+    Args:
+        tools: The tool layer fixture.
+    """
+
+    single = tools.query_sql(
+        "select position, operator, n_operators from genome_operators "
+        "where genome_number = 2 order by position",
+        run="iris_1",
+    )
+    assert single["rows"] == [[0, "add_gate", 2], [1, "clone", 2]]
+
+    rolled = tools.query_sql(
+        "select run, operator, count(*) from genome_operators group by 1, 2 order by 1, 2",
+        group="iris",
+    )
+    unnested = tools.query_sql(
+        "select run, json_each.value, count(*) from genomes, "
+        "json_each(genomes.generated_by) group by 1, 2 order by 1, 2",
+        group="iris",
+    )
+    assert rolled["rows"] == unnested["rows"]
+    assert {row[0] for row in rolled["rows"]} == {"iris_1", "iris_2"}
+
+
+def test_export_query_pages_through_a_full_result(tools: DashboardTools) -> None:
+    """export_query returns compact pages, each saying where the next starts.
+
+    Args:
+        tools: The tool layer fixture.
+    """
+
+    sql = "select run, genome_number from genomes order by run, genome_number"
+    first = tools.export_query(sql, group="iris", limit=4)
+    assert first["columns"] == ["run", "genome_number"]
+    assert first["csv"].splitlines() == [
+        "run,genome_number",
+        "iris_1,1",
+        "iris_1,2",
+        "iris_1,3",
+        "iris_1,4",
+    ]
+    assert (first["row_count"], first["next_offset"], first["complete"]) == (
+        4,
+        4,
+        False,
+    )
+
+    last = tools.export_query(sql, group="iris", limit=4, offset=first["next_offset"])
+    assert last["csv"].splitlines()[1:] == ["iris_2,1", "iris_2,2"]
+    assert (last["row_count"], last["next_offset"], last["complete"]) == (2, None, True)
+
+    as_json = tools.export_query(sql, group="iris", format="json")
+    assert as_json["rows"][0] == ["iris_1", 1]
+    assert as_json["row_count"] == 6 and as_json["complete"]
+    assert "table" not in as_json
+
+    single_run = "select genome_number from genomes order by genome_number"
+    assert (
+        tools.export_query(single_run, run="iris_1", limit=10**9)["row_limit"]
+        == MAX_EXPORT_ROWS
+    )
+    with pytest.raises(ValueError, match="format"):
+        tools.export_query(single_run, run="iris_1", format="parquet")
+
+    # the same guards as query_sql
+    for statement in ("delete from genomes", "select 1; select 2"):
+        with pytest.raises(ValueError):
+            tools.export_query(statement, run="iris_1")
+
+
+def test_export_query_ends_a_page_at_its_byte_budget(
+    tools: DashboardTools, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A page stops before its byte budget, yet always makes progress.
+
+    Args:
+        tools: The tool layer fixture.
+        monkeypatch: pytest fixture shrinking the byte budget.
+    """
+
+    # each CSV line is nine bytes ("iris_1,1\n"), so two fit and a third does not
+    monkeypatch.setattr(mcp_tools, "MAX_EXPORT_BYTES", 20)
+    sql = "select run, genome_number from genomes order by run, genome_number"
+
+    offset: int | None = 0
+    pages = []
+    while offset is not None:
+        page = tools.export_query(sql, group="iris", offset=offset)
+        assert page["row_count"] >= 1
+        pages.append(page)
+        offset = page["next_offset"]
+
+    assert pages[0]["row_count"] == 2
+    collected = [line for page in pages for line in page["csv"].splitlines()[1:]]
+    assert len(collected) == 6 and collected[0] == "iris_1,1"
+
+
 def test_schema_description_lists_what_can_be_queried(tools: DashboardTools) -> None:
     """describe_schema tells an agent the tables, limits and example queries.
 
@@ -443,7 +653,10 @@ def test_schema_description_lists_what_can_be_queried(tools: DashboardTools) -> 
     assert "genomes" in schema["single_run"]
     assert "run" in schema["cross_run"]["genomes"]
     assert schema["limits"]["rows"] == MAX_ROWS
+    assert "export_query" in schema["limits"]["export"]
+    assert "genome_operators" in schema["single_run"]
     assert any("json_extract" in example for example in schema["examples"])
+    assert any("genome_parents" in example for example in schema["examples"])
 
 
 def test_a_client_can_handshake_in_process(tools: DashboardTools) -> None:
@@ -492,6 +705,98 @@ def test_the_dashboard_serves_mcp_on_the_same_port(tools: DashboardTools) -> Non
             assert response.status == 200
 
 
+def test_an_expected_failure_reaches_the_caller(tools: DashboardTools) -> None:
+    """A bad argument is answered with its reason, not a generic tool crash.
+
+    The SDK treats any exception but ``ToolError`` as a crash: the caller is told
+    only ``Error executing tool <name>`` and the reason is logged as a server
+    traceback. Bad arguments are ordinary for these tools -- an unknown run, a
+    metric a run did not record, SQL naming a missing column -- and an agent can
+    only correct them if it is told what was wrong.
+
+    Args:
+        tools: The tool layer fixture.
+    """
+
+    server = build_mcp_server(tools.registry, base_url="http://testserver")
+
+    async def call(name: str, arguments: dict[str, object]) -> str:
+        """Calls one tool in process and returns the text the caller receives."""
+        async with Client(server) as client:
+            result = await client.call_tool(name, arguments)
+            return result.content[0].text
+
+    unknown_run = asyncio.run(call("describe_run", {"run": "no_such_run"}))
+    assert "no_such_run" in unknown_run
+
+    bad_sql = asyncio.run(
+        call(
+            "query_sql", {"sql": "select no_such_column from genomes", "run": "iris_1"}
+        )
+    )
+    assert "no_such_column" in bad_sql
+
+    rejected = asyncio.run(
+        call("query_sql", {"sql": "delete from genomes", "run": "iris_1"})
+    )
+    assert "SELECT" in rejected
+
+
+def test_a_roll_up_names_an_archive_missing_its_columns(
+    tools: DashboardTools, tmp_path: Path
+) -> None:
+    """A run too old to roll up is named, rather than failing as bare SQL.
+
+    The roll-up copies columns the archive gained over time, so a run written
+    before one of them cannot join it. Saying which run and which column -- and
+    that it can still be queried alone -- is the difference between a caller
+    correcting itself and a caller seeing ``no such column: n_cnot``.
+
+    Args:
+        tools: The tool layer fixture.
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    connection = sqlite3.connect(tmp_path / "runs" / "iris_2" / ARCHIVE_FILENAME)
+    connection.execute("ALTER TABLE genomes DROP COLUMN n_cnot")
+    connection.commit()
+    connection.close()
+
+    # the run is still perfectly queryable on its own
+    assert tools.query_sql("select count(*) from genomes", run="iris_2")["rows"]
+
+    with pytest.raises(ValueError, match="iris_2") as refused:
+        tools.query_sql(
+            "select run, count(*) from genomes group by run",
+            runs=["iris_1", "iris_2"],
+        )
+    assert "n_cnot" in str(refused.value)
+
+
+def test_cross_run_sql_reaches_the_recorded_training_metrics(
+    tools: DashboardTools,
+) -> None:
+    """Columns added to the archive are queryable across runs, not just within one.
+
+    Args:
+        tools: The tool layer fixture.
+    """
+
+    schema = tools.describe_schema()
+    for column in ("n_cnot", "n_rot", "final_metrics"):
+        assert column in schema["cross_run"]["genomes"]
+        assert column in schema["single_run"]["genomes"]
+
+    # the query that matters: a training metric, across several runs at once
+    result = tools.query_sql(
+        "select run, genome_number, json_extract(final_metrics, "
+        "'$.\"validation_epoch_metrics.loss\"') as validation_loss from genomes",
+        runs=["iris_1", "iris_2"],
+    )
+    assert result["columns"] == ["run", "genome_number", "validation_loss"]
+    assert {row[0] for row in result["rows"]} == {"iris_1", "iris_2"}
+
+
 def test_tools_never_modify_an_archive(tools: DashboardTools) -> None:
     """Reading through every tool leaves the archives byte for byte unchanged.
 
@@ -528,6 +833,10 @@ def test_tools_never_modify_an_archive(tools: DashboardTools) -> None:
     tools.query_sql(
         "select run, count(*) from genomes group by run", runs=["iris_1", "iris_2"]
     )
+    # the genome_operators view is temporary, so creating it writes nothing
+    tools.query_sql("select count(*) from genome_operators", run="iris_1")
+    tools.export_query("select * from genome_parents", group="iris")
+    tools.export_query("select * from genomes", run="iris_1", format="json")
 
     assert fingerprint() == before
     for path in before:

@@ -13,13 +13,18 @@ accepts either a run's index (``"3"``) or its name (``"iris_1"``).
 
 from __future__ import annotations
 
+import functools
+import sqlite3
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 from src.utils.artifact_viewer.mcp_tools import (
+    DEFAULT_EXPORT_ROWS,
     DEFAULT_ROWS,
     GATE_SAMPLE_SIZE,
+    MAX_EXPORT_ROWS,
     MAX_ROWS,
     DashboardTools,
 )
@@ -37,9 +42,78 @@ the fitness keys and the values genomes can be filtered by. Use the typed tools
 for common questions, and query_sql (with describe_schema) for anything else.
 
 Results are capped: listings return at most a few hundred rows and series are
-downsampled, so prefer aggregates over fetching every genome. Each result
-carries a dashboard_url that opens the same view in a browser.
+downsampled, so prefer aggregates over fetching every genome. To collect rows
+for your own analysis instead, page through export_query, which runs the same
+SQL without the row cap. Most results carry a dashboard_url that opens the same
+view in a browser.
 """
+
+
+class _AnticipatedFailures:
+    """Presents :class:`DashboardTools` with its expected failures as tool errors.
+
+    The tool layer refuses bad arguments the way ordinary Python does, with
+    ``ValueError`` and ``KeyError``: an unknown run, a metric no genome recorded,
+    SQL naming a column that is not there. To the MCP SDK any exception other
+    than :class:`~mcp.server.mcpserver.exceptions.ToolError` is a crash -- the
+    caller is told only ``Error executing tool <name>`` and the message is logged
+    as a server traceback instead. That leaves an agent unable to correct a call
+    it could have fixed had it been told what was wrong, and fills the log with
+    tracebacks for ordinary mistakes.
+
+    Translating here rather than in the tool layer keeps
+    :mod:`src.utils.artifact_viewer.mcp_tools` free of SDK imports, so the
+    transport stays swappable, and covers every tool -- including any added later
+    -- rather than each registration having to remember.
+
+    Attributes:
+        tools: The tool layer being wrapped.
+    """
+
+    def __init__(self, tools: DashboardTools) -> None:
+        """Wraps a tool layer.
+
+        Args:
+            tools: The tools whose anticipated failures are translated.
+        """
+
+        self.tools = tools
+
+    def __getattr__(self, name: str) -> Any:
+        """Looks up a tool, wrapping it to translate its expected failures.
+
+        Args:
+            name: The attribute being read, which for a tool is its method name.
+
+        Returns:
+            The attribute: wrapped when it is callable, unchanged otherwise.
+        """
+
+        attribute = getattr(self.tools, name)
+        if not callable(attribute):
+            return attribute
+
+        @functools.wraps(attribute)
+        def call(*arguments: Any, **keywords: Any) -> Any:
+            """Calls the tool, reporting an expected failure as a tool error."""
+
+            try:
+                return attribute(*arguments, **keywords)
+            except KeyError as error:
+                # KeyError renders its argument quoted ("'no such run'"), so the
+                # message is taken from the argument rather than from str().
+                message = str(error.args[0]) if error.args else str(error)
+                raise ToolError(message) from error
+            except ValueError as error:
+                raise ToolError(str(error)) from error
+            except sqlite3.DatabaseError as error:
+                # A query's own failures are reported by query_sql, but reading
+                # an archive to build a roll-up happens before that, so a
+                # database error can still reach here -- and it is the caller's
+                # selection of runs that provoked it.
+                raise ToolError(f"Could not read a run's archive: {error}") from error
+
+        return call
 
 
 def build_mcp_server(
@@ -59,7 +133,7 @@ def build_mcp_server(
         The configured server, ready to mount over HTTP or run over stdio.
     """
 
-    tools = DashboardTools(registry, renderer, base_url)
+    tools = _AnticipatedFailures(DashboardTools(registry, renderer, base_url))
     server = MCPServer(
         name="exaqc-dashboard",
         title="EXAQC run analysis",
@@ -68,19 +142,25 @@ def build_mcp_server(
     )
 
     @server.tool(
-        description="List the EXAQC runs being served, with their task, size and best fitness."
+        description=(
+            "List the EXAQC runs being served, with their task, size and best fitness. "
+            "Command lines are left out unless include_command_line is set."
+        )
     )
-    def list_runs(name_contains: str | None = None) -> dict[str, Any]:
+    def list_runs(
+        name_contains: str | None = None, include_command_line: bool = False
+    ) -> dict[str, Any]:
         """Lists the served runs.
 
         Args:
             name_contains: Only list runs whose name contains this.
+            include_command_line: Whether each row keeps the run's command line.
 
         Returns:
             One summary row per run, plus the groups they belong to.
         """
 
-        return tools.list_runs(name_contains)
+        return tools.list_runs(name_contains, include_command_line)
 
     @server.tool(
         description=(
@@ -253,23 +333,34 @@ def build_mcp_server(
         return tools.operator_insertion_rates(run, group)
 
     @server.tool(
-        description="Return a run's search progress over time, downsampled to a readable number of points."
+        description=(
+            "Return a run's search progress over time, downsampled. Choose which metric "
+            "to summarize over the population (a fitness key, a circuit size, or a metric "
+            "the task recorded while training) and which statistic of it to return."
+        )
     )
     def progress_series(
-        run: str, metric: str = "best", max_points: int = 200
+        run: str,
+        metric: str | None = None,
+        statistic: str = "best",
+        max_points: int = 200,
     ) -> dict[str, Any]:
         """Returns a run's progress series.
 
         Args:
             run: A run index or name.
-            metric: The recorded metric to return.
+            metric: The metric summarized over the population; the run's default
+                when not given.
+            statistic: Which series of it to return: ``best``, ``mean``,
+                ``worst`` or ``population_size``.
             max_points: The most points to return.
 
         Returns:
-            The downsampled series and the metrics available.
+            The downsampled series, the metrics worth charting and the
+            statistics available.
         """
 
-        return tools.progress_series(run, metric, max_points)
+        return tools.progress_series(run, metric, statistic, max_points)
 
     @server.tool(
         description="Summarize genome sizes across a run and which gate methods its best genomes use."
@@ -345,5 +436,39 @@ def build_mcp_server(
         """
 
         return tools.query_sql(sql, run, runs, group, limit)
+
+    @server.tool(
+        description=(
+            "Page through the full result of a read-only SELECT (the statements query_sql "
+            f"accepts) as compact CSV or JSON, up to {MAX_EXPORT_ROWS} rows a page, for a "
+            "client collecting data to analyze itself. Pass each page's next_offset back "
+            "as offset until complete is true, and ORDER BY the query so pages are stable."
+        )
+    )
+    def export_query(
+        sql: str,
+        run: str | None = None,
+        runs: list[str] | None = None,
+        group: str | None = None,
+        format: str = "csv",
+        limit: int = DEFAULT_EXPORT_ROWS,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Returns one page of a query's full result.
+
+        Args:
+            sql: The statement to run.
+            run: A single run to query.
+            runs: Several runs to roll up and query together.
+            group: A group of runs to roll up and query together.
+            format: ``csv`` or ``json``.
+            limit: The most rows in the page.
+            offset: Rows of the result to skip: the previous page's next_offset.
+
+        Returns:
+            The page, its columns, and the offset the next page starts at.
+        """
+
+        return tools.export_query(sql, run, runs, group, format, limit, offset)
 
     return server

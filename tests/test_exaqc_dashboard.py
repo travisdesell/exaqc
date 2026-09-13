@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import socket
+import sqlite3
 import threading
 import time
 import urllib.error
@@ -508,6 +509,42 @@ def test_the_run_list_picks_up_runs_started_later(tmp_path: Path) -> None:
         assert get_json(f"{url}/api/runs/1")["name"] == "second_run"
 
 
+def test_a_run_page_survives_an_archive_it_cannot_fully_read(tmp_path: Path) -> None:
+    """An archive missing a column still opens, reporting what it could read.
+
+    A run written by an older version has no ``final_metrics`` column, so asking
+    what its genomes can be charted by fails. The page degrades to the rest of
+    what the archive holds rather than failing outright, since a single such run
+    under a watched directory would otherwise take its whole page down.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    watched = tmp_path / "experiments"
+    watched.mkdir()
+    build_run(watched / "older_run", standard_genomes()[:2])
+
+    connection = sqlite3.connect(watched / "older_run" / ARCHIVE_FILENAME)
+    connection.execute("ALTER TABLE genomes DROP COLUMN final_metrics")
+    connection.commit()
+    connection.close()
+
+    with serving(RunRegistry(watch_directory=str(watched))) as url:
+        assert get(f"{url}/api/runs/0")[0] == 200
+
+        payload = get_json(f"{url}/api/runs/0")
+        assert "final_metrics" in payload["error"]
+        assert payload["metrics"] == []
+        assert payload["primary_metrics"] == []
+        # everything the archive could still answer comes through
+        assert payload["genomes"] == 2
+        assert payload["fitness_keys"] == ["loss", "target_metric"]
+
+        # and the progress chart reports having nothing rather than erroring
+        assert get(f"{url}/api/runs/0/history")[0] == 200
+
+
 def test_assign_groups_uses_path_substrings(tmp_path) -> None:
     """A run joins every group whose substring is in its path.
 
@@ -798,15 +835,24 @@ def test_operators_history_and_groups(viewer_url: str) -> None:
     (iris,) = groups["groups"]
     assert iris["name"] == "iris"
     assert [run["name"] for run in iris["runs"]] == ["iris_1", "iris_2"]
-    # iris_2 holds two genomes, so its population stops changing after step 2 and
-    # it records no third step; the groups are aligned on the steps they share
-    assert iris["history"]["step"] == [1, 2]
+    # iris_2 holds two genomes, so it records no third step: it is carried
+    # forward only across its own lifetime and drops out of the average past its
+    # last recorded step, rather than appearing to level off there
+    assert iris["history"]["step"] == [1, 2, 3]
+    assert iris["history"]["runs_at_step"] == [2, 2, 1]
     assert iris["history"]["n_runs"] == 2
     assert iris["best_loss"]["n"] == 2
     assert iris["best_loss"]["min"] == pytest.approx(0.3)
     assert iris["kind"] == "group"
     # operator insertion counts moved to the insertion-rate tables
     assert "operators" not in iris
+
+    # asked for no metric, the comparison picks one the runs recorded rather
+    # than charting nothing: target_metric is what a search is judged on
+    defaulted = get_json(f"{viewer_url}/api/groups")
+    assert defaulted["metric"] == "target_metric"
+    assert defaulted["groups"][0]["history"] is not None
+    assert "target_metric" in defaulted["primary_metrics"]
 
     assert get(f"{viewer_url}/api/groups?conf=wide")[0] == 400
 

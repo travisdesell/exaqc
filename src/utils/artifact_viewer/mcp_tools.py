@@ -21,11 +21,14 @@ Two constraints shape the design, both measured on a 20k-genome archive:
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import re
 import sqlite3
 import statistics
 import time
+from collections.abc import Sequence
 from typing import Any
 from urllib.parse import quote
 
@@ -56,6 +59,23 @@ MAX_RUNS_PER_QUERY = 64
 #: How long a ``query_sql`` statement may run before it is interrupted.
 QUERY_TIMEOUT_SECONDS = 10.0
 
+#: Rows one ``export_query`` page holds when the caller does not say, and the
+#: most it may ask for. Export pages are read by a program rather than an agent,
+#: so they are far larger than a listing.
+DEFAULT_EXPORT_ROWS = 5_000
+MAX_EXPORT_ROWS = 50_000
+
+#: The most encoded bytes of rows one ``export_query`` page carries; a page ends
+#: early rather than exceed it, and says where the next one starts.
+MAX_EXPORT_BYTES = 4 * 1024 * 1024
+
+#: How long an ``export_query`` statement may run: longer than an interactive
+#: query, since a page may scan every genome of many runs.
+EXPORT_TIMEOUT_SECONDS = 60.0
+
+#: The encodings ``export_query`` returns a page in.
+EXPORT_FORMATS = ("csv", "json")
+
 #: Genomes sampled when summarizing gate usage, which needs the stored JSON.
 GATE_SAMPLE_SIZE = 200
 
@@ -71,21 +91,38 @@ _ALLOWED_SQL_ACTIONS = frozenset(
     }
 )
 
-#: The columns a rolled-up cross-run ``genomes`` table exposes to SQL.
-_ROLLUP_COLUMNS = (
-    "run",
-    "genome_number",
-    "insertion",
-    "insert_type",
-    "generated_by",
-    "crossover_type",
-    "island",
-    "n_gates",
-    "n_enabled_gates",
-    "n_parameters",
-    "fitness",
-    "loss",
-    "target_metric",
+#: The per-genome columns a cross-run roll-up holds: each column's name, its SQL
+#: type, and the expression selecting it from an archive. Kept as one table so
+#: the database the roll-up creates, the rows it copies into it and the schema it
+#: advertises cannot disagree -- columns added to the archive but to only one of
+#: those three are how the roll-up came to be missing some.
+_ROLLUP_SELECT: tuple[tuple[str, str, str], ...] = (
+    ("genome_number", "INTEGER", "genome_number"),
+    ("insertion", "INTEGER", "insertion"),
+    ("insert_type", "TEXT", "insert_type"),
+    ("generated_by", "TEXT", "generated_by"),
+    ("crossover_type", "TEXT", "crossover_type"),
+    ("island", "INTEGER", "island"),
+    ("n_gates", "INTEGER", "n_gates"),
+    ("n_enabled_gates", "INTEGER", "n_enabled_gates"),
+    ("n_parameters", "INTEGER", "n_parameters"),
+    ("n_cnot", "INTEGER", "n_cnot"),
+    ("n_rot", "INTEGER", "n_rot"),
+    ("final_metrics", "TEXT", "final_metrics"),
+    ("fitness", "TEXT", "fitness"),
+    ("loss", "REAL", "json_extract(fitness, '$.loss')"),
+    ("target_metric", "REAL", "json_extract(fitness, '$.target_metric')"),
+)
+
+#: Every column of the cross-run ``genomes`` table, the run's name first.
+_ROLLUP_COLUMNS = ("run", *(name for name, _, _ in _ROLLUP_SELECT))
+
+#: Archive tables copied whole into a cross-run roll-up, each with the columns
+#: it keeps; the roll-up puts a ``run`` column naming each row's run in front.
+_ROLLUP_TABLES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("genome_parents", ("child", "parent")),
+    ("population_events", ("step", "recorded_at", "added", "removed")),
+    ("run_info", ("key", "value")),
 )
 
 
@@ -195,6 +232,94 @@ def _statistics(values: list[float]) -> dict[str, Any]:
     }
 
 
+def _genome_operators_view(with_run: bool) -> str:
+    """Builds the statement creating the ``genome_operators`` view.
+
+    ``generated_by`` stores a genome's operators as a JSON array, which every
+    per-operator question would otherwise unnest with ``json_each``. The view
+    does that once: one row per operator applied, with its position and how many
+    operators the genome had, so a genome made by several operators can be told
+    apart from one made by a single operator.
+
+    Args:
+        with_run: Whether the view carries the roll-up's ``run`` column.
+
+    Returns:
+        The ``CREATE TEMP VIEW`` statement. A temporary view lives in the
+        connection's own memory, so creating one never writes to an archive.
+    """
+
+    run = "genomes.run, " if with_run else ""
+    return (
+        "CREATE TEMP VIEW genome_operators AS SELECT "
+        f"{run}genomes.genome_number, CAST(json_each.key AS INTEGER) AS position, "
+        "json_each.value AS operator, "
+        "json_array_length(genomes.generated_by) AS n_operators "
+        "FROM genomes, json_each(genomes.generated_by)"
+    )
+
+
+def _single_statement(sql: str) -> str:
+    """Checks that SQL is one read-only query and returns it without a terminator.
+
+    Only a semicolon SQLite itself would treat as ending a statement is refused;
+    one inside a string literal or a comment -- the separator of
+    ``group_concat(name, ';')``, say -- is part of the query. This is the text
+    half of the guard; the authorizer set on every query connection is the other.
+
+    Args:
+        sql: The statement as given.
+
+    Returns:
+        The statement, stripped of surrounding whitespace and trailing semicolons.
+
+    Raises:
+        ValueError: If there is no statement, there is more than one, or it does
+            not start with ``SELECT`` or ``WITH``.
+    """
+
+    statement = sql.strip().rstrip(";").strip()
+    if not statement:
+        raise ValueError("Give a SQL statement to run.")
+    for position, character in enumerate(statement):
+        if character == ";" and sqlite3.complete_statement(statement[: position + 1]):
+            raise ValueError("Run one statement at a time.")
+    if statement.split(None, 1)[0].upper() not in ("SELECT", "WITH"):
+        raise ValueError("Only SELECT (or WITH ... SELECT) queries are allowed.")
+    return statement
+
+
+def _bounded(statement: str) -> str:
+    """Wraps a statement so a row limit and an offset can be bound to it.
+
+    The closing parenthesis goes on its own line, because a statement ending in
+    a ``--`` comment would otherwise comment it out.
+
+    Args:
+        statement: A statement already checked by :func:`_single_statement`.
+
+    Returns:
+        A statement taking ``LIMIT`` and ``OFFSET`` parameters, in that order.
+    """
+
+    return f"SELECT * FROM ({statement}\n) LIMIT ? OFFSET ?"
+
+
+def _csv_line(values: Sequence[Any]) -> str:
+    """Encodes one row as a line of CSV.
+
+    Args:
+        values: The row's cells; ``None`` is written as an empty cell.
+
+    Returns:
+        The line, ending in a newline.
+    """
+
+    buffer = io.StringIO()
+    csv.writer(buffer, lineterminator="\n").writerow(values)
+    return buffer.getvalue()
+
+
 class DashboardTools:
     """The read-only tools exposed over MCP, backed by the dashboard's data layer.
 
@@ -273,18 +398,26 @@ class DashboardTools:
         return f"{self.base_url}/#{fragment}"
 
     def _fit(self, payload: dict[str, Any], rows_key: str) -> dict[str, Any]:
-        """Trims a result's rows until it fits the response budget.
+        """Trims a result until it fits the response budget.
+
+        A Markdown ``table`` only repeats rows the result already holds, so it is
+        replaced by a note before any row is dropped.
 
         Args:
             payload: The result, which must hold a list under ``rows_key``.
             rows_key: The key holding the rows that may be dropped.
 
         Returns:
-            The payload, with rows dropped and ``truncated`` set when it was too
-            large to return whole.
+            The payload, with its table omitted when that makes it fit, and
+            otherwise also rows dropped and ``truncated`` set.
         """
 
         rows = payload.get(rows_key) or []
+        if (
+            "table" in payload
+            and len(json.dumps(payload, default=str)) > MAX_RESPONSE_BYTES
+        ):
+            payload["table"] = "_table omitted: the rows alone fill the response_"
         while rows and len(json.dumps(payload, default=str)) > MAX_RESPONSE_BYTES:
             del rows[len(rows) // 2 :]
             payload[rows_key] = rows
@@ -304,14 +437,34 @@ class DashboardTools:
         Returns:
             One tuple per genome, in :data:`_ROLLUP_COLUMNS` order after the run
             name.
+
+        Raises:
+            ValueError: If the run's archive predates a column the roll-up holds,
+                which would otherwise fail as a bare SQL error naming neither the
+                run nor what to do about it.
         """
 
+        expressions = ", ".join(expression for _, _, expression in _ROLLUP_SELECT)
+        required = {
+            expression
+            for _, _, expression in _ROLLUP_SELECT
+            if expression.isidentifier()
+        }
+
         with GenomeArchive.open_readonly(run.archive_path) as reader:
+            present = {
+                row[1]
+                for row in reader.connection.execute("PRAGMA table_xinfo(genomes)")
+            }
+            missing = sorted(required - present)
+            if missing:
+                raise ValueError(
+                    f"{run.name} was written before its archive recorded "
+                    f"{', '.join(missing)}, so it cannot be rolled up with other "
+                    "runs. Query it on its own, or re-run it to record them."
+                )
             return reader.connection.execute(
-                "SELECT genome_number, insertion, insert_type, generated_by, "
-                "crossover_type, island, n_gates, n_enabled_gates, n_parameters, "
-                "fitness, json_extract(fitness, '$.loss'), "
-                "json_extract(fitness, '$.target_metric') FROM genomes"
+                f"SELECT {expressions} FROM genomes"
             ).fetchall()
 
     def _rollup(self, runs: list[Run]) -> sqlite3.Connection:
@@ -325,8 +478,9 @@ class DashboardTools:
             runs: The runs to roll up.
 
         Returns:
-            A connection holding ``runs`` and ``genomes`` tables, the latter with
-            a ``run`` column naming each row's run.
+            A connection holding a ``runs`` table, the ``genomes`` summary rows
+            and the :data:`_ROLLUP_TABLES` -- each with a ``run`` column naming
+            each row's run -- and the ``genome_operators`` view over them.
 
         Raises:
             ValueError: If more than :data:`MAX_RUNS_PER_QUERY` runs are given.
@@ -343,20 +497,41 @@ class DashboardTools:
             "CREATE TABLE runs(run TEXT, run_index INTEGER, task TEXT, "
             "task_target TEXT, strategy TEXT, genomes INTEGER)"
         )
-        memory.execute(
-            "CREATE TABLE genomes(run TEXT, genome_number INTEGER, insertion INTEGER, "
-            "insert_type TEXT, generated_by TEXT, crossover_type TEXT, island INTEGER, "
-            "n_gates INTEGER, n_enabled_gates INTEGER, n_parameters INTEGER, "
-            "fitness TEXT, loss REAL, target_metric REAL)"
+        declarations = ", ".join(
+            f"{name} {sql_type}" for name, sql_type, _ in _ROLLUP_SELECT
         )
+        memory.execute(f"CREATE TABLE genomes(run TEXT, {declarations})")
+        for table, columns in _ROLLUP_TABLES:
+            memory.execute(f"CREATE TABLE {table}(run TEXT, {', '.join(columns)})")
+        placeholders = ", ".join(["?"] * len(_ROLLUP_COLUMNS))
         for run in runs:
             rows = self._summary_rows(run)
             memory.executemany(
-                "INSERT INTO genomes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                f"INSERT INTO genomes VALUES ({placeholders})",
                 [(run.name, *row) for row in rows],
             )
             with GenomeArchive.open_readonly(run.archive_path) as reader:
                 info = reader.run_info()
+                present = {
+                    name
+                    for (name,) in reader.connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    )
+                }
+                for table, columns in _ROLLUP_TABLES:
+                    if table not in present:
+                        # an archive older than the table contributes no rows to it
+                        continue
+                    memory.executemany(
+                        f"INSERT INTO {table} VALUES "
+                        f"(?, {', '.join(['?'] * len(columns))})",
+                        [
+                            (run.name, *row)
+                            for row in reader.connection.execute(
+                                f"SELECT {', '.join(columns)} FROM {table}"
+                            )
+                        ],
+                    )
             memory.execute(
                 "INSERT INTO runs VALUES (?, ?, ?, ?, ?, ?)",
                 (
@@ -368,6 +543,7 @@ class DashboardTools:
                     len(rows),
                 ),
             )
+        memory.execute(_genome_operators_view(with_run=True))
         memory.commit()
         return memory
 
@@ -404,11 +580,16 @@ class DashboardTools:
     # Discovery
     # ------------------------------------------------------------------
 
-    def list_runs(self, name_contains: str | None = None) -> dict[str, Any]:
+    def list_runs(
+        self, name_contains: str | None = None, include_command_line: bool = False
+    ) -> dict[str, Any]:
         """Lists the runs being served, newest information first.
 
         Args:
             name_contains: Only list runs whose name contains this.
+            include_command_line: Whether each row keeps the run's command line.
+                It is long and nearly identical across a group's runs, so it is
+                left out unless asked for; ``describe_run`` always includes it.
 
         Returns:
             ``rows`` (one summary per run), ``total``, a Markdown ``table`` and
@@ -417,7 +598,11 @@ class DashboardTools:
 
         payload = self.viewer.runs_payload()
         rows = [
-            run
+            (
+                run
+                if include_command_line
+                else {key: value for key, value in run.items() if key != "command_line"}
+            )
             for run in payload["runs"]
             if not name_contains or name_contains in run["name"]
         ]
@@ -821,52 +1006,79 @@ class DashboardTools:
         return payload
 
     def progress_series(
-        self, run: int | str, metric: str = "best", max_points: int = 200
+        self,
+        run: int | str,
+        metric: str | None = None,
+        statistic: str = "best",
+        max_points: int = 200,
     ) -> dict[str, Any]:
         """Returns a run's search progress over time, downsampled.
 
+        Two things are chosen separately: *which* metric to summarize over the
+        population -- a fitness key, a circuit size, or anything the run's task
+        recorded while training -- and *which* statistic of it to return. The
+        statistics are recomputed from the genomes alive at each step, so a run
+        can be followed by validation accuracy or episode return just as easily
+        as by loss.
+
         Args:
             run: A run index or name.
-            metric: The series to return, one of ``best``, ``mean``, ``worst`` or
-                ``population_size``.
+            metric: The metric to summarize; the run's default (``loss`` when it
+                recorded one) when not given. ``describe_run`` lists the choices.
+            statistic: Which series of it to return: ``best``, ``mean``,
+                ``worst`` or ``population_size``.
             max_points: The most points to return, at most
                 :data:`MAX_SERIES_POINTS`.
 
         Returns:
-            ``step`` and ``value`` arrays, the ``metrics`` available, how many
-            points the run recorded, and a ``dashboard_url``.
+            ``step`` and ``value`` arrays, the ``metric`` and ``statistic`` they
+            describe, the ``metrics`` worth charting and the ``statistics``
+            available, how many points the run recorded, and a
+            ``dashboard_url``.
 
         Raises:
             KeyError: If there is no such run.
-            ValueError: If the run recorded no such metric.
+            ValueError: If the run recorded no such metric, or ``statistic`` is
+                not one of the series returned.
         """
 
         resolved = self._resolve(run)
-        columns = self.viewer.history_payload(resolved.index)["columns"]
+        payload = self.viewer.history_payload(resolved.index, metric)
+        columns = payload["columns"]
         if not columns:
             return {
                 "run": resolved.name,
                 "step": [],
                 "value": [],
                 "metrics": [],
+                "statistics": [],
                 "note": "This run recorded no search progress.",
                 "dashboard_url": self._url(f"/run/{resolved.index}"),
             }
-        if metric not in columns:
+
+        statistics = [name for name in columns if name != "step"]
+        if statistic not in statistics:
             raise ValueError(
-                f"{metric!r} was not recorded; available: {', '.join(sorted(columns))}."
+                f"{statistic!r} is not a statistic; choose one of: "
+                f"{', '.join(statistics)}."
             )
 
         limit = min(int(max_points), MAX_SERIES_POINTS)
-        steps = columns.get("step") or list(range(len(columns[metric])))
-        pairs = list(zip(steps, columns[metric]))
+        steps = columns.get("step") or list(range(len(columns[statistic])))
+        pairs = list(zip(steps, columns[statistic]))
         sampled = _downsample(pairs, limit)
+        # the curated list rather than every key: a per-class breakdown can run to
+        # dozens of entries, and the rest stay reachable through describe_run
+        offered = payload.get("primary_metrics") or payload.get("metrics") or []
         return {
             "run": resolved.name,
-            "metric": metric,
+            "metric": payload.get("metric"),
+            "statistic": statistic,
             "step": [step for step, _ in sampled],
             "value": [value for _, value in sampled],
-            "metrics": sorted(columns),
+            "metrics": offered,
+            "recorded_metrics": len(payload.get("metrics") or []),
+            "statistics": statistics,
             "recorded_points": len(pairs),
             "returned_points": len(sampled),
             "dashboard_url": self._url(f"/run/{resolved.index}"),
@@ -998,6 +1210,65 @@ class DashboardTools:
     # SQL
     # ------------------------------------------------------------------
 
+    def _query_connection(
+        self,
+        run: int | str | None,
+        runs: list[int | str] | None,
+        group: str | None,
+        timeout_seconds: float,
+    ) -> tuple[sqlite3.Connection, dict[str, Any]]:
+        """Opens the guarded, read-only connection a SQL tool runs a statement on.
+
+        A single run is read from its archive opened ``mode=ro``; several are
+        rolled into memory. Either way the connection gains the
+        ``genome_operators`` view, is interrupted past its deadline, and has an
+        authorizer denying everything but reads, so writes, ``ATTACH`` and
+        ``PRAGMA`` fail whatever the SQL says.
+
+        Args:
+            run: A single run to query (its own tables).
+            runs: Several runs to roll up and query together.
+            group: A group of runs to roll up and query together.
+            timeout_seconds: How long a statement may run before it is interrupted.
+
+        Returns:
+            The connection, which the caller closes, and the ``scope`` it covers.
+
+        Raises:
+            KeyError: If a run or group is unknown.
+            ValueError: If both a single run and several are given, or too many
+                runs are selected.
+        """
+
+        if run is not None and (runs or group):
+            raise ValueError("Query a single run, or several runs, not both.")
+
+        connection: sqlite3.Connection
+        if run is not None:
+            resolved = self._resolve(run)
+            scope: dict[str, Any] = {"kind": "run", "run": resolved.name}
+            connection = sqlite3.connect(
+                f"file:{resolved.archive_path}?mode=ro", uri=True
+            )
+            connection.execute(_genome_operators_view(with_run=False))
+        else:
+            selected = self._selected_runs(runs, group)
+            scope = {"kind": "rollup", "runs": [item.name for item in selected]}
+            connection = self._rollup(selected)
+
+        deadline = time.monotonic() + timeout_seconds
+        connection.set_progress_handler(
+            lambda: 1 if time.monotonic() > deadline else 0, 10_000
+        )
+        connection.set_authorizer(
+            lambda action, *_: (
+                sqlite3.SQLITE_OK
+                if action in _ALLOWED_SQL_ACTIONS
+                else sqlite3.SQLITE_DENY
+            )
+        )
+        return connection, scope
+
     def describe_schema(self) -> dict[str, Any]:
         """Describes the tables ``query_sql`` can read, with worked examples.
 
@@ -1011,21 +1282,46 @@ class DashboardTools:
                 "genomes": (
                     "genome_number, insertion, saved_at, insert_type, generated_by "
                     "(JSON array), crossover_type, island, n_gates, n_enabled_gates, "
-                    "n_parameters, fitness (JSON object)"
+                    "n_parameters, n_cnot, n_rot, final_metrics (JSON object), "
+                    "fitness (JSON object)"
+                ),
+                "genome_operators": (
+                    "genome_number, position, operator, n_operators -- a view with one "
+                    "row per operator that generated a genome, so a genome made by "
+                    "several operators has several rows and n_operators says how many"
                 ),
                 "genome_parents": "child, parent",
-                "run_info": "key, value",
+                "population_events": "step, recorded_at, added (JSON), removed (JSON)",
+                "run_info": (
+                    "key, value (JSON) -- the run's task, provenance and command line; "
+                    "runs started since it was recorded also hold operator_selection: "
+                    "mutation_weights (relative integer weights), crossover_rates "
+                    "(fraction of post-initialization children per crossover), "
+                    "mutation_strategy and parent_strategy"
+                ),
                 "note": (
                     "Fitness keys are read with json_extract(fitness, '$.loss'); "
-                    "operators with json_each(genomes.generated_by)."
+                    "operators with the genome_operators view. final_metrics "
+                    "holds the last value of every metric a genome recorded while "
+                    "training, keyed '<series>.<metric>' -- the dots are part of the "
+                    "key, so the path is quoted: "
+                    "json_extract(final_metrics, '$.\"validation_epoch_metrics.loss\"')."
                 ),
             },
             "cross_run": {
                 "genomes": ", ".join(_ROLLUP_COLUMNS),
+                "genome_operators": "run, genome_number, position, operator, n_operators",
+                **{
+                    table: ", ".join(("run", *columns))
+                    for table, columns in _ROLLUP_TABLES
+                },
                 "runs": "run, run_index, task, task_target, strategy, genomes",
                 "note": (
-                    "Selecting more than one run rolls their summary rows into one "
-                    "database, where loss and target_metric are plain columns."
+                    "Selecting more than one run rolls their rows into one database, "
+                    "where every table gains a run column naming each row's run (it "
+                    "exists only here, not when querying a single run) and loss and "
+                    "target_metric are plain genome columns. Genome numbers repeat "
+                    "across runs, so join on run as well as the genome number."
                 ),
             },
             "limits": {
@@ -1033,6 +1329,13 @@ class DashboardTools:
                 "rows": MAX_ROWS,
                 "timeout_seconds": QUERY_TIMEOUT_SECONDS,
                 "runs_per_query": MAX_RUNS_PER_QUERY,
+                "export": (
+                    f"export_query runs the same statements without the {MAX_ROWS}-row "
+                    f"cap, returning pages of up to {MAX_EXPORT_ROWS} rows as CSV or "
+                    "JSON, each with the next_offset to continue from. ORDER BY the "
+                    "query so pages are stable: a run still searching gains genomes "
+                    "between pages."
+                ),
             },
             "examples": [
                 "SELECT insert_type, COUNT(*) FROM genomes GROUP BY 1 ORDER BY 2 DESC",
@@ -1041,6 +1344,19 @@ class DashboardTools:
                 "SELECT run, MIN(loss) FROM genomes GROUP BY run ORDER BY 2",
                 "SELECT json_each.value AS operator, COUNT(*) FROM genomes, "
                 "json_each(genomes.generated_by) GROUP BY 1 ORDER BY 2 DESC",
+                "SELECT run, genome_number, json_extract(final_metrics, "
+                "'$.\"validation_epoch_metrics.loss\"') AS validation_loss "
+                "FROM genomes WHERE validation_loss IS NOT NULL "
+                "ORDER BY validation_loss LIMIT 5",
+                "SELECT o.operator, AVG(g.insert_type != 'discarded') AS kept "
+                "FROM genome_operators o JOIN genomes g "
+                "ON g.run = o.run AND g.genome_number = o.genome_number "
+                "WHERE o.n_operators = 1 GROUP BY 1 ORDER BY 2 DESC",
+                "SELECT p.run, AVG(child.loss < parent.loss) AS beat_parent "
+                "FROM genome_parents p "
+                "JOIN genomes child ON child.run = p.run AND child.genome_number = p.child "
+                "JOIN genomes parent ON parent.run = p.run "
+                "AND parent.genome_number = p.parent GROUP BY p.run",
             ],
         }
 
@@ -1056,8 +1372,9 @@ class DashboardTools:
 
         The connection is opened read-only and an authorizer denies everything
         but reads, so writes, ``ATTACH`` and ``PRAGMA`` fail whatever the SQL
-        says. Statements are wrapped in an enforced ``LIMIT`` and interrupted
-        after :data:`QUERY_TIMEOUT_SECONDS`.
+        says (see :meth:`_query_connection`). Statements are wrapped in an
+        enforced ``LIMIT`` and interrupted after :data:`QUERY_TIMEOUT_SECONDS`.
+        To collect more rows than the cap, page through :meth:`export_query`.
 
         Args:
             sql: The statement to run.
@@ -1076,46 +1393,14 @@ class DashboardTools:
                 fails, or too many runs are selected.
         """
 
-        statement = sql.strip().rstrip(";").strip()
-        if not statement:
-            raise ValueError("Give a SQL statement to run.")
-        if ";" in statement:
-            raise ValueError("Run one statement at a time.")
-        if statement.split(None, 1)[0].upper() not in ("SELECT", "WITH"):
-            raise ValueError("Only SELECT (or WITH ... SELECT) queries are allowed.")
-
-        if run is not None and (runs or group):
-            raise ValueError("Query a single run, or several runs, not both.")
-
-        connection: sqlite3.Connection
-        if run is not None:
-            resolved = self._resolve(run)
-            scope = {"kind": "run", "run": resolved.name}
-            connection = sqlite3.connect(
-                f"file:{resolved.archive_path}?mode=ro", uri=True
-            )
-        else:
-            selected = self._selected_runs(runs, group)
-            scope = {"kind": "rollup", "runs": [item.name for item in selected]}
-            connection = self._rollup(selected)
-
-        deadline = time.monotonic() + QUERY_TIMEOUT_SECONDS
-        connection.set_progress_handler(
-            lambda: 1 if time.monotonic() > deadline else 0, 10_000
-        )
-        connection.set_authorizer(
-            lambda action, *_: (
-                sqlite3.SQLITE_OK
-                if action in _ALLOWED_SQL_ACTIONS
-                else sqlite3.SQLITE_DENY
-            )
+        statement = _single_statement(sql)
+        connection, scope = self._query_connection(
+            run, runs, group, QUERY_TIMEOUT_SECONDS
         )
 
         rows_limit = min(int(limit), MAX_ROWS)
         try:
-            cursor = connection.execute(
-                f"SELECT * FROM ({statement}) LIMIT ?", (rows_limit,)
-            )
+            cursor = connection.execute(_bounded(statement), (rows_limit, 0))
             columns = [description[0] for description in cursor.description or []]
             rows = [list(row) for row in cursor.fetchall()]
         except sqlite3.Error as error:
@@ -1134,3 +1419,97 @@ class DashboardTools:
             },
             "rows",
         )
+
+    def export_query(
+        self,
+        sql: str,
+        run: int | str | None = None,
+        runs: list[int | str] | None = None,
+        group: str | None = None,
+        format: str = "csv",
+        limit: int = DEFAULT_EXPORT_ROWS,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Returns one page of a read-only query's full result, for a client to collect.
+
+        ``query_sql`` is sized for an agent reading its answer; this is sized for
+        a program gathering data to analyze itself, such as per-genome rows for a
+        statistical test. It accepts the same statements under the same guards,
+        but returns pages far larger than the row cap, encoded compactly and with
+        no Markdown table, each saying where the next page starts. Pages are cut
+        with ``LIMIT``/``OFFSET`` over a fresh read, so an ordered query pages
+        stably; an unordered one, or a run still searching, can shift rows
+        between pages.
+
+        Args:
+            sql: The statement to run.
+            run: A single run to query (its own tables).
+            runs: Several runs to roll up and query together.
+            group: A group of runs to roll up and query together.
+            format: ``csv`` for a CSV document with a header line, or ``json``
+                for the rows as lists.
+            limit: The most rows in this page, at most :data:`MAX_EXPORT_ROWS`.
+                A page also ends before its rows pass :data:`MAX_EXPORT_BYTES`,
+                though it always holds at least one row.
+            offset: How many rows of the result to skip: the previous page's
+                ``next_offset``.
+
+        Returns:
+            The ``columns``, the page as ``csv`` or ``rows``, its ``offset``,
+            ``row_count`` and ``row_limit``, the ``next_offset`` to continue from
+            (``None`` on the last page), ``complete`` and the ``scope`` queried.
+
+        Raises:
+            KeyError: If a run or group is unknown.
+            ValueError: If the format is unknown, the statement is not a single
+                read-only query or it fails, or too many runs are selected.
+        """
+
+        if format not in EXPORT_FORMATS:
+            raise ValueError(f"format must be one of: {', '.join(EXPORT_FORMATS)}.")
+        statement = _single_statement(sql)
+        page_limit = max(1, min(int(limit), MAX_EXPORT_ROWS))
+        start = max(0, int(offset))
+        connection, scope = self._query_connection(
+            run, runs, group, EXPORT_TIMEOUT_SECONDS
+        )
+
+        page: list[Any] = []
+        size = 0
+        more = False
+        try:
+            # one row past the page is read, to learn whether another page follows
+            cursor = connection.execute(_bounded(statement), (page_limit + 1, start))
+            columns = [description[0] for description in cursor.description or []]
+            for row in cursor:
+                if len(page) == page_limit:
+                    more = True
+                    break
+                entry: Any = _csv_line(row) if format == "csv" else list(row)
+                encoded = entry if format == "csv" else json.dumps(entry, default=str)
+                row_bytes = len(encoded.encode("utf-8"))
+                if page and size + row_bytes > MAX_EXPORT_BYTES:
+                    more = True
+                    break
+                page.append(entry)
+                size += row_bytes
+        except sqlite3.Error as error:
+            raise ValueError(f"Query failed: {error}") from error
+        finally:
+            connection.close()
+
+        payload: dict[str, Any] = {
+            "scope": scope,
+            "format": format,
+            "columns": columns,
+            "offset": start,
+            "row_count": len(page),
+            "row_limit": page_limit,
+            "next_offset": start + len(page) if more else None,
+            "complete": not more,
+        }
+        if format == "csv":
+            payload["csv"] = _csv_line(columns) + "".join(page)
+        else:
+            payload["rows"] = page
+        return payload

@@ -1077,6 +1077,10 @@
       hideDeadEnds: false,
       highlightLineage: true,
       showHistory: true,
+      // the metric the search-progress chart summarizes; the server picks one
+      // (loss when the run recorded it) until something is chosen here
+      historyMetric: null,
+      showAllMetrics: false,
       sort: keys.includes("loss") ? "loss" : "genome_number",
       desc: !keys.includes("loss"),
       filters: { insert_type: "", generated_by: "", crossover_type: "", island: "" },
@@ -1090,6 +1094,27 @@
       // parents that aren't in the archive: the seed genome
       seeds: new Set(run.unarchived_parents || []),
     };
+
+    // What a genome can be plotted or summarized by: its fitness, its circuit
+    // size, or any metric its task recorded while training. A per-class
+    // breakdown contributes one key per class, so the picker offers the shorter
+    // list until "all metrics" asks for the rest.
+    const primaryMetrics = run.primary_metrics || [...keys, "n_gates", "n_enabled_gates", "n_parameters"];
+    const allMetrics = run.metrics || primaryMetrics;
+
+    /**
+     * Builds the options for a metric picker.
+     *
+     * @param {string|null} current The selected key, kept in the list even when
+     *   it is outside the shown set, so the dropdown never disagrees with what
+     *   is drawn.
+     * @returns {Array<[string, string]>} The options, as value/label pairs.
+     */
+    function metricOptions(current) {
+      const shown = state.showAllMetrics ? allMetrics : primaryMetrics;
+      const keysShown = current && !shown.includes(current) ? [current, ...shown] : shown;
+      return keysShown.map((key) => [key, key]);
+    }
 
     let destroyed = false;
     let timer = null;
@@ -1188,7 +1213,7 @@
     }
 
     function renderChartControls() {
-      const yOptions = [...keys, "n_gates", "n_enabled_gates", "n_parameters"].map((key) => [key, key]);
+      const yOptions = metricOptions(state.yKey);
       setChildren(chartControls,
         segmented(
           [
@@ -1216,6 +1241,12 @@
             "Value plotted across the chart"
           )
         ),
+        allMetrics.length > primaryMetrics.length
+          ? checkbox("all metrics", state.showAllMetrics, (value) => {
+              state.showAllMetrics = value;
+              renderChartControls();
+            })
+          : null,
         h(
           "label",
           {},
@@ -1282,19 +1313,45 @@
         return;
       }
       try {
-        const { columns } = await api(`/api/runs/${index}/history`);
+        const query = state.historyMetric ? `?metric=${encodeURIComponent(state.historyMetric)}` : "";
+        const payload = await api(`/api/runs/${index}/history${query}`);
         if (destroyed || request !== historyRequest) return;
+        const columns = payload.columns || {};
+        // the server chooses the metric until one is picked here
+        state.historyMetric = payload.metric;
         const lines = [
           ["best", "best", 1],
-          ["top5_mean", "top-k mean", 2],
-          ["pop_mean", "population mean", 3],
+          ["mean", "population mean", 2],
+          ["worst", "worst", 3],
         ].filter(([column]) => columns[column]);
-        setChildren(historyNode, h("h3", { text: "Search progress (population fitness as recorded by the profiler, per insertion)" }));
+        setChildren(
+          historyNode,
+          h(
+            "div",
+            { class: "toolbar" },
+            h("h3", { text: "Search progress", style: "margin:0" }),
+            h(
+              "label",
+              {},
+              "metric",
+              select(
+                metricOptions(state.historyMetric),
+                state.historyMetric,
+                (key) => {
+                  state.historyMetric = key;
+                  loadHistory();
+                },
+                "Metric summarized across the population at each insertion"
+              )
+            ),
+            h("span", { class: "meta", text: "the population at each insertion, replayed from the archive" })
+          )
+        );
         const chartHost = h("div");
         historyNode.append(chartHost);
         historyChart = createLineChart(chartHost, {
           xLabel: "Insertion",
-          yLabel: "fitness",
+          yLabel: state.historyMetric || "value",
           x: columns.step,
           series: lines.map(([column, name, slot]) => ({ label: name, color: slotColor(slot), values: columns[column] })),
           height: 240,
@@ -2111,15 +2168,37 @@
   // Compare runs (groups)
   // ---------------------------------------------------------------------------
 
+  /**
+   * Builds the options for the run comparison's metric picker.
+   *
+   * @param {object} payload The groups payload, carrying every metric the
+   *   compared runs recorded and the shorter list to offer first.
+   * @param {boolean} showAll Whether to offer every metric rather than the
+   *   shorter list.
+   * @returns {Array<[string, string]>} The options, as value/label pairs.
+   */
+  function groupMetricOptions(payload, showAll) {
+    const all = payload.metrics || [];
+    const primary = payload.primary_metrics || [];
+    const shown = showAll ? all : primary.length ? primary : all;
+    const current = payload.metric;
+    const keys = current && !shown.includes(current) ? [current, ...shown] : shown;
+    return (keys.length ? keys : [current].filter(Boolean)).map((metric) => [metric, metric]);
+  }
+
   async function showGroupsPage() {
     setBreadcrumbs([{ label: "Runs", href: "#/" }, { label: "Compare runs" }]);
-    const settings = { metric: "best", conf: "std" };
+    // the metric is left to the server until one is chosen here, so the
+    // comparison opens on something the runs actually recorded
+    const settings = { metric: null, conf: "std", showAllMetrics: false };
     const content = h("div", {}, notice("Aggregating runs…"));
     setChildren(app, content);
     let chart = null;
 
     async function load() {
-      const payload = await api(`/api/groups?metric=${encodeURIComponent(settings.metric)}&conf=${settings.conf}`);
+      const chosen = settings.metric ? `metric=${encodeURIComponent(settings.metric)}&` : "";
+      const payload = await api(`/api/groups?${chosen}conf=${settings.conf}`);
+      settings.metric = payload.metric || settings.metric;
       if (chart) {
         chart.destroy();
         chart = null;
@@ -2138,7 +2217,10 @@
         "div",
         { class: "toolbar" },
         h("h1", { text: "Compare runs" }),
-        h("label", {}, "history metric", select((payload.metrics.length ? payload.metrics : [settings.metric]).map((metric) => [metric, metric]), settings.metric, (metric) => ((settings.metric = metric), load()), "History metric")),
+        h("label", {}, "metric", select(groupMetricOptions(payload, settings.showAllMetrics), settings.metric, (metric) => ((settings.metric = metric), load()), "Metric compared across the groups' runs")),
+        (payload.metrics || []).length > (payload.primary_metrics || []).length
+          ? checkbox("all metrics", settings.showAllMetrics, (value) => ((settings.showAllMetrics = value), load()))
+          : null,
         h(
           "label",
           {},
@@ -2167,7 +2249,7 @@
           { class: "card" },
           h("h2", { text: `Mean ${settings.metric} per insertion across each group's runs` }),
           skipped > 0 ? notice(`The chart shows the first ${CATEGORICAL_SLOTS} groups; every group is in the table below.`) : null,
-          charted.length ? chartNode : notice("None of these runs recorded a search history.")
+          charted.length ? chartNode : notice(settings.metric ? `No run recorded ${settings.metric}.` : "None of these runs recorded any search progress.")
         ),
         h(
           "section",

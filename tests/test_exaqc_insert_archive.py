@@ -18,7 +18,7 @@ matplotlib.use("Agg")
 
 import os  # noqa: E402
 from typing import Any  # noqa: E402
-from unittest.mock import MagicMock, call  # noqa: E402
+from unittest.mock import MagicMock, call, patch  # noqa: E402
 
 import pytest  # noqa: E402
 
@@ -29,7 +29,7 @@ from src.circuits.pennylane_gate_specifications import (  # noqa: E402
     pennylane_gate_specifications,
 )
 from src.evolution import master_worker  # noqa: E402
-from src.evolution.exaqc import EXAQC  # noqa: E402
+from src.evolution.exaqc import EXAQC, MUTATION_WEIGHTS  # noqa: E402
 from src.evolution.population_strategy import PopulationStrategy  # noqa: E402
 from src.evolution.steady_state_islands import SteadyStateIslands  # noqa: E402
 from src.evolution.steady_state_population import SteadyStatePopulation  # noqa: E402
@@ -169,6 +169,53 @@ def test_run_info_is_recorded_when_the_search_starts() -> None:
     assert info["population_strategy"] == "SteadyStatePopulation"
     assert "command_line" in info and "start_time" in info
     assert info["seed_genome_number"] == 1
+
+    # how operators were drawn, so observed operator rates can be compared
+    # against what the search was configured to do
+    selection = info["operator_selection"]
+    assert selection["mutation_weights"] == MUTATION_WEIGHTS
+    assert set(selection["crossover_rates"]) == {
+        "binary_crossover",
+        "n_ary_crossover",
+        "exponential_crossover",
+    }
+    assert selection["mutation_strategy"] == ["uniform", "1", "2"]
+    assert selection["parent_strategy"] == ["uniform", "2", "3"]
+
+
+def test_mutations_are_drawn_from_the_weighted_list() -> None:
+    """mutate draws from the weights expanded in their fixed order.
+
+    The expansion must match the list the search always drew from, element for
+    element, so recording the weights did not change which mutation a seeded
+    search picks.
+    """
+
+    search = build_search(
+        SteadyStatePopulation(max_population_size=4, compare=compare), MagicMock()
+    )
+    expected = (
+        ["add_gate"] * 11
+        + ["reorder_gate"] * 2
+        + ["qubit_swap"] * 2
+        + ["enable_gate"]
+        + ["disable_gate"] * 2
+        + ["clone"] * 2
+        + ["mutate_some_weights"] * 2
+        + ["mutate_all_weights"] * 2
+    )
+    drawn_from: list[list[str]] = []
+
+    def choose(options: list[str]) -> str:
+        """Records the options offered and picks clone, which always succeeds."""
+        drawn_from.append(list(options))
+        return "clone"
+
+    with patch("src.evolution.exaqc.random.choice", side_effect=choose):
+        child = search.mutate(search.initial_genome, {}, n_mutations=2)
+
+    assert drawn_from == [expected, expected]
+    assert child.metadata["generated_by"] == ["clone", "clone"]
 
 
 def test_inserted_genomes_are_archived_in_insertion_order() -> None:
@@ -390,7 +437,10 @@ def test_a_real_search_writes_a_fixed_set_of_files(tmp_path) -> None:
     with GenomeArchive.open_readonly(str(run_dir)) as reader:
         stored = dict(reader.iter_genome_dicts())
         assert reader.count() == len(stored) >= 1
-        assert reader.run_info()["task_target"] == "iris"
+        info = reader.run_info()
+        assert info["task_target"] == "iris"
+        # the operator selection survives the archive's JSON round trip intact
+        assert info["operator_selection"]["mutation_weights"] == MUTATION_WEIGHTS
 
     best_number = min(stored)
     restored = CircuitGenome.from_dict(stored[best_number])

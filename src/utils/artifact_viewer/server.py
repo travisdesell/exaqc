@@ -60,15 +60,29 @@ INSERTION_OUTCOMES = ("global_best", "local_best", "inserted", "discarded")
 #: Gate fields compared when two genomes are diffed.
 GATE_FIELDS = ("method_name", "qubits", "depth", "parameters", "enabled")
 
+#: The most points a run comparison charts. Runs record a step whenever their
+#: population changed, so comparing long runs would otherwise return a point per
+#: insertion per run.
+MAX_COMPARISON_POINTS = 500
+
 
 def _aggregate_series(
     series: list[dict[str, list[Any]]], conf: str
 ) -> dict[str, Any] | None:
-    """Summarizes one metric across several runs at the steps they share.
+    """Summarizes one metric across several runs, insertion by insertion.
 
-    Runs rarely record the same number of steps, so they are aligned on the
-    steps every one of them reached; a run contributes nothing beyond its own
-    end rather than being extrapolated.
+    A run records a step only when its population changed, so two runs of the
+    same length still record different steps and intersecting them would leave
+    almost nothing to plot. Instead every recorded step is kept and each run's
+    last recorded value is carried forward across it. That is exact rather than
+    interpolated: a run with no row at a step is a run whose population did not
+    change there, so its statistics are unchanged too.
+
+    A run contributes only across its own lifetime: it joins the average when it
+    reaches a step and drops out past the last step it recorded. Carrying a value
+    forward within a run is exact, but carrying it beyond the run's end is not --
+    a search that has only reached its three hundredth insertion has not levelled
+    off at its thousandth, and averaging it in there would say that it had.
 
     Args:
         series: Each run's population series, as
@@ -78,29 +92,50 @@ def _aggregate_series(
             ``"95ci"`` for 1.96 standard errors.
 
     Returns:
-        The shared ``step`` values with the ``mean``, ``low`` and ``high`` at
-        each and the ``n_runs`` summarized, or ``None`` if the runs share no
-        step at which any of them has a value.
+        The ``step`` values with the ``mean``, ``low`` and ``high`` at each, how
+        many runs were averaged at each (``runs_at_step``) and how many are
+        being compared (``n_runs``), or ``None`` if no run recorded a value.
     """
 
-    by_step = [
-        {
-            step: value
+    steps = sorted({step for run in series for step in run["step"]})
+    if not steps:
+        return None
+    if len(steps) > MAX_COMPARISON_POINTS:
+        stride = len(steps) / MAX_COMPARISON_POINTS
+        steps = [
+            steps[min(int(index * stride), len(steps) - 1)]
+            for index in range(MAX_COMPARISON_POINTS)
+        ]
+
+    recorded = [
+        [
+            (step, value)
             for step, value in zip(run["step"], run["best"])
             if value is not None
-        }
+        ]
         for run in series
     ]
-    shared = sorted(set.intersection(*(set(run) for run in by_step)) if by_step else [])
-    if not shared:
-        return None
+    cursors = [0] * len(recorded)
+    carried: list[float | None] = [None] * len(recorded)
+    last_steps = [pairs[-1][0] if pairs else None for pairs in recorded]
 
-    steps: list[int] = []
+    kept: list[int] = []
     means: list[float] = []
     lows: list[float] = []
     highs: list[float] = []
-    for step in shared:
-        values = [run[step] for run in by_step]
+    counts: list[int] = []
+    for step in steps:
+        for index, pairs in enumerate(recorded):
+            while cursors[index] < len(pairs) and pairs[cursors[index]][0] <= step:
+                carried[index] = pairs[cursors[index]][1]
+                cursors[index] += 1
+            if last_steps[index] is None or step > last_steps[index]:
+                carried[index] = None
+
+        values = [value for value in carried if value is not None]
+        if not values:
+            continue
+
         mean = statistics.fmean(values)
         deviation = statistics.pstdev(values) if len(values) > 1 else 0.0
         spread = (
@@ -108,18 +143,43 @@ def _aggregate_series(
             if conf == "std"
             else 1.96 * deviation / math.sqrt(max(len(values), 1))
         )
-        steps.append(step)
+        kept.append(step)
         means.append(mean)
         lows.append(mean - spread)
         highs.append(mean + spread)
+        counts.append(len(values))
+
+    if not kept:
+        return None
 
     return {
-        "step": steps,
+        "step": kept,
         "mean": means,
         "low": lows,
         "high": highs,
+        "runs_at_step": counts,
         "n_runs": len(series),
     }
+
+
+def default_comparison_metric(available: list[str]) -> str | None:
+    """Chooses the metric a run comparison charts when the caller names none.
+
+    ``target_metric`` is what a search is ultimately judged on, so it is
+    preferred; ``loss`` is the fallback, since every task's population is ranked
+    by it. Anything the runs recorded will do rather than charting nothing.
+
+    Args:
+        available: Every metric the compared runs recorded.
+
+    Returns:
+        The metric to chart, or ``None`` when the runs recorded nothing.
+    """
+
+    for preferred in ("target_metric", "loss"):
+        if preferred in available:
+            return preferred
+    return available[0] if available else None
 
 
 def higher_is_better(key: str) -> bool:
@@ -915,10 +975,13 @@ class ArtifactViewer:
             index: The run's index.
 
         Returns:
-            The run's summary plus its fitness keys, the values its genomes can
-            be filtered by, the ``unarchived_parents`` (parents of stored
-            genomes that are not stored themselves, i.e. the seed genome), and
-            whether it recorded a search history.
+            The run's summary plus its fitness keys, everything its genomes can
+            be charted by (with the shorter ``primary_metrics`` to offer first),
+            the values they can be filtered by, the ``unarchived_parents``
+            (parents of stored genomes that are not stored themselves, i.e. the
+            seed genome), and whether it recorded a search history. An archive
+            that cannot be read fully is reported under ``error``, with those
+            fields empty.
 
         Raises:
             KeyError: If there is no such run.
@@ -926,10 +989,28 @@ class ArtifactViewer:
 
         run = self.run(index)
         payload = self._summary(run)
-        with GenomeArchive.open_readonly(run.archive_path) as reader:
-            payload["fitness_keys"] = reader.fitness_keys()
-            payload["filter_options"] = reader.filter_options()
-            payload["unarchived_parents"] = reader.unarchived_parents()
+        payload.update(
+            {
+                "fitness_keys": [],
+                "metrics": [],
+                "primary_metrics": [],
+                "filter_options": {},
+                "unarchived_parents": [],
+            }
+        )
+        try:
+            with GenomeArchive.open_readonly(run.archive_path) as reader:
+                payload["fitness_keys"] = reader.fitness_keys()
+                payload["metrics"] = reader.series_metrics()
+                payload["primary_metrics"] = reader.primary_series_metrics()
+                payload["filter_options"] = reader.filter_options()
+                payload["unarchived_parents"] = reader.unarchived_parents()
+        except sqlite3.DatabaseError as error:
+            # An archive the viewer cannot read in full still lists and browses:
+            # the run page falls back to what its summary holds rather than
+            # failing outright, as the run list and progress chart already do.
+            logger.warning("Could not read {}: {}", run.archive_path, error)
+            payload["error"] = str(error)
         payload["has_history"] = self._recorded_steps(run) > 0
         return payload
 
@@ -1080,11 +1161,17 @@ class ArtifactViewer:
         """
 
         run = self.run(index)
-        empty: dict[str, Any] = {"columns": {}, "metric": None, "metrics": []}
+        empty: dict[str, Any] = {
+            "columns": {},
+            "metric": None,
+            "metrics": [],
+            "primary_metrics": [],
+        }
 
         try:
             with GenomeArchive.open_readonly(run.archive_path) as reader:
                 available = reader.series_metrics()
+                primary = reader.primary_series_metrics()
                 if not available:
                     return empty
                 chosen = metric or ("loss" if "loss" in available else available[0])
@@ -1099,7 +1186,12 @@ class ArtifactViewer:
             logger.warning("Could not read {}'s search progress: {}", run.name, error)
             return empty
 
-        return {"columns": columns, "metric": chosen, "metrics": available}
+        return {
+            "columns": columns,
+            "metric": chosen,
+            "metrics": available,
+            "primary_metrics": primary,
+        }
 
     def operators_payload(self, index: int) -> dict[str, Any]:
         """Counts, per generating operator, how the genomes it made were inserted.
@@ -1260,7 +1352,9 @@ class ArtifactViewer:
         ]
         return entries
 
-    def groups_payload(self, metric: str = "loss", conf: str = "std") -> dict[str, Any]:
+    def groups_payload(
+        self, metric: str | None = None, conf: str = "std"
+    ) -> dict[str, Any]:
         """Compares groups of runs.
 
         Each ``--groups`` group is compared, and so is every run that belongs to
@@ -1270,15 +1364,17 @@ class ArtifactViewer:
         Args:
             metric: The metric whose mean and band are charted, as
                 :meth:`~src.utils.genome_archive.GenomeArchive.series_metrics`
-                lists them.
+                lists them; chosen by :func:`default_comparison_metric` when not
+                given, so the comparison charts something rather than nothing.
             conf: The band: ``"std"`` or ``"95ci"``.
 
         Returns:
-            ``metric``, ``conf``, the ``metrics`` available across the runs, and
-            per group its ``name``, ``kind`` (``"group"``, or ``"run"`` for a run
-            in no group), ``runs``, aggregated ``history`` (or ``history_error``)
-            and summary statistics of each run's best ``loss`` and
-            ``target_metric``.
+            ``metric`` (the one charted), ``conf``, the ``metrics`` available
+            across the runs with the shorter ``primary_metrics`` to offer first,
+            and per group its ``name``, ``kind`` (``"group"``, or ``"run"`` for a
+            run in no group), ``runs``, aggregated ``history`` (or
+            ``history_error``) and summary statistics of each run's best ``loss``
+            and ``target_metric``.
 
         Raises:
             ValueError: If ``conf`` is not ``"std"`` or ``"95ci"``.
@@ -1288,20 +1384,43 @@ class ArtifactViewer:
             raise ValueError("conf must be 'std' or '95ci'.")
 
         self.registry.refresh()
-        available_metrics: set[str] = set()
-        groups = []
-        for name, kind, runs in self._comparison_entries():
-            series: list[dict[str, list[Any]]] = []
+        entries = self._comparison_entries()
+
+        # Which metric to chart is chosen from everything the compared runs
+        # recorded, so it cannot be decided while walking the groups: what each
+        # run has is read first, and kept so the groups need not ask again.
+        recorded: dict[str, list[str]] = {}
+        offered: dict[str, list[str]] = {}
+        for _, _, runs in entries:
             for run in runs:
+                if run.archive_path in recorded:
+                    continue
                 try:
                     with GenomeArchive.open_readonly(run.archive_path) as reader:
-                        recorded = reader.series_metrics()
-                        available_metrics.update(recorded)
-                        if metric not in recorded:
-                            continue
+                        recorded[run.archive_path] = reader.series_metrics()
+                        offered[run.archive_path] = reader.primary_series_metrics()
+                except sqlite3.DatabaseError as error:
+                    logger.warning("Could not read {}: {}", run.archive_path, error)
+                    recorded[run.archive_path] = []
+                    offered[run.archive_path] = []
+
+        available_metrics = sorted(
+            {name for names in recorded.values() for name in names}
+        )
+        primary_metrics = sorted({name for names in offered.values() for name in names})
+        charted = metric or default_comparison_metric(available_metrics)
+
+        groups = []
+        for name, kind, runs in entries:
+            series: list[dict[str, list[Any]]] = []
+            for run in runs:
+                if charted is None or charted not in recorded.get(run.archive_path, []):
+                    continue
+                try:
+                    with GenomeArchive.open_readonly(run.archive_path) as reader:
                         series.append(
                             reader.population_series(
-                                metric, higher_is_better=higher_is_better(metric)
+                                charted, higher_is_better=higher_is_better(charted)
                             )
                         )
                 except sqlite3.DatabaseError as error:
@@ -1312,12 +1431,11 @@ class ArtifactViewer:
             if series:
                 history = _aggregate_series(series, conf)
                 if history is None:
-                    history_error = (
-                        "The runs have no steps in common. Try comparing runs of "
-                        "a similar length."
-                    )
+                    history_error = f"No run recorded a value for {charted!r}."
+            elif charted is None:
+                history_error = "These runs recorded no search progress."
             else:
-                history_error = f"No run recorded {metric!r}."
+                history_error = f"No run recorded {charted!r}."
 
             best_losses: list[float] = []
             best_targets: list[float] = []
@@ -1349,9 +1467,10 @@ class ArtifactViewer:
             )
 
         return {
-            "metric": metric,
+            "metric": charted,
             "conf": conf,
-            "metrics": sorted(available_metrics),
+            "metrics": available_metrics,
+            "primary_metrics": primary_metrics,
             "groups": groups,
         }
 
