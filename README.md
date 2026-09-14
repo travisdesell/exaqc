@@ -535,7 +535,7 @@ Common to the evolutionary entry points:
 | Argument | Default | Description |
 |---|---|---|
 | `--device` | `cpu` | PyTorch device |
-| `--seed` | `0` | Random seed |
+| `--seed` | `0` (`reinforcement_learning`: random) | Random seed; see [`reinforcement_learning`](#reinforcement_learning) for how it seeds training there |
 | `--logging_level` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
 
 ### [`classification`](./src/examples/classification.py)
@@ -694,7 +694,8 @@ environments work only with `reinforce`, `actor_critic`/`a2c` and `ppo`.
 | `--log_every` | `10` | Evaluate and log every N episodes |
 | `--improvement_cutoff` | `30` | Episodes without an improved evaluation before stopping, 0 to disable |
 | `--ema_alpha` | `0.05` | Smoothing for the reported training return |
-| `--train_vs_validation_bias`, `-tvb` | `0.01` | Weight of training return vs. evaluation return in fitness |
+| `--train_vs_validation_bias`, `-tvb` | `0.1` | Weight of the training return in fitness: `loss = -(tvb × training return + (1 − tvb) × evaluation return)` |
+| `--seed` | random | Base seed for a genome's training and evaluation episodes. By default each genome draws its own (recorded as `training_seed` in its metadata), so genomes are not all selected on the same episodes; give a seed to train every genome on the same ones |
 | `--map_name` / `--is_slippery` | `4x4` / off | FrozenLake only |
 
 Plus the per-algorithm arguments in [Trainers](#trainers).
@@ -703,7 +704,11 @@ Plus the per-algorithm arguments in [Trainers](#trainers).
 `actor_critic`/`a2c`/`ppo`), which the entry point sizes automatically from the
 environment — so use `--decoding linear` for those algorithms. `cartpole` is the
 fastest environment to sanity-check a configuration. Fitness records
-`train_return_mean`, `eval_return_mean` and `best_episode_return`.
+`train_return_mean`, `eval_return_mean` and `best_episode_return`. Genomes are
+ranked by `loss`, which weights the evaluation return (greedy episodes on the
+best checkpoint) far above the smoothed training return by default: the training
+return is a short, noisy sample, so ranking mostly on it selects genomes that got
+lucky episodes rather than ones whose policies evaluate well.
 
 ### [`refine_genome`](./src/examples/refine_genome.py)
 
