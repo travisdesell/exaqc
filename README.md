@@ -471,10 +471,11 @@ However many genomes a run evaluates, its directory holds the same files:
 
 | File | Contents |
 |---|---|
-| `genomes.sqlar` | Every evaluated genome's JSON, plus a summary and parent links for each (for sorting and tracing ancestry), how the population changed after every insertion, and what produced the run: its command line, git commit, host and library versions |
+| `genomes.sqlar` | Every evaluated genome's JSON, plus a summary and parent links for each (for sorting and tracing ancestry), how the population changed after every insertion, and what produced the run: its command line, git commit, host and library versions, and for an island search how its islands are connected |
 | `best_fitness.json`, `best_fitness.png`, `best_fitness_training.png` | The best genome by the population's ranking (lowest `fitness["loss"]`): its JSON, architecture diagram and training plot, overwritten whenever it improves |
 | `best_target_metric.json`, `best_target_metric.png`, `best_target_metric_training.png` | The same for the highest `fitness["target_metric"]` |
 | `run.log` | The run's log |
+| `annotations.sqlite` | Notes and tags on the run and its genomes, written only by the [dashboard](#exaqc_dashboard) or the [MCP interface](#exaqc_mcp) when started with `--allow_annotations` (a search never creates it, and nothing writes annotations into `genomes.sqlar`) |
 
 A genome rejected as a duplicate of a better genome already in a steady-state
 population is not recorded. Nor is genome 1, the empty seed circuit every initial
@@ -821,7 +822,14 @@ Then open `http://127.0.0.1:8000/` in a browser. The page has:
   query, only from the dropdown. Genomes are colored by
   insert type, operator family or island, with a line joining the genomes that
   improved the best value and every parent-to-child link in the run (links fade
-  as they crowd the chart, so runs of tens of thousands of genomes stay legible). The
+  as they crowd the chart, so runs of tens of thousands of genomes stay legible).
+  Coloring by island gives each island its own color only while there are no
+  more than seven; beyond that the chart colors around one *focus* island
+  instead (a run with fewer islands can choose to as well). The focus follows
+  the selected genome's island (the best genome's until one is selected) unless
+  an island is picked from the *focus* menu. Its genomes get one color, the
+  islands it draws parents from (its neighbors in `--topology`) a second, and
+  every other island is gray. The
   **Progress** view emphasizes the best-so-far line and the **Genealogy** view the
   links; either can highlight a genome's full lineage or hide genomes that had no
   children. On the right, a sortable, filterable table of the genomes that loads
@@ -842,7 +850,22 @@ Then open `http://127.0.0.1:8000/` in a browser. The page has:
   metrics for reinforcement learning. Nothing is hard-coded per task — nested
   values such as a per-class accuracy breakdown are flattened into columns like
   `mean_class_accuracy.mean`, and long histories show their first and last rows
-  with a toggle for the rest.
+  with a toggle for the rest. A **Notes** tab shows the genome's tags and notes,
+  and a **Run notes** section at the foot of the run's header holds notes about
+  the run as a whole. Each shows whether it was written from the dashboard or by
+  an agent over MCP, by whom (if a name was given) and when. Notes are
+  append-only; a removed tag disappears from the chips but its history (who added
+  and removed it, and when) is kept. Adding either needs `--allow_annotations`;
+  without it they are shown read-only. An island search also has an **Island
+  topology** section: its islands laid out by `--topology` (a tree as a
+  hierarchy, a 2-D mesh as its grid, a star around its hub, a ring or fully
+  connected graph as a circle, and a random graph by a force-directed layout),
+  each shaded by its best value of the charted metric, with every connection as
+  wide as the number of genomes bred on one of its islands from a parent on the
+  other. Rings mark the chart's focus island and its neighbors, and clicking an
+  island colors the chart around it. While a genome is selected (and *highlight
+  selected lineage* is on), arrows show where its ancestry crossed between
+  islands.
 - **Insertion rates**: for one run, one group (summed over its runs, then each
   run on its own) or every group side by side, the share of each operator's
   genomes that became a global best or a local best, were inserted or were
@@ -874,7 +897,15 @@ Then open `http://127.0.0.1:8000/` in a browser. The page has:
 | `--port` | `8000` | Port to serve on (`0` picks a free port) |
 | `--open_browser` | off | Open the page in a web browser once it is running |
 | `--mcp` | on | Also serve the [MCP interface](#exaqc_mcp) at `/mcp`, so an agent can query the same runs over the same port (`--no-mcp` turns it off) |
+| `--allow_annotations` | off | Let the page and its MCP interface write notes and tags, kept in each run's `annotations.sqlite` beside its archive (the archive itself is never written) |
 | `--logging_level` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
+
+The dashboard has no login: with `--allow_annotations`, anyone who can reach its
+port can write notes and tags. Keep it on the default `--host 127.0.0.1` and
+reach it through an SSH tunnel (below) rather than serving it on a shared
+network; the dashboard warns when annotations are allowed on any other address.
+Writes must come from the dashboard's own page (or an MCP client), so another
+web site open in the same browser cannot post them.
 
 To view runs on a cluster, start the dashboard there and forward its port from your
 own machine, then open the same address locally:
@@ -900,13 +931,19 @@ python3 -m src.examples.exaqc_mcp --runs ./artifacts/iris
 python3 -m src.examples.exaqc_mcp --directory ./2026_ppsn_exaqc --groups iris wine
 ```
 
-Everything is **read-only**: archives are opened read-only, and no tool writes to
-a run, so it is safe to point at a search that is still running.
+Archives are **never written**: they are opened read-only, so it is safe to point
+at a search that is still running. The one thing an agent can write is
+annotations — notes on a run or genome, and tags on a genome — and only when
+started with `--allow_annotations`. They go to each run's `annotations.sqlite`
+beside its archive (created on the first write), marked as written over MCP.
 
 The tools are `list_runs`, `describe_run`, `list_genomes`, `get_genome`,
 `genome_metrics`, `compare_genomes`, `genome_lineage`, `fitness_summary`,
 `operator_insertion_rates`, `progress_series`, `gate_statistics`, `compare_runs`,
-`describe_schema`, `query_sql` and `export_query`. The first thirteen answer
+`list_annotations`, `describe_schema`, `query_sql` and `export_query`, plus
+`add_note`, `tag_genome` and `untag_genome` under `--allow_annotations`
+(`list_annotations` shows removed tags when `include_removed` is set). The first
+fourteen answer
 common questions with typed arguments (`genome_metrics` returns a genome's
 recorded training history, each series keyed by its own epoch or episode column;
 `list_runs` leaves out each run's command line unless `include_command_line` is
@@ -915,7 +952,9 @@ set, while `describe_run` always shows it); `query_sql` runs a single read-only
 database, for questions the typed tools do not cover. A roll-up holds each run's
 `genomes`, `genome_parents`, `population_events` and `run_info`, every table with
 a `run` column, and both kinds of query can read a `genome_operators` view with
-one row per operator that generated a genome. Results are capped (at most 200
+one row per operator that generated a genome, and the run's annotations as
+`notes` and `genome_tags` tables (a tag still applied has a null `removed_at`),
+so a query can, for example, pick out every genome tagged `promising`. Results are capped (at most 200
 rows, series downsampled) and most carry a link into the dashboard showing the
 same view. `export_query` is the exception to the cap: it runs the same
 statements for a client collecting data to analyze itself, returning pages of up
@@ -931,6 +970,7 @@ configured (runs archived before this was added do not have it).
 | `--directory` | one of `--runs` / `--directory` is required | A directory to watch: every run below it is served, including runs started later |
 | `--groups` | — | Substrings grouping runs for comparison, as in the analysis scripts |
 | `--dashboard_url` | `http://127.0.0.1:8000` | Base URL used for the dashboard links in results |
+| `--allow_annotations` | off | Offer the tools that write notes and tags, kept in each run's `annotations.sqlite` beside its archive (the archive itself is never written) |
 | `--logging_level` | `WARNING` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`; logs go to stderr, since stdout carries the protocol |
 
 To use it from Claude Code, register it as an MCP server running this command

@@ -84,7 +84,8 @@ documented there, and most are also wrapped by a script in
   over runs' `genomes.sqlar` archives, given as `--runs` or found by watching a
   `--directory` (server and static app in `src/utils/artifact_viewer/`). It has
   no wrapper script; it depends on the archive layout, the fitness keys, the
-  recorded population events, and the insert types and `generated_by` operators its
+  recorded population events, the island topology an island search records in
+  `run_info`, and the insert types and `generated_by` operators its
   insertion-rate tables count (mirroring
   `src.analysis.analyze_genome_generation`).
 - **MCP interface:** `python3 -m src.examples.exaqc_mcp`, which serves the
@@ -92,8 +93,13 @@ documented there, and most are also wrapped by a script in
   same tool layer at `/mcp` unless `--no-mcp` is passed. Tools live in
   `src/utils/artifact_viewer/mcp_tools.py` and are registered in `mcp_app.py`,
   so a new tool needs a README row and an entry in `tests/test_exaqc_mcp.py`'s
-  `EXPECTED_TOOLS`. Everything it does is read-only, and `query_sql` must stay
-  that way: it is guarded by a single-statement check *and* a SQLite authorizer.
+  `EXPECTED_TOOLS` (or `ANNOTATION_WRITE_TOOLS`, for one that writes). Archives
+  are only ever read. The one write path is annotations (notes and tags, in
+  `src.utils.annotations.AnnotationStore`), kept in an `annotations.sqlite`
+  beside each archive and offered only under `--allow_annotations`, from both
+  the dashboard page and MCP. `query_sql` must stay read-only: it is guarded by
+  a single-statement check *and* a SQLite authorizer, and sees annotations as
+  copied `notes`/`genome_tags` tables rather than by attaching the sidecar.
 - **Analysis:** `python3 -m src.analysis.analyze_genome_generation`.
 
 A search's outputs (`--out_dir`, `--shared_file_system`, `genomes.sqlar` and the

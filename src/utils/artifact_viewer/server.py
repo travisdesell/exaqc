@@ -28,6 +28,7 @@ from typing import Any
 
 from loguru import logger
 
+from src.utils.annotations import AnnotationStore
 from src.utils.genome_archive import ARCHIVE_FILENAME, GenomeArchive
 
 #: The images a genome can be rendered as.
@@ -882,18 +883,29 @@ class ArtifactViewer:
     Attributes:
         registry: The runs being served.
         renderer: Renders genome images.
+        allow_annotations: Whether notes and tags may be written; they can always
+            be read.
     """
 
-    def __init__(self, registry: RunRegistry, renderer: RenderService) -> None:
+    def __init__(
+        self,
+        registry: RunRegistry,
+        renderer: RenderService,
+        allow_annotations: bool = False,
+    ) -> None:
         """Creates the viewer.
 
         Args:
             registry: The runs to serve.
             renderer: The image render service.
+            allow_annotations: Whether notes and tags may be written. Reading them
+                is always allowed, and writing them changes only each run's
+                ``annotations.sqlite`` -- never its archive.
         """
 
         self.registry = registry
         self.renderer = renderer
+        self.allow_annotations = allow_annotations
 
     def run(self, index: int) -> Run:
         """Looks up a served run.
@@ -979,7 +991,8 @@ class ArtifactViewer:
             be charted by (with the shorter ``primary_metrics`` to offer first),
             the values they can be filtered by, the ``unarchived_parents``
             (parents of stored genomes that are not stored themselves, i.e. the
-            seed genome), and whether it recorded a search history. An archive
+            seed genome), the ``island_topology`` an island search recorded
+            (``None`` otherwise), and whether it recorded a search history. An archive
             that cannot be read fully is reported under ``error``, with those
             fields empty.
 
@@ -996,6 +1009,7 @@ class ArtifactViewer:
                 "primary_metrics": [],
                 "filter_options": {},
                 "unarchived_parents": [],
+                "island_topology": None,
             }
         )
         try:
@@ -1005,6 +1019,7 @@ class ArtifactViewer:
                 payload["primary_metrics"] = reader.primary_series_metrics()
                 payload["filter_options"] = reader.filter_options()
                 payload["unarchived_parents"] = reader.unarchived_parents()
+                payload["island_topology"] = reader.run_info().get("island_topology")
         except sqlite3.DatabaseError as error:
             # An archive the viewer cannot read in full still lists and browses:
             # the run page falls back to what its summary holds rather than
@@ -1012,6 +1027,7 @@ class ArtifactViewer:
             logger.warning("Could not read {}: {}", run.archive_path, error)
             payload["error"] = str(error)
         payload["has_history"] = self._recorded_steps(run) > 0
+        payload["annotations_enabled"] = self.allow_annotations
         return payload
 
     def _recorded_steps(self, run: Run) -> int:
@@ -1217,8 +1233,9 @@ class ArtifactViewer:
             genome_number: The genome.
 
         Returns:
-            ``summary``, the full serialized ``genome``, its ``children`` and
-            ready-to-run ``commands``.
+            ``summary``, the full serialized ``genome``, its ``children``, the
+            ``parent_islands`` (each parent's island, in ``summary["parents"]``
+            order) and ready-to-run ``commands``.
 
         Raises:
             KeyError: If there is no such run or genome.
@@ -1227,12 +1244,192 @@ class ArtifactViewer:
         run = self.run(index)
         with GenomeArchive.open_readonly(run.archive_path) as reader:
             genome = reader.get_genome_dict(genome_number)
+            summary = reader.get_summary(genome_number)
             return {
-                "summary": reader.get_summary(genome_number),
+                "summary": summary,
                 "genome": genome,
                 "children": reader.children(genome_number),
+                # beside the parents rather than in the summary, which every
+                # genome listing shares
+                "parent_islands": reader.islands_of(summary["parents"]),
                 "commands": genome_commands(run, genome),
             }
+
+    def require_annotations(self) -> None:
+        """Checks that notes and tags may be written here.
+
+        Returns:
+            None.
+
+        Raises:
+            PermissionError: If annotations were not allowed when the server was
+                started.
+        """
+
+        if not self.allow_annotations:
+            raise PermissionError(
+                "Annotations are read-only here: start the dashboard (or exaqc_mcp) "
+                "with --allow_annotations to write notes and tags."
+            )
+
+    def _writable_run(self, index: int, genome_number: int | None) -> Run:
+        """Checks that an annotation may be written, and that what it is about exists.
+
+        Args:
+            index: The run's index.
+            genome_number: The genome the annotation is about, or ``None`` for the
+                run as a whole.
+
+        Returns:
+            The run.
+
+        Raises:
+            PermissionError: If annotations may not be written here.
+            KeyError: If there is no such run, or no such genome in it.
+        """
+
+        self.require_annotations()
+        run = self.run(index)
+        if genome_number is not None:
+            with GenomeArchive.open_readonly(run.archive_path) as reader:
+                found = reader.connection.execute(
+                    "SELECT 1 FROM genomes WHERE genome_number = ?",
+                    (int(genome_number),),
+                ).fetchone()
+            if found is None:
+                raise KeyError(f"{run.name} has no genome {int(genome_number)}.")
+        return run
+
+    def annotations_payload(
+        self,
+        index: int,
+        genome_number: int | None = None,
+        tag: str | None = None,
+        include_removed: bool = False,
+    ) -> dict[str, Any]:
+        """Returns the notes and tags recorded for a run, or for one of its genomes.
+
+        Args:
+            index: The run's index.
+            genome_number: Only return this genome's notes and tags; every note
+                and tag in the run when not given.
+            tag: Only return tags with this name.
+            include_removed: Also return tags that were removed, with when and by
+                whom.
+
+        Returns:
+            ``enabled`` (whether annotations may be written here),
+            ``genome_number``, ``notes`` (a note about the run as a whole has no
+            genome number) and ``tags``.
+
+        Raises:
+            KeyError: If there is no such run.
+        """
+
+        store = AnnotationStore.beside(self.run(index).archive_path)
+        return {
+            "enabled": self.allow_annotations,
+            "genome_number": genome_number,
+            "notes": store.notes(genome_number=genome_number),
+            "tags": store.tags(
+                genome_number=genome_number, tag=tag, include_removed=include_removed
+            ),
+        }
+
+    def add_note(
+        self,
+        index: int,
+        text: str,
+        source: str,
+        author: str | None = None,
+        genome_number: int | None = None,
+    ) -> dict[str, Any]:
+        """Records a note about a run, or about one of its genomes.
+
+        Args:
+            index: The run's index.
+            text: What to note.
+            source: Where the note is written from (``mcp`` or ``dashboard``).
+            author: The writer's name, if they gave one.
+            genome_number: The genome the note is about, or ``None`` for the run.
+
+        Returns:
+            The note as recorded.
+
+        Raises:
+            PermissionError: If annotations may not be written here.
+            KeyError: If there is no such run or genome.
+            ValueError: If the note is empty or too long, or the source or author
+                is invalid.
+        """
+
+        run = self._writable_run(index, genome_number)
+        return AnnotationStore.beside(run.archive_path).add_note(
+            text, source, author, genome_number
+        )
+
+    def add_tag(
+        self,
+        index: int,
+        genome_number: int,
+        tag: str,
+        source: str,
+        author: str | None = None,
+    ) -> dict[str, Any]:
+        """Tags a genome, leaving it as it is if it already carries the tag.
+
+        Args:
+            index: The run's index.
+            genome_number: The genome to tag.
+            tag: The tag.
+            source: Where the tag is written from (``mcp`` or ``dashboard``).
+            author: The writer's name, if they gave one.
+
+        Returns:
+            The tag that now applies, with ``created`` saying whether it is new.
+
+        Raises:
+            PermissionError: If annotations may not be written here.
+            KeyError: If there is no such run or genome.
+            ValueError: If the tag, source or author is invalid.
+        """
+
+        run = self._writable_run(index, genome_number)
+        return AnnotationStore.beside(run.archive_path).add_tag(
+            genome_number, tag, source, author
+        )
+
+    def remove_tag(
+        self,
+        index: int,
+        genome_number: int,
+        tag: str,
+        source: str,
+        author: str | None = None,
+    ) -> dict[str, Any]:
+        """Removes a tag from a genome, keeping the record that it applied.
+
+        Args:
+            index: The run's index.
+            genome_number: The genome to untag.
+            tag: The tag to remove.
+            source: Where the removal is made from (``mcp`` or ``dashboard``).
+            author: The remover's name, if they gave one.
+
+        Returns:
+            The tag, stamped with its removal.
+
+        Raises:
+            PermissionError: If annotations may not be written here.
+            KeyError: If there is no such run or genome, or the genome does not
+                carry the tag.
+            ValueError: If the tag, source or author is invalid.
+        """
+
+        run = self._writable_run(index, genome_number)
+        return AnnotationStore.beside(run.archive_path).remove_tag(
+            genome_number, tag, source, author
+        )
 
     def genome_json(self, index: int, genome_number: int) -> bytes:
         """Returns a genome's JSON exactly as a genome file would hold it.

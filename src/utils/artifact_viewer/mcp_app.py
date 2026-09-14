@@ -46,6 +46,11 @@ downsampled, so prefer aggregates over fetching every genome. To collect rows
 for your own analysis instead, page through export_query, which runs the same
 SQL without the row cap. Most results carry a dashboard_url that opens the same
 view in a browser.
+
+Notes and tags people or agents have recorded are listed by list_annotations,
+and queryable as the notes and genome_tags tables. When this server allows it,
+add_note, tag_genome and untag_genome record them -- beside a run, never in its
+archive.
 """
 
 
@@ -106,6 +111,9 @@ class _AnticipatedFailures:
                 raise ToolError(message) from error
             except ValueError as error:
                 raise ToolError(str(error)) from error
+            except PermissionError as error:
+                # an annotation write on a server that does not allow them
+                raise ToolError(str(error)) from error
             except sqlite3.DatabaseError as error:
                 # A query's own failures are reported by query_sql, but reading
                 # an archive to build a roll-up happens before that, so a
@@ -120,6 +128,7 @@ def build_mcp_server(
     registry: RunRegistry,
     renderer: RenderService | None = None,
     base_url: str = "http://127.0.0.1:8000",
+    allow_annotations: bool = False,
 ) -> MCPServer:
     """Builds the MCP server exposing one set of runs.
 
@@ -128,12 +137,17 @@ def build_mcp_server(
         renderer: The dashboard's image renderer, shared so tools and the web UI
             use one cache; an inline renderer is created when none is given.
         base_url: The dashboard's base URL, used for the deep links in results.
+        allow_annotations: Whether to offer the tools that write notes and tags.
+            Without it they are not registered at all, so an agent is never
+            shown a tool it cannot use; ``list_annotations`` is offered either way.
 
     Returns:
         The configured server, ready to mount over HTTP or run over stdio.
     """
 
-    tools = _AnticipatedFailures(DashboardTools(registry, renderer, base_url))
+    tools = _AnticipatedFailures(
+        DashboardTools(registry, renderer, base_url, allow_annotations)
+    )
     server = MCPServer(
         name="exaqc-dashboard",
         title="EXAQC run analysis",
@@ -231,6 +245,109 @@ def build_mcp_server(
         """
 
         return tools.get_genome(run, genome_number)
+
+    @server.tool(
+        description=(
+            "List the notes and tags recorded for a run, or for one genome: conclusions "
+            "people or agents wrote down, and labels such as 'candidate' marking genomes. "
+            "Pass tag to find every genome carrying it."
+        )
+    )
+    def list_annotations(
+        run: str,
+        genome_number: int | None = None,
+        tag: str | None = None,
+        include_removed: bool = False,
+    ) -> dict[str, Any]:
+        """Lists notes and tags.
+
+        Args:
+            run: A run index or name.
+            genome_number: Only list this genome's notes and tags.
+            tag: Only list tags with this name.
+            include_removed: Also list tags that were removed.
+
+        Returns:
+            The notes and tags, and whether annotations may be written here.
+        """
+
+        return tools.list_annotations(run, genome_number, tag, include_removed)
+
+    if allow_annotations:
+
+        @server.tool(
+            description=(
+                "Record a note about a run, or about one genome when genome_number is "
+                "given. Notes are kept beside the run, never in its archive, and are "
+                "never edited or deleted, so write what was concluded and why."
+            )
+        )
+        def add_note(
+            run: str,
+            text: str,
+            genome_number: int | None = None,
+            author: str | None = None,
+        ) -> dict[str, Any]:
+            """Records a note.
+
+            Args:
+                run: A run index or name.
+                text: What to note.
+                genome_number: The genome the note is about; the run otherwise.
+                author: A name to record with the note.
+
+            Returns:
+                The recorded note.
+            """
+
+            return tools.add_note(run, text, genome_number, author)
+
+        @server.tool(
+            description=(
+                "Tag a genome with a short label (letters, digits and _ . : -, no spaces), "
+                "such as 'candidate' or 'needs:rerun'. Tagging a genome that already "
+                "carries the tag changes nothing."
+            )
+        )
+        def tag_genome(
+            run: str, genome_number: int, tag: str, author: str | None = None
+        ) -> dict[str, Any]:
+            """Tags a genome.
+
+            Args:
+                run: A run index or name.
+                genome_number: The genome to tag.
+                tag: The tag.
+                author: A name to record with the tag.
+
+            Returns:
+                The tag that now applies.
+            """
+
+            return tools.tag_genome(run, genome_number, tag, author)
+
+        @server.tool(
+            description=(
+                "Remove a tag from a genome. The tag's history is kept: it is marked "
+                "removed, with when and by whom, rather than deleted."
+            )
+        )
+        def untag_genome(
+            run: str, genome_number: int, tag: str, author: str | None = None
+        ) -> dict[str, Any]:
+            """Removes a tag from a genome.
+
+            Args:
+                run: A run index or name.
+                genome_number: The genome to untag.
+                tag: The tag to remove.
+                author: A name to record with the removal.
+
+            Returns:
+                The tag, marked removed.
+            """
+
+            return tools.untag_genome(run, genome_number, tag, author)
 
     @server.tool(
         description=(

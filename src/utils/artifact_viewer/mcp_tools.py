@@ -1,8 +1,12 @@
-"""Read-only analysis tools an agent calls to interrogate EXAQC runs.
+"""Analysis tools an agent calls to interrogate EXAQC runs.
 
 These are the implementations behind the MCP interface
 (:mod:`src.utils.artifact_viewer.mcp_app`); they are plain methods returning
 JSON-safe dicts, so they can be tested and benchmarked without a transport.
+
+Every tool reads runs without changing them. The one exception is annotations:
+when a server allows it, notes and tags can be recorded, and they are kept in
+each run's ``annotations.sqlite`` beside its archive, never in the archive.
 
 Every tool answers from the same data layer the dashboard uses
 (:class:`~src.utils.artifact_viewer.server.ArtifactViewer`), and every result
@@ -32,6 +36,7 @@ from collections.abc import Sequence
 from typing import Any
 from urllib.parse import quote
 
+from src.utils.annotations import NOTE_COLUMNS, TAG_COLUMNS, AnnotationStore
 from src.utils.artifact_viewer.server import (
     ArtifactViewer,
     RenderService,
@@ -259,6 +264,43 @@ def _genome_operators_view(with_run: bool) -> str:
     )
 
 
+def _add_annotation_tables(
+    connection: sqlite3.Connection, runs: list[Run], with_run: bool
+) -> None:
+    """Gives a query connection ``notes`` and ``genome_tags`` tables to read.
+
+    A run's annotations live in their own file beside its archive. Rather than
+    attach that file -- which the query's authorizer forbids, and which would
+    need a second mechanism for roll-ups -- its rows are copied in, the same way
+    a roll-up gathers archives. Annotations are small, so this is cheap, and a run
+    that has not been annotated still gets the tables, empty, so a query naming
+    them does not fail.
+
+    Args:
+        connection: The connection the query will run on, before its authorizer
+            is installed.
+        runs: The runs whose annotations are copied.
+        with_run: Whether the tables carry a roll-up's ``run`` column. A single
+            run's tables are temporary instead, so creating them never writes to
+            its archive.
+
+    Returns:
+        None. Creates and fills the two tables on ``connection``.
+    """
+
+    temporary = "" if with_run else "TEMP "
+    for table, columns in (("notes", NOTE_COLUMNS), ("genome_tags", TAG_COLUMNS)):
+        names = ("run", *columns) if with_run else columns
+        connection.execute(f"CREATE {temporary}TABLE {table}({', '.join(names)})")
+        placeholders = ", ".join(["?"] * len(names))
+        for run in runs:
+            rows = AnnotationStore.beside(run.archive_path).table_rows(table)
+            connection.executemany(
+                f"INSERT INTO {table} VALUES ({placeholders})",
+                [(run.name, *row) if with_run else row for row in rows],
+            )
+
+
 def _single_statement(sql: str) -> str:
     """Checks that SQL is one read-only query and returns it without a terminator.
 
@@ -321,7 +363,10 @@ def _csv_line(values: Sequence[Any]) -> str:
 
 
 class DashboardTools:
-    """The read-only tools exposed over MCP, backed by the dashboard's data layer.
+    """The tools exposed over MCP, backed by the dashboard's data layer.
+
+    Every tool reads, except the annotation writes -- notes and tags kept beside a
+    run, never in its archive -- which a server may allow.
 
     Attributes:
         registry: The runs being served.
@@ -334,6 +379,7 @@ class DashboardTools:
         registry: RunRegistry,
         renderer: RenderService | None = None,
         base_url: str = "http://127.0.0.1:8000",
+        allow_annotations: bool = False,
     ) -> None:
         """Creates the tool set.
 
@@ -342,10 +388,15 @@ class DashboardTools:
             renderer: The image renderer the viewer uses; tools never render, so
                 an inline renderer is created when none is given.
             base_url: The dashboard's base URL for deep links.
+            allow_annotations: Whether notes and tags may be written.
         """
 
         self.registry = registry
-        self.viewer = ArtifactViewer(registry, renderer or RenderService(processes=0))
+        self.viewer = ArtifactViewer(
+            registry,
+            renderer or RenderService(processes=0),
+            allow_annotations=allow_annotations,
+        )
         self.base_url = base_url.rstrip("/")
 
     # ------------------------------------------------------------------
@@ -543,6 +594,7 @@ class DashboardTools:
                     len(rows),
                 ),
             )
+        _add_annotation_tables(memory, runs, with_run=True)
         memory.execute(_genome_operators_view(with_run=True))
         memory.commit()
         return memory
@@ -728,8 +780,9 @@ class DashboardTools:
             genome_number: The genome to fetch.
 
         Returns:
-            Its ``summary``, the serialized ``genome``, its ``children``,
-            copy-ready ``commands`` and a ``dashboard_url``.
+            Its ``summary``, the serialized ``genome``, its ``children``, each
+            parent's island (``parent_islands``), copy-ready ``commands`` and a
+            ``dashboard_url``.
 
         Raises:
             KeyError: If there is no such run or genome.
@@ -741,6 +794,153 @@ class DashboardTools:
             f"/run/{resolved.index}/genome/{int(genome_number)}"
         )
         return payload
+
+    def list_annotations(
+        self,
+        run: int | str,
+        genome_number: int | None = None,
+        tag: str | None = None,
+        include_removed: bool = False,
+    ) -> dict[str, Any]:
+        """Lists the notes and tags recorded for a run, or for one of its genomes.
+
+        Args:
+            run: A run index or name.
+            genome_number: Only list this genome's notes and tags.
+            tag: Only list tags with this name, e.g. to find every candidate.
+            include_removed: Also list tags that were removed, with when and by
+                whom.
+
+        Returns:
+            ``notes`` and ``tags``, whether annotations may be written here
+            (``enabled``), the ``run`` and a ``dashboard_url``.
+
+        Raises:
+            KeyError: If there is no such run.
+        """
+
+        resolved = self._resolve(run)
+        number = None if genome_number is None else int(genome_number)
+        payload = self.viewer.annotations_payload(
+            resolved.index, number, tag, include_removed
+        )
+        payload["run"] = resolved.name
+        payload["dashboard_url"] = self._url(
+            f"/run/{resolved.index}" + ("" if number is None else f"/genome/{number}")
+        )
+        return self._fit(payload, "notes")
+
+    def add_note(
+        self,
+        run: int | str,
+        text: str,
+        genome_number: int | None = None,
+        author: str | None = None,
+    ) -> dict[str, Any]:
+        """Records a note about a run, or about one of its genomes.
+
+        Notes are never edited or deleted, so this always adds one.
+
+        Args:
+            run: A run index or name.
+            text: What to note.
+            genome_number: The genome the note is about; the run when not given.
+            author: A name to record with the note.
+
+        Returns:
+            The recorded ``note``, the ``run`` and a ``dashboard_url``.
+
+        Raises:
+            PermissionError: If annotations may not be written here.
+            KeyError: If there is no such run or genome.
+            ValueError: If the note is empty or too long, or the author invalid.
+        """
+
+        resolved = self._resolve(run)
+        number = None if genome_number is None else int(genome_number)
+        note = self.viewer.add_note(resolved.index, text, "mcp", author, number)
+        return {
+            "run": resolved.name,
+            "note": note,
+            "dashboard_url": self._url(
+                f"/run/{resolved.index}"
+                + ("" if number is None else f"/genome/{number}")
+            ),
+        }
+
+    def tag_genome(
+        self,
+        run: int | str,
+        genome_number: int,
+        tag: str,
+        author: str | None = None,
+    ) -> dict[str, Any]:
+        """Tags a genome, leaving it as it is if it already carries the tag.
+
+        Args:
+            run: A run index or name.
+            genome_number: The genome to tag.
+            tag: A short label such as ``candidate`` or ``needs:rerun``.
+            author: A name to record with the tag.
+
+        Returns:
+            The ``tag`` that now applies (its ``created`` says whether it is new),
+            the ``run`` and a ``dashboard_url``.
+
+        Raises:
+            PermissionError: If annotations may not be written here.
+            KeyError: If there is no such run or genome.
+            ValueError: If the tag or author is invalid.
+        """
+
+        resolved = self._resolve(run)
+        applied = self.viewer.add_tag(
+            resolved.index, int(genome_number), tag, "mcp", author
+        )
+        return {
+            "run": resolved.name,
+            "tag": applied,
+            "dashboard_url": self._url(
+                f"/run/{resolved.index}/genome/{int(genome_number)}"
+            ),
+        }
+
+    def untag_genome(
+        self,
+        run: int | str,
+        genome_number: int,
+        tag: str,
+        author: str | None = None,
+    ) -> dict[str, Any]:
+        """Removes a tag from a genome, keeping the record that it applied.
+
+        Args:
+            run: A run index or name.
+            genome_number: The genome to untag.
+            tag: The tag to remove.
+            author: A name to record with the removal.
+
+        Returns:
+            The ``tag``, stamped with its removal, the ``run`` and a
+            ``dashboard_url``.
+
+        Raises:
+            PermissionError: If annotations may not be written here.
+            KeyError: If there is no such run or genome, or it lacks the tag.
+            ValueError: If the tag or author is invalid.
+        """
+
+        resolved = self._resolve(run)
+        removed = self.viewer.remove_tag(
+            resolved.index, int(genome_number), tag, "mcp", author
+        )
+        return {
+            "run": resolved.name,
+            "tag": removed,
+            "dashboard_url": self._url(
+                f"/run/{resolved.index}/genome/{int(genome_number)}"
+            ),
+        }
 
     def genome_metrics(
         self, run: int | str, genome_number: int, series: str | None = None
@@ -1251,6 +1451,7 @@ class DashboardTools:
                 f"file:{resolved.archive_path}?mode=ro", uri=True
             )
             connection.execute(_genome_operators_view(with_run=False))
+            _add_annotation_tables(connection, [resolved], with_run=False)
         else:
             selected = self._selected_runs(runs, group)
             scope = {"kind": "rollup", "runs": [item.name for item in selected]}
@@ -1292,6 +1493,15 @@ class DashboardTools:
                 ),
                 "genome_parents": "child, parent",
                 "population_events": "step, recorded_at, added (JSON), removed (JSON)",
+                "notes": (
+                    "note_id, genome_number (NULL for a note about the run as a whole), "
+                    "text, source ('mcp' or 'dashboard'), author, created_at -- notes "
+                    "people and agents recorded; never edited or deleted"
+                ),
+                "genome_tags": (
+                    "tag_id, genome_number, tag, source, author, added_at, removed_at "
+                    "(NULL while the tag still applies), removed_source, removed_author"
+                ),
                 "run_info": (
                     "key, value (JSON) -- the run's task, provenance and command line; "
                     "runs started since it was recorded also hold operator_selection: "
@@ -1315,6 +1525,8 @@ class DashboardTools:
                     table: ", ".join(("run", *columns))
                     for table, columns in _ROLLUP_TABLES
                 },
+                "notes": ", ".join(("run", *NOTE_COLUMNS)),
+                "genome_tags": ", ".join(("run", *TAG_COLUMNS)),
                 "runs": "run, run_index, task, task_target, strategy, genomes",
                 "note": (
                     "Selecting more than one run rolls their rows into one database, "
@@ -1357,6 +1569,10 @@ class DashboardTools:
                 "JOIN genomes child ON child.run = p.run AND child.genome_number = p.child "
                 "JOIN genomes parent ON parent.run = p.run "
                 "AND parent.genome_number = p.parent GROUP BY p.run",
+                "SELECT t.run, t.tag, COUNT(*) AS genomes, AVG(g.loss) AS mean_loss "
+                "FROM genome_tags t JOIN genomes g "
+                "ON g.run = t.run AND g.genome_number = t.genome_number "
+                "WHERE t.removed_at IS NULL GROUP BY 1, 2",
             ],
         }
 

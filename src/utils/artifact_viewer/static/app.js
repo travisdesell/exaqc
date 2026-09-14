@@ -64,7 +64,7 @@
   };
 
   /** Chart options that only restyle the chart, so changing them keeps the zoom. */
-  const STYLE_ONLY_OPTIONS = new Set(["mode", "highlightLineage"]);
+  const STYLE_ONLY_OPTIONS = new Set(["mode", "highlightLineage", "islandFocus"]);
 
   /** Why the seed genome, a parent of every initial genome, has no page of its own. */
   const SEED_EXPLANATION =
@@ -277,6 +277,34 @@
     return body;
   }
 
+  /**
+   * Sends a write to the JSON API, throwing the server's error message on failure.
+   *
+   * The body goes as JSON: the server only accepts writes that way, which is what
+   * keeps another site's page from writing through a dashboard someone has open.
+   *
+   * @param {string} path The API path.
+   * @param {string} method The HTTP method, e.g. "POST" or "DELETE".
+   * @param {object} [body] The JSON body, if any.
+   * @returns {Promise<object>} The decoded response.
+   */
+  async function apiSend(path, method, body) {
+    const options = { method, cache: "no-store", headers: {} };
+    if (body !== undefined) {
+      options.headers["Content-Type"] = "application/json";
+      options.body = JSON.stringify(body);
+    }
+    const response = await fetch(path, options);
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch (error) {
+      payload = null;
+    }
+    if (!response.ok) throw new Error((payload && payload.error) || `${response.status} ${response.statusText}`);
+    return payload;
+  }
+
   /** Reads a CSS custom property (palette token). */
   function token(name) {
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -439,12 +467,21 @@
   /**
    * The categories a color encoding splits genomes into, each with a fixed
    * palette color: insert type (global best stands out; discarded recedes),
-   * operator family, or island.
+   * operator family, or island. With a `focus` island (`{island, neighbors}`),
+   * island colors go to that island and the islands it draws parents from, with
+   * every other island gray: listed focus first, but drawn gray first so the
+   * focus stays on top.
    */
-  function categoriesFor(encoding, points) {
+  function categoriesFor(encoding, points, focus = null) {
     const muted = token("--text-muted");
     let categories;
-    if (encoding === "insert_type") {
+    if (encoding === "island" && focus) {
+      categories = [
+        { key: "other", label: "other islands", color: muted, legendRank: 2 },
+        ...(focus.neighbors.size ? [{ key: "neighbor", label: neighborLabel(focus.neighbors), color: slotColor(2), legendRank: 1 }] : []),
+        { key: "focus", label: `island ${focus.island}`, color: slotColor(1), legendRank: 0 },
+      ];
+    } else if (encoding === "insert_type") {
       categories = [
         { key: "global_best", label: "global best", color: slotColor(2) },
         { key: "local_best", label: "local best", color: slotColor(3) },
@@ -462,8 +499,20 @@
     return categories;
   }
 
-  function categoryKey(encoding, points, i, known) {
+  /** Names the islands a focused island draws parents from, counting them when there are many. */
+  function neighborLabel(neighbors) {
+    const sorted = [...neighbors].sort((a, b) => a - b);
+    return sorted.length <= 6 ? `its neighbors: island${sorted.length === 1 ? "" : "s"} ${sorted.join(", ")}` : `its ${sorted.length} neighboring islands`;
+  }
+
+  function categoryKey(encoding, points, i, known, focus = null) {
     let key;
+    if (encoding === "island" && focus) {
+      const island = points.island[i];
+      if (island === null || island === undefined) return "unknown";
+      if (island === focus.island) return "focus";
+      return focus.neighbors.has(island) ? "neighbor" : "other";
+    }
     if (encoding === "insert_type") key = points.insert_type[i];
     else if (encoding === "family") key = operatorFamily(points.operator[i]);
     else key = points.island[i] === null ? null : String(points.island[i]);
@@ -494,6 +543,186 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Island topology
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Places a run's islands for drawing, as points in the unit square plus the
+   * size to draw them at. Each topology is laid out by its own shape -- a tree as
+   * a hierarchy, a 2-D mesh as its grid, a star around its hub, a ring (and a
+   * fully connected graph) as a circle -- and anything else, such as a random
+   * graph, by a force-directed layout of its connections.
+   */
+  function islandLayout(topology) {
+    const neighbors = topology.neighbors;
+    const count = neighbors.length;
+    const [name, ...args] = topology.topology || [];
+    const numbers = args.map(Number);
+    const around = (i, n) => {
+      const angle = -Math.PI / 2 + (2 * Math.PI * i) / Math.max(1, n);
+      return { x: 0.5 + 0.5 * Math.cos(angle), y: 0.5 + 0.5 * Math.sin(angle) };
+    };
+    const circleSide = Math.min(520, Math.max(200, count * 30));
+
+    if (count <= 1) return { positions: neighbors.map(() => ({ x: 0.5, y: 0.5 })), width: 0, height: 0 };
+    if (name === "ring" || name === "fully_connected") return { positions: neighbors.map((_, i) => around(i, count)), width: circleSide, height: circleSide };
+    if (name === "star") return { positions: neighbors.map((_, i) => (i === 0 ? { x: 0.5, y: 0.5 } : around(i - 1, count - 1))), width: circleSide, height: circleSide };
+    if (name === "2d_mesh" && numbers.length === 2 && numbers[0] * numbers[1] === count) {
+      // islands are numbered row by row: island x * y_dim + y sits in row x, column y
+      const [rows, columns] = numbers;
+      return {
+        positions: neighbors.map((_, i) => ({ x: columns > 1 ? (i % columns) / (columns - 1) : 0.5, y: rows > 1 ? Math.floor(i / columns) / (rows - 1) : 0.5 })),
+        width: (columns - 1) * 80,
+        height: (rows - 1) * 80,
+      };
+    }
+    if (name === "tree" && numbers.length === 1 && numbers[0] > 0) {
+      // island i's children are islands i * n + 1 .. i * n + n; leaves are spaced
+      // evenly left to right, and each parent sits centered over its children
+      const branching = numbers[0];
+      const depth = new Array(count).fill(0);
+      const across = new Array(count).fill(0);
+      let leaves = 0;
+      const place = (island, level) => {
+        depth[island] = level;
+        const children = Array.from({ length: branching }, (_, j) => island * branching + 1 + j).filter((child) => child < count);
+        if (!children.length) {
+          across[island] = leaves++;
+          return;
+        }
+        children.forEach((child) => place(child, level + 1));
+        across[island] = (across[children[0]] + across[children[children.length - 1]]) / 2;
+      };
+      place(0, 0);
+      const deepest = Math.max(...depth);
+      return {
+        positions: neighbors.map((_, i) => ({ x: leaves > 1 ? across[i] / (leaves - 1) : 0.5, y: deepest ? depth[i] / deepest : 0.5 })),
+        width: Math.max(0, leaves - 1) * 44,
+        height: deepest * 72,
+      };
+    }
+    const side = Math.min(520, Math.max(240, Math.sqrt(count) * 120));
+    return { positions: forceLayout(neighbors), width: side, height: side };
+  }
+
+  /**
+   * Lays out a graph by simulated forces: every pair of islands pushes apart and
+   * connected islands pull together, starting from a circle and running a fixed
+   * number of cooling steps, so the same topology always draws the same way.
+   * Returns positions in the unit square, keeping the layout's proportions.
+   */
+  function forceLayout(neighbors) {
+    const count = neighbors.length;
+    const positions = neighbors.map((_, i) => ({ x: 0.5 + 0.4 * Math.cos((2 * Math.PI * i) / count), y: 0.5 + 0.4 * Math.sin((2 * Math.PI * i) / count) }));
+    const edges = neighbors.flatMap((sources, island) => sources.filter((source) => source < count).map((source) => [source, island]));
+    const ideal = 1 / Math.sqrt(count);
+    let temperature = 0.1;
+    for (let step = 0; step < 300; step++) {
+      const shift = positions.map(() => ({ x: 0, y: 0 }));
+      for (let i = 0; i < count; i++) {
+        for (let j = i + 1; j < count; j++) {
+          const dx = positions[i].x - positions[j].x;
+          const dy = positions[i].y - positions[j].y;
+          const distance = Math.max(1e-3, Math.hypot(dx, dy));
+          const push = (ideal * ideal) / distance;
+          shift[i].x += (dx / distance) * push;
+          shift[i].y += (dy / distance) * push;
+          shift[j].x -= (dx / distance) * push;
+          shift[j].y -= (dy / distance) * push;
+        }
+      }
+      for (const [i, j] of edges) {
+        const dx = positions[i].x - positions[j].x;
+        const dy = positions[i].y - positions[j].y;
+        const distance = Math.max(1e-3, Math.hypot(dx, dy));
+        const pull = (distance * distance) / ideal;
+        shift[i].x -= (dx / distance) * pull;
+        shift[i].y -= (dy / distance) * pull;
+        shift[j].x += (dx / distance) * pull;
+        shift[j].y += (dy / distance) * pull;
+      }
+      for (let i = 0; i < count; i++) {
+        const length = Math.max(1e-9, Math.hypot(shift[i].x, shift[i].y));
+        const moved = Math.min(length, temperature);
+        positions[i].x += (shift[i].x / length) * moved;
+        positions[i].y += (shift[i].y / length) * moved;
+      }
+      temperature *= 0.98;
+    }
+    const xs = positions.map((point) => point.x);
+    const ys = positions.map((point) => point.y);
+    const [minX, maxX, minY, maxY] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+    const span = Math.max(maxX - minX, maxY - minY) || 1;
+    return positions.map((point) => ({
+      x: (point.x - minX) / span + (1 - (maxX - minX) / span) / 2,
+      y: (point.y - minY) / span + (1 - (maxY - minY) / span) / 2,
+    }));
+  }
+
+  /**
+   * Summarizes each island from the chart's genomes. Returns `islandOf` (each
+   * genome's island, by genome number), `islands` (each island's genome count
+   * and best value of `yKey`, with the genome holding it) and `migrations` (how
+   * many genomes were bred on one island from a parent on another, keyed
+   * "parent island>child island").
+   */
+  function islandStatistics(points, links, yKey) {
+    const islandOf = new Map();
+    const islands = new Map();
+    const better = lowerIsBetter(yKey) ? (a, b) => a < b : (a, b) => a > b;
+    for (let i = 0; i < points.genome_number.length; i++) {
+      const island = points.island[i];
+      if (island === null || island === undefined) continue;
+      islandOf.set(points.genome_number[i], island);
+      if (!islands.has(island)) islands.set(island, { genomes: 0, best: null, bestGenome: null });
+      const entry = islands.get(island);
+      entry.genomes++;
+      const value = points.y[i];
+      if (isNumber(value) && (entry.best === null || better(value, entry.best))) {
+        entry.best = value;
+        entry.bestGenome = points.genome_number[i];
+      }
+    }
+    const migrations = new Map();
+    for (let k = 0; links && k < links.child.length; k++) {
+      const from = islandOf.get(links.parent[k]);
+      const to = islandOf.get(links.child[k]);
+      if (from === undefined || to === undefined || from === to) continue;
+      migrations.set(`${from}>${to}`, (migrations.get(`${from}>${to}`) || 0) + 1);
+    }
+    return { islandOf, islands, migrations };
+  }
+
+  /**
+   * Counts where a genome's ancestry crossed between islands: for the genome and
+   * every ancestor, each parent on another island, keyed "parent island>child
+   * island".
+   */
+  function ancestryMigrations(genome, links, islandOf) {
+    const parentsOf = new Map();
+    for (let k = 0; links && k < links.child.length; k++) {
+      if (!parentsOf.has(links.child[k])) parentsOf.set(links.child[k], []);
+      parentsOf.get(links.child[k]).push(links.parent[k]);
+    }
+    const crossings = new Map();
+    const seen = new Set([genome]);
+    const queue = [genome];
+    while (queue.length) {
+      const child = queue.pop();
+      for (const parent of parentsOf.get(child) || []) {
+        const from = islandOf.get(parent);
+        const to = islandOf.get(child);
+        if (from !== undefined && to !== undefined && from !== to) crossings.set(`${from}>${to}`, (crossings.get(`${from}>${to}`) || 0) + 1);
+        if (!seen.has(parent)) {
+          seen.add(parent);
+          queue.push(parent);
+        }
+      }
+    }
+    return crossings;
+  }
+
+  // ---------------------------------------------------------------------------
   // The genome chart (progress scatter and whole-run genealogy)
   // ---------------------------------------------------------------------------
 
@@ -521,13 +750,28 @@
     let zoomed = false;
     let lineageCache = { genome: null, value: null };
 
+    /**
+     * The island the chart colors around when coloring by island, or null when
+     * each island gets its own color: the pinned `islandFocus`, or else the
+     * selected genome's island, falling back to the best plotted genome's.
+     */
+    function islandFocus(indexOf, bestIndex) {
+      if (config.encoding !== "island" || config.islandFocus === "each") return null;
+      let island = null;
+      if (Number.isInteger(config.islandFocus)) island = config.islandFocus;
+      else {
+        const i = selected !== null && indexOf.has(selected) ? indexOf.get(selected) : bestIndex;
+        island = i >= 0 ? points.island[i] : null;
+      }
+      if (island === null || island === undefined) return null;
+      const neighbors = config.islandNeighbors ? config.islandNeighbors[island] : null;
+      return { island, neighbors: new Set(neighbors || []) };
+    }
+
     function buildModel() {
       const count = points.genome_number.length;
       const xs = points.genome_number;
       const ys = points.y.map((value) => (isNumber(value) ? value : null));
-      const categories = categoriesFor(config.encoding, points);
-      const known = new Set(categories.map((category) => category.key));
-      const categoryIndex = new Map(categories.map((category, i) => [category.key, i]));
       const category = new Int32Array(count);
       const visible = new Uint8Array(count);
       const indexOf = new Map();
@@ -536,10 +780,16 @@
       let bestIndex = -1;
       for (let i = 0; i < count; i++) {
         indexOf.set(xs[i], i);
-        category[i] = categoryIndex.get(categoryKey(config.encoding, points, i, known));
         visible[i] = ys[i] !== null && passesFilters(points, i, config.filters) ? 1 : 0;
         if (visible[i] && (bestIndex < 0 || better(ys[i], ys[bestIndex]))) bestIndex = i;
       }
+
+      // the island focus can follow the best genome, so categories come after it is found
+      const focus = islandFocus(indexOf, bestIndex);
+      const categories = categoriesFor(config.encoding, points, focus);
+      const known = new Set(categories.map((entry) => entry.key));
+      const categoryIndex = new Map(categories.map((entry, i) => [entry.key, i]));
+      for (let i = 0; i < count; i++) category[i] = categoryIndex.get(categoryKey(config.encoding, points, i, known, focus));
 
       let parentsOf = null;
       let childrenOf = null;
@@ -764,6 +1014,8 @@
         h("div", {}, h("b", { text: `Genome ${model.xs[i]}` })),
         h("div", {}, h("span", { class: "muted", text: `${config.yKey}: ` }), formatNumber(model.ys[i])),
         h("div", {}, legendItem(categoryInfo.color, categoryInfo.label)),
+        // an island's genomes colored as its neighbors or as "other islands" still name their island
+        points.island[i] !== null && points.island[i] !== undefined && categoryInfo.label !== `island ${points.island[i]}` ? h("div", { class: "muted", text: `island ${points.island[i]}` }) : null,
         h("div", { class: "muted", text: (points.generated_by[i] || []).map(label).join(", ") || "no operators recorded" }),
         parents && parents.length
           ? h("div", { class: "muted", text: `parents: ${parents.map((parent) => (config.seeds && config.seeds.has(parent) ? `${parent} (seed)` : parent)).join(", ")}` })
@@ -783,8 +1035,12 @@
     function renderLegend() {
       const counts = new Array(model.categories.length).fill(0);
       for (let i = 0; i < model.count; i++) if (model.visible[i]) counts[model.category[i]]++;
+      // a category drawn underneath the others (the gray around a focused island) can still be listed last
+      const rank = (i) => model.categories[i].legendRank ?? CATEGORICAL_SLOTS + i;
       const items = model.categories
-        .map((category, i) => (counts[i] ? legendItem(category.color, `${category.label} (${counts[i].toLocaleString()})`) : null))
+        .map((category, i) => i)
+        .sort((a, b) => rank(a) - rank(b))
+        .map((i) => (counts[i] ? legendItem(model.categories[i].color, `${model.categories[i].label} (${counts[i].toLocaleString()})`) : null))
         .filter(Boolean);
       const style = emphasis();
       items.push(legendItem(token(style.bestInk), `best ${config.yKey} so far`, true));
@@ -906,10 +1162,11 @@
         if (points) render();
       },
       setSelected(genome) {
-        const changedVisibility = config.hideDeadEnds && links;
+        // hiding dead ends always keeps the selected genome, and island colors can follow it
+        const needsRebuild = (config.hideDeadEnds && links) || (config.encoding === "island" && config.islandFocus === "selected");
         selected = genome;
         lineageCache = { genome: null, value: null };
-        if (changedVisibility && points) render();
+        if (needsRebuild && points) render();
         else if (plot) plot.redraw(false, false);
       },
       /** Re-fits the chart to the space left for it, e.g. after content above it changes height. */
@@ -1070,10 +1327,14 @@
     setBreadcrumbs([{ label: "Runs", href: "#/" }, { label: run.name }]);
 
     const keys = run.fitness_keys || [];
+    const islandCount = run.filter_options && run.filter_options.island ? run.filter_options.island.length : 0;
     const state = {
       mode: "progress",
       yKey: keys.includes("loss") ? "loss" : keys[0] || "n_gates",
       encoding: "insert_type",
+      // what coloring by island colors: "each" island its own color (offered only while the
+      // palette has a color per island), the "selected" genome's island, or a pinned island
+      islandFocus: islandCount <= CATEGORICAL_SLOTS - 1 ? "each" : "selected",
       hideDeadEnds: false,
       highlightLineage: true,
       showHistory: true,
@@ -1151,6 +1412,9 @@
       seeds: state.seeds,
       yKey: state.yKey,
       encoding: state.encoding,
+      islandFocus: state.islandFocus,
+      // each island's neighbors by island id, when the run recorded its topology
+      islandNeighbors: run.island_topology ? run.island_topology.neighbors : null,
       filters: state.filters,
       hideDeadEnds: state.hideDeadEnds,
       highlightLineage: state.highlightLineage,
@@ -1159,6 +1423,15 @@
         if (state.selected !== null && state.selected !== undefined) location.hash = `#/run/${index}`;
       },
     });
+
+    // Built once and moved back into the header on every refresh, so a note being
+    // typed -- or an opened section -- survives the page's polling.
+    const runNotesNode = h("details", { class: "run-notes" }, h("summary", { text: "Run notes" }), renderAnnotations(null));
+    // an island search's topology: drawn once opened, then redrawn as genomes arrive or the selection changes
+    const topologyNode =
+      run.island_topology && (run.island_topology.neighbors || []).length
+        ? h("details", { class: "island-topology", ontoggle: () => renderTopology() }, h("summary", { text: `Island topology (${(run.island_topology.topology || []).join(" ")})` }), h("div"))
+        : null;
 
     function renderHeader() {
       const summary = state.summary;
@@ -1175,7 +1448,9 @@
           h("span", { text: `started ${formatTime(summary.start_time)}` }),
           h("a", { href: insertionHref({ kind: "run", index }), text: "insertion rates →" })
         ),
-        summary.command_line ? h("details", {}, h("summary", { text: "Command line" }), h("div", { class: "command" }, h("pre", { text: summary.command_line }), copyButton(summary.command_line))) : null
+        summary.command_line ? h("details", {}, h("summary", { text: "Command line" }), h("div", { class: "command" }, h("pre", { text: summary.command_line }), copyButton(summary.command_line))) : null,
+        runNotesNode,
+        topologyNode
       );
     }
 
@@ -1258,12 +1533,38 @@
               ...(run.filter_options && run.filter_options.island && run.filter_options.island.length ? [["island", "island"]] : []),
             ],
             state.encoding,
-            (encoding) => ((state.encoding = encoding), chart.setOptions({ encoding })),
+            (encoding) => {
+              state.encoding = encoding;
+              renderChartControls();
+              chart.setOptions({ encoding });
+              renderTopology();
+            },
             "Color by"
           )
         ),
+        state.encoding === "island"
+          ? h(
+              "label",
+              {},
+              "focus",
+              select(
+                [
+                  ...(islandCount <= CATEGORICAL_SLOTS - 1 ? [["each", "each island"]] : []),
+                  ["selected", "selected genome's island"],
+                  ...run.filter_options.island.map((island) => [String(island), `island ${island}`]),
+                ],
+                String(state.islandFocus),
+                (value) => {
+                  state.islandFocus = value === "each" || value === "selected" ? value : Number(value);
+                  chart.setOptions({ islandFocus: state.islandFocus });
+                  renderTopology();
+                },
+                "Island to color, with the islands it draws parents from"
+              )
+            )
+          : null,
         checkbox("hide dead ends", state.hideDeadEnds, (value) => ((state.hideDeadEnds = value), chart.setOptions({ hideDeadEnds: value }))),
-        checkbox("highlight selected lineage", state.highlightLineage, (value) => ((state.highlightLineage = value), chart.setOptions({ highlightLineage: value }))),
+        checkbox("highlight selected lineage", state.highlightLineage, (value) => ((state.highlightLineage = value), chart.setOptions({ highlightLineage: value }), renderTopology())),
         run.has_history ? checkbox("search progress", state.showHistory, (value) => ((state.showHistory = value), loadHistory())) : null,
         h("span", { class: "meta", text: "drag to zoom · double-click to reset · click a point to open or close it · click empty space to clear" })
       );
@@ -1279,7 +1580,10 @@
         const payload = await api(`/api/runs/${index}/genealogy?y=${encodeURIComponent(state.yKey)}`);
         state.points = payload.points;
         state.links = payload.links;
-        if (!destroyed) chart.setData(state.points, state.links, changes);
+        if (!destroyed) {
+          chart.setData(state.points, state.links, changes);
+          renderTopology();
+        }
       } catch (error) {
         setChildren(chartNode, notice(`Could not load the chart: ${error.message}`, true));
       }
@@ -1534,13 +1838,236 @@
     }
 
     /** Links to a genome's parents, labelling the (unstored) seed genome rather than linking to it. */
-    function parentLinks(parents) {
+    function parentLinks(parents, islands = null) {
       return parents.map((parent, i) => [
         i ? ", " : "",
         state.seeds.has(parent)
           ? h("span", { class: "seed", title: SEED_EXPLANATION, text: `${parent} (seed)` })
           : h("a", { href: genomeHref(index, parent), text: parent }),
+        // `islands` lines up with `parents`, so an inter-island crossover shows where each parent came from
+        islands && islands[i] !== null && islands[i] !== undefined ? h("span", { class: "meta", text: ` (island ${islands[i]})` }) : "",
       ]);
+    }
+
+    /**
+     * Draws the run's island topology into its section, when the run recorded one
+     * and the section is open: islands shaded by their best value of the charted
+     * metric, each connection as wide as the genomes bred across it, rings for the
+     * chart's focus island and its neighbors, and arrows where the selected
+     * genome's ancestry crossed between islands. Clicking an island colors the
+     * chart around it.
+     */
+    function renderTopology() {
+      if (!topologyNode || !topologyNode.open) return;
+      const body = topologyNode.lastElementChild;
+      if (!state.points) {
+        setChildren(body, notice("Loading the run's genomes…"));
+        return;
+      }
+      const topology = run.island_topology;
+      const neighbors = topology.neighbors;
+      const count = neighbors.length;
+      const { positions, width, height } = islandLayout(topology);
+      const { islandOf, islands, migrations } = islandStatistics(state.points, state.links, state.yKey);
+      const better = lowerIsBetter(state.yKey) ? (a, b) => a < b : (a, b) => a > b;
+      const plural = (n, word) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
+      const margin = 36;
+      const radius = 11;
+      const at = (island) => ({ x: margin + positions[island].x * width, y: margin + positions[island].y * height });
+      // shortens a segment at both ends, so it meets the islands' edges rather than their centers
+      const trimmed = (from, to, gap) => {
+        const dx = to.x - from.x;
+        const dy = to.y - from.y;
+        const distance = Math.hypot(dx, dy) || 1;
+        return { x1: from.x + (dx / distance) * gap, y1: from.y + (dy / distance) * gap, x2: to.x - (dx / distance) * gap, y2: to.y - (dy / distance) * gap };
+      };
+
+      // the focus follows the chart: a pinned island, else the selected genome's, else the best genome's
+      let focus = null;
+      if (state.encoding === "island" && state.islandFocus !== "each") {
+        if (Number.isInteger(state.islandFocus)) focus = state.islandFocus;
+        else if (islandOf.has(state.selected)) focus = islandOf.get(state.selected);
+        else {
+          for (const [island, entry] of islands) {
+            if (isNumber(entry.best) && (focus === null || better(entry.best, islands.get(focus).best))) focus = island;
+          }
+        }
+      }
+      const focusNeighbors = new Set(focus === null ? [] : neighbors[focus] || []);
+      const selectedIsland = islandOf.get(state.selected);
+      const crossings = state.highlightLineage && selectedIsland !== undefined ? ancestryMigrations(state.selected, state.links, islandOf) : new Map();
+
+      const values = [...islands.values()].map((entry) => entry.best).filter(isNumber);
+      const low = Math.min(...values);
+      const high = Math.max(...values);
+      const light = token("--sequential-light");
+      const dark = token("--sequential-dark");
+      const shade = (value) => {
+        if (!isNumber(value)) return token("--surface-2");
+        const t = high > low ? (value - low) / (high - low) : 1;
+        return mixColors(light, dark, lowerIsBetter(state.yKey) ? 1 - t : t);
+      };
+
+      const svgWidth = width + 2 * margin;
+      const svgHeight = height + 2 * margin;
+      const arrowhead = (id, color) =>
+        s("marker", { id, viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 9, markerHeight: 9, markerUnits: "userSpaceOnUse", orient: "auto" }, s("path", { d: "M0,0 L10,5 L0,10 z", fill: color }));
+      const graph = s(
+        "svg",
+        { width: svgWidth, height: svgHeight, viewBox: `0 0 ${svgWidth} ${svgHeight}`, role: "img", "aria-label": `Island topology: ${(topology.topology || []).join(" ")}, ${count} islands` },
+        s("defs", {}, arrowhead("topology-connection", token("--text-muted")), arrowhead("topology-ancestry", token("--text-primary")))
+      );
+
+      // one line per connected pair of islands, plus any pair genomes were bred across without being connected
+      const pairKey = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+      const pairs = new Map();
+      const addPair = (a, b, connected) => {
+        const key = pairKey(a, b);
+        if (!pairs.has(key)) pairs.set(key, { a: Math.min(a, b), b: Math.max(a, b), flows: [], connected });
+        return pairs.get(key);
+      };
+      neighbors.forEach((sources, island) => sources.forEach((source) => addPair(source, island, true).flows.push([source, island])));
+      for (const key of migrations.keys()) {
+        const [source, island] = key.split(">").map(Number);
+        addPair(source, island, false);
+      }
+
+      const most = Math.max(1, ...migrations.values());
+      let unused = false;
+      let directed = false;
+      for (const pair of pairs.values()) {
+        if (pair.b >= count) continue;
+        const forward = migrations.get(`${pair.a}>${pair.b}`) || 0;
+        const backward = migrations.get(`${pair.b}>${pair.a}`) || 0;
+        const total = forward + backward;
+        // a connection only one of its islands draws across (a random topology is directed) points at that island
+        const oneWay = pair.connected && pair.flows.length === 1;
+        const [source, island] = oneWay ? pair.flows[0] : [pair.a, pair.b];
+        directed ||= oneWay;
+        unused ||= pair.connected && total === 0;
+        const title = !pair.connected
+          ? `Islands ${pair.a} and ${pair.b} are not connected, yet ${plural(total, "genome")} were bred across them`
+          : oneWay
+            ? `Island ${island} draws parents from island ${source}: ${plural(total, "genome")} bred across`
+            : `Islands ${pair.a} and ${pair.b}: ${plural(backward, "genome")} bred on island ${pair.a} from island ${pair.b}, ${plural(forward, "genome")} on island ${pair.b} from island ${pair.a}`;
+        const segment = trimmed(at(source), at(island), radius + 3);
+        graph.append(
+          s(
+            "g",
+            {},
+            s("title", { text: title }),
+            // a wide invisible line, so a thin connection is still easy to hover
+            s("line", { ...segment, stroke: "transparent", "stroke-width": 12 }),
+            s("line", {
+              ...segment,
+              stroke: token(total ? "--text-muted" : "--baseline"),
+              "stroke-width": total ? 1 + 5 * Math.sqrt(total / most) : 1,
+              "stroke-linecap": "round",
+              "stroke-dasharray": pair.connected ? (total ? null : "4 3") : "1 4",
+              "marker-end": oneWay ? "url(#topology-connection)" : null,
+            })
+          )
+        );
+      }
+
+      const mostCrossings = Math.max(1, ...crossings.values());
+      for (const [key, crossed] of crossings) {
+        const [source, island] = key.split(">").map(Number);
+        if (source >= count || island >= count) continue;
+        const from = at(source);
+        const to = at(island);
+        const dx = to.x - from.x;
+        const dy = to.y - from.y;
+        const distance = Math.hypot(dx, dy) || 1;
+        // bowed to one side, so ancestry that crossed both ways between two islands draws two arrows
+        const bend = Math.min(30, distance * 0.3);
+        const control = { x: (from.x + to.x) / 2 + (dy / distance) * bend, y: (from.y + to.y) / 2 - (dx / distance) * bend };
+        const start = trimmed(from, control, radius + 3);
+        const end = trimmed(control, to, radius + 3);
+        graph.append(
+          s(
+            "path",
+            {
+              d: `M${start.x1},${start.y1} Q${control.x},${control.y} ${end.x2},${end.y2}`,
+              fill: "none",
+              stroke: token("--text-primary"),
+              "stroke-width": 1.5 + 2 * Math.sqrt(crossed / mostCrossings),
+              "marker-end": "url(#topology-ancestry)",
+            },
+            s("title", { text: `Genome ${state.selected}'s ancestry: ${plural(crossed, "genome")} bred on island ${island} from a parent on island ${source}` })
+          )
+        );
+      }
+
+      for (let island = 0; island < count; island++) {
+        const { x, y } = at(island);
+        const entry = islands.get(island) || { genomes: 0, best: null, bestGenome: null };
+        const ring = island === focus ? slotColor(1) : focusNeighbors.has(island) ? slotColor(2) : null;
+        const sources = neighbors[island] || [];
+        const title = [
+          `Island ${island}`,
+          plural(entry.genomes, "genome"),
+          isNumber(entry.best) ? `best ${state.yKey} ${formatNumber(entry.best)} (genome ${entry.bestGenome})` : `no ${state.yKey} recorded`,
+          sources.length ? `draws parents from island${sources.length === 1 ? "" : "s"} ${sources.join(", ")}` : "draws parents from no other island",
+        ].join(" · ");
+        const focusOn = () => {
+          if (!islandCount) return;
+          state.encoding = "island";
+          state.islandFocus = island;
+          renderChartControls();
+          chart.setOptions({ encoding: "island", islandFocus: island });
+          renderTopology();
+        };
+        graph.append(
+          s(
+            "g",
+            {
+              class: "island",
+              tabindex: "0",
+              role: "button",
+              "aria-label": `${title}. Color the chart around island ${island}.`,
+              onclick: focusOn,
+              onkeydown: (event) => {
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
+                focusOn();
+              },
+            },
+            s("title", { text: title }),
+            ...(island === selectedIsland ? [s("circle", { cx: x, cy: y, r: radius + 7, fill: "none", stroke: token("--text-primary"), "stroke-width": 1.5, "stroke-dasharray": "3 2" })] : []),
+            s("circle", { cx: x, cy: y, r: radius, fill: shade(entry.best), stroke: ring || token("--surface-1"), "stroke-width": ring ? 4 : 2 }),
+            s("text", { x: x + radius + 3, y: y - radius + 1, text: island })
+          )
+        );
+      }
+
+      const totalMigrations = [...migrations.values()].reduce((sum, n) => sum + n, 0);
+      const legend = h(
+        "div",
+        { class: "chart-legend" },
+        h("span", {}, h("span", { class: "swatch", style: `background:linear-gradient(90deg, ${light}, ${dark})` }), `island's best ${state.yKey}, worse to better`),
+        ...(focus !== null ? [legendItem(slotColor(1), `focus island ${focus} (ring)`)] : []),
+        ...(focusNeighbors.size ? [legendItem(slotColor(2), "its neighbors (ring)")] : []),
+        legendItem(token("--text-muted"), "genomes bred across a connection (width)", true),
+        ...(unused ? [h("span", { class: "muted", text: "dashed: never used" })] : []),
+        ...(directed ? [h("span", { class: "muted", text: "arrowhead: the island that draws parents" })] : []),
+        ...(selectedIsland !== undefined ? [h("span", { class: "muted", text: `dotted outline: genome ${state.selected}'s island` })] : []),
+        ...(selectedIsland !== undefined && state.highlightLineage
+          ? [crossings.size ? legendItem(token("--text-primary"), `genome ${state.selected}'s ancestry crossing islands`, true) : h("span", { class: "muted", text: `genome ${state.selected}'s ancestry never left island ${selectedIsland}` })]
+          : [])
+      );
+      setChildren(
+        body,
+        h(
+          "div",
+          { class: "toolbar" },
+          h("span", { class: "meta", text: `${count} islands · ${plural(totalMigrations, "genome")} bred from a parent on another island` }),
+          h("span", { class: "spacer" }),
+          h("span", { class: "muted", text: "click an island to color the chart around it" })
+        ),
+        legend,
+        h("div", { class: "topology-frame" }, graph)
+      );
     }
 
     /** Selects a genome, or clears the selection if it is already the selected one. */
@@ -1560,6 +2087,7 @@
       state.selected = genome;
       chart.setSelected(genome);
       highlightTableRow();
+      renderTopology();
       if (genome === null || genome === undefined) {
         detailRequest++;
         detailNode.hidden = true;
@@ -1601,7 +2129,7 @@
     }
 
     function renderDetail(payload) {
-      const { summary, genome, children, commands } = payload;
+      const { summary, genome, children, commands, parent_islands: parentIslands } = payload;
       const number = genome.genome_number;
       const tabContent = h("div");
 
@@ -1613,6 +2141,7 @@
         ["fitness", "Fitness"],
         ["gates", `Gates (${summary.n_enabled_gates}/${summary.n_gates})`],
         ["lineage", "Lineage"],
+        ["notes", "Notes"],
         ["commands", "Commands"],
       ];
 
@@ -1642,7 +2171,8 @@
         if (tab === "metrics") return renderMetrics(series);
         if (tab === "fitness") return renderFitness(summary, genome);
         if (tab === "gates") return renderGates(genome);
-        if (tab === "lineage") return renderLineage(summary, genome, children);
+        if (tab === "lineage") return renderLineage(summary, genome, children, parentIslands);
+        if (tab === "notes") return [renderAnnotations(number)];
         return renderCommands(number, commands);
       }
 
@@ -1688,6 +2218,148 @@
         tabContent
       );
       showTab(state.tab);
+    }
+
+    /** Key the name annotations are signed with is remembered under. */
+    const AUTHOR_KEY = "exaqc.annotationAuthor";
+
+    /** The name annotations were last signed with, or "" if none (or no storage). */
+    function rememberedAuthor() {
+      try {
+        return localStorage.getItem(AUTHOR_KEY) || "";
+      } catch (error) {
+        return "";
+      }
+    }
+
+    /** Remembers the name annotations are signed with, when storage is available. */
+    function rememberAuthor(name) {
+      try {
+        localStorage.setItem(AUTHOR_KEY, name);
+      } catch (error) {
+        // storage is unavailable here, so there is nothing to remember it in
+      }
+    }
+
+    /**
+     * Renders the notes recorded for a genome or for the run -- and a genome's
+     * tags -- with forms to add them when the dashboard allows it.
+     *
+     * Notes are shown oldest first and are never edited or deleted. A tag's ×
+     * removes it, which the server records rather than forgetting, so the tag's
+     * history survives. When annotations cannot be written here, whatever was
+     * already recorded is still shown, read-only.
+     *
+     * @param {number|null} genomeNumber The genome, or null for the run itself.
+     * @returns {HTMLElement} The container, filled once the annotations load.
+     */
+    function renderAnnotations(genomeNumber) {
+      const container = h("div", { class: "annotations" }, notice("Loading notes…"));
+      const enabled = Boolean(run.annotations_enabled);
+      const base = `/api/runs/${index}`;
+
+      async function load() {
+        let payload;
+        try {
+          payload = await api(`${base}/annotations${genomeNumber === null ? "" : `?genome=${genomeNumber}`}`);
+        } catch (error) {
+          setChildren(container, notice(`Could not load notes: ${error.message}`, true));
+          return;
+        }
+        if (!destroyed) draw(payload);
+      }
+
+      async function write(action) {
+        try {
+          await action();
+          await load();
+        } catch (error) {
+          container.prepend(notice(error.message, true));
+        }
+      }
+
+      function byline(entry, seconds) {
+        return [entry.source === "mcp" ? "via MCP" : "via dashboard", entry.author, formatTime(seconds)].filter(Boolean).join(" · ");
+      }
+
+      function draw(payload) {
+        const notes = genomeNumber === null ? payload.notes.filter((note) => note.genome_number === null) : payload.notes;
+        const parts = [];
+
+        if (genomeNumber !== null) {
+          const chips = payload.tags.map((tag) =>
+            h(
+              "span",
+              { class: "tag-chip", title: byline(tag, tag.added_at) },
+              tag.tag,
+              enabled
+                ? h("button", {
+                    type: "button",
+                    "aria-label": `Remove tag ${tag.tag}`,
+                    title: "Remove this tag (its history is kept)",
+                    text: "×",
+                    onclick: () =>
+                      write(() => apiSend(`${base}/genomes/${genomeNumber}/tags/${encodeURIComponent(tag.tag)}`, "DELETE", { author: rememberedAuthor() || null })),
+                  })
+                : null
+            )
+          );
+          parts.push(h("div", { class: "toolbar" }, h("strong", { text: "Tags" }), ...(chips.length ? chips : [h("span", { class: "meta", text: "none" })])));
+          if (enabled) {
+            parts.push(
+              h(
+                "form",
+                {
+                  class: "annotation-form",
+                  onsubmit: (event) => {
+                    event.preventDefault();
+                    const tag = String(new FormData(event.target).get("tag") || "").trim();
+                    write(() => apiSend(`${base}/genomes/${genomeNumber}/tags`, "POST", { tag, author: rememberedAuthor() || null }));
+                  },
+                },
+                h("label", {}, "add tag ", h("input", { name: "tag", required: true, maxlength: "64", placeholder: "candidate" })),
+                h("button", { type: "submit", text: "Tag" })
+              )
+            );
+          }
+        }
+
+        // a run's notes sit under their own "Run notes" summary, so only a genome's need a heading
+        if (genomeNumber !== null) parts.push(h("strong", { text: "Notes" }));
+        if (notes.length) {
+          parts.push(...notes.map((note) => h("div", { class: "note" }, h("p", { text: note.text }), h("div", { class: "meta", text: byline(note, note.created_at) }))));
+        } else {
+          parts.push(h("span", { class: "meta", text: enabled ? "No notes yet." : "No notes. Start the dashboard with --allow_annotations to add notes and tags." }));
+        }
+
+        if (enabled) {
+          parts.push(
+            h(
+              "form",
+              {
+                class: "annotation-form",
+                onsubmit: (event) => {
+                  event.preventDefault();
+                  const data = new FormData(event.target);
+                  const author = String(data.get("author") || "").trim();
+                  rememberAuthor(author);
+                  const body = { text: String(data.get("text") || ""), author: author || null };
+                  if (genomeNumber !== null) body.genome_number = genomeNumber;
+                  write(() => apiSend(`${base}/notes`, "POST", body));
+                },
+              },
+              h("textarea", { name: "text", required: true, maxlength: "10000", placeholder: genomeNumber === null ? "A note about this run" : `A note about genome ${genomeNumber}` }),
+              h("label", {}, "author ", h("input", { name: "author", maxlength: "100", value: rememberedAuthor(), placeholder: "optional" })),
+              h("button", { type: "submit", text: "Add note" })
+            )
+          );
+        }
+
+        setChildren(container, ...parts);
+      }
+
+      load();
+      return container;
     }
 
     /**
@@ -1878,7 +2550,22 @@
       ];
     }
 
-    function renderLineage(summary, genome, children) {
+    /**
+     * The island a genome was bred for, as facts-list rows: its `target_island_id`,
+     * or for an initial genome (bred for no island) the island it was placed on.
+     * A genome from a search without islands has no row.
+     */
+    function islandFacts(summary, genome) {
+      const target = genome.metadata ? genome.metadata.target_island_id : undefined;
+      const inserted = summary.island;
+      if (Number.isInteger(target)) {
+        return [["target island", Number.isInteger(inserted) && inserted !== target ? `${target} (inserted into island ${inserted})` : String(target)]];
+      }
+      if (Number.isInteger(inserted)) return [["target island", `none (an initial genome, placed on island ${inserted})`]];
+      return [];
+    }
+
+    function renderLineage(summary, genome, children, parentIslands = null) {
       const links = (numbers) => numbers.map((other, i) => [i ? ", " : "", h("a", { href: genomeHref(index, other), text: other })]);
       const depthSelect = select(
         [1, 2, 3, 5, 8, 12, 20].map((depth) => [String(depth), `${depth} generation${depth === 1 ? "" : "s"}`]),
@@ -1902,7 +2589,8 @@
         factsList([
           ["generated by", summary.generated_by.map(label).join(", ") || "—"],
           ["crossover type", summary.crossover_type ?? "—"],
-          ["parents", summary.parents.length ? parentLinks(summary.parents) : "—"],
+          ...islandFacts(summary, genome),
+          ["parents", summary.parents.length ? parentLinks(summary.parents, parentIslands) : "—"],
           [
             `children (${children.length.toLocaleString()})`,
             children.length ? [links(children.slice(0, MAX_CHILDREN_SHOWN)), children.length > MAX_CHILDREN_SHOWN ? ` … and ${(children.length - MAX_CHILDREN_SHOWN).toLocaleString()} more` : ""] : "none",
@@ -1964,7 +2652,7 @@
       for (const { x, y, node } of position.values()) {
         const value = node.fitness ? node.fitness[state.yKey] : null;
         const title = node.in_archive
-          ? `Genome ${node.genome_number} · generation ${node.generation} back · ${state.yKey}: ${formatNumber(value)} · ${label(node.insert_type)} · ${(node.generated_by || []).map(label).join(", ")}`
+          ? `Genome ${node.genome_number} · generation ${node.generation} back · ${state.yKey}: ${formatNumber(value)} · ${label(node.insert_type)}${node.island !== null && node.island !== undefined ? ` · island ${node.island}` : ""} · ${(node.generated_by || []).map(label).join(", ")}`
           : `Genome ${node.genome_number}. ${SEED_EXPLANATION}`;
         const group = s(
           "g",

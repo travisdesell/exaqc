@@ -182,6 +182,25 @@ def test_run_info_is_recorded_when_the_search_starts() -> None:
     assert selection["mutation_strategy"] == ["uniform", "1", "2"]
     assert selection["parent_strategy"] == ["uniform", "2", "3"]
 
+    # a single population has no islands to describe
+    assert "island_topology" not in info
+
+
+def test_island_topology_is_recorded_when_the_search_starts() -> None:
+    """An island search records which islands each island draws parents from."""
+
+    archive = MagicMock()
+    population = SteadyStateIslands(
+        n_islands=3, max_island_size=2, compare=compare, topology=["ring"]
+    )
+    build_search(population, archive)
+
+    info = archive.set_run_info.call_args.kwargs
+    assert info["island_topology"] == {
+        "topology": ["ring"],
+        "neighbors": [[1, 2], [0, 2], [1, 0]],
+    }
+
 
 def test_mutations_are_drawn_from_the_weighted_list() -> None:
     """mutate draws from the weights expanded in their fixed order.

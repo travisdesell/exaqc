@@ -1556,7 +1556,8 @@ class GenomeArchive:
             ``nodes``: the genome and its ancestors, each with its
             ``genome_number``, ``generation`` (the fewest steps back it is
             reached in), whether it is ``in_archive`` (the seed genome never is),
-            and its ``insert_type``, ``generated_by`` and ``fitness``; and
+            and its ``insert_type``, ``island``, ``generated_by`` and
+            ``fitness``; and
             ``edges``: the ``child``/``parent`` links among them.
         """
 
@@ -1600,6 +1601,7 @@ class GenomeArchive:
                     "generation": generations[genome],
                     "in_archive": genome in summaries,
                     "insert_type": summary.get("insert_type"),
+                    "island": summary.get("island"),
                     "generated_by": summary.get("generated_by", []),
                     "fitness": summary.get("fitness"),
                 }
@@ -1819,6 +1821,27 @@ class GenomeArchive:
             (int(genome_number),),
         ).fetchall()
         return [row[0] for row in rows]
+
+    def islands_of(self, genome_numbers: list[int]) -> list[int | None]:
+        """Looks up the island each of several genomes was inserted into.
+
+        Args:
+            genome_numbers: The genomes to look up, e.g. a genome's parents.
+
+        Returns:
+            Each genome's island, in the order given: ``None`` for a genome that
+            is not stored (the seed genome) or was not evolved on an island.
+        """
+
+        islands: dict[int, int | None] = {}
+        for chunk in _chunks(sorted({int(number) for number in genome_numbers})):
+            islands.update(
+                self.connection.execute(
+                    f"SELECT genome_number, island FROM genomes WHERE genome_number IN ({', '.join('?' * len(chunk))})",
+                    chunk,
+                ).fetchall()
+            )
+        return [islands.get(int(number)) for number in genome_numbers]
 
     def _parents_of(self, genome_numbers: list[int]) -> dict[int, list[int]]:
         """Looks up the parents of several genomes at once.

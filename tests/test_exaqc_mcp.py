@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import socket
 import sqlite3
 import threading
@@ -58,7 +59,11 @@ EXPECTED_TOOLS = {
     "describe_schema",
     "query_sql",
     "export_query",
+    "list_annotations",
 }
+
+#: The tools a server adds only when it allows annotations to be written.
+ANNOTATION_WRITE_TOOLS = {"add_note", "tag_genome", "untag_genome"}
 
 
 @pytest.fixture
@@ -131,6 +136,7 @@ def test_parser_defaults() -> None:
     assert args.groups is None
     assert args.dashboard_url == "http://127.0.0.1:8000"
     assert args.logging_level == "WARNING"
+    assert args.allow_annotations is False
 
     watching = exaqc_mcp.build_parser().parse_args(["--directory", "runs"])
     assert watching.directory == "runs"
@@ -795,6 +801,148 @@ def test_cross_run_sql_reaches_the_recorded_training_metrics(
     )
     assert result["columns"] == ["run", "genome_number", "validation_loss"]
     assert {row[0] for row in result["rows"]} == {"iris_1", "iris_2"}
+
+
+def test_annotation_writes_are_offered_only_when_allowed(
+    tools: DashboardTools, tmp_path: Path
+) -> None:
+    """A server that does not allow annotations shows no tool that writes them.
+
+    Args:
+        tools: The tool layer fixture, which does not allow annotations.
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    offered = {
+        tool.name for tool in asyncio.run(build_mcp_server(tools.registry).list_tools())
+    }
+    assert "list_annotations" in offered
+    assert not ANNOTATION_WRITE_TOOLS & offered
+
+    writable = build_mcp_server(tools.registry, allow_annotations=True)
+    assert {tool.name for tool in asyncio.run(writable.list_tools())} == (
+        EXPECTED_TOOLS | ANNOTATION_WRITE_TOOLS
+    )
+
+    # the tool layer refuses too, whatever registered it
+    with pytest.raises(PermissionError, match="--allow_annotations"):
+        tools.add_note("iris_1", "not allowed here")
+
+    # reading annotations of an unannotated run creates nothing beside it
+    assert tools.list_annotations("iris_1")["notes"] == []
+    assert tools.query_sql("select count(*) from genome_tags", run="iris_1")[
+        "rows"
+    ] == [[0]]
+    assert not list((tmp_path / "runs").rglob("annotations.sqlite"))
+
+
+def test_annotations_round_trip_without_touching_the_archive(tmp_path: Path) -> None:
+    """Notes and tags written through MCP are read back and queryable, archive intact.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    build_run(tmp_path / "runs" / "iris_1", standard_genomes())
+    build_run(tmp_path / "runs" / "iris_2", standard_genomes()[:2])
+    registry = RunRegistry(
+        run_directories=[
+            str(tmp_path / "runs" / "iris_1"),
+            str(tmp_path / "runs" / "iris_2"),
+        ],
+        groups=["iris"],
+    )
+    archive = tmp_path / "runs" / "iris_1" / ARCHIVE_FILENAME
+    before = hashlib.sha256(archive.read_bytes()).hexdigest()
+
+    server = build_mcp_server(
+        registry, base_url="http://dash.test:8000", allow_annotations=True
+    )
+
+    async def exchange() -> dict[str, str]:
+        """Writes and reads annotations through a real client, in process."""
+        texts: dict[str, str] = {}
+        async with Client(server) as client:
+            for key, name, arguments in (
+                (
+                    "note",
+                    "add_note",
+                    {
+                        "run": "iris_1",
+                        "genome_number": 3,
+                        "text": "promising",
+                        "author": "agent",
+                    },
+                ),
+                ("run_note", "add_note", {"run": "iris_1", "text": "converged early"}),
+                (
+                    "tag",
+                    "tag_genome",
+                    {"run": "iris_1", "genome_number": 3, "tag": "candidate"},
+                ),
+                (
+                    "missing",
+                    "tag_genome",
+                    {"run": "iris_1", "genome_number": 999, "tag": "candidate"},
+                ),
+                (
+                    "bad_tag",
+                    "tag_genome",
+                    {"run": "iris_1", "genome_number": 3, "tag": "has space"},
+                ),
+                ("listed", "list_annotations", {"run": "iris_1", "genome_number": 3}),
+            ):
+                result = await client.call_tool(name, arguments)
+                texts[key] = result.content[0].text
+        return texts
+
+    texts = asyncio.run(exchange())
+
+    note = json.loads(texts["note"])["note"]
+    assert (note["source"], note["author"], note["genome_number"]) == (
+        "mcp",
+        "agent",
+        3,
+    )
+    assert json.loads(texts["tag"])["tag"]["created"] is True
+    # refusals explain themselves rather than failing as a generic tool error
+    assert "no genome 999" in texts["missing"]
+    assert "is not a tag" in texts["bad_tag"]
+
+    listed = json.loads(texts["listed"])
+    assert [entry["text"] for entry in listed["notes"]] == ["promising"]
+    assert [entry["tag"] for entry in listed["tags"]] == ["candidate"]
+    assert listed["enabled"] is True
+    assert listed["dashboard_url"].endswith("#/run/0/genome/3")
+
+    # the annotations live beside the archive, and the archive is untouched
+    assert (tmp_path / "runs" / "iris_1" / "annotations.sqlite").is_file()
+    assert hashlib.sha256(archive.read_bytes()).hexdigest() == before
+
+    reader = DashboardTools(
+        registry, RenderService(processes=0), "http://dash.test:8000"
+    )
+    assert reader.query_sql(
+        "select genome_number, tag from genome_tags where removed_at is null",
+        run="iris_1",
+    )["rows"] == [[3, "candidate"]]
+    assert reader.query_sql(
+        "select run, count(*) from notes group by run order by run",
+        runs=["iris_1", "iris_2"],
+    )["rows"] == [["iris_1", 2]]
+
+    writer = DashboardTools(
+        registry,
+        RenderService(processes=0),
+        "http://dash.test:8000",
+        allow_annotations=True,
+    )
+    removed = writer.untag_genome("iris_1", 3, "candidate", author="travis")
+    assert removed["tag"]["active"] is False
+    assert reader.list_annotations("iris_1", genome_number=3)["tags"] == []
+    history = reader.list_annotations("iris_1", genome_number=3, include_removed=True)
+    assert [entry["removed_author"] for entry in history["tags"]] == ["travis"]
+    assert hashlib.sha256(archive.read_bytes()).hexdigest() == before
 
 
 def test_tools_never_modify_an_archive(tools: DashboardTools) -> None:

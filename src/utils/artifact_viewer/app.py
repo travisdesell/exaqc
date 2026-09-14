@@ -19,6 +19,7 @@ import contextlib
 import json
 import re
 import socket
+import urllib.parse
 import webbrowser
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -27,6 +28,7 @@ from typing import Any
 import uvicorn
 from loguru import logger
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.routing import Mount, Route
@@ -292,6 +294,162 @@ def create_app(viewer: ArtifactViewer, mcp_server: Any | None = None) -> Starlet
             )
         )
 
+    async def annotation_body(
+        request: Request, required: bool = True
+    ) -> dict[str, Any]:
+        """Reads an annotation write's JSON body, refusing writes from other sites.
+
+        A dashboard running on someone's machine can be sent a write by any web
+        page they happen to have open, as a plain cross-site form post. Such a
+        post cannot carry a JSON content type without a CORS preflight, which the
+        dashboard never grants, and browsers name the page a request came from,
+        so a write whose ``Origin`` is another site is refused outright.
+
+        Args:
+            request: The write request.
+            required: Whether a body must be sent; removing a tag needs none.
+
+        Returns:
+            The decoded body, or an empty dict when none was needed or sent.
+
+        Raises:
+            PermissionError: If the request came from another site.
+            ValueError: If a required body is missing, is not JSON, or is not a
+                JSON object.
+        """
+
+        origin = request.headers.get("origin")
+        if origin is not None and urllib.parse.urlsplit(
+            origin
+        ).netloc != request.headers.get("host"):
+            raise PermissionError(
+                "Notes and tags can only be written from the dashboard's own page."
+            )
+        content_type = request.headers.get("content-type", "").split(";")[0].strip()
+        if content_type.lower() != "application/json":
+            if required:
+                raise ValueError(
+                    "Send the annotation as a JSON body (Content-Type: application/json)."
+                )
+            return {}
+        try:
+            body = await request.json()
+        except ValueError as error:
+            raise ValueError(f"The request body is not valid JSON: {error}") from error
+        if not isinstance(body, dict):
+            raise ValueError("An annotation's JSON body must be an object.")
+        return body
+
+    def text_field(
+        body: dict[str, Any], name: str, required: bool = True
+    ) -> str | None:
+        """Reads a string field from an annotation's body.
+
+        Args:
+            body: The decoded body.
+            name: The field to read.
+            required: Whether the field must be present.
+
+        Returns:
+            The string, or ``None`` when an optional field was left out.
+
+        Raises:
+            ValueError: If the field is missing when required, or is not a string.
+        """
+
+        value = body.get(name)
+        if value is None and not required:
+            return None
+        if not isinstance(value, str):
+            raise ValueError(f"{name} must be given as a string.")
+        return value
+
+    def genome_field(body: dict[str, Any]) -> int | None:
+        """Reads the optional genome an annotation's body is about.
+
+        Args:
+            body: The decoded body.
+
+        Returns:
+            The genome number, or ``None`` for an annotation about the run.
+
+        Raises:
+            ValueError: If a genome number is given but is not a whole number of
+                zero or more.
+        """
+
+        value = body.get("genome_number")
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError("genome_number must be a whole number of zero or more.")
+        return value
+
+    def api_annotations(request: Request) -> Response:
+        """Returns a run's notes and tags, or one genome's.
+
+        The ``genome``, ``tag`` and ``include_removed`` parameters narrow what is
+        returned.
+        """
+        query = _query(request)
+        genome = (
+            query_int(query, "genome", 0, minimum=0) if query.get("genome") else None
+        )
+        return _json(
+            viewer.annotations_payload(
+                request.path_params["run"],
+                genome,
+                query.get("tag") or None,
+                query.get("include_removed") == "1",
+            )
+        )
+
+    async def api_add_note(request: Request) -> Response:
+        """Records a note about the run, or about the genome its body names."""
+        viewer.require_annotations()
+        body = await annotation_body(request)
+        note = await run_in_threadpool(
+            viewer.add_note,
+            request.path_params["run"],
+            text_field(body, "text"),
+            "dashboard",
+            text_field(body, "author", required=False),
+            genome_field(body),
+        )
+        return _json(note, status=201)
+
+    async def api_add_tag(request: Request) -> Response:
+        """Tags a genome; a tag it already carries is left as it is."""
+        viewer.require_annotations()
+        body = await annotation_body(request)
+        tag = await run_in_threadpool(
+            viewer.add_tag,
+            request.path_params["run"],
+            request.path_params["genome"],
+            text_field(body, "tag"),
+            "dashboard",
+            text_field(body, "author", required=False),
+        )
+        return _json(tag, status=201 if tag["created"] else 200)
+
+    async def api_remove_tag(request: Request) -> Response:
+        """Removes a tag from a genome, keeping the record that it applied."""
+        viewer.require_annotations()
+        body = await annotation_body(request, required=False)
+        tag = await run_in_threadpool(
+            viewer.remove_tag,
+            request.path_params["run"],
+            request.path_params["genome"],
+            request.path_params["tag"],
+            "dashboard",
+            text_field(body, "author", required=False),
+        )
+        return _json(tag)
+
+    def forbidden(request: Request, exception: Exception) -> Response:
+        """Turns a write that is not allowed into a 403."""
+        return _error(request, 403, str(exception))
+
     def not_found(request: Request, exception: Exception) -> Response:
         """Turns a missing run, genome or file into a 404."""
         message = str(exception.args[0]) if exception.args else "Not found."
@@ -329,6 +487,18 @@ def create_app(viewer: ArtifactViewer, mcp_server: Any | None = None) -> Starlet
         Route("/api/runs/{run:int}/genomes/{genome:int}.json", api_genome_json),
         Route("/api/runs/{run:int}/genomes/{genome:int}/{kind}.png", api_genome_image),
         Route("/api/runs/{run:int}/genomes/{genome:int}/ancestry", api_ancestry),
+        Route("/api/runs/{run:int}/annotations", api_annotations),
+        Route("/api/runs/{run:int}/notes", api_add_note, methods=["POST"]),
+        Route(
+            "/api/runs/{run:int}/genomes/{genome:int}/tags",
+            api_add_tag,
+            methods=["POST"],
+        ),
+        Route(
+            "/api/runs/{run:int}/genomes/{genome:int}/tags/{tag}",
+            api_remove_tag,
+            methods=["DELETE"],
+        ),
         Route("/api/runs/{run:int}/genomes/{genome:int}", api_genome),
     ]
 
@@ -352,7 +522,11 @@ def create_app(viewer: ArtifactViewer, mcp_server: Any | None = None) -> Starlet
     return Starlette(
         routes=routes,
         lifespan=lifespan,
-        exception_handlers={KeyError: not_found, ValueError: bad_request},
+        exception_handlers={
+            KeyError: not_found,
+            ValueError: bad_request,
+            PermissionError: forbidden,
+        },
     )
 
 
@@ -366,6 +540,7 @@ def serve(
     render_processes: int = 1,
     rescan_interval: float = RESCAN_INTERVAL_SECONDS,
     mcp: bool = True,
+    allow_annotations: bool = False,
 ) -> None:
     """Serves the dashboard until interrupted.
 
@@ -382,6 +557,9 @@ def serve(
         render_processes: Worker processes rendering images.
         rescan_interval: The least time between scans for new runs, in seconds.
         mcp: Whether to serve the MCP interface at ``/mcp`` for agents.
+        allow_annotations: Whether the dashboard and its MCP interface may write
+            notes and tags, kept in each run's ``annotations.sqlite``. Archives are
+            never written either way.
 
     Returns:
         None. Runs until interrupted with Ctrl+C.
@@ -416,9 +594,17 @@ def serve(
     if mcp:
         from src.utils.artifact_viewer.mcp_app import build_mcp_server
 
-        mcp_server = build_mcp_server(registry, renderer, f"http://{host}:{bound_port}")
+        mcp_server = build_mcp_server(
+            registry,
+            renderer,
+            f"http://{host}:{bound_port}",
+            allow_annotations=allow_annotations,
+        )
 
-    application = create_app(ArtifactViewer(registry, renderer), mcp_server)
+    application = create_app(
+        ArtifactViewer(registry, renderer, allow_annotations=allow_annotations),
+        mcp_server,
+    )
     url = f"http://{host}:{bound_port}/"
 
     if registry.watch_directory is not None:
@@ -441,6 +627,17 @@ def serve(
             )
     if mcp:
         logger.info("Serving the MCP interface at {}mcp for agents.", url)
+    if allow_annotations:
+        logger.info(
+            "Notes and tags can be written, beside each run's archive in {}.",
+            "annotations.sqlite",
+        )
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            logger.warning(
+                "Annotations are writable by anyone who can reach {} -- serve on "
+                "127.0.0.1 and forward the port to limit who can write them.",
+                url,
+            )
     if open_browser:
         webbrowser.open(url)
 

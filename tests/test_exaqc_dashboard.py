@@ -125,7 +125,13 @@ def gate(
     }
 
 
-def build_run(directory, genomes: list[FakeGenome], history: bool = True) -> str:
+def build_run(
+    directory,
+    genomes: list[FakeGenome],
+    history: bool = True,
+    islands: list[int | None] | None = None,
+    run_info: dict[str, Any] | None = None,
+) -> str:
     """Writes a run directory holding an archive, and its search progress.
 
     Args:
@@ -133,6 +139,10 @@ def build_run(directory, genomes: list[FakeGenome], history: bool = True) -> str
         genomes: The genomes to store, in insertion order.
         history: Whether to record the population changes a search would, which
             is what the progress charts are recomputed from.
+        islands: The island each genome was inserted into, in the same order,
+            for a run that used islands.
+        run_info: Further ``run_info`` values to record, such as an island
+            topology.
 
     Returns:
         The run directory, as a string.
@@ -143,9 +153,11 @@ def build_run(directory, genomes: list[FakeGenome], history: bool = True) -> str
             task="classification",
             task_target="iris",
             population_strategy="SteadyStatePopulation",
+            **(run_info or {}),
         )
         for insertion, genome in enumerate(genomes, start=1):
-            archive.add_genome(genome, insertion=insertion)
+            island = islands[insertion - 1] if islands else None
+            archive.add_genome(genome, insertion=insertion, island=island)
 
         if history:
             # Three steps, growing the population one genome at a time, so a
@@ -203,7 +215,9 @@ def standard_genomes() -> list[FakeGenome]:
 
 
 @contextmanager
-def _running_server(registry: RunRegistry) -> Iterator[str]:
+def _running_server(
+    registry: RunRegistry, allow_annotations: bool = False
+) -> Iterator[str]:
     """Serves a registry's runs with uvicorn on a free port, for a block's duration.
 
     The socket is bound here rather than by uvicorn so the port is known before
@@ -211,6 +225,7 @@ def _running_server(registry: RunRegistry) -> Iterator[str]:
 
     Args:
         registry: The runs to serve.
+        allow_annotations: Whether the dashboard may write notes and tags.
 
     Yields:
         The base URL, e.g. ``http://127.0.0.1:54321``.
@@ -221,7 +236,11 @@ def _running_server(registry: RunRegistry) -> Iterator[str]:
     listener.bind(("127.0.0.1", 0))
     port = listener.getsockname()[1]
 
-    application = create_app(ArtifactViewer(registry, RenderService(processes=0)))
+    application = create_app(
+        ArtifactViewer(
+            registry, RenderService(processes=0), allow_annotations=allow_annotations
+        )
+    )
     running = uvicorn.Server(uvicorn.Config(application, log_level="error"))
     thread = threading.Thread(
         target=running.run, kwargs={"sockets": [listener]}, daemon=True
@@ -277,17 +296,18 @@ def viewer_url(tmp_path, monkeypatch) -> Iterator[str]:
 
 
 @contextmanager
-def serving(registry: RunRegistry) -> Iterator[str]:
+def serving(registry: RunRegistry, allow_annotations: bool = False) -> Iterator[str]:
     """Serves a registry's runs on a free port for the duration of a block.
 
     Args:
         registry: The runs to serve.
+        allow_annotations: Whether the dashboard may write notes and tags.
 
     Yields:
         The base URL, e.g. ``http://127.0.0.1:54321``.
     """
 
-    with _running_server(registry) as url:
+    with _running_server(registry, allow_annotations) as url:
         yield url
 
 
@@ -324,6 +344,42 @@ def get(url: str) -> tuple[int, dict[str, str], bytes]:
         return error.code, _headers(error), error.read()
 
 
+def send(
+    url: str,
+    method: str,
+    body: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+) -> tuple[int, Any]:
+    """Sends a write request with a JSON body, returning error responses too.
+
+    Args:
+        url: The URL to send to.
+        method: The HTTP method, e.g. ``POST`` or ``DELETE``.
+        body: The JSON body to send, if any.
+        headers: Extra request headers, such as an ``Origin``.
+
+    Returns:
+        The status code and the decoded JSON response, or ``None`` when the
+        response is not JSON.
+    """
+
+    data = None if body is None else json.dumps(body).encode("utf-8")
+    request = urllib.request.Request(url, data=data, method=method)
+    if body is not None:
+        request.add_header("Content-Type", "application/json")
+    for name, value in (headers or {}).items():
+        request.add_header(name, value)
+    try:
+        with urllib.request.urlopen(request) as response:
+            status, raw = response.status, response.read()
+    except urllib.error.HTTPError as error:
+        status, raw = error.code, error.read()
+    try:
+        return status, json.loads(raw)
+    except json.JSONDecodeError:
+        return status, None
+
+
 def get_json(url: str) -> Any:
     """Fetches and decodes a successful JSON API response.
 
@@ -352,6 +408,7 @@ def test_parser_defaults() -> None:
     assert args.host == "127.0.0.1"
     assert args.port == 8000
     assert args.open_browser is False
+    assert args.allow_annotations is False
     assert args.logging_level == "INFO"
 
     watching = exaqc_dashboard.build_parser().parse_args(["--directory", "runs"])
@@ -543,6 +600,119 @@ def test_a_run_page_survives_an_archive_it_cannot_fully_read(tmp_path: Path) -> 
 
         # and the progress chart reports having nothing rather than erroring
         assert get(f"{url}/api/runs/0/history")[0] == 200
+
+
+def test_annotations_are_read_only_unless_allowed(tmp_path: Path) -> None:
+    """A dashboard started without --allow_annotations refuses every write.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    build_run(tmp_path / "iris_1", standard_genomes())
+    with serving(RunRegistry(run_directories=[str(tmp_path / "iris_1")])) as url:
+        assert get_json(f"{url}/api/runs/0")["annotations_enabled"] is False
+        assert get_json(f"{url}/api/runs/0/annotations") == {
+            "enabled": False,
+            "genome_number": None,
+            "notes": [],
+            "tags": [],
+        }
+
+        status, body = send(f"{url}/api/runs/0/notes", "POST", {"text": "hello"})
+        assert status == 403
+        assert "--allow_annotations" in body["error"]
+        tags = f"{url}/api/runs/0/genomes/3/tags"
+        assert send(tags, "POST", {"tag": "candidate"})[0] == 403
+        assert send(f"{tags}/candidate", "DELETE")[0] == 403
+
+    # refusing, and reading, left the run directory as it was
+    assert not (tmp_path / "iris_1" / "annotations.sqlite").exists()
+
+
+def test_the_dashboard_writes_notes_and_tags_when_allowed(tmp_path: Path) -> None:
+    """Notes and tags round-trip through the API, and the archive is untouched.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    build_run(tmp_path / "iris_1", standard_genomes())
+    archive = tmp_path / "iris_1" / ARCHIVE_FILENAME
+    before = archive.read_bytes()
+    registry = RunRegistry(run_directories=[str(tmp_path / "iris_1")])
+
+    with serving(registry, allow_annotations=True) as url:
+        assert get_json(f"{url}/api/runs/0")["annotations_enabled"] is True
+
+        status, note = send(
+            f"{url}/api/runs/0/notes",
+            "POST",
+            {"text": "promising", "genome_number": 3, "author": "travis"},
+        )
+        assert status == 201
+        assert (note["source"], note["author"], note["genome_number"]) == (
+            "dashboard",
+            "travis",
+            3,
+        )
+        assert send(f"{url}/api/runs/0/notes", "POST", {"text": "run-level"})[0] == 201
+
+        tags = f"{url}/api/runs/0/genomes/3/tags"
+        status, tag = send(tags, "POST", {"tag": "candidate"})
+        assert status == 201 and tag["created"] is True
+        # tagging a genome that already carries the tag changes nothing
+        status, again = send(tags, "POST", {"tag": "candidate"})
+        assert status == 200 and again["created"] is False
+
+        genome = get_json(f"{url}/api/runs/0/annotations?genome=3")
+        assert [entry["text"] for entry in genome["notes"]] == ["promising"]
+        assert [entry["tag"] for entry in genome["tags"]] == ["candidate"]
+        assert len(get_json(f"{url}/api/runs/0/annotations")["notes"]) == 2
+
+        status, removed = send(f"{tags}/candidate", "DELETE")
+        assert status == 200 and removed["active"] is False
+        assert get_json(f"{url}/api/runs/0/annotations?genome=3")["tags"] == []
+        history = get_json(f"{url}/api/runs/0/annotations?genome=3&include_removed=1")
+        assert len(history["tags"]) == 1
+
+        # what cannot be written is refused, with a reason
+        missing = f"{url}/api/runs/0/genomes/999/tags"
+        assert send(missing, "POST", {"tag": "candidate"})[0] == 404
+        assert send(tags, "POST", {"tag": "has space"})[0] == 400
+        assert send(f"{url}/api/runs/0/notes", "POST", {"text": "   "})[0] == 400
+        assert send(f"{tags}/candidate", "DELETE")[0] == 404
+
+    assert archive.read_bytes() == before
+    assert (tmp_path / "iris_1" / "annotations.sqlite").is_file()
+
+
+def test_annotation_writes_from_other_sites_are_refused(tmp_path: Path) -> None:
+    """A write the dashboard's own page did not send is not accepted.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    build_run(tmp_path / "iris_1", standard_genomes())
+    registry = RunRegistry(run_directories=[str(tmp_path / "iris_1")])
+
+    with serving(registry, allow_annotations=True) as url:
+        notes = f"{url}/api/runs/0/notes"
+
+        # a page on another site, which the browser names as the origin
+        foreign = {"Origin": "https://elsewhere.example"}
+        assert send(notes, "POST", {"text": "x"}, headers=foreign)[0] == 403
+
+        # a plain form post needs no preflight, so it is refused for not being JSON
+        form = urllib.request.Request(notes, data=b"text=x", method="POST")
+        form.add_header("Content-Type", "application/x-www-form-urlencoded")
+        with pytest.raises(urllib.error.HTTPError) as refused:
+            urllib.request.urlopen(form)
+        assert refused.value.code == 400
+
+        # the dashboard's own page is accepted
+        assert send(notes, "POST", {"text": "ok"}, headers={"Origin": url})[0] == 201
 
 
 def test_assign_groups_uses_path_substrings(tmp_path) -> None:
@@ -783,6 +953,55 @@ def test_ancestry_includes_the_seed(viewer_url: str) -> None:
 
     shallow = get_json(f"{viewer_url}/api/runs/0/genomes/4/ancestry?depth=1")
     assert sorted(node["genome_number"] for node in shallow["nodes"]) == [3, 4]
+
+
+def test_island_runs_show_their_topology_and_each_parents_island(tmp_path) -> None:
+    """An island run's page learns its topology, and a genome its parents' islands.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    topology = {"topology": ["ring"], "neighbors": [[1, 2], [0, 2], [1, 0]]}
+    build_run(
+        tmp_path / "islands",
+        standard_genomes(),
+        islands=[0, 1, 1, 2],
+        run_info={"island_topology": topology},
+    )
+    build_run(tmp_path / "steady", standard_genomes())
+    registry = RunRegistry(
+        run_directories=[str(tmp_path / "islands"), str(tmp_path / "steady")]
+    )
+
+    with serving(registry) as url:
+        indexes = {
+            run["name"]: run["index"] for run in get_json(f"{url}/api/runs")["runs"]
+        }
+        islands, steady = indexes["islands"], indexes["steady"]
+
+        assert get_json(f"{url}/api/runs/{islands}")["island_topology"] == topology
+        assert get_json(f"{url}/api/runs/{steady}")["island_topology"] is None
+
+        # genome 3 is a crossover of genomes 1 (island 0) and 2 (island 1)
+        crossover = get_json(f"{url}/api/runs/{islands}/genomes/3")
+        assert crossover["summary"]["parents"] == [1, 2]
+        assert crossover["parent_islands"] == [0, 1]
+        # the seed genome is never stored, so its island is unknown
+        assert get_json(f"{url}/api/runs/{islands}/genomes/1")["parent_islands"] == [
+            None
+        ]
+
+        ancestry = get_json(f"{url}/api/runs/{islands}/genomes/4/ancestry?depth=5")
+        assert {
+            node["genome_number"]: node["island"] for node in ancestry["nodes"]
+        } == {
+            4: 2,
+            3: 1,
+            1: 0,
+            2: 1,
+            0: None,
+        }
 
 
 def test_compare_two_genomes(viewer_url: str) -> None:

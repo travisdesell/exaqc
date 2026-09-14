@@ -323,6 +323,9 @@ class EXAQC:
                     "mutation_strategy": list(self.mutation_strategy),
                     "parent_strategy": list(self.parent_strategy),
                 },
+                # whatever the population strategy records about itself, such as
+                # how an island search's islands are connected
+                **self.population.run_info(),
             )
 
     def validate_mutation_strategy(self, mutation_strategy: list[str]):
