@@ -25,5 +25,6 @@ for i in $(seq 1 1); do
     --input_qubits 4 \
     --output_qubits 4 \
     --episodes 1000 \
+    --shared_file_system \
     --out_dir artifacts/frozenlake/runs/${i}
 done

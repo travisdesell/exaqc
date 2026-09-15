@@ -1,8 +1,8 @@
 import argparse
-import os
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from typing import Any
 
 from src.circuits.circuit import CircuitGenome
 
@@ -62,14 +62,14 @@ class PopulationStrategy(ABC):
 
         Constructs a :class:`~src.evolution.steady_state_population.SteadyStatePopulation`
         or :class:`~src.evolution.steady_state_islands.SteadyStateIslands` from
-        the sub-command chosen by :meth:`initialize_parser` and its flags. The
-        output directory the strategy writes genomes into is created here (the
-        strategy is the component that owns ``--out_dir``).
+        the sub-command chosen by :meth:`initialize_parser` and its flags. A
+        population strategy only selects and ranks genomes; everything written
+        to disk goes through the run's
+        :class:`~src.utils.genome_archive.GenomeArchive`.
 
         Args:
             args: Parsed arguments carrying ``population_strategy`` and the
-                selected strategy's flags, along with ``--out_dir`` and
-                ``--save_training_plot``.
+                selected strategy's flags.
             compare: Genome comparison used to order the population (task
                 specific; each entry point defines its own).
 
@@ -82,15 +82,10 @@ class PopulationStrategy(ABC):
         from src.evolution.steady_state_islands import SteadyStateIslands
         from src.evolution.steady_state_population import SteadyStatePopulation
 
-        # The strategy owns the output directory, so create it here.
-        os.makedirs(args.out_dir, exist_ok=True)
-
         if args.population_strategy == "steady_state":
             return SteadyStatePopulation(
                 max_population_size=args.max_population_size,
                 compare=compare,
-                out_dir=args.out_dir,
-                save_training_plot=args.save_training_plot,
             )
 
         return SteadyStateIslands(
@@ -103,8 +98,6 @@ class PopulationStrategy(ABC):
             intra_island_crossover_rate=args.intra_island_crossover_rate,
             compare=compare,
             topology=args.topology,
-            out_dir=args.out_dir,
-            save_training_plot=args.save_training_plot,
         )
 
     @abstractmethod
@@ -119,7 +112,7 @@ class PopulationStrategy(ABC):
         """
         pass
 
-    def get_best_genome(self) -> CircuitGenome:
+    def get_best_genome(self) -> CircuitGenome | None:
         """
         Returns:
             The best genome in the strategy. Will return none if no genomes
@@ -128,7 +121,19 @@ class PopulationStrategy(ABC):
         pass
 
     @abstractmethod
-    def get_parent(self, **kwargs) -> tuple[CircuitGenome, dict[str, any]]:
+    def get_population(self) -> list[CircuitGenome]:
+        """Returns every genome the strategy currently holds, best first.
+
+        Used to record the search's progress after each insertion.
+
+        Returns:
+            A new list of the held genomes, sorted by the strategy's compare
+            function (best first). Modifying it does not affect the strategy.
+        """
+        pass
+
+    @abstractmethod
+    def get_parent(self, **kwargs: Any) -> tuple[CircuitGenome, dict[str, Any]]:
         """
         Used to get a single to be used in mutation or
         other operations to generate children.
@@ -148,8 +153,8 @@ class PopulationStrategy(ABC):
 
     @abstractmethod
     def get_parents(
-        self, n_parents: int = 2, **kwargs
-    ) -> tuple[list[CircuitGenome], dict[str, any]]:
+        self, n_parents: int = 2, **kwargs: Any
+    ) -> tuple[list[CircuitGenome], dict[str, Any]]:
         """
         Used to get two or more parents to be used in crossover or
         other operations to generate children.
@@ -169,7 +174,7 @@ class PopulationStrategy(ABC):
         pass
 
     @abstractmethod
-    def insert_genome(self, genome: CircuitGenome, **kwargs) -> bool:
+    def insert_genome(self, genome: CircuitGenome, **kwargs: Any) -> bool:
         """
         Inserts a genome back into the population.
 
@@ -179,6 +184,9 @@ class PopulationStrategy(ABC):
                 inserting the genome, such as an island or species it came from.
 
         Returns:
-            True if it was inserted into the population, False otherwise.
+            True if the genome should be recorded as evaluated -- whether it was
+            kept or discarded straight away from a full population -- and False
+            if it was rejected without being recorded (a duplicate of a better
+            genome already held).
         """
         pass

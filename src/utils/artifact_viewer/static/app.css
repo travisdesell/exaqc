@@ -1,0 +1,692 @@
+/* EXAQC Dashboard styles.
+ *
+ * Colors come from the data-viz reference palette: a chart surface and ink
+ * tokens, and eight categorical slots used in a fixed order. Dark mode uses the
+ * palette's own dark steps rather than an automatic inversion.
+ */
+
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface-1: #fcfcfb;
+  --surface-2: #f3f2ee;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #898781;
+  --gridline: #e1e0d9;
+  --baseline: #c3c2b7;
+  --border: rgba(11, 11, 11, 0.1);
+  --accent: #2a78d6;
+  --danger: #d03b3b;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+  --sequential-light: #86b6ef;
+  --sequential-dark: #104281;
+  --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface-1: #1a1a19;
+    --surface-2: #232321;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --gridline: #2c2c2a;
+    --baseline: #383835;
+    --border: rgba(255, 255, 255, 0.1);
+    --accent: #3987e5;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+    --series-8: #e66767;
+    --sequential-light: #184f95;
+    --sequential-dark: #86b6ef;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d;
+  --surface-1: #1a1a19;
+  --surface-2: #232321;
+  --text-primary: #ffffff;
+  --text-secondary: #c3c2b7;
+  --text-muted: #898781;
+  --gridline: #2c2c2a;
+  --baseline: #383835;
+  --border: rgba(255, 255, 255, 0.1);
+  --accent: #3987e5;
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+  --sequential-light: #184f95;
+  --sequential-dark: #86b6ef;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--text-primary);
+  font: 14px/1.45 var(--font);
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+button,
+select,
+input {
+  font: inherit;
+  color: var(--text-primary);
+  background: var(--surface-1);
+  border: 1px solid var(--baseline);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--surface-2);
+}
+
+button[aria-pressed="true"] {
+  background: var(--text-primary);
+  color: var(--surface-1);
+  border-color: var(--text-primary);
+}
+
+h1 {
+  font-size: 20px;
+  margin: 0;
+}
+
+h2 {
+  font-size: 15px;
+  margin: 0 0 8px;
+}
+
+h3 {
+  font-size: 13px;
+  margin: 16px 0 6px;
+  color: var(--text-secondary);
+}
+
+code,
+pre,
+.mono {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+/* ---------- page chrome ---------- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 20px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.brand {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+#breadcrumbs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  color: var(--text-muted);
+  min-width: 0;
+}
+
+#breadcrumbs span.separator::before {
+  content: "›";
+}
+
+main {
+  padding: 16px 20px 40px;
+  max-width: 1800px;
+  margin: 0 auto;
+}
+
+.page-header {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-bottom: 12px;
+}
+
+.meta {
+  color: var(--text-secondary);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+
+.meta b {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.card {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+  margin-bottom: 14px;
+  min-width: 0;
+}
+
+.notice {
+  color: var(--text-secondary);
+  padding: 8px 0;
+}
+
+.notice.error {
+  color: var(--danger);
+}
+
+.live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--series-3);
+  margin-right: 5px;
+  vertical-align: middle;
+}
+
+.live-dot.idle {
+  background: var(--baseline);
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin-bottom: 10px;
+}
+
+.toolbar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+
+.segmented {
+  display: inline-flex;
+}
+
+.segmented button {
+  border-radius: 0;
+}
+
+.segmented button:first-child {
+  border-radius: 6px 0 0 6px;
+}
+
+.segmented button:last-child {
+  border-radius: 0 6px 6px 0;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.badge {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 10px;
+  color: var(--text-secondary);
+}
+
+/* ---------- tables ---------- */
+
+.table-wrap {
+  overflow: auto;
+  max-width: 100%;
+}
+
+.table-wrap.is-loading {
+  opacity: 0.55;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--gridline);
+  white-space: nowrap;
+}
+
+th {
+  color: var(--text-secondary);
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  background: var(--surface-1);
+}
+
+th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+th.sortable:hover {
+  color: var(--text-primary);
+}
+
+td.number,
+th.number {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+tbody tr.clickable {
+  cursor: pointer;
+}
+
+tbody tr.clickable:hover,
+tbody tr.clickable:focus {
+  background: var(--surface-2);
+  outline: none;
+}
+
+tbody tr.selected {
+  background: var(--surface-2);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+tr.different td {
+  background: var(--surface-2);
+}
+
+.seed {
+  color: var(--text-secondary);
+  text-decoration: underline dotted;
+  cursor: help;
+}
+
+.swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: baseline;
+}
+
+.swatch.line {
+  width: 16px;
+  height: 3px;
+  border-radius: 2px;
+  vertical-align: middle;
+}
+
+/* ---------- run page layout ---------- */
+
+/* The genome chart runs down a column on the left; the selected genome's details
+ * and the genome table fill the right. Both columns always share one height: as
+ * the table loads more rows the chart panel stretches with it, while the chart
+ * itself stays in view (sticky) inside the panel.
+ *
+ * Between them is a 14px divider that can be dragged to trade width between the
+ * columns. The chart column takes --chart-width of the page (set by the divider;
+ * 38% by default) but never less than 260px, and never so much that the table
+ * gets less than 320px. These numbers are mirrored in app.js. */
+.run-body {
+  display: grid;
+  grid-template-columns: minmax(260px, min(var(--chart-width, 38%), calc(100% - 334px))) 14px minmax(0, 1fr);
+  gap: 14px 0;
+  align-items: stretch;
+  margin-bottom: 14px;
+}
+
+.column-resizer {
+  position: relative;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+/* a line down the middle of the divider, shown on hover, on keyboard focus and while dragging */
+.column-resizer::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 6px;
+  width: 2px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background-color 120ms;
+}
+
+/* a grip that stays in the middle of the window, so the divider can be found on a long table */
+.column-resizer-grip {
+  position: sticky;
+  top: calc(50vh - 18px);
+  display: block;
+  width: 6px;
+  height: 36px;
+  margin: 0 auto;
+  border-radius: 3px;
+  background: var(--baseline);
+  transition: background-color 120ms;
+}
+
+.column-resizer:hover::before,
+.column-resizer:has(.column-resizer-grip:focus-visible)::before,
+.resizing-columns .column-resizer::before,
+.column-resizer:hover .column-resizer-grip,
+.column-resizer-grip:focus-visible,
+.resizing-columns .column-resizer-grip {
+  background: var(--accent);
+}
+
+/* the grip takes keyboard focus for the divider */
+.column-resizer-grip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* while dragging, keep the resize cursor (the chart sets its own) and don't select text */
+.resizing-columns,
+.resizing-columns * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+
+.run-body > .card,
+.run-main > .card {
+  margin-bottom: 0;
+}
+
+.run-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* No scroll anchoring inside the run body: when rows are appended the browser would
+ * otherwise shift the page to keep the "loading" status line where it was, which
+ * keeps it in view and loads the whole table. */
+.run-body {
+  overflow-anchor: none;
+}
+
+.table-card {
+  flex: 1 1 auto;
+  scroll-margin-top: 64px;
+}
+
+.chart-sticky {
+  position: sticky;
+  top: 60px;
+}
+
+/* the run's search progress, above the genome chart */
+.search-progress {
+  margin-bottom: 12px;
+}
+
+.search-progress h3 {
+  margin-top: 0;
+}
+
+.table-status {
+  padding-top: 8px;
+}
+
+@media (max-width: 1100px) {
+  .run-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .chart-sticky {
+    position: static;
+  }
+
+  /* the columns stack, so there is no width to trade */
+  .column-resizer {
+    display: none;
+  }
+}
+
+.detail-panel {
+  scroll-margin-top: 64px;
+}
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 1px solid var(--gridline);
+  margin: 10px 0;
+}
+
+.tabs button {
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  color: var(--text-secondary);
+}
+
+.tabs button[aria-selected="true"] {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+}
+
+.image-frame {
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px;
+  min-height: 80px;
+  overflow: auto;
+}
+
+.image-frame img {
+  max-width: 100%;
+  display: block;
+}
+
+dl.facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 3px 14px;
+  margin: 0;
+}
+
+dl.facts dt {
+  color: var(--text-secondary);
+}
+
+dl.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.command {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin-bottom: 8px;
+}
+
+.command pre {
+  flex: 1;
+  margin: 0;
+  padding: 8px;
+  background: var(--surface-2);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- charts ---------- */
+
+.chart-host {
+  position: relative;
+  width: 100%;
+  min-height: 120px;
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.chart-tooltip {
+  position: absolute;
+  pointer-events: none;
+  z-index: 5;
+  background: var(--surface-1);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+  padding: 6px 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.chart-tooltip .muted {
+  color: var(--text-secondary);
+}
+
+.uplot,
+.uplot * {
+  font-family: var(--font);
+}
+
+.uplot .u-select {
+  background: var(--border);
+}
+
+.ancestry {
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-1);
+}
+
+.ancestry svg text {
+  fill: var(--text-secondary);
+  font-size: 11px;
+}
+
+.ancestry svg .node {
+  cursor: pointer;
+}
+
+.compare-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+@media (max-width: 900px) {
+  .compare-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+details summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  margin: 6px 0;
+}
+
+/* ---------- insertion rates ---------- */
+
+.explanation {
+  color: var(--text-secondary);
+  max-width: 90ch;
+  margin: 0 0 12px;
+}
+
+.inline-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+
+.inline-link {
+  margin-left: 8px;
+  font-size: 12px;
+}
+
+/* each operator's block of rows starts with a heavier rule; its name spans the block */
+table.rates tbody th.operator {
+  position: static;
+  vertical-align: top;
+  color: var(--text-primary);
+}
+
+table.rates tbody + tbody tr:first-child > * {
+  border-top: 2px solid var(--baseline);
+}
+
+table.rates .count,
+table.rates tr.operator-total td,
+table.rates .muted-cell {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+table.rates thead .count {
+  font-weight: 400;
+}

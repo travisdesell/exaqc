@@ -236,7 +236,7 @@ def test_main_routes_on_the_genomes_recorded_task(monkeypatch, tmp_path) -> None
         "argv",
         [
             "refine_genome.py",
-            "--genome",
+            "--genome_json",
             path,
             "--out_dir",
             str(tmp_path / "out"),
@@ -277,7 +277,7 @@ def test_main_rejects_an_unknown_task(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
         sys,
         "argv",
-        ["refine_genome.py", "--genome", path, "--out_dir", str(tmp_path / "out")],
+        ["refine_genome.py", "--genome_json", path, "--out_dir", str(tmp_path / "out")],
     )
 
     with pytest.raises(SystemExit) as error:
@@ -306,9 +306,7 @@ def test_exaqc_stamps_generated_genomes(tmp_path) -> None:
 
     search = EXAQC(
         gate_specifications=pennylane_gate_specifications,
-        population=SteadyStatePopulation(
-            max_population_size=4, compare=lambda a, b: 0, out_dir=str(tmp_path)
-        ),
+        population=SteadyStatePopulation(max_population_size=4, compare=lambda a, b: 0),
         objective=lambda genome: None,
         initial_encoder=initialize_encoder(
             target="pennylane",
@@ -341,3 +339,128 @@ def test_exaqc_stamps_generated_genomes(tmp_path) -> None:
     assert child.task_target == "iris"
     # and it survives a round trip, which is what refinement relies on
     assert CircuitGenome.from_dict(child.to_dict()).task_target == "iris"
+
+
+def write_archive(genome: CircuitGenome, tmp_path) -> str:
+    """Stores a genome in a run's archive, the way a search records it.
+
+    Args:
+        genome: The genome to store.
+        tmp_path: Directory to create the run directory in.
+
+    Returns:
+        The run directory holding the archive.
+    """
+
+    from src.utils.genome_archive import GenomeArchive
+
+    run_dir = tmp_path / "run"
+    with GenomeArchive.create(str(run_dir)) as archive:
+        archive.add_genome(genome, insertion=1)
+    return str(run_dir)
+
+
+def test_load_genome_reads_from_an_archive(tmp_path) -> None:
+    """A genome can be loaded out of a run's archive by its number.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    run_dir = write_archive(
+        build_genome("teacher", "bell_out", genome_number=4), tmp_path
+    )
+
+    genome = refine_genome.load_genome(archive=run_dir, genome_number=4)
+
+    assert genome.genome_number == 4
+    assert genome.task == "teacher"
+    assert genome.task_target == "bell_out"
+
+    with pytest.raises(ValueError, match="no genome 5"):
+        refine_genome.load_genome(archive=run_dir, genome_number=5)
+
+
+def test_main_refines_a_genome_from_an_archive(monkeypatch, tmp_path) -> None:
+    """``--archive`` with ``--genome_number`` works in place of ``--genome_json``.
+
+    Args:
+        monkeypatch: Used to replace the objective builder and ``sys.argv``.
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    run_dir = write_archive(
+        build_genome("teacher", "bell_out", genome_number=4), tmp_path
+    )
+
+    def fake_builder(genome: CircuitGenome, device: str | None):
+        """Builds an objective that pretends to train, writing a fitness."""
+
+        def objective(target_genome: CircuitGenome) -> None:
+            """Writes a fitness onto the genome."""
+            target_genome.fitness = {"loss": 0.1, "target_metric": 0.9}
+
+        return objective
+
+    monkeypatch.setitem(refine_genome.OBJECTIVE_BUILDERS, "teacher", fake_builder)
+    monkeypatch.setattr(refine_genome.logger, "remove", MagicMock())
+    monkeypatch.setattr(refine_genome.logger, "add", MagicMock())
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "refine_genome.py",
+            "--archive",
+            run_dir,
+            "--genome_number",
+            "4",
+            "--out_dir",
+            str(tmp_path / "out"),
+            "--no-save_circuit",
+        ],
+    )
+
+    refine_genome.main()
+
+    refined = json.loads((tmp_path / "out" / "refined_genome_4.json").read_text())
+    assert refined["task_target"] == "bell_out"
+    assert refined["fitness"]["loss"] == pytest.approx(0.1)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        [],
+        ["--archive", "RUN"],
+        ["--genome_json", "GENOME", "--genome_number", "4"],
+        ["--genome_json", "GENOME", "--archive", "RUN", "--genome_number", "4"],
+        ["--archive", "RUN", "--genome_number", "99"],
+    ],
+)
+def test_genome_source_arguments_are_validated(source, monkeypatch, tmp_path) -> None:
+    """Missing, conflicting or unresolvable genome sources are usage errors.
+
+    Args:
+        source: The genome-source arguments, with ``RUN``/``GENOME`` placeholders.
+        monkeypatch: Used to replace ``sys.argv``.
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    genome = build_genome("teacher", "bell_out", genome_number=4)
+    run_dir = write_archive(genome, tmp_path)
+    genome_path = write_genome(genome, tmp_path)
+    placeholders = {"RUN": run_dir, "GENOME": genome_path}
+
+    monkeypatch.setattr(refine_genome.logger, "remove", MagicMock())
+    monkeypatch.setattr(refine_genome.logger, "add", MagicMock())
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["refine_genome.py", "--out_dir", str(tmp_path / "out")]
+        + [placeholders.get(argument, argument) for argument in source],
+    )
+
+    with pytest.raises(SystemExit) as error:
+        refine_genome.main()
+
+    assert error.value.code == 2

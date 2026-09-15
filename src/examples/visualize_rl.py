@@ -1,9 +1,11 @@
 """Visualize a trained RL circuit genome acting in its target environment.
 
-Loads a circuit-genome JSON produced by ``src.examples.reinforcement_learning``
-(i.e. by ``CircuitGenome.to_dict``), rebuilds the quantum circuit, reconnects
-it to the Gymnasium environment it was trained on, and rolls the greedy policy
-so you can *watch* the evolved circuit control the environment.
+Loads a circuit genome produced by ``src.examples.reinforcement_learning`` --
+from a JSON file (i.e. one written by ``CircuitGenome.to_dict``, such as
+``best_fitness.json``), or from the run's ``genomes.sqlar`` archive by its genome
+number -- rebuilds the quantum circuit, reconnects it to the Gymnasium
+environment it was trained on, and rolls the greedy policy so you can *watch*
+the evolved circuit control the environment.
 
 The environment the genome was evolved for is recorded in the genome's
 ``task_target`` (e.g. ``"cartpole"``, the friendly ``--env`` name stamped by
@@ -15,20 +17,19 @@ evolved.
 Two output modes:
 
 * **Live** (default): renders an interactive window as the policy plays --
-  ``python -m src.examples.visualize_rl path/to/genome.json``.
+  ``python -m src.examples.visualize_rl --genome_json path/to/genome.json``.
 * **Saved** (``--output_file PATH``): headless-friendly; writes an animated
   GIF of the rollout to ``PATH``.
 
 Example::
 
-    python -m src.examples.visualize_rl genome_368.json --episodes 3
-    python -m src.examples.visualize_rl genome_368.json --output_file rollout.gif
+    python -m src.examples.visualize_rl --genome_json best_fitness.json --episodes 3
+    python -m src.examples.visualize_rl --archive ./artifacts/cartpole --genome_number 368 --output_file rollout.gif
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import random
 import sys
@@ -41,21 +42,39 @@ from loguru import logger
 from src.circuits.circuit import CircuitGenome
 from src.examples.reinforcement_learning import ENV_CHOICES, make_environment
 from src.trainer.reinforcement_trainer import RLEnvironment, greedy_action
+from src.utils.genome_archive import (
+    add_genome_source_arguments,
+    check_genome_source_arguments,
+    load_genome_dict,
+)
 
 
-def load_genome(json_path: str) -> CircuitGenome:
-    """Loads and initializes a circuit genome from a saved JSON file.
+def load_genome(
+    json_path: str | None = None,
+    archive: str | None = None,
+    genome_number: int | None = None,
+) -> CircuitGenome:
+    """Loads and initializes a saved circuit genome.
+
+    Give either ``json_path``, or ``archive`` together with ``genome_number``.
 
     Args:
         json_path: Path to a genome JSON produced by ``CircuitGenome.to_dict``.
+        archive: A run's ``genomes.sqlar`` archive, or the run directory holding
+            it.
+        genome_number: The genome to load from ``archive``.
 
     Returns:
         The reconstructed :class:`CircuitGenome` with its ``hybrid_model``
         already initialized (ready for ``genome.forward``).
+
+    Raises:
+        ValueError: If the source is not given correctly or the archive holds no
+            such genome (see :func:`~src.utils.genome_archive.load_genome_dict`).
+        OSError: If the file or archive cannot be read.
     """
 
-    with open(json_path) as json_file:
-        serialized = json.load(json_file)
+    serialized = load_genome_dict(json_path, archive, genome_number)
 
     genome = CircuitGenome.from_dict(serialized)
     genome.initialize_model()
@@ -266,14 +285,18 @@ def save_gif(frames: list[np.ndarray], path: str, fps: int) -> None:
 
 
 def main() -> None:
-    """Parses arguments, loads the genome, and visualizes it in its env."""
+    """Parses arguments, loads the genome, and visualizes it in its env.
+
+    Returns:
+        None. Plays the rollout in a live window, or saves it as a GIF when
+        ``--output_file`` is given.
+    """
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--genome_json",
-        type=str,
-        required=True,
-        help="Path to a genome JSON produced by the RL example script.",
+    # --genome_json or --archive (with --genome_number) chooses the genome.
+    add_genome_source_arguments(
+        parser,
+        json_help="Path to a genome JSON produced by the RL example script.",
     )
     parser.add_argument(
         "--env",
@@ -308,11 +331,15 @@ def main() -> None:
     parser.add_argument("--logging_level", type=str, default="INFO")
 
     args = parser.parse_args()
+    check_genome_source_arguments(parser, args)
 
     logger.remove()
     logger.add(sys.stdout, level=args.logging_level)
 
-    genome = load_genome(args.genome_json)
+    try:
+        genome = load_genome(args.genome_json, args.archive, args.genome_number)
+    except (OSError, ValueError) as error:
+        parser.error(str(error))
     logger.info(
         f"loaded genome {genome.genome_number} (target={genome.target}); "
         f"recorded fitness: {genome.fitness}"
