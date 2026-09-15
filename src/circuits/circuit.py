@@ -776,6 +776,30 @@ class CircuitGenome:
 
         return self.hybrid_model.parameters()
 
+    def count_trainable_parameters(self) -> int:
+        """Counts the parameters training actually updates.
+
+        The quantum weight vector holds one entry per gate parameter for *every*
+        gate, disabled ones included, but disabled gates are skipped in the
+        forward pass, so their parameters are never connected to the loss. They
+        are left out: what remains is the encoder's and decoder's trainable
+        weights plus the parameters of enabled gates. A genome whose count is
+        zero has nothing connected to the loss, so trainers evaluate it rather
+        than train it (``backward()`` would fail with "element 0 of tensors does
+        not require grad").
+
+        Requires :meth:`initialize_model` to have already been called.
+
+        Returns:
+            The number of parameters training updates.
+        """
+
+        n_parameters = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        disabled_gate_parameters = sum(
+            len(gate.parameters) for gate in self.gates if not gate.enabled
+        )
+        return n_parameters - disabled_gate_parameters
+
     def clone_state_dict(self) -> dict[str, Tensor]:
         """Returns a detached, cloned snapshot of the hybrid model's state.
 

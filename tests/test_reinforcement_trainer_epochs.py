@@ -103,6 +103,11 @@ def test_train_records_per_episode_and_best_metrics(
 
     _assert_return_metrics(genome.metadata["best_training_metrics"])
     _assert_return_metrics(genome.metadata["best_validation_metrics"])
+    # recorded the same way as supervised genomes: what the optimizer updated
+    assert (
+        genome.metadata["n_trainable_parameters"] == genome.count_trainable_parameters()
+    )
+    assert genome.metadata["n_trainable_parameters"] > 0
     # the deterministic env yields a constant +1 per step, so returns are >= 0
     assert genome.metadata["best_validation_metrics"]["return_mean"] >= 0.0
 
@@ -253,6 +258,7 @@ def test_train_with_no_trainable_parameters_only_evaluates(target: str) -> None:
     trainer.train(genome, environment)
 
     assert genome.metadata["training_episode_metrics"] == []
+    assert genome.metadata["n_trainable_parameters"] == 0
     _assert_return_metrics(genome.metadata["best_training_metrics"])
     _assert_return_metrics(genome.metadata["best_validation_metrics"])
 

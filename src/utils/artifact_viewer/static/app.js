@@ -663,7 +663,7 @@
    * Summarizes each island from the chart's genomes. Returns `islandOf` (each
    * genome's island, by genome number), `islands` (each island's genome count
    * and best value of `yKey`, with the genome holding it) and `migrations` (how
-   * many genomes were bred on one island from a parent on another, keyed
+   * many genomes were reproduced on one island from a parent on another, keyed
    * "parent island>child island").
    */
   function islandStatistics(points, links, yKey) {
@@ -1852,7 +1852,7 @@
     /**
      * Draws the run's island topology into its section, when the run recorded one
      * and the section is open: islands shaded by their best value of the charted
-     * metric, each connection as wide as the genomes bred across it, rings for the
+     * metric, each connection as wide as the genomes reproduced across it, rings for the
      * chart's focus island and its neighbors, and arrows where the selected
      * genome's ancestry crossed between islands. Clicking an island colors the
      * chart around it.
@@ -1918,7 +1918,7 @@
         s("defs", {}, arrowhead("topology-connection", token("--text-muted")), arrowhead("topology-ancestry", token("--text-primary")))
       );
 
-      // one line per connected pair of islands, plus any pair genomes were bred across without being connected
+      // one line per connected pair of islands, plus any pair genomes were reproduced across without being connected
       const pairKey = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
       const pairs = new Map();
       const addPair = (a, b, connected) => {
@@ -1946,10 +1946,10 @@
         directed ||= oneWay;
         unused ||= pair.connected && total === 0;
         const title = !pair.connected
-          ? `Islands ${pair.a} and ${pair.b} are not connected, yet ${plural(total, "genome")} were bred across them`
+          ? `Islands ${pair.a} and ${pair.b} are not connected, yet ${plural(total, "genome")} were reproduced across them`
           : oneWay
-            ? `Island ${island} draws parents from island ${source}: ${plural(total, "genome")} bred across`
-            : `Islands ${pair.a} and ${pair.b}: ${plural(backward, "genome")} bred on island ${pair.a} from island ${pair.b}, ${plural(forward, "genome")} on island ${pair.b} from island ${pair.a}`;
+            ? `Island ${island} draws parents from island ${source}: ${plural(total, "genome")} reproduced across`
+            : `Islands ${pair.a} and ${pair.b}: ${plural(backward, "genome")} reproduced on island ${pair.a} from island ${pair.b}, ${plural(forward, "genome")} on island ${pair.b} from island ${pair.a}`;
         const segment = trimmed(at(source), at(island), radius + 3);
         graph.append(
           s(
@@ -1994,7 +1994,7 @@
               "stroke-width": 1.5 + 2 * Math.sqrt(crossed / mostCrossings),
               "marker-end": "url(#topology-ancestry)",
             },
-            s("title", { text: `Genome ${state.selected}'s ancestry: ${plural(crossed, "genome")} bred on island ${island} from a parent on island ${source}` })
+            s("title", { text: `Genome ${state.selected}'s ancestry: ${plural(crossed, "genome")} reproduced on island ${island} from a parent on island ${source}` })
           )
         );
       }
@@ -2048,7 +2048,7 @@
         h("span", {}, h("span", { class: "swatch", style: `background:linear-gradient(90deg, ${light}, ${dark})` }), `island's best ${state.yKey}, worse to better`),
         ...(focus !== null ? [legendItem(slotColor(1), `focus island ${focus} (ring)`)] : []),
         ...(focusNeighbors.size ? [legendItem(slotColor(2), "its neighbors (ring)")] : []),
-        legendItem(token("--text-muted"), "genomes bred across a connection (width)", true),
+        legendItem(token("--text-muted"), "genomes reproduced across a connection (width)", true),
         ...(unused ? [h("span", { class: "muted", text: "dashed: never used" })] : []),
         ...(directed ? [h("span", { class: "muted", text: "arrowhead: the island that draws parents" })] : []),
         ...(selectedIsland !== undefined ? [h("span", { class: "muted", text: `dotted outline: genome ${state.selected}'s island` })] : []),
@@ -2061,7 +2061,7 @@
         h(
           "div",
           { class: "toolbar" },
-          h("span", { class: "meta", text: `${count} islands · ${plural(totalMigrations, "genome")} bred from a parent on another island` }),
+          h("span", { class: "meta", text: `${count} islands · ${plural(totalMigrations, "genome")} reproduced from a parent on another island` }),
           h("span", { class: "spacer" }),
           h("span", { class: "muted", text: "click an island to color the chart around it" })
         ),
@@ -2551,8 +2551,8 @@
     }
 
     /**
-     * The island a genome was bred for, as facts-list rows: its `target_island_id`,
-     * or for an initial genome (bred for no island) the island it was placed on.
+     * The island a genome was reproduced for, as facts-list rows: its `target_island_id`,
+     * or for an initial genome (reproduced for no island) the island it was placed on.
      * A genome from a search without islands has no row.
      */
     function islandFacts(summary, genome) {
