@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import os
 
@@ -15,9 +17,10 @@ class PopulationStrategy(ABC):
 
         Every entry point offers the same choice of how genomes are managed, as
         a required sub-command that in turn owns its own flags. This registers
-        the ``steady_state`` and ``islands`` sub-parsers and hands each to the
-        concrete strategy's own ``initialize_parser`` (so each class defines its
-        own constructor flags), keeping the entry points in sync.
+        the ``steady_state``, ``islands``, and ``steady_state_speciation``
+        sub-parsers and hands each to the concrete strategy's own
+        ``initialize_parser`` (so each class defines its own constructor
+        flags), keeping the entry points in sync.
 
         The concrete strategies are imported lazily because they subclass
         :class:`PopulationStrategy`; importing them at module load time would be
@@ -29,12 +32,14 @@ class PopulationStrategy(ABC):
 
         Returns:
             None. Mutates ``parser`` by adding a required ``population_strategy``
-            sub-command with ``steady_state`` and ``islands`` choices, each
-            carrying that strategy's own arguments.
+            sub-command with ``steady_state``, ``islands``, and
+            ``steady_state_speciation`` choices, each carrying that strategy's
+            own arguments.
         """
 
         from src.evolution.steady_state_islands import SteadyStateIslands
         from src.evolution.steady_state_population import SteadyStatePopulation
+        from src.evolution.steady_state_speciation import SteadyStateSpeciation
 
         populations = parser.add_subparsers(
             dest="population_strategy",
@@ -52,6 +57,12 @@ class PopulationStrategy(ABC):
                 "islands", help="Use multiple islands of steady state populations."
             )
         )
+        SteadyStateSpeciation.initialize_parser(
+            populations.add_parser(
+                "steady_state_speciation",
+                help="Use speciation over a global population.",
+            )
+        )
 
     @staticmethod
     def from_args(
@@ -60,11 +71,12 @@ class PopulationStrategy(ABC):
     ) -> "PopulationStrategy":
         """Builds the selected population strategy from parsed arguments.
 
-        Constructs a :class:`~src.evolution.steady_state_population.SteadyStatePopulation`
-        or :class:`~src.evolution.steady_state_islands.SteadyStateIslands` from
-        the sub-command chosen by :meth:`initialize_parser` and its flags. The
-        output directory the strategy writes genomes into is created here (the
-        strategy is the component that owns ``--out_dir``).
+        Constructs a :class:`~src.evolution.steady_state_population.SteadyStatePopulation`,
+        :class:`~src.evolution.steady_state_islands.SteadyStateIslands`, or
+        :class:`~src.evolution.steady_state_speciation.SteadyStateSpeciation`
+        from the sub-command chosen by :meth:`initialize_parser` and its flags.
+        The output directory the strategy writes genomes into is created here
+        (the strategy is the component that owns ``--out_dir``).
 
         Args:
             args: Parsed arguments carrying ``population_strategy`` and the
@@ -75,12 +87,17 @@ class PopulationStrategy(ABC):
 
         Returns:
             The constructed :class:`PopulationStrategy`.
+
+        Raises:
+            ValueError: If ``args.population_strategy`` is not a known
+                sub-command.
         """
 
         # Imported lazily: the concrete strategies subclass this class, so a
         # module-level import here would be circular.
         from src.evolution.steady_state_islands import SteadyStateIslands
         from src.evolution.steady_state_population import SteadyStatePopulation
+        from src.evolution.steady_state_speciation import SteadyStateSpeciation
 
         # The strategy owns the output directory, so create it here.
         os.makedirs(args.out_dir, exist_ok=True)
@@ -92,20 +109,33 @@ class PopulationStrategy(ABC):
                 out_dir=args.out_dir,
                 save_training_plot=args.save_training_plot,
             )
-
-        return SteadyStateIslands(
-            n_islands=args.n_islands,
-            max_island_size=args.max_island_size,
-            genomes_before_extinction=args.genomes_before_extinction,
-            genomes_for_next_extinction=args.genomes_for_next_extinction,
-            islands_to_extinct=args.islands_to_extinct,
-            primary_parent=args.primary_parent,
-            intra_island_crossover_rate=args.intra_island_crossover_rate,
-            compare=compare,
-            topology=args.topology,
-            out_dir=args.out_dir,
-            save_training_plot=args.save_training_plot,
-        )
+        if args.population_strategy == "islands":
+            return SteadyStateIslands(
+                n_islands=args.n_islands,
+                max_island_size=args.max_island_size,
+                genomes_before_extinction=args.genomes_before_extinction,
+                genomes_for_next_extinction=args.genomes_for_next_extinction,
+                islands_to_extinct=args.islands_to_extinct,
+                primary_parent=args.primary_parent,
+                intra_island_crossover_rate=args.intra_island_crossover_rate,
+                compare=compare,
+                topology=args.topology,
+                out_dir=args.out_dir,
+                save_training_plot=args.save_training_plot,
+            )
+        if args.population_strategy == "steady_state_speciation":
+            return SteadyStateSpeciation(
+                max_population_size=args.max_population_size,
+                compare=compare,
+                species_threshold=args.species_threshold,
+                neat_c1=args.neat_c1,
+                neat_c2=args.neat_c2,
+                neat_c3=args.neat_c3,
+                inter_species_parent_rate=args.inter_species_parent_rate,
+                out_dir=args.out_dir,
+                save_training_plot=args.save_training_plot,
+            )
+        raise ValueError(f"unknown population strategy: {args.population_strategy}")
 
     @abstractmethod
     def is_initializing(self) -> bool:

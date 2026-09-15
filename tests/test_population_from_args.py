@@ -14,6 +14,7 @@ from src.circuits.circuit import CircuitGenome
 from src.evolution.population_strategy import PopulationStrategy
 from src.evolution.steady_state_islands import SteadyStateIslands
 from src.evolution.steady_state_population import SteadyStatePopulation
+from src.evolution.steady_state_speciation import SteadyStateSpeciation
 
 
 def compare(genome1: CircuitGenome, genome2: CircuitGenome) -> int:
@@ -28,6 +29,24 @@ def steady_state_args(out_dir: str, **overrides) -> Namespace:
     values = {
         "population_strategy": "steady_state",
         "max_population_size": 5,
+        "out_dir": out_dir,
+        "save_training_plot": False,
+    }
+    values.update(overrides)
+    return Namespace(**values)
+
+
+def speciation_args(out_dir: str, **overrides) -> Namespace:
+    """Builds a parsed-args namespace selecting historical speciation."""
+
+    values = {
+        "population_strategy": "steady_state_speciation",
+        "max_population_size": 5,
+        "species_threshold": 0.6,
+        "neat_c1": 1.0,
+        "neat_c2": 1.0,
+        "neat_c3": 0.0,
+        "inter_species_parent_rate": 0.1,
         "out_dir": out_dir,
         "save_training_plot": False,
     }
@@ -70,6 +89,14 @@ def test_from_args_builds_islands_population(tmp_path) -> None:
     population = PopulationStrategy.from_args(islands_args(str(tmp_path)), compare)
 
     assert isinstance(population, SteadyStateIslands)
+
+
+def test_from_args_builds_speciation_population(tmp_path) -> None:
+    """A ``steady_state_speciation`` sub-command yields SteadyStateSpeciation."""
+
+    population = PopulationStrategy.from_args(speciation_args(str(tmp_path)), compare)
+
+    assert isinstance(population, SteadyStateSpeciation)
 
 
 def test_from_args_creates_the_output_directory(tmp_path) -> None:
