@@ -120,6 +120,18 @@ class PopulationStrategy(ABC):
         """
         pass
 
+    def run_info(self) -> dict[str, Any]:
+        """Describes the strategy's fixed configuration, for the run's archive.
+
+        Recorded in the archive's ``run_info`` when the search starts, so tools
+        reading a run can see how its population was arranged.
+
+        Returns:
+            Extra ``run_info`` values keyed by name; none by default.
+        """
+
+        return {}
+
     @abstractmethod
     def get_population(self) -> list[CircuitGenome]:
         """Returns every genome the strategy currently holds, best first.

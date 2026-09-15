@@ -271,7 +271,8 @@ def build_trainer(algo: str) -> ReinforcementLearningTrainer:
 def compare(genome1: CircuitGenome, genome2: CircuitGenome) -> int:
     """Sorts genomes by fitness ``loss`` (lower is better).
 
-    Fitness ``loss`` is set to the negative mean evaluation return, so
+    Fitness ``loss`` is set to the negative of a weighted mean of the training
+    and evaluation returns (see :class:`ReinforcementLearningObjective`), so
     sorting ascending by loss is equivalent to sorting descending by return
     -- matching the convention used by the classification example.
 
@@ -303,6 +304,9 @@ class ReinforcementLearningObjective(Objective):
     Args:
         environment: The target reinforcement-learning environment.
         trainer: The reinforcement-learning trainer (algorithm) to use.
+        train_vs_validation_bias: The weight of the training return in the
+            fitness ``loss``; the evaluation return gets the rest, so the loss
+            is ``-(bias * training return + (1 - bias) * evaluation return)``.
     """
 
     def __init__(
@@ -310,17 +314,33 @@ class ReinforcementLearningObjective(Objective):
         environment: RLEnvironment,
         trainer: ReinforcementLearningTrainer,
         train_vs_validation_bias: float = 0.1,
-    ):
+    ) -> None:
+        """Stores the environment, trainer and fitness weighting.
+
+        Args:
+            environment: The target reinforcement-learning environment.
+            trainer: The reinforcement-learning trainer (algorithm) to use.
+            train_vs_validation_bias: The weight of the training return in the
+                fitness ``loss``; the evaluation return gets ``1 - bias``.
+
+        Returns:
+            None. Sets ``environment``, ``trainer`` and
+            ``train_vs_validation_bias``.
+        """
+
         self.environment = environment
         self.trainer = trainer
         self.train_vs_validation_bias = train_vs_validation_bias
 
-    def __call__(self, genome: CircuitGenome):
+    def __call__(self, genome: CircuitGenome) -> None:
         """Trains and evaluates a genome, setting its fitness.
 
         Args:
-            genome: The genome to train and evaluate. Its ``fitness``
-                attribute is populated on return.
+            genome: The genome to train and evaluate.
+
+        Returns:
+            None. Sets the genome's ``fitness``, whose ``loss`` is the negative
+            weighted mean return described on the class.
         """
 
         self.trainer.train(genome, self.environment)
@@ -328,12 +348,10 @@ class ReinforcementLearningObjective(Objective):
         training_metrics = genome.metadata["best_training_metrics"]
         validation_metrics = genome.metadata["best_validation_metrics"]
 
+        # the bias weights the training return; the evaluation return gets the rest
         mean_return = (
-            self.train_vs_validation_bias * validation_metrics["return_mean"]
-        ) + ((1.0 - self.train_vs_validation_bias) * training_metrics["return_mean"])
-
-        # mean_return = validation_metrics["return_mean"]
-        # mean_return = training_metrics["return_mean"]
+            self.train_vs_validation_bias * training_metrics["return_mean"]
+        ) + ((1.0 - self.train_vs_validation_bias) * validation_metrics["return_mean"])
 
         # "loss" (lower is better) drives population sorting via compare();
         # the remaining keys mirror the RL fields used by save_circuit's tag
@@ -438,8 +456,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--train_vs_validation_bias",
         "-tvb",
         type=float,
-        default=0.01,
-        help="Weights how the loss is calculated as (<tvb> * train_return) + ((1.0 - <tvb>) * validation_return)).",
+        default=0.1,
+        help="Weights how the loss is calculated: -((<tvb> * train_return) + ((1.0 - <tvb>) * validation_return)).",
     )
 
     parser.add_argument(

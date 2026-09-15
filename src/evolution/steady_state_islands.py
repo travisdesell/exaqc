@@ -203,6 +203,7 @@ class SteadyStateIslands(PopulationStrategy):
         ]
         self.current_island = 0
 
+        self.topology = list(topology)
         assign_topology(self.islands, topology)
 
         self.global_best_genome = None
@@ -215,6 +216,30 @@ class SteadyStateIslands(PopulationStrategy):
             exit(1)
 
         self.primary_parent = primary_parent
+
+    def run_info(self) -> dict[str, Any]:
+        """Describes how the islands are connected, for the run's archive.
+
+        The neighbors are fixed once the islands are built (extinction events
+        repopulate islands but never rewire them), so recording them when the
+        search starts describes the whole run.
+
+        Returns:
+            ``island_topology``: the ``topology`` the islands were built with
+            and, for each island in id order, the ids of its ``neighbors`` --
+            the islands it draws parents from for inter-island crossover. A
+            ``random`` topology is directed, so these need not be symmetric.
+        """
+
+        return {
+            "island_topology": {
+                "topology": list(self.topology),
+                "neighbors": [
+                    [neighbor.id for neighbor in island.neighbors]
+                    for island in self.islands
+                ],
+            }
+        }
 
     def is_initializing(self) -> bool:
         """

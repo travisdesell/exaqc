@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -28,6 +29,8 @@ from src.circuits.circuit import CircuitGenome
 from src.examples.reinforcement_learning import (
     CONTINUOUS_ENVS,
     ENV_IDS,
+    ReinforcementLearningObjective,
+    build_parser,
     make_environment,
 )
 
@@ -102,6 +105,87 @@ def test_train_records_per_episode_and_best_metrics(
     _assert_return_metrics(genome.metadata["best_validation_metrics"])
     # the deterministic env yields a constant +1 per step, so returns are >= 0
     assert genome.metadata["best_validation_metrics"]["return_mean"] >= 0.0
+
+
+def test_genomes_train_on_random_seeds_unless_one_is_fixed() -> None:
+    """Without a fixed seed each genome draws its own; a fixed seed is kept.
+
+    Every genome training on the same seeded episodes would let the search
+    select for those particular episodes, so seeds are random by default.
+    """
+
+    trainer = build_trainer("reinforce")
+    seeds = []
+    for genome_number, seed in ((1, None), (2, None), (3, 1234)):
+        genome, observation_features = build_rl_genome(
+            genome_number=genome_number,
+            target="pennylane",
+            complexity="shallow",
+            encoder_name="linear",
+            decoder_name="linear",
+            trainer=trainer,
+        )
+        genome.hyperparameters["seed"] = seed
+        trainer.train(genome, make_test_environment(observation_features))
+        seeds.append(genome.metadata["training_seed"])
+        # the drawn seed is recorded, not written back into the inherited hyperparameters
+        assert genome.hyperparameters["seed"] == seed
+
+    assert all(isinstance(seed, int) for seed in seeds)
+    assert seeds[0] != seeds[1]
+    assert seeds[2] == 1234
+
+
+@pytest.mark.parametrize("bias", [0.1, 0.25])
+def test_fitness_loss_weights_training_return_by_the_bias(bias: float) -> None:
+    """The bias weights the training return and the evaluation return gets the rest.
+
+    Args:
+        bias: The ``train_vs_validation_bias`` to score with.
+    """
+
+    class FixedReturnsTrainer:
+        """Stands in for a trainer, recording fixed training and evaluation returns."""
+
+        def train(self, genome: SimpleNamespace, environment: SimpleNamespace) -> None:
+            """Records a training return of 100 and an evaluation return of 300.
+
+            Args:
+                genome: The genome whose metadata is set.
+                environment: Unused.
+            """
+
+            genome.metadata["best_training_metrics"] = {
+                "return_mean": 100.0,
+                "best_episode_return": 120.0,
+            }
+            genome.metadata["best_validation_metrics"] = {
+                "return_mean": 300.0,
+                "return_std": 5.0,
+            }
+
+    genome = SimpleNamespace(genome_number=1, metadata={}, fitness=None)
+    objective = ReinforcementLearningObjective(
+        environment=SimpleNamespace(env_id="Fake-v0"),
+        trainer=FixedReturnsTrainer(),
+        train_vs_validation_bias=bias,
+    )
+
+    objective(genome)
+
+    assert genome.fitness["loss"] == pytest.approx(-(bias * 100.0 + (1 - bias) * 300.0))
+    assert genome.fitness["train_return_mean"] == 100.0
+    assert genome.fitness["eval_return_mean"] == 300.0
+
+
+def test_parser_defaults_weight_evaluation_and_draw_random_seeds() -> None:
+    """The documented defaults: a 0.1 training-return weight and random seeds."""
+
+    defaults = {action.dest: action.default for action in build_parser()._actions}
+
+    assert defaults["train_vs_validation_bias"] == 0.1
+    assert defaults["seed"] is None
+    assert ReinforcementLearningObjective.__init__.__defaults__ == (0.1,)
 
 
 @pytest.mark.parametrize("encoder_name,decoder_name", ENCODER_DECODER_PAIRS)

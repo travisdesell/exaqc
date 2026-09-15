@@ -16,34 +16,20 @@ import json
 import math
 import multiprocessing
 import os
-import re
 import shlex
 import sqlite3
 import statistics
 import threading
 import time
-import webbrowser
 from collections import OrderedDict
 from concurrent.futures import Future, ProcessPoolExecutor
 from dataclasses import dataclass, field
-from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
 
 from loguru import logger
 
+from src.utils.annotations import AnnotationStore
 from src.utils.genome_archive import ARCHIVE_FILENAME, GenomeArchive
-from src.utils.search_history import (
-    HISTORY_FILENAME,
-    aggregate_history,
-    history_columns,
-    load_history_csv,
-)
-
-#: Directory holding the viewer's HTML, JavaScript, CSS and vendored uPlot.
-STATIC_DIRECTORY = Path(__file__).resolve().parent / "static"
 
 #: The images a genome can be rendered as.
 IMAGE_KINDS = ("diagram", "training")
@@ -75,16 +61,126 @@ INSERTION_OUTCOMES = ("global_best", "local_best", "inserted", "discarded")
 #: Gate fields compared when two genomes are diffed.
 GATE_FIELDS = ("method_name", "qubits", "depth", "parameters", "enabled")
 
-#: History CSV columns that describe the row rather than the search's progress.
-_HISTORY_INDEX_COLUMNS = frozenset({"step", "current_time", "inserted_genomes"})
+#: The most points a run comparison charts. Runs record a step whenever their
+#: population changed, so comparing long runs would otherwise return a point per
+#: insertion per run.
+MAX_COMPARISON_POINTS = 500
 
-_CONTENT_TYPES = {
-    ".html": "text/html; charset=utf-8",
-    ".js": "text/javascript; charset=utf-8",
-    ".css": "text/css; charset=utf-8",
-}
 
-_STATIC_NAME = re.compile(r"[A-Za-z0-9_.-]+")
+def _aggregate_series(
+    series: list[dict[str, list[Any]]], conf: str
+) -> dict[str, Any] | None:
+    """Summarizes one metric across several runs, insertion by insertion.
+
+    A run records a step only when its population changed, so two runs of the
+    same length still record different steps and intersecting them would leave
+    almost nothing to plot. Instead every recorded step is kept and each run's
+    last recorded value is carried forward across it. That is exact rather than
+    interpolated: a run with no row at a step is a run whose population did not
+    change there, so its statistics are unchanged too.
+
+    A run contributes only across its own lifetime: it joins the average when it
+    reaches a step and drops out past the last step it recorded. Carrying a value
+    forward within a run is exact, but carrying it beyond the run's end is not --
+    a search that has only reached its three hundredth insertion has not levelled
+    off at its thousandth, and averaging it in there would say that it had.
+
+    Args:
+        series: Each run's population series, as
+            :meth:`~src.utils.genome_archive.GenomeArchive.population_series`
+            returns them.
+        conf: The band around the mean: ``"std"`` for one standard deviation, or
+            ``"95ci"`` for 1.96 standard errors.
+
+    Returns:
+        The ``step`` values with the ``mean``, ``low`` and ``high`` at each, how
+        many runs were averaged at each (``runs_at_step``) and how many are
+        being compared (``n_runs``), or ``None`` if no run recorded a value.
+    """
+
+    steps = sorted({step for run in series for step in run["step"]})
+    if not steps:
+        return None
+    if len(steps) > MAX_COMPARISON_POINTS:
+        stride = len(steps) / MAX_COMPARISON_POINTS
+        steps = [
+            steps[min(int(index * stride), len(steps) - 1)]
+            for index in range(MAX_COMPARISON_POINTS)
+        ]
+
+    recorded = [
+        [
+            (step, value)
+            for step, value in zip(run["step"], run["best"])
+            if value is not None
+        ]
+        for run in series
+    ]
+    cursors = [0] * len(recorded)
+    carried: list[float | None] = [None] * len(recorded)
+    last_steps = [pairs[-1][0] if pairs else None for pairs in recorded]
+
+    kept: list[int] = []
+    means: list[float] = []
+    lows: list[float] = []
+    highs: list[float] = []
+    counts: list[int] = []
+    for step in steps:
+        for index, pairs in enumerate(recorded):
+            while cursors[index] < len(pairs) and pairs[cursors[index]][0] <= step:
+                carried[index] = pairs[cursors[index]][1]
+                cursors[index] += 1
+            if last_steps[index] is None or step > last_steps[index]:
+                carried[index] = None
+
+        values = [value for value in carried if value is not None]
+        if not values:
+            continue
+
+        mean = statistics.fmean(values)
+        deviation = statistics.pstdev(values) if len(values) > 1 else 0.0
+        spread = (
+            deviation
+            if conf == "std"
+            else 1.96 * deviation / math.sqrt(max(len(values), 1))
+        )
+        kept.append(step)
+        means.append(mean)
+        lows.append(mean - spread)
+        highs.append(mean + spread)
+        counts.append(len(values))
+
+    if not kept:
+        return None
+
+    return {
+        "step": kept,
+        "mean": means,
+        "low": lows,
+        "high": highs,
+        "runs_at_step": counts,
+        "n_runs": len(series),
+    }
+
+
+def default_comparison_metric(available: list[str]) -> str | None:
+    """Chooses the metric a run comparison charts when the caller names none.
+
+    ``target_metric`` is what a search is ultimately judged on, so it is
+    preferred; ``loss`` is the fallback, since every task's population is ranked
+    by it. Anything the runs recorded will do rather than charting nothing.
+
+    Args:
+        available: Every metric the compared runs recorded.
+
+    Returns:
+        The metric to chart, or ``None`` when the runs recorded nothing.
+    """
+
+    for preferred in ("target_metric", "loss"):
+        if preferred in available:
+            return preferred
+    return available[0] if available else None
 
 
 def higher_is_better(key: str) -> bool:
@@ -747,7 +843,7 @@ def insertion_rates_latex(
     return "\n".join(lines) + "\n"
 
 
-def _query_int(
+def query_int(
     query: dict[str, str],
     name: str,
     default: int,
@@ -787,18 +883,29 @@ class ArtifactViewer:
     Attributes:
         registry: The runs being served.
         renderer: Renders genome images.
+        allow_annotations: Whether notes and tags may be written; they can always
+            be read.
     """
 
-    def __init__(self, registry: RunRegistry, renderer: RenderService) -> None:
+    def __init__(
+        self,
+        registry: RunRegistry,
+        renderer: RenderService,
+        allow_annotations: bool = False,
+    ) -> None:
         """Creates the viewer.
 
         Args:
             registry: The runs to serve.
             renderer: The image render service.
+            allow_annotations: Whether notes and tags may be written. Reading them
+                is always allowed, and writing them changes only each run's
+                ``annotations.sqlite`` -- never its archive.
         """
 
         self.registry = registry
         self.renderer = renderer
+        self.allow_annotations = allow_annotations
 
     def run(self, index: int) -> Run:
         """Looks up a served run.
@@ -880,10 +987,14 @@ class ArtifactViewer:
             index: The run's index.
 
         Returns:
-            The run's summary plus its fitness keys, the values its genomes can
-            be filtered by, the ``unarchived_parents`` (parents of stored
-            genomes that are not stored themselves, i.e. the seed genome), and
-            whether it recorded a search history.
+            The run's summary plus its fitness keys, everything its genomes can
+            be charted by (with the shorter ``primary_metrics`` to offer first),
+            the values they can be filtered by, the ``unarchived_parents``
+            (parents of stored genomes that are not stored themselves, i.e. the
+            seed genome), the ``island_topology`` an island search recorded
+            (``None`` otherwise), and whether it recorded a search history. An archive
+            that cannot be read fully is reported under ``error``, with those
+            fields empty.
 
         Raises:
             KeyError: If there is no such run.
@@ -891,14 +1002,55 @@ class ArtifactViewer:
 
         run = self.run(index)
         payload = self._summary(run)
-        with GenomeArchive.open_readonly(run.archive_path) as reader:
-            payload["fitness_keys"] = reader.fitness_keys()
-            payload["filter_options"] = reader.filter_options()
-            payload["unarchived_parents"] = reader.unarchived_parents()
-        payload["has_history"] = os.path.isfile(
-            os.path.join(run.directory, HISTORY_FILENAME)
+        payload.update(
+            {
+                "fitness_keys": [],
+                "metrics": [],
+                "primary_metrics": [],
+                "filter_options": {},
+                "unarchived_parents": [],
+                "island_topology": None,
+            }
         )
+        try:
+            with GenomeArchive.open_readonly(run.archive_path) as reader:
+                payload["fitness_keys"] = reader.fitness_keys()
+                payload["metrics"] = reader.series_metrics()
+                payload["primary_metrics"] = reader.primary_series_metrics()
+                payload["filter_options"] = reader.filter_options()
+                payload["unarchived_parents"] = reader.unarchived_parents()
+                payload["island_topology"] = reader.run_info().get("island_topology")
+        except sqlite3.DatabaseError as error:
+            # An archive the viewer cannot read in full still lists and browses:
+            # the run page falls back to what its summary holds rather than
+            # failing outright, as the run list and progress chart already do.
+            logger.warning("Could not read {}: {}", run.archive_path, error)
+            payload["error"] = str(error)
+        payload["has_history"] = self._recorded_steps(run) > 0
+        payload["annotations_enabled"] = self.allow_annotations
         return payload
+
+    def _recorded_steps(self, run: Run) -> int:
+        """Counts the population changes a run recorded.
+
+        Args:
+            run: The run to read.
+
+        Returns:
+            How many steps its archive holds, and zero when the archive cannot
+            be read.
+        """
+
+        try:
+            with GenomeArchive.open_readonly(run.archive_path) as reader:
+                return int(
+                    reader.connection.execute(
+                        "SELECT count(*) FROM population_events"
+                    ).fetchone()[0]
+                )
+        except sqlite3.DatabaseError as error:
+            logger.warning("Could not read {}'s population events: {}", run.name, error)
+            return 0
 
     def genomes_payload(self, index: int, query: dict[str, str]) -> dict[str, Any]:
         """Lists a page of a run's genomes.
@@ -925,10 +1077,10 @@ class ArtifactViewer:
         """
 
         run = self.run(index)
-        offset = _query_int(query, "offset", 0, minimum=0)
-        limit = _query_int(query, "limit", 50, minimum=1, maximum=MAX_PAGE_SIZE)
+        offset = query_int(query, "offset", 0, minimum=0)
+        limit = query_int(query, "limit", 50, minimum=1, maximum=MAX_PAGE_SIZE)
         max_genome = (
-            _query_int(query, "max_genome", -1, minimum=0)
+            query_int(query, "max_genome", -1, minimum=0)
             if query.get("max_genome")
             else None
         )
@@ -937,7 +1089,7 @@ class ArtifactViewer:
             "generated_by": query.get("generated_by") or None,
             "crossover_type": query.get("crossover_type") or None,
             "island": (
-                _query_int(query, "island", -1, minimum=0)
+                query_int(query, "island", -1, minimum=0)
                 if query.get("island")
                 else None
             ),
@@ -999,28 +1151,62 @@ class ArtifactViewer:
         with GenomeArchive.open_readonly(self.run(index).archive_path) as reader:
             return {"points": reader.points(y_key), "links": reader.parent_links()}
 
-    def history_payload(self, index: int) -> dict[str, Any]:
-        """Returns a run's search-progress history.
+    def history_payload(self, index: int, metric: str | None = None) -> dict[str, Any]:
+        """Returns a run's search progress, recomputed from its archive.
+
+        The statistics are not stored: the population's membership is replayed
+        from the recorded changes and summarized over whichever genomes were
+        alive at each step. That is what lets any metric a run's genomes recorded
+        be charted -- a loss, a return, a fidelity, a gate count -- rather than
+        only a fixed set decided while the search was running.
 
         Args:
             index: The run's index.
+            metric: The metric to summarize; ``loss`` when the run recorded it,
+                otherwise the first available, when not given.
 
         Returns:
-            ``columns``: each history CSV column's values, keyed by column name
-            (empty when the run recorded no history).
+            ``columns`` (``step``, ``population_size``, ``best``, ``mean`` and
+            ``worst``, empty when the run recorded no population changes),
+            ``metric`` (the one summarized, ``None`` when there is nothing to
+            summarize) and ``metrics`` (everything that could be charted).
 
         Raises:
             KeyError: If there is no such run.
+            ValueError: If ``metric`` was not recorded by the run's genomes.
         """
 
-        path = os.path.join(self.run(index).directory, HISTORY_FILENAME)
-        if not os.path.isfile(path):
-            return {"columns": {}}
-        rows = load_history_csv(path)
+        run = self.run(index)
+        empty: dict[str, Any] = {
+            "columns": {},
+            "metric": None,
+            "metrics": [],
+            "primary_metrics": [],
+        }
+
+        try:
+            with GenomeArchive.open_readonly(run.archive_path) as reader:
+                available = reader.series_metrics()
+                primary = reader.primary_series_metrics()
+                if not available:
+                    return empty
+                chosen = metric or ("loss" if "loss" in available else available[0])
+                if chosen not in available:
+                    raise ValueError(
+                        f"{chosen!r} was not recorded; available: {', '.join(available)}."
+                    )
+                columns = reader.population_series(
+                    chosen, higher_is_better=higher_is_better(chosen)
+                )
+        except sqlite3.DatabaseError as error:
+            logger.warning("Could not read {}'s search progress: {}", run.name, error)
+            return empty
+
         return {
-            "columns": {
-                name: [row.get(name) for row in rows] for name in history_columns(path)
-            }
+            "columns": columns,
+            "metric": chosen,
+            "metrics": available,
+            "primary_metrics": primary,
         }
 
     def operators_payload(self, index: int) -> dict[str, Any]:
@@ -1047,8 +1233,9 @@ class ArtifactViewer:
             genome_number: The genome.
 
         Returns:
-            ``summary``, the full serialized ``genome``, its ``children`` and
-            ready-to-run ``commands``.
+            ``summary``, the full serialized ``genome``, its ``children``, the
+            ``parent_islands`` (each parent's island, in ``summary["parents"]``
+            order) and ready-to-run ``commands``.
 
         Raises:
             KeyError: If there is no such run or genome.
@@ -1057,12 +1244,192 @@ class ArtifactViewer:
         run = self.run(index)
         with GenomeArchive.open_readonly(run.archive_path) as reader:
             genome = reader.get_genome_dict(genome_number)
+            summary = reader.get_summary(genome_number)
             return {
-                "summary": reader.get_summary(genome_number),
+                "summary": summary,
                 "genome": genome,
                 "children": reader.children(genome_number),
+                # beside the parents rather than in the summary, which every
+                # genome listing shares
+                "parent_islands": reader.islands_of(summary["parents"]),
                 "commands": genome_commands(run, genome),
             }
+
+    def require_annotations(self) -> None:
+        """Checks that notes and tags may be written here.
+
+        Returns:
+            None.
+
+        Raises:
+            PermissionError: If annotations were not allowed when the server was
+                started.
+        """
+
+        if not self.allow_annotations:
+            raise PermissionError(
+                "Annotations are read-only here: start the dashboard (or exaqc_mcp) "
+                "with --allow_annotations to write notes and tags."
+            )
+
+    def _writable_run(self, index: int, genome_number: int | None) -> Run:
+        """Checks that an annotation may be written, and that what it is about exists.
+
+        Args:
+            index: The run's index.
+            genome_number: The genome the annotation is about, or ``None`` for the
+                run as a whole.
+
+        Returns:
+            The run.
+
+        Raises:
+            PermissionError: If annotations may not be written here.
+            KeyError: If there is no such run, or no such genome in it.
+        """
+
+        self.require_annotations()
+        run = self.run(index)
+        if genome_number is not None:
+            with GenomeArchive.open_readonly(run.archive_path) as reader:
+                found = reader.connection.execute(
+                    "SELECT 1 FROM genomes WHERE genome_number = ?",
+                    (int(genome_number),),
+                ).fetchone()
+            if found is None:
+                raise KeyError(f"{run.name} has no genome {int(genome_number)}.")
+        return run
+
+    def annotations_payload(
+        self,
+        index: int,
+        genome_number: int | None = None,
+        tag: str | None = None,
+        include_removed: bool = False,
+    ) -> dict[str, Any]:
+        """Returns the notes and tags recorded for a run, or for one of its genomes.
+
+        Args:
+            index: The run's index.
+            genome_number: Only return this genome's notes and tags; every note
+                and tag in the run when not given.
+            tag: Only return tags with this name.
+            include_removed: Also return tags that were removed, with when and by
+                whom.
+
+        Returns:
+            ``enabled`` (whether annotations may be written here),
+            ``genome_number``, ``notes`` (a note about the run as a whole has no
+            genome number) and ``tags``.
+
+        Raises:
+            KeyError: If there is no such run.
+        """
+
+        store = AnnotationStore.beside(self.run(index).archive_path)
+        return {
+            "enabled": self.allow_annotations,
+            "genome_number": genome_number,
+            "notes": store.notes(genome_number=genome_number),
+            "tags": store.tags(
+                genome_number=genome_number, tag=tag, include_removed=include_removed
+            ),
+        }
+
+    def add_note(
+        self,
+        index: int,
+        text: str,
+        source: str,
+        author: str | None = None,
+        genome_number: int | None = None,
+    ) -> dict[str, Any]:
+        """Records a note about a run, or about one of its genomes.
+
+        Args:
+            index: The run's index.
+            text: What to note.
+            source: Where the note is written from (``mcp`` or ``dashboard``).
+            author: The writer's name, if they gave one.
+            genome_number: The genome the note is about, or ``None`` for the run.
+
+        Returns:
+            The note as recorded.
+
+        Raises:
+            PermissionError: If annotations may not be written here.
+            KeyError: If there is no such run or genome.
+            ValueError: If the note is empty or too long, or the source or author
+                is invalid.
+        """
+
+        run = self._writable_run(index, genome_number)
+        return AnnotationStore.beside(run.archive_path).add_note(
+            text, source, author, genome_number
+        )
+
+    def add_tag(
+        self,
+        index: int,
+        genome_number: int,
+        tag: str,
+        source: str,
+        author: str | None = None,
+    ) -> dict[str, Any]:
+        """Tags a genome, leaving it as it is if it already carries the tag.
+
+        Args:
+            index: The run's index.
+            genome_number: The genome to tag.
+            tag: The tag.
+            source: Where the tag is written from (``mcp`` or ``dashboard``).
+            author: The writer's name, if they gave one.
+
+        Returns:
+            The tag that now applies, with ``created`` saying whether it is new.
+
+        Raises:
+            PermissionError: If annotations may not be written here.
+            KeyError: If there is no such run or genome.
+            ValueError: If the tag, source or author is invalid.
+        """
+
+        run = self._writable_run(index, genome_number)
+        return AnnotationStore.beside(run.archive_path).add_tag(
+            genome_number, tag, source, author
+        )
+
+    def remove_tag(
+        self,
+        index: int,
+        genome_number: int,
+        tag: str,
+        source: str,
+        author: str | None = None,
+    ) -> dict[str, Any]:
+        """Removes a tag from a genome, keeping the record that it applied.
+
+        Args:
+            index: The run's index.
+            genome_number: The genome to untag.
+            tag: The tag to remove.
+            source: Where the removal is made from (``mcp`` or ``dashboard``).
+            author: The remover's name, if they gave one.
+
+        Returns:
+            The tag, stamped with its removal.
+
+        Raises:
+            PermissionError: If annotations may not be written here.
+            KeyError: If there is no such run or genome, or the genome does not
+                carry the tag.
+            ValueError: If the tag, source or author is invalid.
+        """
+
+        run = self._writable_run(index, genome_number)
+        return AnnotationStore.beside(run.archive_path).remove_tag(
+            genome_number, tag, source, author
+        )
 
     def genome_json(self, index: int, genome_number: int) -> bytes:
         """Returns a genome's JSON exactly as a genome file would hold it.
@@ -1182,22 +1549,29 @@ class ArtifactViewer:
         ]
         return entries
 
-    def groups_payload(self, metric: str = "best", conf: str = "std") -> dict[str, Any]:
+    def groups_payload(
+        self, metric: str | None = None, conf: str = "std"
+    ) -> dict[str, Any]:
         """Compares groups of runs.
 
         Each ``--groups`` group is compared, and so is every run that belongs to
-        no group, on its own.
+        no group, on its own. Every group's curve is recomputed from its runs'
+        archives, so any metric the runs' genomes recorded can be compared.
 
         Args:
-            metric: The history column whose mean and band are charted.
+            metric: The metric whose mean and band are charted, as
+                :meth:`~src.utils.genome_archive.GenomeArchive.series_metrics`
+                lists them; chosen by :func:`default_comparison_metric` when not
+                given, so the comparison charts something rather than nothing.
             conf: The band: ``"std"`` or ``"95ci"``.
 
         Returns:
-            ``metric``, ``conf``, the history ``metrics`` available, and per group
-            its ``name``, ``kind`` (``"group"``, or ``"run"`` for a run in no
-            group), ``runs``, aggregated ``history`` (or ``history_error``) and
-            summary statistics of each run's best ``loss`` and
-            ``target_metric``.
+            ``metric`` (the one charted), ``conf``, the ``metrics`` available
+            across the runs with the shorter ``primary_metrics`` to offer first,
+            and per group its ``name``, ``kind`` (``"group"``, or ``"run"`` for a
+            run in no group), ``runs``, aggregated ``history`` (or
+            ``history_error``) and summary statistics of each run's best ``loss``
+            and ``target_metric``.
 
         Raises:
             ValueError: If ``conf`` is not ``"std"`` or ``"95ci"``.
@@ -1207,41 +1581,58 @@ class ArtifactViewer:
             raise ValueError("conf must be 'std' or '95ci'.")
 
         self.registry.refresh()
-        available_metrics: set[str] = set()
+        entries = self._comparison_entries()
+
+        # Which metric to chart is chosen from everything the compared runs
+        # recorded, so it cannot be decided while walking the groups: what each
+        # run has is read first, and kept so the groups need not ask again.
+        recorded: dict[str, list[str]] = {}
+        offered: dict[str, list[str]] = {}
+        for _, _, runs in entries:
+            for run in runs:
+                if run.archive_path in recorded:
+                    continue
+                try:
+                    with GenomeArchive.open_readonly(run.archive_path) as reader:
+                        recorded[run.archive_path] = reader.series_metrics()
+                        offered[run.archive_path] = reader.primary_series_metrics()
+                except sqlite3.DatabaseError as error:
+                    logger.warning("Could not read {}: {}", run.archive_path, error)
+                    recorded[run.archive_path] = []
+                    offered[run.archive_path] = []
+
+        available_metrics = sorted(
+            {name for names in recorded.values() for name in names}
+        )
+        primary_metrics = sorted({name for names in offered.values() for name in names})
+        charted = metric or default_comparison_metric(available_metrics)
+
         groups = []
-        for name, kind, runs in self._comparison_entries():
-            csv_paths = [
-                path
-                for path in (
-                    os.path.join(run.directory, HISTORY_FILENAME) for run in runs
-                )
-                if os.path.isfile(path)
-            ]
-            for path in csv_paths:
-                available_metrics.update(
-                    column
-                    for column in history_columns(path)
-                    if column not in _HISTORY_INDEX_COLUMNS
-                )
+        for name, kind, runs in entries:
+            series: list[dict[str, list[Any]]] = []
+            for run in runs:
+                if charted is None or charted not in recorded.get(run.archive_path, []):
+                    continue
+                try:
+                    with GenomeArchive.open_readonly(run.archive_path) as reader:
+                        series.append(
+                            reader.population_series(
+                                charted, higher_is_better=higher_is_better(charted)
+                            )
+                        )
+                except sqlite3.DatabaseError as error:
+                    logger.warning("Could not read {}: {}", run.archive_path, error)
 
             history = None
             history_error = None
-            if csv_paths:
-                try:
-                    steps, mean, low, high = aggregate_history(
-                        csv_paths, metric=metric, conf=conf
-                    )
-                    history = {
-                        "step": steps,
-                        "mean": mean,
-                        "low": low,
-                        "high": high,
-                        "n_runs": len(csv_paths),
-                    }
-                except RuntimeError as error:
-                    history_error = str(error)
+            if series:
+                history = _aggregate_series(series, conf)
+                if history is None:
+                    history_error = f"No run recorded a value for {charted!r}."
+            elif charted is None:
+                history_error = "These runs recorded no search progress."
             else:
-                history_error = "No search history was recorded."
+                history_error = f"No run recorded {charted!r}."
 
             best_losses: list[float] = []
             best_targets: list[float] = []
@@ -1273,9 +1664,10 @@ class ArtifactViewer:
             )
 
         return {
-            "metric": metric,
+            "metric": charted,
             "conf": conf,
-            "metrics": sorted(available_metrics),
+            "metrics": available_metrics,
+            "primary_metrics": primary_metrics,
             "groups": groups,
         }
 
@@ -1401,535 +1793,3 @@ class ArtifactViewer:
             ),
             "errors": errors,
         }
-
-
-#: API routes: a path pattern and the handler method serving it.
-_ROUTES: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"/api/runs"), "_api_runs"),
-    (re.compile(r"/api/groups"), "_api_groups"),
-    (re.compile(r"/api/insertion_rates"), "_api_insertion_rates"),
-    (re.compile(r"/api/runs/(\d+)"), "_api_run"),
-    (re.compile(r"/api/runs/(\d+)/genomes"), "_api_genomes"),
-    (re.compile(r"/api/runs/(\d+)/points"), "_api_points"),
-    (re.compile(r"/api/runs/(\d+)/genealogy"), "_api_genealogy"),
-    (re.compile(r"/api/runs/(\d+)/history"), "_api_history"),
-    (re.compile(r"/api/runs/(\d+)/operators"), "_api_operators"),
-    (re.compile(r"/api/runs/(\d+)/compare"), "_api_compare"),
-    (re.compile(r"/api/runs/(\d+)/genomes/(\d+)"), "_api_genome"),
-    (re.compile(r"/api/runs/(\d+)/genomes/(\d+)\.json"), "_api_genome_json"),
-    (
-        re.compile(r"/api/runs/(\d+)/genomes/(\d+)/(diagram|training)\.png"),
-        "_api_genome_image",
-    ),
-    (re.compile(r"/api/runs/(\d+)/genomes/(\d+)/ancestry"), "_api_ancestry"),
-]
-
-
-class ViewerRequestHandler(BaseHTTPRequestHandler):
-    """Serves the viewer's static files and JSON API (GET requests only)."""
-
-    server: ArtifactViewerServer
-    server_version = "EXAQCMonitor/1"
-
-    def do_GET(self) -> None:
-        """Handles a GET request, turning lookup and parameter errors into 404/400.
-
-        Returns:
-            None. Writes the response.
-        """
-
-        parts = urlsplit(self.path)
-        query = {name: values[-1] for name, values in parse_qs(parts.query).items()}
-
-        try:
-            self._route(parts.path, query)
-        except KeyError as error:
-            self._send_error(
-                HTTPStatus.NOT_FOUND, str(error.args[0]) if error.args else "Not found."
-            )
-        except ValueError as error:
-            self._send_error(HTTPStatus.BAD_REQUEST, str(error))
-        except (BrokenPipeError, ConnectionResetError):
-            pass
-        except Exception as error:
-            logger.exception("Error serving {}", self.path)
-            self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(error))
-
-    def log_message(self, format: str, *args: Any) -> None:
-        """Sends the server's access log to the debug log instead of stderr.
-
-        Args:
-            format: The log message format string.
-            *args: Values for ``format``.
-
-        Returns:
-            None.
-        """
-
-        logger.debug("{} - {}", self.address_string(), format % args)
-
-    def _route(self, path: str, query: dict[str, str]) -> None:
-        """Dispatches a request path to the static files or an API handler.
-
-        Args:
-            path: The request path.
-            query: The request's query parameters.
-
-        Returns:
-            None. Writes the response.
-
-        Raises:
-            KeyError: If nothing is served at ``path``.
-        """
-
-        if path in ("/", "/index.html"):
-            self._send_static("index.html")
-            return
-        if path.startswith("/static/"):
-            self._send_static(path[len("/static/") :])
-            return
-
-        for pattern, handler_name in _ROUTES:
-            match = pattern.fullmatch(path)
-            if match:
-                getattr(self, handler_name)(match, query)
-                return
-
-        raise KeyError(f"Nothing is served at {path}.")
-
-    # ------------------------------------------------------------------
-    # API handlers
-    # ------------------------------------------------------------------
-
-    def _api_runs(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves the run list.
-
-        Args:
-            match: The matched route.
-            query: The query parameters.
-
-        Returns:
-            None.
-        """
-
-        self._send_json(self.server.viewer.runs_payload())
-
-    def _api_groups(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves the run-group comparison (``metric`` and ``conf`` parameters).
-
-        Args:
-            match: The matched route.
-            query: The query parameters.
-
-        Returns:
-            None.
-        """
-
-        self._send_json(
-            self.server.viewer.groups_payload(
-                query.get("metric") or "best", query.get("conf") or "std"
-            )
-        )
-
-    def _api_insertion_rates(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves insertion rates for a ``run`` (index), a ``group`` (name) or every group.
-
-        Args:
-            match: The matched route.
-            query: The query parameters.
-
-        Returns:
-            None.
-        """
-
-        run_index = (
-            _query_int(query, "run", -1, minimum=0) if query.get("run") else None
-        )
-        self._send_json(
-            self.server.viewer.insertion_rates_payload(
-                run_index=run_index, group=query.get("group") or None
-            )
-        )
-
-    def _api_run(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves one run's description.
-
-        Args:
-            match: The matched route (the run index).
-            query: The query parameters.
-
-        Returns:
-            None.
-        """
-
-        self._send_json(self.server.viewer.run_payload(int(match.group(1))))
-
-    def _api_genomes(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves a page of a run's genomes.
-
-        Args:
-            match: The matched route (the run index).
-            query: Sort, paging and filter parameters.
-
-        Returns:
-            None.
-        """
-
-        self._send_json(self.server.viewer.genomes_payload(int(match.group(1)), query))
-
-    def _api_points(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves a run's progress-chart points (``y`` parameter).
-
-        Args:
-            match: The matched route (the run index).
-            query: The query parameters.
-
-        Returns:
-            None.
-        """
-
-        self._send_json(
-            self.server.viewer.points_payload(
-                int(match.group(1)), query.get("y") or "loss"
-            )
-        )
-
-    def _api_genealogy(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves a run's points and parent links (``y`` parameter).
-
-        Args:
-            match: The matched route (the run index).
-            query: The query parameters.
-
-        Returns:
-            None.
-        """
-
-        self._send_json(
-            self.server.viewer.genealogy_payload(
-                int(match.group(1)), query.get("y") or "loss"
-            )
-        )
-
-    def _api_history(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves a run's search-progress history.
-
-        Args:
-            match: The matched route (the run index).
-            query: The query parameters.
-
-        Returns:
-            None.
-        """
-
-        self._send_json(self.server.viewer.history_payload(int(match.group(1))))
-
-    def _api_operators(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves a run's operator insert-type counts.
-
-        Args:
-            match: The matched route (the run index).
-            query: The query parameters.
-
-        Returns:
-            None.
-        """
-
-        self._send_json(self.server.viewer.operators_payload(int(match.group(1))))
-
-    def _api_compare(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves a comparison of genomes ``a`` and ``b``.
-
-        Args:
-            match: The matched route (the run index).
-            query: The query parameters, which must include ``a`` and ``b``.
-
-        Returns:
-            None.
-
-        Raises:
-            ValueError: If ``a`` or ``b`` is missing.
-        """
-
-        if not query.get("a") or not query.get("b"):
-            raise ValueError(
-                "Give the two genomes to compare as ?a=<number>&b=<number>."
-            )
-        genome_a = _query_int(query, "a", 0, minimum=0)
-        genome_b = _query_int(query, "b", 0, minimum=0)
-        self._send_json(
-            self.server.viewer.compare_payload(int(match.group(1)), genome_a, genome_b)
-        )
-
-    def _api_genome(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves one genome's details.
-
-        Args:
-            match: The matched route (run index and genome number).
-            query: The query parameters.
-
-        Returns:
-            None.
-        """
-
-        self._send_json(
-            self.server.viewer.genome_payload(int(match.group(1)), int(match.group(2)))
-        )
-
-    def _api_genome_json(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves a genome's JSON as a file download.
-
-        Args:
-            match: The matched route (run index and genome number).
-            query: The query parameters.
-
-        Returns:
-            None.
-        """
-
-        genome_number = int(match.group(2))
-        body = self.server.viewer.genome_json(int(match.group(1)), genome_number)
-        self._send_bytes(
-            body, "application/json", filename=f"genome_{genome_number}.json"
-        )
-
-    def _api_genome_image(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves a genome's rendered diagram or training plot.
-
-        Args:
-            match: The matched route (run index, genome number and image kind).
-            query: The query parameters.
-
-        Returns:
-            None.
-
-        Raises:
-            KeyError: If the image could not be drawn.
-        """
-
-        kind = match.group(3)
-        image = self.server.viewer.image(int(match.group(1)), int(match.group(2)), kind)
-        if image is None:
-            if kind == "training":
-                raise KeyError("This genome recorded no training metrics to plot.")
-            raise KeyError("This genome's diagram could not be drawn.")
-        self._send_bytes(image, "image/png", cache=True)
-
-    def _api_ancestry(self, match: re.Match[str], query: dict[str, str]) -> None:
-        """Serves a genome's ancestry graph (``depth`` parameter).
-
-        Args:
-            match: The matched route (run index and genome number).
-            query: The query parameters.
-
-        Returns:
-            None.
-        """
-
-        depth = _query_int(
-            query,
-            "depth",
-            DEFAULT_ANCESTRY_DEPTH,
-            minimum=1,
-            maximum=MAX_ANCESTRY_DEPTH,
-        )
-        self._send_json(
-            self.server.viewer.ancestry_payload(
-                int(match.group(1)), int(match.group(2)), depth
-            )
-        )
-
-    # ------------------------------------------------------------------
-    # Responses
-    # ------------------------------------------------------------------
-
-    def _send_static(self, name: str) -> None:
-        """Serves a file from the static directory.
-
-        Args:
-            name: The file name (no directories).
-
-        Returns:
-            None.
-
-        Raises:
-            KeyError: If there is no such static file.
-        """
-
-        path = STATIC_DIRECTORY / name
-        if not _STATIC_NAME.fullmatch(name) or not path.is_file():
-            raise KeyError(f"There is no static file {name!r}.")
-        self._send_bytes(
-            path.read_bytes(),
-            _CONTENT_TYPES.get(path.suffix, "text/plain; charset=utf-8"),
-        )
-
-    def _send_json(self, payload: Any, status: HTTPStatus = HTTPStatus.OK) -> None:
-        """Sends a JSON response.
-
-        Args:
-            payload: The value to encode (see :func:`json_safe`).
-            status: The HTTP status.
-
-        Returns:
-            None.
-        """
-
-        body = json.dumps(json_safe(payload), allow_nan=False).encode("utf-8")
-        self._send_bytes(body, "application/json", status=status)
-
-    def _send_error(self, status: HTTPStatus, message: str) -> None:
-        """Sends an error, as JSON for API requests and plain text otherwise.
-
-        Args:
-            status: The HTTP status.
-            message: What went wrong.
-
-        Returns:
-            None.
-        """
-
-        try:
-            if self.path.startswith("/api/"):
-                self._send_json({"error": message}, status=status)
-            else:
-                self._send_bytes(
-                    message.encode("utf-8"), "text/plain; charset=utf-8", status=status
-                )
-        except (BrokenPipeError, ConnectionResetError):
-            pass
-
-    def _send_bytes(
-        self,
-        body: bytes,
-        content_type: str,
-        status: HTTPStatus = HTTPStatus.OK,
-        filename: str | None = None,
-        cache: bool = False,
-    ) -> None:
-        """Sends a response body.
-
-        Args:
-            body: The response bytes.
-            content_type: The ``Content-Type`` header.
-            status: The HTTP status.
-            filename: When given, the response is offered as a download with this
-                file name.
-            cache: Whether the browser may cache the response.
-
-        Returns:
-            None.
-        """
-
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "max-age=3600" if cache else "no-store")
-        if filename is not None:
-            self.send_header(
-                "Content-Disposition", f'attachment; filename="{filename}"'
-            )
-        self.end_headers()
-        self.wfile.write(body)
-
-
-class ArtifactViewerServer(ThreadingHTTPServer):
-    """The viewer's HTTP server, carrying the :class:`ArtifactViewer` it serves.
-
-    Attributes:
-        viewer: The data served by the API.
-    """
-
-    daemon_threads = True
-
-    def __init__(self, address: tuple[str, int], viewer: ArtifactViewer) -> None:
-        """Binds the server.
-
-        Args:
-            address: The ``(host, port)`` to listen on; port ``0`` picks a free
-                port.
-            viewer: The data to serve.
-        """
-
-        super().__init__(address, ViewerRequestHandler)
-        self.viewer = viewer
-
-
-def serve(
-    runs: list[str] | None = None,
-    directory: str | None = None,
-    groups: list[str] | None = None,
-    host: str = "127.0.0.1",
-    port: int = 8000,
-    open_browser: bool = False,
-    render_processes: int = 1,
-    rescan_interval: float = RESCAN_INTERVAL_SECONDS,
-) -> None:
-    """Serves the dashboard until interrupted.
-
-    Args:
-        runs: Run output directories (or their archive files) to serve; a run
-            whose archive has not been written yet (even one whose directory
-            does not exist yet) appears once it is.
-        directory: A directory to watch instead: every run below it is served,
-            including runs started while the dashboard is running.
-        groups: Substrings grouping runs for comparison.
-        host: The address to listen on.
-        port: The port to listen on (``0`` picks a free port).
-        open_browser: Whether to open the dashboard in a web browser.
-        render_processes: Worker processes rendering images.
-        rescan_interval: The least time between scans for new runs, in seconds.
-
-    Returns:
-        None. Runs until interrupted with Ctrl+C.
-
-    Raises:
-        ValueError: If both or neither of ``runs`` and ``directory`` are given.
-        FileNotFoundError: If the watched directory does not exist.
-        NotADirectoryError: If the watched path is not a directory.
-        OSError: If the server cannot listen on ``host:port``.
-    """
-
-    registry = RunRegistry(
-        run_directories=runs,
-        watch_directory=directory,
-        groups=groups,
-        rescan_interval=rescan_interval,
-    )
-
-    renderer = RenderService(processes=render_processes)
-    try:
-        server = ArtifactViewerServer((host, port), ArtifactViewer(registry, renderer))
-    except OSError:
-        renderer.close()
-        raise
-    url = f"http://{host}:{server.server_address[1]}/"
-
-    if registry.watch_directory is not None:
-        logger.info(
-            "Watching {} for runs ({} found so far), serving at {} -- press Ctrl+C to stop.",
-            registry.watch_directory,
-            len(registry.runs),
-            url,
-        )
-    else:
-        logger.info(
-            "Serving {} run(s) at {} -- press Ctrl+C to stop.", len(registry.runs), url
-        )
-        waiting = registry.source()["waiting"]
-        if waiting:
-            logger.info(
-                "Waiting for {} to be written in: {}",
-                ARCHIVE_FILENAME,
-                ", ".join(waiting),
-            )
-    if open_browser:
-        webbrowser.open(url)
-
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        logger.info("Stopping the dashboard.")
-    finally:
-        server.server_close()
-        renderer.close()

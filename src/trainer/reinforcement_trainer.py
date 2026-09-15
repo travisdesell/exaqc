@@ -101,6 +101,7 @@ from types import SimpleNamespace
 from typing import Any, Callable, Optional
 
 import math
+import secrets
 import numpy as np
 import torch
 
@@ -458,7 +459,11 @@ def greedy_action(
 #:     gamma: Reward discount factor.
 #:     max_steps: Maximum number of steps per episode.
 #:     eval_episodes: Number of episodes used for greedy evaluation.
-#:     seed: Base random seed.
+#:     seed: Base random seed for training and evaluation episodes, or ``None``
+#:         (the default) to draw a fresh random seed each time a genome's
+#:         hyperparameters are resolved, so genomes do not all train and get
+#:         scored on the same episodes. :meth:`ReinforcementLearningTrainer.train`
+#:         records the seed a genome used in its ``training_seed`` metadata.
 #:     log_every: Logging / evaluation frequency, in episodes.
 #:     ema_alpha: Smoothing factor for the exponential moving average (EMA) of
 #:         episode returns reported as the training return mean. Each episode
@@ -488,7 +493,7 @@ RL_HYPERPARAMETER_DEFAULTS: dict[str, Any] = {
     "gamma": 0.99,
     "max_steps": 500,
     "eval_episodes": 10,
-    "seed": 0,
+    "seed": None,
     "log_every": 10,
     "ema_alpha": 0.01,
     "baseline": "mean",
@@ -723,8 +728,12 @@ class ReinforcementLearningTrainer(ABC):
         parser.add_argument(
             "--seed",
             type=int,
-            default=0,
-            help="Base random seed for the environment, PyTorch, and NumPy.",
+            default=None,
+            help=(
+                "Base random seed for the environment, PyTorch, and NumPy. By default each genome "
+                "draws its own random seed (recorded as training_seed in its metadata); give a "
+                "seed to train every genome on the same episodes."
+            ),
         )
 
         parser.add_argument(
@@ -802,16 +811,24 @@ class ReinforcementLearningTrainer(ABC):
         Returns:
             A fresh :class:`types.SimpleNamespace` with one attribute per key of
             :data:`RL_HYPERPARAMETER_DEFAULTS` (so fields are accessed as
-            ``hp.episodes``, ``hp.gamma``, and so on).
+            ``hp.episodes``, ``hp.gamma``, and so on). A ``seed`` that is
+            ``None`` is replaced by a freshly drawn random seed, so every
+            resolution can seed episodes directly.
         """
 
         source = getattr(genome, "hyperparameters", {}) or {}
-        return SimpleNamespace(
+        hp = SimpleNamespace(
             **{
                 name: source.get(name, default)
                 for name, default in RL_HYPERPARAMETER_DEFAULTS.items()
             }
         )
+        if hp.seed is None:
+            # Drawn from the operating system rather than Python's, NumPy's or
+            # PyTorch's generators, which training reseeds: a seed derived from
+            # those could repeat from one genome to the next.
+            hp.seed = secrets.randbits(31)
+        return hp
 
     def policy_logits(
         self, genome: CircuitGenome, environment: RLEnvironment, observation: Any
@@ -894,7 +911,9 @@ class ReinforcementLearningTrainer(ABC):
         :meth:`run_update`), evaluates periodically, and restores the
         best-evaluated weights. On completion the genome's ``metadata``
         contains ``training_episode_metrics`` (per-episode returns),
-        ``best_training_metrics`` and ``best_validation_metrics``.
+        ``best_training_metrics``, ``best_validation_metrics`` and the
+        ``training_seed`` its episodes were seeded from (drawn at random unless
+        the genome's hyperparameters fix a ``seed``).
 
         Args:
             genome: The genome to train (its model is initialized here).
@@ -917,6 +936,8 @@ class ReinforcementLearningTrainer(ABC):
 
         genome.initialize_model()
 
+        # recorded so a genome's training episodes can be reproduced later
+        genome.metadata["training_seed"] = hp.seed
         torch.manual_seed(hp.seed)
         np.random.seed(hp.seed)
 

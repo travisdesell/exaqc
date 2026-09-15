@@ -58,6 +58,7 @@ classical layers train together with ordinary backpropagation and the standard P
   - [evaluate](#evaluate)
   - [visualize_rl](#visualize_rl)
   - [exaqc_dashboard](#exaqc_dashboard)
+  - [exaqc_mcp](#exaqc_mcp)
   - [classical_image_classification](#classical_image_classification)
   - [reinforcement_learning_fixed](#reinforcement_learning_fixed)
 - [Reproducing 2026 PPSN results](#reproducing-2026-ppsn-results)
@@ -470,11 +471,11 @@ However many genomes a run evaluates, its directory holds the same files:
 
 | File | Contents |
 |---|---|
-| `genomes.sqlar` | Every evaluated genome's JSON, plus a summary and parent links for each, for sorting and tracing ancestry |
+| `genomes.sqlar` | Every evaluated genome's JSON, plus a summary and parent links for each (for sorting and tracing ancestry), how the population changed after every insertion, and what produced the run: its command line, git commit, host and library versions, and for an island search how its islands are connected |
 | `best_fitness.json`, `best_fitness.png`, `best_fitness_training.png` | The best genome by the population's ranking (lowest `fitness["loss"]`): its JSON, architecture diagram and training plot, overwritten whenever it improves |
 | `best_target_metric.json`, `best_target_metric.png`, `best_target_metric_training.png` | The same for the highest `fitness["target_metric"]` |
-| `exaqc_history.csv`, `exaqc_curves.png` | Population fitness and size statistics after every insertion, and a plot of them |
 | `run.log` | The run's log |
+| `annotations.sqlite` | Notes and tags on the run and its genomes, written only by the [dashboard](#exaqc_dashboard) or the [MCP interface](#exaqc_mcp) when started with `--allow_annotations` (a search never creates it, and nothing writes annotations into `genomes.sqlar`) |
 
 A genome rejected as a duplicate of a better genome already in a steady-state
 population is not recorded. Nor is genome 1, the empty seed circuit every initial
@@ -500,6 +501,26 @@ and [`visualize_rl`](#visualize_rl)) take a genome either as a JSON file
 genomes.sqlar> --genome_number <n>`), and the analysis scripts read archives as
 well as the `all_genomes/` directories of older runs.
 
+An archive is also an ordinary database, so a run can be queried directly. Each
+genome's `loss` and `target_metric` are indexed columns generated from its stored
+fitness, which keeps ranking queries fast however long the run is:
+
+```
+sqlite3 ./artifacts/iris/genomes.sqlar "select genome_number, loss from genomes order by loss limit 5"
+sqlite3 ./artifacts/iris/genomes.sqlar "select step, added, removed from population_events"
+```
+
+The search's progress is not stored as a fixed set of statistics. `population_events`
+records only which genomes entered and left the population at each insertion, so the
+population at any step is everything added up to it minus everything removed. Every
+population statistic is then recomputed from the genomes themselves, which is what
+lets progress be charted against any metric a run recorded -- a loss, a return, a
+fidelity, a gate count -- rather than only the handful a search would have had to
+choose in advance, while it was still running. Each genome's summary row also carries `n_cnot` and `n_rot`
+(its circuit complexity once decomposed) and `final_metrics` (the last value of every
+per-epoch or per-episode metric it recorded). [`exaqc_mcp`](#exaqc_mcp) exposes the
+same queries to an agent.
+
 ---
 
 ## [`Examples`](./src/examples)
@@ -514,7 +535,7 @@ Common to the evolutionary entry points:
 | Argument | Default | Description |
 |---|---|---|
 | `--device` | `cpu` | PyTorch device |
-| `--seed` | `0` | Random seed |
+| `--seed` | `0` (`reinforcement_learning`: random) | Random seed; see [`reinforcement_learning`](#reinforcement_learning) for how it seeds training there |
 | `--logging_level` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
 
 ### [`classification`](./src/examples/classification.py)
@@ -673,7 +694,8 @@ environments work only with `reinforce`, `actor_critic`/`a2c` and `ppo`.
 | `--log_every` | `10` | Evaluate and log every N episodes |
 | `--improvement_cutoff` | `30` | Episodes without an improved evaluation before stopping, 0 to disable |
 | `--ema_alpha` | `0.05` | Smoothing for the reported training return |
-| `--train_vs_validation_bias`, `-tvb` | `0.01` | Weight of training return vs. evaluation return in fitness |
+| `--train_vs_validation_bias`, `-tvb` | `0.1` | Weight of the training return in fitness: `loss = -(tvb × training return + (1 − tvb) × evaluation return)` |
+| `--seed` | random | Base seed for a genome's training and evaluation episodes. By default each genome draws its own (recorded as `training_seed` in its metadata), so genomes are not all selected on the same episodes; give a seed to train every genome on the same ones |
 | `--map_name` / `--is_slippery` | `4x4` / off | FrozenLake only |
 
 Plus the per-algorithm arguments in [Trainers](#trainers).
@@ -682,7 +704,11 @@ Plus the per-algorithm arguments in [Trainers](#trainers).
 `actor_critic`/`a2c`/`ppo`), which the entry point sizes automatically from the
 environment — so use `--decoding linear` for those algorithms. `cartpole` is the
 fastest environment to sanity-check a configuration. Fitness records
-`train_return_mean`, `eval_return_mean` and `best_episode_return`.
+`train_return_mean`, `eval_return_mean` and `best_episode_return`. Genomes are
+ranked by `loss`, which weights the evaluation return (greedy episodes on the
+best checkpoint) far above the smoothed training return by default: the training
+return is a short, noisy sample, so ranking mostly on it selects genomes that got
+lucky episodes rather than ones whose policies evaluate well.
 
 ### [`refine_genome`](./src/examples/refine_genome.py)
 
@@ -785,14 +811,30 @@ Then open `http://127.0.0.1:8000/` in a browser. The page has:
 
 - **Runs**: every run found, with its task, genome count, best `loss` and
   `target_metric`, and whether it is still being written.
-- **A run's page**: on the left, the run's search progress (the population's
-  best, top-k mean and mean fitness per insertion, when the run recorded them;
-  untick *search progress* to hide it) above a chart of every genome, with genome number
-  running down it and a chosen fitness key across it, better values to the right
-  (so `loss` runs high to low and `target_metric` low to high). Genomes are colored by
+- **A run's page**: on the left, the run's search progress (the best, mean and
+  worst of a chosen metric across the population at each insertion; untick
+  *search progress* to hide it) above a chart of every genome, with genome number
+  running down it and a chosen metric across it, better values to the right
+  (so `loss` runs high to low and `target_metric` low to high). Neither chart is
+  limited to fitness: both pick from the run's fitness keys, its genomes' circuit
+  size and complexity (`n_enabled_gates`, `n_cnot`, `n_rot`) and any metric its
+  task recorded while training, so a classification run can be charted by
+  validation loss or mean class accuracy and a reinforcement-learning one by
+  episode return. Training and validation series stay separate. A task that
+  records a per-class breakdown contributes one entry per class per statistic,
+  which would bury the handful of metrics anyone charts, so the pickers offer the
+  shorter list until *all metrics* asks for the rest — nothing is hidden from a
+  query, only from the dropdown. Genomes are colored by
   insert type, operator family or island, with a line joining the genomes that
   improved the best value and every parent-to-child link in the run (links fade
-  as they crowd the chart, so runs of tens of thousands of genomes stay legible). The
+  as they crowd the chart, so runs of tens of thousands of genomes stay legible).
+  Coloring by island gives each island its own color only while there are no
+  more than seven; beyond that the chart colors around one *focus* island
+  instead (a run with fewer islands can choose to as well). The focus follows
+  the selected genome's island (the best genome's until one is selected) unless
+  an island is picked from the *focus* menu. Its genomes get one color, the
+  islands it draws parents from (its neighbors in `--topology`) a second, and
+  every other island is gray. The
   **Progress** view emphasizes the best-so-far line and the **Genealogy** view the
   links; either can highlight a genome's full lineage or hide genomes that had no
   children. On the right, a sortable, filterable table of the genomes that loads
@@ -806,7 +848,29 @@ Then open `http://127.0.0.1:8000/` in a browser. The page has:
   in the chart, clears the selection) opens its details above the
   table: its diagram, training plot, fitness, gates,
   parents, children, ancestry graph and ready-to-run `refine_genome` /
-  `visualize_rl` / `evaluate` commands.
+  `visualize_rl` / `evaluate` commands, with a **Download JSON** button for the
+  genome itself. A **Metrics** tab lists whatever the genome recorded while
+  training, one table per series: per-epoch training and validation metrics for
+  classification and teacher genomes, per-episode training and evaluation
+  metrics for reinforcement learning. Nothing is hard-coded per task — nested
+  values such as a per-class accuracy breakdown are flattened into columns like
+  `mean_class_accuracy.mean`, and long histories show their first and last rows
+  with a toggle for the rest. A **Notes** tab shows the genome's tags and notes,
+  and a **Run notes** section at the foot of the run's header holds notes about
+  the run as a whole. Each shows whether it was written from the dashboard or by
+  an agent over MCP, by whom (if a name was given) and when. Notes are
+  append-only; a removed tag disappears from the chips but its history (who added
+  and removed it, and when) is kept. Adding either needs `--allow_annotations`;
+  without it they are shown read-only. An island search also has an **Island
+  topology** section: its islands laid out by `--topology` (a tree as a
+  hierarchy, a 2-D mesh as its grid, a star around its hub, a ring or fully
+  connected graph as a circle, and a random graph by a force-directed layout),
+  each shaded by its best value of the charted metric, with every connection as
+  wide as the number of genomes bred on one of its islands from a parent on the
+  other. Rings mark the chart's focus island and its neighbors, and clicking an
+  island colors the chart around it. While a genome is selected (and *highlight
+  selected lineage* is on), arrows show where its ancestry crossed between
+  islands.
 - **Insertion rates**: for one run, one group (summed over its runs, then each
   run on its own) or every group side by side, the share of each operator's
   genomes that became a global best or a local best, were inserted or were
@@ -816,8 +880,18 @@ Then open `http://127.0.0.1:8000/` in a browser. The page has:
   page and the run comparison.
 - **Compare genomes**: two genomes' diagrams, fitness, hyperparameters and gates
   (matched by innovation number) side by side.
-- **Compare runs**: the mean and spread of each group's search history, and a
-  summary of each group's best genomes.
+- **Compare runs**: the mean and spread of each group's progress on a chosen
+  metric — `target_metric` unless the runs did not record it, then `loss` —
+  offering the same shorter metric list, and *all metrics* toggle, as a run's
+  page. Also a summary of each group's best genomes. A run records a step only
+  when its population changed, so runs are not aligned on the steps they happen
+  to share (which for long runs is almost none): every step is kept and each run
+  carries its last value forward, which is exact rather than interpolated -- a
+  step with no row is a step where that run's population did not change. Each run
+  counts only across its own lifetime, joining the average as it reaches a step
+  and dropping out past the last step it recorded, so a search still in progress
+  is never averaged in as though it had levelled off at an insertion it has not
+  reached.
 
 | Argument | Default | Description |
 |---|---|---|
@@ -827,13 +901,88 @@ Then open `http://127.0.0.1:8000/` in a browser. The page has:
 | `--host` | `127.0.0.1` | Address to serve on |
 | `--port` | `8000` | Port to serve on (`0` picks a free port) |
 | `--open_browser` | off | Open the page in a web browser once it is running |
+| `--mcp` | on | Also serve the [MCP interface](#exaqc_mcp) at `/mcp`, so an agent can query the same runs over the same port (`--no-mcp` turns it off) |
+| `--allow_annotations` | off | Let the page and its MCP interface write notes and tags, kept in each run's `annotations.sqlite` beside its archive (the archive itself is never written) |
 | `--logging_level` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
+
+The dashboard has no login: with `--allow_annotations`, anyone who can reach its
+port can write notes and tags. Keep it on the default `--host 127.0.0.1` and
+reach it through an SSH tunnel (below) rather than serving it on a shared
+network; the dashboard warns when annotations are allowed on any other address.
+Writes must come from the dashboard's own page (or an MCP client), so another
+web site open in the same browser cannot post them.
 
 To view runs on a cluster, start the dashboard there and forward its port from your
 own machine, then open the same address locally:
 
 ```
 ssh -L 8000:localhost:8000 <cluster login node>
+```
+
+The same tunnel carries the MCP endpoint, so an agent on your laptop can analyze
+runs on the cluster by pointing at `http://localhost:8000/mcp`.
+
+### [`exaqc_mcp`](./src/examples/exaqc_mcp.py)
+
+Serves the dashboard's analysis tools to an agent over the
+[Model Context Protocol](https://modelcontextprotocol.io), so a language model
+can query runs, compute statistics and assemble tables without a script being
+written for each question. It is the same tool layer the dashboard mounts at
+`/mcp`; this entry point runs it on standard input and output instead, for an
+agent running on the same machine as the archives.
+
+```
+python3 -m src.examples.exaqc_mcp --runs ./artifacts/iris
+python3 -m src.examples.exaqc_mcp --directory ./2026_ppsn_exaqc --groups iris wine
+```
+
+Archives are **never written**: they are opened read-only, so it is safe to point
+at a search that is still running. The one thing an agent can write is
+annotations — notes on a run or genome, and tags on a genome — and only when
+started with `--allow_annotations`. They go to each run's `annotations.sqlite`
+beside its archive (created on the first write), marked as written over MCP.
+
+The tools are `list_runs`, `describe_run`, `list_genomes`, `get_genome`,
+`genome_metrics`, `compare_genomes`, `genome_lineage`, `fitness_summary`,
+`operator_insertion_rates`, `progress_series`, `gate_statistics`, `compare_runs`,
+`list_annotations`, `describe_schema`, `query_sql` and `export_query`, plus
+`add_note`, `tag_genome` and `untag_genome` under `--allow_annotations`
+(`list_annotations` shows removed tags when `include_removed` is set). The first
+fourteen answer
+common questions with typed arguments (`genome_metrics` returns a genome's
+recorded training history, each series keyed by its own epoch or episode column;
+`list_runs` leaves out each run's command line unless `include_command_line` is
+set, while `describe_run` always shows it); `query_sql` runs a single read-only
+`SELECT` against one run's archive, or against several runs rolled into one
+database, for questions the typed tools do not cover. A roll-up holds each run's
+`genomes`, `genome_parents`, `population_events` and `run_info`, every table with
+a `run` column, and both kinds of query can read a `genome_operators` view with
+one row per operator that generated a genome, and the run's annotations as
+`notes` and `genome_tags` tables (a tag still applied has a null `removed_at`),
+so a query can, for example, pick out every genome tagged `promising`. Results are capped (at most 200
+rows, series downsampled) and most carry a link into the dashboard showing the
+same view. `export_query` is the exception to the cap: it runs the same
+statements for a client collecting data to analyze itself, returning pages of up
+to 50,000 rows as CSV or JSON, each with the `next_offset` to request next.
+A run's `run_info` also records `operator_selection` -- the mutation weights,
+crossover rates and mutation/parent count strategies its search drew operators
+with -- so the operator rates its genomes show can be compared against what was
+configured (runs archived before this was added do not have it).
+
+| Argument | Default | Description |
+|---|---|---|
+| `--runs` | one of `--runs` / `--directory` is required | Run output directories (or their `genomes.sqlar` files) to serve |
+| `--directory` | one of `--runs` / `--directory` is required | A directory to watch: every run below it is served, including runs started later |
+| `--groups` | — | Substrings grouping runs for comparison, as in the analysis scripts |
+| `--dashboard_url` | `http://127.0.0.1:8000` | Base URL used for the dashboard links in results |
+| `--allow_annotations` | off | Offer the tools that write notes and tags, kept in each run's `annotations.sqlite` beside its archive (the archive itself is never written) |
+| `--logging_level` | `WARNING` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`; logs go to stderr, since stdout carries the protocol |
+
+To use it from Claude Code, register it as an MCP server running this command
+from the repository root:
+
+```
+claude mcp add exaqc -- python3 -m src.examples.exaqc_mcp --directory ./artifacts
 ```
 
 ### [`classical_image_classification`](./src/examples/classical_image_classification.py)

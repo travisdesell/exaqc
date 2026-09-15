@@ -18,7 +18,7 @@ matplotlib.use("Agg")
 
 import os  # noqa: E402
 from typing import Any  # noqa: E402
-from unittest.mock import MagicMock, call  # noqa: E402
+from unittest.mock import MagicMock, call, patch  # noqa: E402
 
 import pytest  # noqa: E402
 
@@ -29,7 +29,7 @@ from src.circuits.pennylane_gate_specifications import (  # noqa: E402
     pennylane_gate_specifications,
 )
 from src.evolution import master_worker  # noqa: E402
-from src.evolution.exaqc import EXAQC  # noqa: E402
+from src.evolution.exaqc import EXAQC, MUTATION_WEIGHTS  # noqa: E402
 from src.evolution.population_strategy import PopulationStrategy  # noqa: E402
 from src.evolution.steady_state_islands import SteadyStateIslands  # noqa: E402
 from src.evolution.steady_state_population import SteadyStatePopulation  # noqa: E402
@@ -170,9 +170,75 @@ def test_run_info_is_recorded_when_the_search_starts() -> None:
     assert "command_line" in info and "start_time" in info
     assert info["seed_genome_number"] == 1
 
+    # how operators were drawn, so observed operator rates can be compared
+    # against what the search was configured to do
+    selection = info["operator_selection"]
+    assert selection["mutation_weights"] == MUTATION_WEIGHTS
+    assert set(selection["crossover_rates"]) == {
+        "binary_crossover",
+        "n_ary_crossover",
+        "exponential_crossover",
+    }
+    assert selection["mutation_strategy"] == ["uniform", "1", "2"]
+    assert selection["parent_strategy"] == ["uniform", "2", "3"]
+
+    # a single population has no islands to describe
+    assert "island_topology" not in info
+
+
+def test_island_topology_is_recorded_when_the_search_starts() -> None:
+    """An island search records which islands each island draws parents from."""
+
+    archive = MagicMock()
+    population = SteadyStateIslands(
+        n_islands=3, max_island_size=2, compare=compare, topology=["ring"]
+    )
+    build_search(population, archive)
+
+    info = archive.set_run_info.call_args.kwargs
+    assert info["island_topology"] == {
+        "topology": ["ring"],
+        "neighbors": [[1, 2], [0, 2], [1, 0]],
+    }
+
+
+def test_mutations_are_drawn_from_the_weighted_list() -> None:
+    """mutate draws from the weights expanded in their fixed order.
+
+    The expansion must match the list the search always drew from, element for
+    element, so recording the weights did not change which mutation a seeded
+    search picks.
+    """
+
+    search = build_search(
+        SteadyStatePopulation(max_population_size=4, compare=compare), MagicMock()
+    )
+    expected = (
+        ["add_gate"] * 11
+        + ["reorder_gate"] * 2
+        + ["qubit_swap"] * 2
+        + ["enable_gate"]
+        + ["disable_gate"] * 2
+        + ["clone"] * 2
+        + ["mutate_some_weights"] * 2
+        + ["mutate_all_weights"] * 2
+    )
+    drawn_from: list[list[str]] = []
+
+    def choose(options: list[str]) -> str:
+        """Records the options offered and picks clone, which always succeeds."""
+        drawn_from.append(list(options))
+        return "clone"
+
+    with patch("src.evolution.exaqc.random.choice", side_effect=choose):
+        child = search.mutate(search.initial_genome, {}, n_mutations=2)
+
+    assert drawn_from == [expected, expected]
+    assert child.metadata["generated_by"] == ["clone", "clone"]
+
 
 def test_inserted_genomes_are_archived_in_insertion_order() -> None:
-    """Every recorded genome is archived, with a history row after each."""
+    """Every recorded genome is archived, with a population delta after each."""
 
     archive = MagicMock()
     search = build_search(
@@ -191,9 +257,9 @@ def test_inserted_genomes_are_archived_in_insertion_order() -> None:
         call(genomes[1], insertion=2, island=None),
     ]
     assert [
-        recorded.kwargs["step"] for recorded in archive.record_history.call_args_list
+        recorded.kwargs["step"] for recorded in archive.record_population.call_args_list
     ] == [1, 2]
-    snapshot = archive.record_history.call_args_list[-1].kwargs["population"]
+    snapshot = archive.record_population.call_args_list[-1].kwargs["population"]
     assert [genome.genome_number for genome in snapshot] == [2, 1]
 
 
@@ -207,12 +273,10 @@ def test_best_files_are_rewritten_only_when_a_best_changes() -> None:
 
     search.insert_genome(FakeGenome(1, loss=1.0, target_metric=0.5))
     assert best_writes(archive) == [(1, "fitness"), (1, "target_metric")]
-    assert archive.plot_history.call_count == 1
 
     archive.reset_mock()
     search.insert_genome(FakeGenome(2, loss=2.0, target_metric=0.4))
     assert best_writes(archive) == []
-    archive.plot_history.assert_not_called()
 
     archive.reset_mock()
     search.insert_genome(FakeGenome(3, loss=0.5, target_metric=0.3))
@@ -243,7 +307,7 @@ def test_rejected_duplicates_are_not_archived() -> None:
 
     archive.add_genome.assert_not_called()
     archive.write_current_best.assert_not_called()
-    archive.record_history.assert_not_called()
+    archive.record_population.assert_not_called()
     assert search.inserted_genomes == 2
     assert search.target_metric_best_genome.genome_number == 1
     assert [genome.genome_number for genome in population.get_population()] == [1]
@@ -269,8 +333,8 @@ def test_island_genomes_are_archived_with_their_island() -> None:
     assert sorted(islands) == [0, 0, 1, 1]
     assert [genome.metadata["island_id"] for genome in genomes] == islands
 
-    # the history snapshot merges the islands into one ranking, best first
-    snapshot = archive.record_history.call_args_list[-1].kwargs["population"]
+    # the population snapshot merges the islands into one ranking, best first
+    snapshot = archive.record_population.call_args_list[-1].kwargs["population"]
     assert [genome.genome_number for genome in snapshot] == [1, 2, 3, 4]
 
 
@@ -387,14 +451,15 @@ def test_a_real_search_writes_a_fixed_set_of_files(tmp_path) -> None:
         "best_fitness.png",
         "best_target_metric.json",
         "best_target_metric.png",
-        "exaqc_history.csv",
-        "exaqc_curves.png",
     }
 
     with GenomeArchive.open_readonly(str(run_dir)) as reader:
         stored = dict(reader.iter_genome_dicts())
         assert reader.count() == len(stored) >= 1
-        assert reader.run_info()["task_target"] == "iris"
+        info = reader.run_info()
+        assert info["task_target"] == "iris"
+        # the operator selection survives the archive's JSON round trip intact
+        assert info["operator_selection"]["mutation_weights"] == MUTATION_WEIGHTS
 
     best_number = min(stored)
     restored = CircuitGenome.from_dict(stored[best_number])

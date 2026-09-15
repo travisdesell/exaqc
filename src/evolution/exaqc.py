@@ -32,6 +32,24 @@ from src.evolution.objective import Objective
 from src.evolution.population_strategy import PopulationStrategy
 from src.utils.genome_archive import GenomeArchive
 
+#: How likely each mutation is to be chosen, as integer weights: a mutation is
+#: drawn uniformly from a list holding each name ``weight`` times, so ``add_gate``
+#: is picked 11/24 (~46%) of the time, ``enable_gate`` 1/24 (~4%) and the rest
+#: 2/24 (~8%) each. A drawn mutation that cannot modify the child is redrawn, so
+#: the operators a genome records follow these weights only approximately. The
+#: order is kept fixed so a seeded search draws the same mutations. Recorded in
+#: each archive's ``run_info`` as part of ``operator_selection``.
+MUTATION_WEIGHTS: dict[str, int] = {
+    "add_gate": 11,
+    "reorder_gate": 2,
+    "qubit_swap": 2,
+    "enable_gate": 1,
+    "disable_gate": 2,
+    "clone": 2,
+    "mutate_some_weights": 2,
+    "mutate_all_weights": 2,
+}
+
 
 class EXAQC:
 
@@ -293,6 +311,21 @@ class EXAQC:
                 # the empty circuit the initial genomes are mutated from; it is
                 # never evaluated, so it is never stored in the archive
                 seed_genome_number=self.initial_genome.genome_number,
+                # how operators were drawn, so the rates a run's genomes record
+                # can be compared against what the search was configured to do
+                operator_selection={
+                    "mutation_weights": dict(MUTATION_WEIGHTS),
+                    "crossover_rates": {
+                        "binary_crossover": self.binary_crossover_rate,
+                        "n_ary_crossover": self.n_ary_crossover_rate,
+                        "exponential_crossover": self.exponential_crossover_rate,
+                    },
+                    "mutation_strategy": list(self.mutation_strategy),
+                    "parent_strategy": list(self.parent_strategy),
+                },
+                # whatever the population strategy records about itself, such as
+                # how an island search's islands are connected
+                **self.population.run_info(),
             )
 
     def validate_mutation_strategy(self, mutation_strategy: list[str]):
@@ -479,30 +512,29 @@ class EXAQC:
         return self.genome_number
 
     def mutate(
-        self, parent: CircuitGenome, metadata: dict[str, any], n_mutations: int = 1
+        self, parent: CircuitGenome, metadata: dict[str, Any], n_mutations: int = 1
     ) -> CircuitGenome:
         """
         Takes a given parent genome, makes a copy of it (with a new genome number) and
-        then applies a random mutation to it.
+        then applies random mutations to it.
+
+        Each mutation is drawn according to :data:`MUTATION_WEIGHTS`; a draw that
+        does not modify the child is redrawn, and only mutations that modified it
+        are recorded in its ``generated_by`` metadata.
 
         Args:
             parent: is the genome to mutate
+            metadata: is the metadata dict the child takes (e.g. its target island);
+                ``parent_genomes`` and ``generated_by`` are set in it.
+            n_mutations: is how many successful mutations to apply.
 
         Returns:
             A mutated copy of the parent genome as a child.
         """
 
-        # mutation_options = ["add_gate", "disable_gate", "enable_gate", "reorder_gate"]
-        mutation_options = (
-            ["add_gate"] * 11  # 65%
-            + ["reorder_gate"] * 2  # 10%
-            + ["qubit_swap"] * 2  # 10%
-            + ["enable_gate"]  # 5%
-            + ["disable_gate"] * 2  # 10%
-            + ["clone"] * 2  # 10%
-            + ["mutate_some_weights"] * 2
-            + ["mutate_all_weights"] * 2
-        )
+        mutation_options = [
+            name for name, weight in MUTATION_WEIGHTS.items() for _ in range(weight)
+        ]
 
         # only use the gates with which do not still require some validation from us to
         # ensure compatability
@@ -763,9 +795,9 @@ class EXAQC:
         This is the single insertion path for both serial and MPI runs. Once the
         population strategy accepts the genome, it is written to the run's
         archive, the current-best genome files are rewritten if it improved the
-        best genome by fitness or by ``target_metric``, and the search history is
-        recorded. A genome the population rejects as a duplicate of a better one
-        is not recorded.
+        best genome by fitness or by ``target_metric``, and the change to the
+        population is recorded. A genome the population rejects as a duplicate of
+        a better one is not recorded.
 
         Args:
             genome: The evaluated genome to insert.
@@ -806,11 +838,9 @@ class EXAQC:
         if new_target_metric_best:
             self.archive.write_current_best(genome, "target_metric")
 
-        self.archive.record_history(
+        self.archive.record_population(
             step=self.inserted_genomes, population=self.population.get_population()
         )
-        if new_fitness_best or new_target_metric_best:
-            self.archive.plot_history()
 
     def update_target_metric_best(self, genome: CircuitGenome) -> bool:
         """Tracks the best genome by ``fitness["target_metric"]``.

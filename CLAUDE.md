@@ -84,13 +84,26 @@ documented there, and most are also wrapped by a script in
   over runs' `genomes.sqlar` archives, given as `--runs` or found by watching a
   `--directory` (server and static app in `src/utils/artifact_viewer/`). It has
   no wrapper script; it depends on the archive layout, the fitness keys, the
-  history CSV columns, and the insert types and `generated_by` operators its
+  recorded population events, the island topology an island search records in
+  `run_info`, and the insert types and `generated_by` operators its
   insertion-rate tables count (mirroring
   `src.analysis.analyze_genome_generation`).
+- **MCP interface:** `python3 -m src.examples.exaqc_mcp`, which serves the
+  dashboard's analysis tools to an agent over stdio; the dashboard mounts the
+  same tool layer at `/mcp` unless `--no-mcp` is passed. Tools live in
+  `src/utils/artifact_viewer/mcp_tools.py` and are registered in `mcp_app.py`,
+  so a new tool needs a README row and an entry in `tests/test_exaqc_mcp.py`'s
+  `EXPECTED_TOOLS` (or `ANNOTATION_WRITE_TOOLS`, for one that writes). Archives
+  are only ever read. The one write path is annotations (notes and tags, in
+  `src.utils.annotations.AnnotationStore`), kept in an `annotations.sqlite`
+  beside each archive and offered only under `--allow_annotations`, from both
+  the dashboard page and MCP. `query_sql` must stay read-only: it is guarded by
+  a single-statement check *and* a SQLite authorizer, and sees annotations as
+  copied `notes`/`genome_tags` tables rather than by attaching the sidecar.
 - **Analysis:** `python3 -m src.analysis.analyze_genome_generation`.
 
-A search's outputs (`--out_dir`, `--shared_file_system`, `genomes.sqlar`, the
-overwritten `best_*` files and `exaqc_history.csv`) are owned by
+A search's outputs (`--out_dir`, `--shared_file_system`, `genomes.sqlar` and the
+overwritten `best_*` files) are owned by
 `src.utils.genome_archive.GenomeArchive`, so changes to its layout affect every
 search entry point, the single-genome tools, the analysis scripts and the viewer.
 
@@ -171,7 +184,7 @@ for a in m.build_parser()._actions: print(a.dest, a.default, a.choices)"
 ```
 
 `classification`, `teacher`, `reinforcement_learning`, `refine_genome`,
-`exaqc_dashboard` and `classical_image_classification` expose `build_parser()`
+`exaqc_dashboard`, `exaqc_mcp` and `classical_image_classification` expose `build_parser()`
 alongside a `main()`,
 which is the pattern to follow for any new entry point. The rest
 (`reinforcement_learning_fixed`, `evaluate`, `visualize_rl`) still build their
