@@ -16,7 +16,7 @@ import argparse
 import random
 
 from functools import cmp_to_key
-from typing import Callable, Optional
+from typing import Any, Callable
 
 from loguru import logger
 
@@ -24,7 +24,6 @@ from src.circuits.circuit import CircuitGenome
 from src.evolution.island import Island
 from src.evolution.topology import assign_topology
 from src.evolution.population_strategy import PopulationStrategy
-from src.utils.profiler import EXAQCProfiler
 
 
 def island_compare(island1: Island, island2: Island) -> int:
@@ -146,10 +145,7 @@ class SteadyStateIslands(PopulationStrategy):
         islands_to_extinct: int = 2,
         primary_parent: str = "best",
         topology: list[str] = ["fully_connected"],
-        out_dir: str = None,
-        profiler: Optional[EXAQCProfiler] = None,
-        save_training_plot: bool = False,
-    ):
+    ) -> None:
         """
         Creates an island-model population of ``n_islands`` steady-state
         populations, each holding up to ``max_island_size`` genomes sorted by
@@ -188,24 +184,15 @@ class SteadyStateIslands(PopulationStrategy):
                 '2d_mesh <x_dim> <y_dim>' (requires x_dim * y_dim == n_islands),
                 'tree <children per node>', and
                 'random <min_edges> <max_edges>'.
-            out_dir: the directory to write out the best found genomes and log
-                files; if not specified, files are not written.
-            profiler: an optional profiler to record per-insertion population
-                snapshots; created automatically from ``out_dir`` when omitted.
-            save_training_plot: when True, each saved genome also gets a
-                training-history line plot written next to its diagram (see
-                :meth:`CircuitGenome.save_circuit`).
         """
 
         self.n_islands = n_islands
         self.max_island_size = max_island_size
         self.compare = compare
-        self.save_training_plot = save_training_plot
         self.intra_island_crossover_rate = intra_island_crossover_rate
         self.genomes_before_extinction = genomes_before_extinction
         self.genomes_for_next_extinction = genomes_for_next_extinction
         self.islands_to_extinct = islands_to_extinct
-        self.out_dir = out_dir
 
         self.insertions = 0
 
@@ -219,7 +206,6 @@ class SteadyStateIslands(PopulationStrategy):
         assign_topology(self.islands, topology)
 
         self.global_best_genome = None
-        self.metric_best_genome = None
 
         if primary_parent not in ("best", "island"):
             logger.error(
@@ -229,13 +215,6 @@ class SteadyStateIslands(PopulationStrategy):
             exit(1)
 
         self.primary_parent = primary_parent
-
-        self.profiler = profiler
-        if self.profiler is None and out_dir:
-            self.profiler = EXAQCProfiler(
-                out_dir=self.out_dir,
-                topk=5,
-            )
 
     def is_initializing(self) -> bool:
         """
@@ -272,9 +251,23 @@ class SteadyStateIslands(PopulationStrategy):
 
         return self.global_best_genome
 
+    def get_population(self) -> list[CircuitGenome]:
+        """Returns the genomes on every island merged into one ranking, best first.
+
+        Returns:
+            A new list of all the islands' genomes, sorted by the compare
+            function, so its best and top-k entries match the global ranking.
+        """
+
+        merged_population: list[CircuitGenome] = []
+        for island in self.islands:
+            merged_population.extend(island.population)
+        merged_population.sort(key=cmp_to_key(self.compare))
+        return merged_population
+
     def get_parent(
-        self, **kwargs
-    ) -> tuple[CircuitGenome | None, dict[str, any] | None]:
+        self, **kwargs: Any
+    ) -> tuple[CircuitGenome | None, dict[str, Any] | None]:
         """
         Used to get a parent to be used in mutation or other operations to generate
         children. This will be generated from an island in a round robin fashion.
@@ -324,8 +317,8 @@ class SteadyStateIslands(PopulationStrategy):
             exit(1)
 
     def get_parents(
-        self, n_parents: int = 2, **kwargs
-    ) -> tuple[list[CircuitGenome], dict[str, any]]:
+        self, n_parents: int = 2, **kwargs: Any
+    ) -> tuple[list[CircuitGenome], dict[str, Any]]:
         """
         Used to get two or more parents to be used in crossover or
         other operations to generate children, for a target island selected
@@ -463,14 +456,15 @@ class SteadyStateIslands(PopulationStrategy):
 
             return parents, metadata
 
-    def insert_genome(self, genome: CircuitGenome, **kwargs) -> None:
+    def insert_genome(self, genome: CircuitGenome, **kwargs: Any) -> bool:
         """
         Inserts a genome into the island it was generated for, updates the
-        global/metric best genomes, and triggers extinction events periodically.
+        global best genome, and triggers extinction events periodically.
 
         A genome carrying a ``target_island_id`` in its metadata is routed to
         that island; one generated for initialization (no target) is routed to
-        one of the islands with the fewest genomes.
+        one of the islands with the fewest genomes. The island it went into is
+        recorded in its ``island_id`` metadata.
 
         Args:
             genome: is the genome to insert into the population.
@@ -478,8 +472,9 @@ class SteadyStateIslands(PopulationStrategy):
                 ``current_genome_number`` (used to gate extinction/repopulation).
 
         Returns:
-            None. Inserts the genome into an island and updates the strategy's
-            best-genome tracking and extinction state in place.
+            True: every genome given to the island strategy is recorded as
+            evaluated, whether its island kept or discarded it. Inserting also
+            updates the best-genome tracking and extinction state in place.
         """
 
         target_island = None
@@ -499,39 +494,7 @@ class SteadyStateIslands(PopulationStrategy):
             # from the metadata
             target_island = self.islands[genome.metadata["target_island_id"]]
 
-        if self.profiler is not None:
-            # Sort the merged snapshot so profiler Best/top-k match global ranking.
-            merged_population: list[CircuitGenome] = []
-            for island in self.islands:
-                merged_population.extend(island.population)
-            merged_population.sort(key=cmp_to_key(self.compare))
-
-            self.profiler.record(
-                step=self.insertions,
-                population=merged_population,
-            )
-
-        if self.metric_best_genome is None or (
-            "target_metric" in genome.fitness
-            and self.metric_best_genome.fitness["target_metric"]
-            <= genome.fitness["target_metric"]
-        ):
-            self.metric_best_genome = genome
-
-            # this was a new genome with a best accuracy
-            logger.success(
-                f"[global insertion {self.insertions}] Population found new best genome for target_metric"
-                f"with fitness: {genome.fitness}"
-            )
-
-            if self.out_dir is not None:
-                genome.save_circuit(
-                    insert_type="best_accuracy",
-                    out_dir=self.out_dir,
-                    save_training_plot=self.save_training_plot,
-                )
-                if self.profiler is not None:
-                    self.profiler.plot_single_run()
+        genome.metadata["island_id"] = target_island.id
 
         if (
             self.global_best_genome is None
@@ -549,26 +512,10 @@ class SteadyStateIslands(PopulationStrategy):
                 f"with fitness: {genome.fitness}"
             )
 
-            if self.out_dir is not None:
-                genome.save_circuit(
-                    insert_type="best_fitness",
-                    out_dir=self.out_dir,
-                    save_training_plot=self.save_training_plot,
-                )
-                if self.profiler is not None:
-                    self.profiler.plot_single_run()
-
         # check to see if the genome was a new global best
         logger.debug(f"target island id: {target_island.id}")
         target_island.insert_genome(genome)
         self.insertions += 1
-
-        if self.out_dir is not None:
-            genome.save_circuit(
-                insert_type="genome",
-                out_dir=self.out_dir + "/all_genomes/",
-                save_training_plot=self.save_training_plot,
-            )
 
         if (
             self.insertions > 0
@@ -609,3 +556,5 @@ class SteadyStateIslands(PopulationStrategy):
                     repopulation_genome_number=current_genome_number
                 )
                 removed += 1
+
+        return True

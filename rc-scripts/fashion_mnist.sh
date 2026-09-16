@@ -53,6 +53,7 @@ srun python3.11 -m src.examples.classification \
     --mutation_strategy uniform 1 5 \
     --parent_strategy uniform 2 5 \
     --seed 42 \
+    --shared_file_system \
     --out_dir artifacts/${DATASET}_${ENCODING}_2 \
     steady_state \
     --max_population_size 30

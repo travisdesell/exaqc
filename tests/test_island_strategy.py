@@ -127,7 +127,6 @@ def test_island_insertion():
         genomes_before_extinction=10,
         islands_to_extinct=1,
         compare=compare,
-        out_dir=None,
     )
 
     # test adding in genomes with no metadata, these should fill

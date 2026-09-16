@@ -125,7 +125,6 @@ def make_strategy(
         intra_island_crossover_rate=intra_island_crossover_rate,
         primary_parent=primary_parent,
         topology=["fully_connected"],
-        out_dir=None,
     )
 
 

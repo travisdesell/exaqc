@@ -17,6 +17,7 @@ from src.circuits.circuit import CircuitGenome
 from src.circuits.gate_specifications import GateSpecifications
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
 from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
+from src.utils.search_history import aggregate_history, load_history_csv
 
 #: Gate specifications per target framework. Each
 #: :class:`~src.circuits.gate_specifications.GateSpecification` carries the
@@ -551,12 +552,7 @@ class EXAQCProfiler:
             A list of rows, where each row is a dictionary mapping column
             names to float values. Non-parsable values become ``np.nan``.
         """
-        rows = []
-        with open(path, "r") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                rows.append({key: _safe_float(value) for key, value in row.items()})
-        return rows
+        return load_history_csv(path)
 
     @staticmethod
     def aggregate_and_plot(
@@ -594,42 +590,18 @@ class EXAQCProfiler:
         if not paths:
             raise FileNotFoundError(f"No CSVs matched: {csv_glob}")
 
-        runs = [
-            EXAQCProfiler._load_csv(path) for path in paths if path.endswith(".csv")
-        ]
-
-        step_sets = [{int(row["step"]) for row in run} for run in runs]
-        common_steps = sorted(set.intersection(*step_sets))
-        if not common_steps:
-            raise RuntimeError(
-                "No common steps across runs. Try using the same run length."
-            )
-
-        fig = plt.figure()
+        csv_paths = [path for path in paths if path.endswith(".csv")]
         metrics = ["top5_mean", "best", "pop_mean"] if metric is None else [metric]
 
-        n_runs = len(runs)
+        # Aggregate every metric before drawing, so a failure leaves no open figure.
+        aggregated = [
+            (metric_name, *aggregate_history(csv_paths, metric=metric_name, conf=conf))
+            for metric_name in metrics
+        ]
 
-        for metric_name in metrics:
-            Y = []
-            for run in runs:
-                step_to_value = {
-                    int(row["step"]): row.get(metric_name, np.nan) for row in run
-                }
-                Y.append([step_to_value[step] for step in common_steps])
+        fig = plt.figure()
 
-            Y = np.array(Y, dtype=np.float32)
-            mu = np.nanmean(Y, axis=0)
-            sd = np.nanstd(Y, axis=0)
-
-            if conf.lower() == "std":
-                lo = mu - sd
-                hi = mu + sd
-            else:
-                sem = sd / max(math.sqrt(n_runs), 1.0)
-                lo = mu - 1.96 * sem
-                hi = mu + 1.96 * sem
-
+        for metric_name, common_steps, mu, lo, hi in aggregated:
             plt.plot(common_steps, mu, label=f"mean({metric_name})")
             plt.fill_between(common_steps, lo, hi, alpha=0.15)
 
