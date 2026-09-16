@@ -16,7 +16,6 @@ from src.circuits.circuit import CircuitGenome
 from src.evolution.population_strategy import PopulationStrategy
 from src.evolution.steady_state_islands import SteadyStateIslands
 from src.evolution.steady_state_population import SteadyStatePopulation
-from src.evolution.steady_state_speciation import SteadyStateSpeciation
 
 
 def compare(genome1: CircuitGenome, genome2: CircuitGenome) -> int:
