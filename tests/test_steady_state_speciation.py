@@ -11,39 +11,6 @@ from loguru import logger
 from src.evolution.steady_state_speciation import Species, SteadyStateSpeciation
 
 
-class MockProfiler:
-    """Records insert steps without touching the filesystem.
-
-    Args:
-        None.
-    """
-
-    def __init__(self) -> None:
-        self.records: list[tuple[int, list[object]]] = []
-
-    def record(self, *, step: int, population: list[object]) -> None:
-        """Stores a population snapshot.
-
-        Args:
-            step: Insertion counter.
-            population: Retained genomes after the insert.
-
-        Returns:
-            None. Appends to ``records``.
-        """
-
-        self.records.append((step, list(population)))
-
-    def plot_single_run(self) -> None:
-        """No-op plot used in unit tests.
-
-        Returns:
-            None.
-        """
-
-        return None
-
-
 class MockGenome:
     """Minimal genome with historical innovations and a loss fitness.
 
@@ -52,7 +19,8 @@ class MockGenome:
         innovations: Innovation IDs on this genome.
         loss: Fitness loss (lower is better).
         enabled: Optional per-innovation enable flags; defaults to all True.
-        target_metric: Optional target metric for best-target bookkeeping.
+        target_metric: Optional target metric (unused by the strategy; kept for
+            callers that still stamp fitness dicts).
     """
 
     def __init__(
@@ -90,25 +58,6 @@ class MockGenome:
         """
 
         return frozenset(zip(self.innovations, self.enabled))
-
-    def save_circuit(
-        self,
-        insert_type: str,
-        out_dir: str = "artifacts/",
-        save_training_plot: bool = False,
-    ) -> None:
-        """Records a save request on metadata.
-
-        Args:
-            insert_type: Save tag.
-            out_dir: Destination directory.
-            save_training_plot: Ignored.
-
-        Returns:
-            None. Sets ``metadata['saved']``.
-        """
-
-        self.metadata["saved"] = (insert_type, out_dir)
 
 
 def compatible(
@@ -171,7 +120,7 @@ def make_pop(
     rng_seed: int = 0,
     **kwargs: object,
 ) -> SteadyStateSpeciation:
-    """Builds a speciation strategy that does not write files.
+    """Builds a speciation strategy for unit tests.
 
     Args:
         max_population_size: Global capacity.
@@ -181,7 +130,7 @@ def make_pop(
         **kwargs: Extra constructor overrides.
 
     Returns:
-        A ``SteadyStateSpeciation`` using ``MockProfiler``.
+        A ``SteadyStateSpeciation`` with no disk side effects.
     """
 
     return SteadyStateSpeciation(
@@ -189,8 +138,6 @@ def make_pop(
         compare=compare,
         species_threshold=species_threshold,
         inter_species_parent_rate=inter_species_parent_rate,
-        out_dir=None,
-        profiler=MockProfiler(),
         rng_seed=rng_seed,
         **kwargs,
     )
@@ -247,7 +194,8 @@ def test_singleton_protection_and_all_singleton_fallback() -> None:
     for genome_number, innov in ((1, [1]), (2, [10, 20]), (3, [30, 40])):
         singles.insert_genome(MockGenome(genome_number, innov, float(genome_number)))
     worst_new = MockGenome(4, [50, 60], 9.0)
-    assert not singles.insert_genome(worst_new)
+    # Capacity discard is still recorded so EXAQC can archive it.
+    assert singles.insert_genome(worst_new)
     assert worst_new.metadata["insert_type"] == "discarded"
     assert {g.genome_number for g in singles._all_genomes()} == {1, 2, 3}
 
@@ -261,7 +209,10 @@ def test_capacity_one_keeps_global_best() -> None:
     assert pop.insert_genome(first)
     assert pop.insert_genome(second)
     assert pop.get_best_genome().genome_number == 2
-    assert not pop.insert_genome(compatible(3, 0.9, 2))
+    worse = compatible(3, 0.9, 2)
+    assert pop.insert_genome(worse)
+    assert worse.metadata["insert_type"] == "discarded"
+    assert pop.get_best_genome().genome_number == 2
 
 
 def test_duplicate_replace_stays_in_same_species() -> None:
@@ -358,19 +309,20 @@ def test_round_robin_cursor_and_species_deletion() -> None:
     assert created.metadata["species_id"] != deleted_id
 
 
-def test_profiler_record_receives_fitness_sorted_population() -> None:
-    """Profiler snapshots are ordered by ``compare``, not species-list order."""
+def test_get_population_is_fitness_sorted() -> None:
+    """``get_population`` is ordered by ``compare``, not species-list order."""
 
     pop = make_pop()
     worse = compatible(1, 0.9, 0)
     better = distant(2, 0.1, (10, 11))
     pop.insert_genome(worse)
     pop.insert_genome(better)
-    assert isinstance(pop.profiler, MockProfiler)
-    _, population = pop.profiler.records[-1]
+    population = pop.get_population()
     assert population[0] is better
     losses = [genome.fitness["loss"] for genome in population]
     assert losses == sorted(losses)
+    population.append(compatible(3, 0.5, 2))
+    assert len(pop._all_genomes()) == 2
 
 
 def test_logging_one_outcome_record() -> None:
@@ -402,31 +354,24 @@ def test_logging_one_outcome_record() -> None:
             assert field in line
 
 
-def test_logging_global_and_accuracy_best() -> None:
-    """New loss and target-metric champions emit the same grep keys as steady state."""
+def test_logging_global_best() -> None:
+    """New loss champions emit the same grep keys as steady state."""
 
     messages: list[str] = []
     handler_id = logger.add(lambda record: messages.append(record.record["message"]))
     try:
         pop = make_pop()
-        pop.insert_genome(compatible(1, 0.5, 0, target_metric=0.4))
-        pop.insert_genome(compatible(2, 0.2, 1, target_metric=0.9))
-        pop.insert_genome(compatible(3, 0.3, 0, target_metric=0.5))
+        pop.insert_genome(compatible(1, 0.5, 0))
+        pop.insert_genome(compatible(2, 0.2, 1))
+        pop.insert_genome(compatible(3, 0.3, 0))
     finally:
         logger.remove(handler_id)
 
     global_best = [line for line in messages if "GLOBAL best" in line]
-    accuracy_best = [line for line in messages if "ACCURACY best" in line]
     assert len(global_best) == 2
     assert "genome 1" in global_best[0]
     assert "genome 2" in global_best[1]
-    assert len(accuracy_best) == 2
-    assert "insertion 1" in accuracy_best[0]
-    assert "insertion 2" in accuracy_best[1]
     assert not any("GLOBAL best" in line and "genome 3" in line for line in messages)
-    assert not any(
-        "ACCURACY best" in line and "insertion 3" in line for line in messages
-    )
 
 
 def test_constructor_and_parser_bounds() -> None:
@@ -456,14 +401,13 @@ def test_is_initializing_and_get_parent_empty() -> None:
     pop = make_pop(max_population_size=2)
     assert pop.is_initializing()
     assert pop.get_parent() == (None, None)
-    pop.insert_genome(compatible(1, 0.2, 0, target_metric=0.8))
+    pop.insert_genome(compatible(1, 0.2, 0))
     assert pop.is_initializing()
-    pop.insert_genome(compatible(2, 0.1, 1, target_metric=0.9))
+    pop.insert_genome(compatible(2, 0.1, 1))
     assert not pop.is_initializing()
     parent, metadata = pop.get_parent()
     assert parent is not None
     assert metadata["crossover_type"] == "mutation"
-    assert pop.metric_best_genome.genome_number == 2
 
 
 def test_three_hundred_inserts_keep_invariants() -> None:

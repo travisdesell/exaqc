@@ -71,8 +71,9 @@ class PopulationStrategy(ABC):
     ) -> "PopulationStrategy":
         """Builds the selected population strategy from parsed arguments.
 
-        Constructs a :class:`~src.evolution.steady_state_population.SteadyStatePopulation`
-        or :class:`~src.evolution.steady_state_islands.SteadyStateIslands` from
+        Constructs a :class:`~src.evolution.steady_state_population.SteadyStatePopulation`,
+        :class:`~src.evolution.steady_state_islands.SteadyStateIslands`, or
+        :class:`~src.evolution.steady_state_speciation.SteadyStateSpeciation` from
         the sub-command chosen by :meth:`initialize_parser` and its flags. A
         population strategy only selects and ranks genomes; everything written
         to disk goes through the run's
@@ -96,6 +97,7 @@ class PopulationStrategy(ABC):
         # module-level import here would be circular.
         from src.evolution.steady_state_islands import SteadyStateIslands
         from src.evolution.steady_state_population import SteadyStatePopulation
+        from src.evolution.steady_state_speciation import SteadyStateSpeciation
 
         if args.population_strategy == "steady_state":
             return SteadyStatePopulation(
@@ -103,16 +105,33 @@ class PopulationStrategy(ABC):
                 compare=compare,
             )
 
-        return SteadyStateIslands(
-            n_islands=args.n_islands,
-            max_island_size=args.max_island_size,
-            genomes_before_extinction=args.genomes_before_extinction,
-            genomes_for_next_extinction=args.genomes_for_next_extinction,
-            islands_to_extinct=args.islands_to_extinct,
-            primary_parent=args.primary_parent,
-            intra_island_crossover_rate=args.intra_island_crossover_rate,
-            compare=compare,
-            topology=args.topology,
+        if args.population_strategy == "islands":
+            return SteadyStateIslands(
+                n_islands=args.n_islands,
+                max_island_size=args.max_island_size,
+                genomes_before_extinction=args.genomes_before_extinction,
+                genomes_for_next_extinction=args.genomes_for_next_extinction,
+                islands_to_extinct=args.islands_to_extinct,
+                primary_parent=args.primary_parent,
+                intra_island_crossover_rate=args.intra_island_crossover_rate,
+                compare=compare,
+                topology=args.topology,
+            )
+
+        if args.population_strategy == "steady_state_speciation":
+            return SteadyStateSpeciation(
+                max_population_size=args.max_population_size,
+                compare=compare,
+                species_threshold=args.species_threshold,
+                neat_c1=args.neat_c1,
+                neat_c2=args.neat_c2,
+                neat_c3=args.neat_c3,
+                inter_species_parent_rate=args.inter_species_parent_rate,
+            )
+
+        raise ValueError(
+            f"Unknown population strategy {args.population_strategy!r}; "
+            "expected 'steady_state', 'islands', or 'steady_state_speciation'."
         )
 
     @abstractmethod

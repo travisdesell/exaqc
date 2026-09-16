@@ -19,7 +19,6 @@ from loguru import logger
 from src.circuits.circuit import CircuitGenome
 from src.evolution.historical_distance import historical_distance
 from src.evolution.population_strategy import PopulationStrategy
-from src.utils.profiler import EXAQCProfiler
 
 
 class Species:
@@ -108,12 +107,12 @@ class SteadyStateSpeciation(PopulationStrategy):
         neat_c2: float = 1.0,
         neat_c3: float = 0.0,
         inter_species_parent_rate: float = 0.1,
-        out_dir: str | None = "artifacts",
-        profiler: EXAQCProfiler | None = None,
-        save_training_plot: bool = False,
         rng_seed: int | None = None,
     ) -> None:
         """Creates a speciation population with global capacity.
+
+        Disk output is owned by the search's ``GenomeArchive``; this strategy
+        only selects, ranks, and partitions genomes.
 
         Args:
             max_population_size: Maximum retained genomes across all species.
@@ -125,9 +124,6 @@ class SteadyStateSpeciation(PopulationStrategy):
             neat_c3: Angle-term coefficient; must be 0.0.
             inter_species_parent_rate: Probability a multi-parent request mixes
                 species, when that path is eligible.
-            out_dir: Directory for saved genomes; ``None`` skips files.
-            profiler: Optional profiler; a default is constructed if omitted.
-            save_training_plot: Passed through to ``save_circuit``.
             rng_seed: Seed for shuffle and parent draws; ``None`` is unseeded.
 
         Raises:
@@ -154,17 +150,11 @@ class SteadyStateSpeciation(PopulationStrategy):
         self.neat_c1 = neat_c1
         self.neat_c2 = neat_c2
         self.inter_species_parent_rate = inter_species_parent_rate
-        self.out_dir = out_dir
-        self.save_training_plot = save_training_plot
         self.rng = random.Random(rng_seed)
         self.insertions = 0
         self.species_list: list[Species] = []
         self.next_species_id = 0
         self.generation_species = 0
-        self.metric_best_genome: CircuitGenome | None = None
-        self.profiler = profiler
-        if self.profiler is None:
-            self.profiler = EXAQCProfiler(out_dir=out_dir)
 
     def is_initializing(self) -> bool:
         """Returns whether the retained population is still below capacity.
@@ -186,6 +176,16 @@ class SteadyStateSpeciation(PopulationStrategy):
         if not genomes:
             return None
         return min(genomes, key=cmp_to_key(self.compare))
+
+    def get_population(self) -> list[CircuitGenome]:
+        """Returns every retained genome, best first.
+
+        Returns:
+            A new list sorted by ``compare``. Modifying it does not affect the
+            strategy.
+        """
+
+        return sorted(self._all_genomes(), key=cmp_to_key(self.compare))
 
     def get_parent(
         self, **kwargs: object
@@ -255,7 +255,10 @@ class SteadyStateSpeciation(PopulationStrategy):
             **kwargs: Extra insert options; unused.
 
         Returns:
-            True if ``genome`` remains in the retained population.
+            True if the genome should be recorded as evaluated -- whether it
+            was kept or discarded from a full population -- and False if it
+            was rejected without being recorded (a duplicate of a better
+            genome already held).
         """
 
         self.insertions += 1
@@ -264,7 +267,8 @@ class SteadyStateSpeciation(PopulationStrategy):
             if self.compare(existing, genome) > 0:
                 species = self._replace_duplicate(existing, genome)
                 return self._finish(genome, True, "duplicate_replaced", 0.0, species)
-            return self._finish(genome, False, "discarded", None, None)
+            self._finish(genome, False, "discarded", None, None)
+            return False
 
         species, action, distance = self._assign(genome)
         retained = True
@@ -272,7 +276,9 @@ class SteadyStateSpeciation(PopulationStrategy):
             retained = self._evict(genome)
             if not retained:
                 action = "discarded"
-        return self._finish(genome, retained, action, distance, species)
+        # Capacity discards are still recorded (same contract as steady_state).
+        self._finish(genome, retained, action, distance, species)
+        return True
 
     def _all_genomes(self) -> list[CircuitGenome]:
         """Returns every retained genome.
@@ -536,7 +542,7 @@ class SteadyStateSpeciation(PopulationStrategy):
         distance: float | None,
         species: Species | None,
     ) -> bool:
-        """Writes metadata, artifacts, profiler state, and the outcome log.
+        """Sets insert metadata and writes the speciation outcome log.
 
         Args:
             genome: Candidate considered for insertion.
@@ -550,9 +556,7 @@ class SteadyStateSpeciation(PopulationStrategy):
             ``retained``.
         """
 
-        # The profiler treats population[0] as best and population[:k] as
-        # top-k. Species lists are not fitness-ordered, so sort a copy.
-        population = sorted(self._all_genomes(), key=cmp_to_key(self.compare))
+        population = self.get_population()
         if retained:
             genome.metadata["insert_type"] = "inserted"
             best = self.get_best_genome()
@@ -563,41 +567,8 @@ class SteadyStateSpeciation(PopulationStrategy):
                     f"[insertion {self.insertions}] Population found new GLOBAL best genome "
                     f"with fitness: {genome.fitness}"
                 )
-                if self.out_dir is not None:
-                    genome.save_circuit(
-                        insert_type="best_fitness",
-                        out_dir=self.out_dir,
-                        save_training_plot=self.save_training_plot,
-                    )
-            fitness = genome.fitness or {}
-            if "target_metric" in fitness and (
-                self.metric_best_genome is None
-                or self.metric_best_genome.fitness["target_metric"]
-                <= fitness["target_metric"]
-            ):
-                self.metric_best_genome = genome
-                logger.success(
-                    f"[global insertion {self.insertions}] Population found new ACCURACY best genome "
-                    f"with fitness: {genome.fitness}"
-                )
-                if self.out_dir is not None:
-                    genome.save_circuit(
-                        insert_type="best_target",
-                        out_dir=self.out_dir,
-                        save_training_plot=self.save_training_plot,
-                    )
         else:
             genome.metadata["insert_type"] = "discarded"
-
-        if self.profiler is not None:
-            self.profiler.record(step=self.insertions, population=population)
-        if self.out_dir is not None:
-            genome.save_circuit(
-                insert_type="genome",
-                out_dir=self.out_dir + "/all_genomes/",
-                save_training_plot=self.save_training_plot,
-            )
-            self.profiler.plot_single_run()
 
         species_id = (
             species.species_id
