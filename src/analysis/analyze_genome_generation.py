@@ -372,4 +372,4 @@ if __name__ == "__main__":
             group_points, patch_artist=True, tick_labels=args.groups  # fill with color
         )  # will be used to label x-ticks
 
-        plt.show()
+        # plt.show()

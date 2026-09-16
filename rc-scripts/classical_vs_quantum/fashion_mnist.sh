@@ -1,12 +1,12 @@
 #!/bin/bash -l
-#SBATCH -J exaqc_fmnist_ryfc
+#SBATCH -J exaqc_fmnist_ry_cnn
 #SBATCH -t 3-00:00:00
 #SBATCH -A cps -p tier3
 #SBATCH --nodes=1
 #SBATCH --ntasks=6
 #SBATCH --ntasks-per-node=6
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=32GB
+#SBATCH --mem=16GB
 #SBATCH --gres=gpu:a100:1
 
 spack env activate default-ml-x86_64-25052701
@@ -17,7 +17,7 @@ DATASET="fashion_mnist"
 QUBITS=5
 ENCODING="cnn"
 DECODING="linear"
-MODEL_CONFIG="configs/mnist_fc_1.json"
+MODEL_CONFIG="configs/fashion_mnist_cnn_2.json"
 QUANTUM_ENC="ry"
 QUANTUM_OUT="probs"
 BATCH_SIZE=32
@@ -82,9 +82,9 @@ for i in $(seq $MIN_COUNT $MAX_COUNT); do
         --mutation_strategy uniform 1 5 \
         --parent_strategy uniform 2 5 \
         --seed $((i + 40)) \
-        --out_dir artifacts/${DATASET}_e${ENCODING}_d${DECODING}_f${MODEL_FILENAME}_${QUANTUM_ENC}_${QUANTUM_OUT}_g${N_GENOMES}_q${QUBITS}_b${BATCH_SIZE}/runs/${i} \
+        --out_dir artifacts/classical/${DATASET}_e${ENCODING}_d${DECODING}_f${MODEL_FILENAME}_${QUANTUM_ENC}_${QUANTUM_OUT}_g${N_GENOMES}_q${QUBITS}_b${BATCH_SIZE}/runs/${i} \
         steady_state \
         --max_population_size 30 \
-        > ./outs/$DATASET/runs/${i}/output_${QUANTUM_ENC}_q${QUBITS}.o \
-        2> ./logs/$DATASET/runs/${i}/error_${QUANTUM_ENC}_q${QUBITS}.o
+        > ./outs/classical_v_quantum/$DATASET/runs/${i}/output_${QUANTUM_ENC}_q${QUBITS}_f${MODEL_FILENAME}.o \
+        2> ./logs/classical_v_quantum/$DATASET/runs/${i}/error_${QUANTUM_ENC}_q${QUBITS}_F${MODEL_FILENAME}.o
 done

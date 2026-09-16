@@ -4,6 +4,7 @@ import argparse
 import csv
 import numpy as np
 import sys
+from pathlib import Path
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -85,6 +86,43 @@ def get_group_metrics(
     return (min_list, avg_list, max_list)
 
 
+def save_figure_to_run_directories(
+    fig: plt.Figure,
+    input_directories: list[str],
+    filename: str = "search_progress.png",
+) -> None:
+    """
+    Save the generated figure into each EXAQC run directory.
+
+    Each input directory is expected to be a run directory containing files
+    such as exaqc_history.csv, metadata, and the all_genomes directory.
+
+    Args:
+        fig: Matplotlib figure to save.
+        input_directories: EXAQC run directories.
+        filename: Name of the output figure.
+    """
+
+    for directory in input_directories:
+        run_directory = Path(directory)
+
+        if not run_directory.is_dir():
+            logger.warning(
+                f"Skipping invalid run directory: {run_directory}"
+            )
+            continue
+
+        output_file = run_directory / filename
+
+        logger.info(f"Saving search progress figure to: {output_file}")
+
+        fig.savefig(
+            output_file,
+            dpi=300,
+            bbox_inches="tight",
+        )
+
+
 if __name__ == "__main__":
     """
     This will parse all the provided input directories, reading all the genomes in the
@@ -123,6 +161,17 @@ if __name__ == "__main__":
     )
 
     p.add_argument(
+        "--output_filename",
+        type=str,
+        required=False,
+        default="search_progress.png",
+        help=(
+            "Filename used when saving the progress plot into each "
+            "run directory."
+        ),
+    )
+
+    p.add_argument(
         "--logging_level",
         type=str,
         required=False,
@@ -141,6 +190,41 @@ if __name__ == "__main__":
             avg_list,
             max_list,
         ) = get_group_metrics(args.input_directories, args.column_max_length)
+
+        fig, ax = plt.subplots(figsize=(8, 5))
+
+        xs = range(args.column_max_length)
+
+        ax.plot(
+            xs,
+            avg_list,
+            linewidth=2,
+            label="Average",
+        )
+
+        ax.fill_between(
+            xs,
+            min_list,
+            max_list,
+            alpha=0.25,
+        )
+
+        ax.set_title("Search Progress")
+        ax.set_xlabel("Genomes Evaluated")
+        ax.set_ylabel("Validation Loss")
+        ax.grid()
+        ax.legend(loc="upper right")
+
+        fig.tight_layout()
+
+        save_figure_to_run_directories(
+            fig,
+            args.input_directories,
+            args.output_filename,
+        )
+
+        plt.close(fig)
+
     else:
 
         group_mins = {}

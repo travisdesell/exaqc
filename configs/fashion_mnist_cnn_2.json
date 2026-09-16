@@ -1,0 +1,30 @@
+{
+  "conv_blocks": [
+    {
+      "out_channels": 16,
+      "kernel_size": 3,
+      "padding": 1,
+      "batch_norm": true,
+      "activation": "relu",
+      "pool": {
+        "type": "max",
+        "kernel_size": 2
+      }
+    },
+    {
+      "out_channels": 32,
+      "kernel_size": 3,
+      "padding": 1,
+      "batch_norm": true,
+      "activation": "relu",
+      "pool": {
+        "type": "max",
+        "kernel_size": 2
+      }
+    }
+  ],
+  "adaptive_pool_size": [4, 4],
+  "fully_connected_layers": [128, 64],
+  "dropout": 0.3,
+  "output_activation": "tanh"
+}

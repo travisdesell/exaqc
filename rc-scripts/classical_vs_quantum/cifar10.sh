@@ -1,9 +1,7 @@
 #!/bin/bash -l
-#SBATCH -J exaqc_cifar10_u3
-#SBATCH -t 5-00:00:00
+#SBATCH -J exaqc_cifar10_ry
+#SBATCH -t 4-00:00:00
 #SBATCH -A cps -p tier3
-#SBATCH -o ./outs/cifar10/compare/output_u3.o
-#SBATCH -e ./logs/cifar10/compare/error_u3.e
 #SBATCH --nodes=1
 #SBATCH --ntasks=6
 #SBATCH --ntasks-per-node=6
@@ -17,10 +15,12 @@ source .venv/bin/activate
 
 DATASET="cifar10"
 INPUT_QUBITS=8
-OUTPUT_QUBITS=8
+OUTPUT_QUBITS=5
 ENCODING="cnn"
-QUANTUM_ENC="u3"
-QUANTUM_OUT="expval"
+DECODING="linear"
+QUANTUM_ENC="ry"
+QUANTUM_OUT="probs"
+MODEL_CONFIG="configs/cifar10_cnn_6.json"
 BATCH_SIZE=64
 N_GENOMES=500
 
@@ -38,6 +38,8 @@ N_GENOMES=500
 # --validation_samples $TEST_SAMPLES \
 # --encoder_config configs/mnist_cnn_2.json \
 
+MODEL_FILENAME=$(basename "$MODEL_CONFIG" .json)
+
 MIN_COUNT=$1
 MAX_COUNT=$2
 
@@ -46,8 +48,8 @@ for i in $(seq $MIN_COUNT $MAX_COUNT); do
         --dataset $DATASET \
         --target pennylane \
         --encoding $ENCODING \
-        --decoding linear \
-        --encoder_config configs/cifar10_cnn_3.json \
+        --decoding $DECODING \
+        --encoder_config $MODEL_CONFIG \
         --input_qubits $INPUT_QUBITS \
         --output_qubits $OUTPUT_QUBITS \
         --quantum_input_mode $QUANTUM_ENC \
@@ -61,7 +63,9 @@ for i in $(seq $MIN_COUNT $MAX_COUNT); do
         --mutation_strategy uniform 1 5 \
         --parent_strategy uniform 2 5 \
         --seed $((i + 40)) \
-        --out_dir artifacts/${DATASET}_${ENCODING}_${QUANTUM_ENC}_${QUANTUM_OUT}_g${N_GENOMES}_q${QUBITS}_b${BATCH_SIZE}/runs/${i} \
+        --out_dir artifacts/classical/${DATASET}_e${ENCODING}_d${DECODING}_f${MODEL_FILENAME}_${QUANTUM_OUT}_g${N_GENOMES}_q${QUBITS}_b${BATCH_SIZE}/runs/${i} \
         steady_state \
-        --max_population_size 30
+        --max_population_size 30 \
+        > ./outs/classical_v_quantum/$DATASET/runs/${i}/output_${QUANTUM_ENC}_q${QUBITS}.o \
+        2> ./logs/classical_v_quantum/$DATASET/runs/${i}/error_${QUANTUM_ENC}_q${QUBITS}.o
 done

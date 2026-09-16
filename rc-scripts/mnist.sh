@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH -J exaqc_mnist_amp
+#SBATCH -J exaqc_mnist_rz
 #SBATCH -t 3-00:00:00
 #SBATCH -A cps -p tier3
 #SBATCH --nodes=1
@@ -18,7 +18,7 @@ QUBITS=5
 ENCODING="cnn"
 DECODING="linear"
 MODEL_CONFIG="configs/mnist_fc.json"
-QUANTUM_ENC="amplitude"
+QUANTUM_ENC="rz"
 QUANTUM_OUT="probs"
 BATCH_SIZE=32
 N_GENOMES=800
