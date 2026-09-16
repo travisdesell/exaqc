@@ -103,7 +103,7 @@ def exponential_crossover(
     p2: CircuitGenome,
     c1: float = -2.0,
     c2: float = 0.5,
-):
+) -> None:
     """
     This recombines 2 parent genomes into a new child genome. A random depth is
     selected and all gates below that depth from p1 are added to the child genome,
@@ -113,6 +113,12 @@ def exponential_crossover(
         child: an empty CircuitGenome to have gates added to by the parents.
         p1: The first parent to recombine.
         p2: The second parent to recombine.
+        c1: Lower bound of the encoder/decoder simplex line-search draw.
+        c2: Upper bound of the encoder/decoder simplex line-search draw.
+
+    Returns:
+        None. Mutates ``child`` by copying parent gates and crossing encoders
+        and decoders.
     """
 
     crossover_depth = random.uniform(0, 1.0)
@@ -124,7 +130,7 @@ def exponential_crossover(
         logger.debug(f"p1 gate {gate.innovation_number} at depth: {gate.depth}")
         if gate.depth < crossover_depth:
             logger.debug("\tadding!")
-            child.add_existing_gate(gate)
+            child.add_existing_gate(gate.copy())
         else:
             logger.debug("\tnot adding.")
 
@@ -132,7 +138,7 @@ def exponential_crossover(
         logger.debug(f"p2 gate {gate.innovation_number} at depth: {gate.depth}")
         if gate.depth >= crossover_depth:
             logger.debug("\tadding!")
-            child.add_existing_gate(gate)
+            child.add_existing_gate(gate.copy())
         else:
             logger.debug("\tnot adding.")
 

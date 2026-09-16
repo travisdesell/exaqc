@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 
 from abc import ABC, abstractmethod
@@ -15,9 +17,10 @@ class PopulationStrategy(ABC):
 
         Every entry point offers the same choice of how genomes are managed, as
         a required sub-command that in turn owns its own flags. This registers
-        the ``steady_state`` and ``islands`` sub-parsers and hands each to the
-        concrete strategy's own ``initialize_parser`` (so each class defines its
-        own constructor flags), keeping the entry points in sync.
+        the ``steady_state``, ``islands``, and ``steady_state_speciation``
+        sub-parsers and hands each to the concrete strategy's own
+        ``initialize_parser`` (so each class defines its own constructor
+        flags), keeping the entry points in sync.
 
         The concrete strategies are imported lazily because they subclass
         :class:`PopulationStrategy`; importing them at module load time would be
@@ -29,12 +32,14 @@ class PopulationStrategy(ABC):
 
         Returns:
             None. Mutates ``parser`` by adding a required ``population_strategy``
-            sub-command with ``steady_state`` and ``islands`` choices, each
-            carrying that strategy's own arguments.
+            sub-command with ``steady_state``, ``islands``, and
+            ``steady_state_speciation`` choices, each carrying that strategy's
+            own arguments.
         """
 
         from src.evolution.steady_state_islands import SteadyStateIslands
         from src.evolution.steady_state_population import SteadyStatePopulation
+        from src.evolution.steady_state_speciation import SteadyStateSpeciation
 
         populations = parser.add_subparsers(
             dest="population_strategy",
@@ -50,6 +55,12 @@ class PopulationStrategy(ABC):
         SteadyStateIslands.initialize_parser(
             populations.add_parser(
                 "islands", help="Use multiple islands of steady state populations."
+            )
+        )
+        SteadyStateSpeciation.initialize_parser(
+            populations.add_parser(
+                "steady_state_speciation",
+                help="Use speciation over a global population.",
             )
         )
 
@@ -75,6 +86,10 @@ class PopulationStrategy(ABC):
 
         Returns:
             The constructed :class:`PopulationStrategy`.
+
+        Raises:
+            ValueError: If ``args.population_strategy`` is not a known
+                sub-command.
         """
 
         # Imported lazily: the concrete strategies subclass this class, so a
