@@ -124,7 +124,7 @@ def exponential_crossover(
         logger.debug(f"p1 gate {gate.innovation_number} at depth: {gate.depth}")
         if gate.depth < crossover_depth:
             logger.debug("\tadding!")
-            child.add_existing_gate(gate)
+            child.add_existing_gate(gate.copy())
         else:
             logger.debug("\tnot adding.")
 
@@ -132,7 +132,7 @@ def exponential_crossover(
         logger.debug(f"p2 gate {gate.innovation_number} at depth: {gate.depth}")
         if gate.depth >= crossover_depth:
             logger.debug("\tadding!")
-            child.add_existing_gate(gate)
+            child.add_existing_gate(gate.copy())
         else:
             logger.debug("\tnot adding.")
 
