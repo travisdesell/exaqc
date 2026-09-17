@@ -492,7 +492,7 @@ def main() -> None:
     # when the file sink is added.
     logger.remove()
     logger.add(sys.stdout, level=args.logging_level)
-    logger.add(os.path.join(args.out_dir, "run.log"))
+    # logger.add(os.path.join(args.out_dir, "run.log"))
 
     # -----------------------------------------------------------------
     # Environment + trainer + objective
