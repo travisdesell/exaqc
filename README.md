@@ -128,6 +128,11 @@ and owns the population, and every other rank is a worker that trains them.
 mpiexec -n 12 python3 -m src.examples.classification ... steady_state --max_population_size 30
 ```
 
+> **Long runs should abort on a crash.** If any rank raises, the rest keep
+> waiting on it and the job idles until its time limit. Starting the module
+> through `python3 -m mpi4py -m <module>` (as `scripts/exaqc_rl_job.sh` does)
+> makes an uncaught exception on any rank abort the whole job instead.
+
 Because each genome is trained independently, the search scales close to
 linearly with the number of workers.
 

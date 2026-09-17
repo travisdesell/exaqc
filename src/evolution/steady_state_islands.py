@@ -396,6 +396,11 @@ class SteadyStateIslands(PopulationStrategy):
             Returns ``(None, None)`` when no
             parent can be selected -- i.e. the target island is repopulating and
             none of its neighbors hold any genomes.
+
+        Raises:
+            RuntimeError: If the target island is still initializing, which the
+                search never asks for. Raised rather than exiting so an MPI run
+                aborts instead of leaving the workers waiting on the master.
         """
 
         target_island = self.islands[self.current_island]
@@ -419,10 +424,9 @@ class SteadyStateIslands(PopulationStrategy):
                 return None, None
 
         else:
-            logger.error(
+            raise RuntimeError(
                 "tried to get a parent from an initializing island. This should never happen."
             )
-            exit(1)
 
     def get_parents(
         self, n_parents: int = 2, **kwargs: Any
@@ -456,6 +460,11 @@ class SteadyStateIslands(PopulationStrategy):
             number of parents, i.e., the target island is too small for intra-island
             crossover or there are not enough islands with genomes for inter-island
             crossover, then it will return None.
+
+        Raises:
+            RuntimeError: If the target island is still initializing, which the
+                search never asks for. Raised rather than exiting so an MPI run
+                aborts instead of leaving the workers waiting on the master.
         """
 
         target_island = self.islands[self.current_island]
@@ -503,10 +512,9 @@ class SteadyStateIslands(PopulationStrategy):
                     parents = best_neighbor.get_parents(n_parents)
 
             else:
-                logger.error(
+                raise RuntimeError(
                     "Doing intra-island crossover on an initializing island, this should never happen."
                 )
-                exit(1)
 
         # there weren't enough parents at the target (or best) island to get
         # intra-island parents so fall back to inter-island parents
@@ -546,10 +554,9 @@ class SteadyStateIslands(PopulationStrategy):
                     parents = [random.choice(best_neighbor.population)]
 
             else:
-                logger.error(
+                raise RuntimeError(
                     "Doing inter-island crossover on an initializing island, this should never happen."
                 )
-                exit(1)
 
             # get all the remaining parents from other islands randomly
             parents.extend(random.sample(potential_parents, n_parents - 1))
