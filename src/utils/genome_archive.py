@@ -52,7 +52,7 @@ ARCHIVE_FILENAME = "genomes.sqlar"
 _METRIC_SERIES = re.compile(r"_(epoch|episode)_metrics$")
 
 #: Version of the archive layout, recorded in ``run_info``.
-ARCHIVE_FORMAT_VERSION = 3
+ARCHIVE_FORMAT_VERSION = 5
 
 #: The kinds of current-best genome files kept in the output directory: the best
 #: genome by the search's own ranking and the best by ``fitness["target_metric"]``.
@@ -84,6 +84,11 @@ SORTABLE_COLUMNS = frozenset(
         "n_parameters",
         "n_cnot",
         "n_rot",
+        "generated_at_insertion",
+        "evaluation_seconds",
+        "evaluated_host",
+        "evaluated_rank",
+        "discard_reason",
     }
 )
 
@@ -96,6 +101,7 @@ _NUMERIC_COLUMNS = (
     "n_parameters",
     "n_cnot",
     "n_rot",
+    "evaluation_seconds",
 )
 
 #: Filters :meth:`GenomeArchive.list_genomes` understands.
@@ -113,7 +119,9 @@ _ITERATION_BATCH_SIZE = 200
 _SUMMARY_COLUMNS = (
     "genome_number, insertion, saved_at, insert_type, generated_by, "
     "crossover_type, island, n_gates, n_enabled_gates, n_parameters, "
-    "n_cnot, n_rot, final_metrics, fitness"
+    "n_cnot, n_rot, max_innovation_number, generated_at_insertion, "
+    "evaluation_seconds, evaluated_host, evaluated_rank, discard_reason, "
+    "final_metrics, fitness"
 )
 
 _SCHEMA = """
@@ -137,6 +145,12 @@ CREATE TABLE IF NOT EXISTS genomes(
     n_parameters INTEGER,
     n_cnot INTEGER,
     n_rot INTEGER,
+    max_innovation_number INTEGER,
+    generated_at_insertion INTEGER,
+    evaluation_seconds REAL,
+    evaluated_host TEXT,
+    evaluated_rank INTEGER,
+    discard_reason TEXT,
     final_metrics TEXT,
     fitness TEXT,
     loss REAL GENERATED ALWAYS AS (json_extract(fitness, '$.loss')) VIRTUAL,
@@ -665,6 +679,46 @@ def _filter_clause(filters: dict[str, Any] | None) -> tuple[str, list[Any]]:
     return "WHERE " + " AND ".join(conditions), parameters
 
 
+def _discard_run(out_dir: str, archive_path: str) -> None:
+    """Removes a previous run's archive and best-genome files, to start over.
+
+    Only what a search wrote is removed: the archive (with any journal beside
+    it) and the current-best genome files. The run's log is left to be appended
+    to, and annotations someone recorded are left alone -- they are not the
+    search's to delete -- but they name genomes the new run will not have, so
+    finding them is worth reporting.
+
+    Args:
+        out_dir: The run's output directory.
+        archive_path: The archive inside it.
+
+    Returns:
+        None. Removes the files from ``out_dir``.
+    """
+
+    # Imported here so that reading an archive does not pull in the annotations
+    # sidecar's module.
+    from src.utils.annotations import ANNOTATIONS_FILENAME
+
+    for suffix in ("", "-wal", "-shm", "-journal"):
+        _remove_if_exists(f"{archive_path}{suffix}")
+
+    for kind in BEST_KINDS:
+        prefix = os.path.join(out_dir, f"best_{kind}")
+        for name in (f"{prefix}.json", f"{prefix}.png", f"{prefix}_training.png"):
+            _remove_if_exists(name)
+
+    annotations = os.path.join(out_dir, ANNOTATIONS_FILENAME)
+    if os.path.exists(annotations):
+        logger.warning(
+            "{} still holds notes and tags recorded about the run just discarded; they name "
+            "genomes the new run will not have.",
+            annotations,
+        )
+
+    logger.info("discarded the run in {}; starting a new one.", out_dir)
+
+
 def _summary_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
     """Converts a ``genomes`` table row into a summary dict.
 
@@ -688,6 +742,12 @@ def _summary_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
         n_parameters,
         n_cnot,
         n_rot,
+        max_innovation_number,
+        generated_at_insertion,
+        evaluation_seconds,
+        evaluated_host,
+        evaluated_rank,
+        discard_reason,
         final_metrics,
         fitness,
     ) = row
@@ -705,6 +765,12 @@ def _summary_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
         "n_parameters": n_parameters,
         "n_cnot": n_cnot,
         "n_rot": n_rot,
+        "max_innovation_number": max_innovation_number,
+        "generated_at_insertion": generated_at_insertion,
+        "evaluation_seconds": evaluation_seconds,
+        "evaluated_host": evaluated_host,
+        "evaluated_rank": evaluated_rank,
+        "discard_reason": discard_reason,
         "final_metrics": json.loads(final_metrics) if final_metrics else {},
         "fitness": json.loads(fitness) if fitness else None,
     }
@@ -736,8 +802,9 @@ class GenomeArchive:
             parser: The parser to add the arguments to.
 
         Returns:
-            None. Mutates ``parser`` by adding ``--out_dir`` and
-            ``--shared_file_system``.
+            None. Mutates ``parser`` by adding ``--out_dir``,
+            ``--shared_file_system``, ``--restart``, ``--overwrite_archive`` and
+            ``--force_restart``.
         """
 
         parser.add_argument(
@@ -761,24 +828,81 @@ class GenomeArchive:
             ),
         )
 
+        parser.add_argument(
+            "--restart",
+            type=str,
+            choices=("never", "auto", "require"),
+            default="auto",
+            help=(
+                "Whether to continue the run already in --out_dir: 'auto' (the default) continues "
+                "a run when there is one and starts a new one otherwise, so the same command can "
+                "be requeued; 'require' fails when there is nothing to continue; 'never' always "
+                "starts a new run, and refuses to write into a directory that already holds one. "
+                "A restart takes its configuration from the run it continues, evaluating genomes "
+                "until the run has --number_genomes of them."
+            ),
+        )
+
+        parser.add_argument(
+            "--overwrite_archive",
+            action=argparse.BooleanOptionalAction,
+            default=False,
+            help=(
+                "Discard the run already in --out_dir and start a new one in its place, replacing "
+                "its archive and best-genome files."
+            ),
+        )
+
+        parser.add_argument(
+            "--force_restart",
+            action=argparse.BooleanOptionalAction,
+            default=False,
+            help=(
+                "Restart even when this command's arguments differ from the ones the run being "
+                "continued recorded. The run's own arguments are used for everything except "
+                "--number_genomes and where and how this process runs."
+            ),
+        )
+
     @classmethod
-    def from_args(cls, args: argparse.Namespace) -> GenomeArchive:
+    def from_args(
+        cls, args: argparse.Namespace, restarting: bool = False
+    ) -> GenomeArchive:
         """Creates a writable archive from parsed command-line arguments.
 
+        The arguments are recorded with the run (see :meth:`create`), so what the
+        search was configured to do is part of its own record rather than
+        something a reader has to parse back out of the command line.
+
         Args:
-            args: Parsed arguments carrying ``out_dir`` and
-                ``shared_file_system`` (see :meth:`initialize_parser`).
+            args: Parsed arguments carrying ``out_dir``, ``shared_file_system``
+                and ``overwrite_archive`` (see :meth:`initialize_parser`), and
+                the rest of the run's configuration.
+            restarting: Whether this search continues the run the archive already
+                holds, in which case the archive is appended to rather than
+                discarded or warned about.
 
         Returns:
             The archive, opened for writing.
         """
 
         return cls.create(
-            out_dir=args.out_dir, shared_file_system=args.shared_file_system
+            out_dir=args.out_dir,
+            shared_file_system=args.shared_file_system,
+            arguments=vars(args),
+            overwrite=getattr(args, "overwrite_archive", False) and not restarting,
+            expect_existing=restarting,
         )
 
     @classmethod
-    def create(cls, out_dir: str, shared_file_system: bool = False) -> GenomeArchive:
+    def create(
+        cls,
+        out_dir: str,
+        shared_file_system: bool = False,
+        arguments: dict[str, Any] | None = None,
+        overwrite: bool = False,
+        expect_existing: bool = False,
+    ) -> GenomeArchive:
         """Creates (or reopens) a run's output directory and archive for writing.
 
         Local disks use write-ahead logging, so readers such as the artifact
@@ -787,9 +911,22 @@ class GenomeArchive:
         is used instead, which also avoids creating and deleting a journal file
         on every commit.
 
+        An archive that already holds a run keeps the format version,
+        provenance and arguments that run recorded: they describe the search
+        that produced the genomes in it, so restarting a run leaves them intact
+        and records itself separately.
+
         Args:
             out_dir: The run's output directory; created if missing.
             shared_file_system: Whether to use shared-file-system settings.
+            arguments: The run's parsed command-line arguments, recorded for a
+                new archive so a restart can rebuild the same search.
+            overwrite: Whether to discard a run already in ``out_dir`` -- its
+                archive and best-genome files -- and start a new one in its
+                place.
+            expect_existing: Whether an archive that already holds genomes is
+                expected (this run continues it), so finding one is reported as
+                continuing the run rather than warned about.
 
         Returns:
             The archive, opened for writing.
@@ -797,6 +934,9 @@ class GenomeArchive:
 
         os.makedirs(out_dir, exist_ok=True)
         path = os.path.join(out_dir, ARCHIVE_FILENAME)
+
+        if overwrite:
+            _discard_run(out_dir, path)
 
         connection = _connect(path)
         connection.execute(
@@ -820,17 +960,23 @@ class GenomeArchive:
         archive._population_members = set(archive.population_at())
 
         existing = archive.count()
-        if existing:
+        if existing and expect_existing:
+            logger.info(
+                "continuing the run in {}: it already holds {} genomes.", path, existing
+            )
+        elif existing:
             logger.warning(
                 "{} already holds {} genomes; genomes with the same numbers will be replaced.",
                 path,
                 existing,
             )
 
-        archive.set_run_info(
-            format_version=ARCHIVE_FORMAT_VERSION,
-            **_provenance(),
-        )
+        if not archive.run_info():
+            archive.set_run_info(
+                format_version=ARCHIVE_FORMAT_VERSION,
+                **_provenance(),
+                **({} if arguments is None else {"arguments": arguments}),
+            )
         return archive
 
     @classmethod
@@ -1031,6 +1177,9 @@ class GenomeArchive:
             )
             counts = {}
 
+        timing = metadata.get("timing") or {}
+        placement = metadata.get("evaluated_by") or {}
+
         summary = (
             genome_number,
             int(insertion),
@@ -1044,6 +1193,21 @@ class GenomeArchive:
             sum(len(gate.get("parameters") or {}) for gate in gates),
             int(counts["gates_cnot"]) if counts else None,
             int(counts["gates_rot"]) if counts else None,
+            # the highest innovation number this genome holds, so a restarted
+            # search can continue numbering gates without reusing one
+            max(
+                (
+                    int(gate["innovation_number"])
+                    for gate in gates
+                    if gate.get("innovation_number") is not None
+                ),
+                default=None,
+            ),
+            metadata.get("generated_at_insertion"),
+            timing.get("evaluation_seconds"),
+            placement.get("host"),
+            placement.get("rank"),
+            metadata.get("discard_reason"),
             json.dumps(_finite_or_none(_final_metrics(metadata))),
             json.dumps(_finite_or_none(serialized.get("fitness"))),
         )
@@ -1065,7 +1229,7 @@ class GenomeArchive:
                 ),
             )
             connection.execute(
-                f"INSERT OR REPLACE INTO genomes({_SUMMARY_COLUMNS}) VALUES ({', '.join('?' * 14)})",
+                f"INSERT OR REPLACE INTO genomes({_SUMMARY_COLUMNS}) VALUES ({', '.join('?' * len(summary))})",
                 summary,
             )
             connection.execute(

@@ -28,7 +28,7 @@ from src.evolution.mutation import (
     reorder_gate,
     qubit_swap,
 )
-from src.evolution.objective import Objective
+from src.evolution.objective import Objective, evaluate_genome
 from src.evolution.population_strategy import PopulationStrategy
 from src.utils.genome_archive import GenomeArchive
 
@@ -151,6 +151,7 @@ class EXAQC:
         task: str | None = None,
         task_target: str | None = None,
         archive: GenomeArchive | None = None,
+        restarting: bool = False,
     ) -> None:
         """
         Creates an instance of Evolutionary Exploration of Augmenting Quantum Circuits given a
@@ -208,6 +209,10 @@ class EXAQC:
                 every inserted genome, the current-best genome files and the
                 search history are written to. When None nothing is written,
                 e.g. in tests.
+            restarting: whether this search continues a run the archive already
+                holds (see :mod:`src.evolution.restart`). A restart leaves what
+                that run recorded about itself -- its command line, start time
+                and configuration -- as it is, and records itself separately.
         """
 
         self.gate_specifications = gate_specifications
@@ -300,7 +305,7 @@ class EXAQC:
         self.saved_epochs = 10
         self.initial_genome.hyperparameters = self.get_hyperparameters()
 
-        if self.archive is not None:
+        if self.archive is not None and not restarting:
             self.archive.set_run_info(
                 task=self.task,
                 task_target=self.task_target,
@@ -511,6 +516,27 @@ class EXAQC:
         self.genome_number += 1
         return self.genome_number
 
+    def record_generation(self, child: CircuitGenome) -> CircuitGenome:
+        """Stamps a newly generated genome with when, in the search, it was created.
+
+        ``generated_at_insertion`` is how many genomes had been inserted when the
+        child was generated. Together with the insertion it is eventually
+        recorded at, it says how many insertions happened while the child was
+        being evaluated, and with the archive's population events what the
+        population it was generated from held.
+
+        Args:
+            child: The genome just generated.
+
+        Returns:
+            The same genome, with ``generated_at_insertion`` and
+            ``timing["generated_at"]`` (wall-clock seconds) set in its metadata.
+        """
+
+        child.metadata["generated_at_insertion"] = self.inserted_genomes
+        child.metadata.setdefault("timing", {})["generated_at"] = time.time()
+        return child
+
     def mutate(
         self, parent: CircuitGenome, metadata: dict[str, Any], n_mutations: int = 1
     ) -> CircuitGenome:
@@ -672,7 +698,7 @@ class EXAQC:
                 f"set child encoder and decoder: {type(child.encoder)}, {type(child.decoder)}"
             )
 
-            return child
+            return self.record_generation(child)
 
         else:
             # generate from the population as usual
@@ -787,7 +813,7 @@ class EXAQC:
             else:
                 assert child.decoder is not None
 
-            return child
+            return self.record_generation(child)
 
     def insert_genome(self, genome: CircuitGenome) -> None:
         """Inserts an evaluated genome into the population and records it.
@@ -796,18 +822,21 @@ class EXAQC:
         population strategy accepts the genome, it is written to the run's
         archive, the current-best genome files are rewritten if it improved the
         best genome by fitness or by ``target_metric``, and the change to the
-        population is recorded. A genome the population rejects as a duplicate of
-        a better one is not recorded.
+        population is recorded. A genome a population strategy declines to record
+        (by returning False) is counted but not archived; the built-in strategies
+        record every genome, discarded ones included.
 
         Args:
             genome: The evaluated genome to insert.
 
         Returns:
-            None. Updates the population, ``inserted_genomes`` and
-            ``target_metric_best_genome``, and writes to ``archive`` when one
-            was given.
+            None. Stamps the genome's ``timing["inserted_at"]``, updates the
+            population, ``inserted_genomes`` and ``target_metric_best_genome``,
+            and writes to ``archive`` when one was given.
         """
 
+        # when the master took the genome back, on the master's clock
+        genome.metadata.setdefault("timing", {})["inserted_at"] = time.time()
         previous_best = self.population.get_best_genome()
         recorded = self.population.insert_genome(
             genome, current_genome_number=self.genome_number
@@ -903,7 +932,8 @@ class EXAQC:
 
         for _ in range(number_genomes):
             child = self.generate_genome()
-            self.objective(child)
+            # records how long the evaluation took and where it ran, as a worker does
+            evaluate_genome(self.objective, child)
             # use the same insertion path as the MPI master so serial and
             # distributed runs behave identically (passes current_genome_number
             # and updates the genome-insertion tracking).

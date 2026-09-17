@@ -107,6 +107,14 @@ overwritten `best_*` files) are owned by
 `src.utils.genome_archive.GenomeArchive`, so changes to its layout affect every
 search entry point, the single-genome tools, the analysis scripts and the viewer.
 
+A stopped run is continued with `--restart` (`src/evolution/restart.py`), which
+rebuilds the search from the arguments the archive recorded rather than from the
+command line. Anything that changes what a run records -- the arguments stored in
+`run_info`, the gate innovation numbers, the population events, or a population
+strategy's own state -- changes what can be restarted, so a new population
+strategy must implement `restore()`, and an archive field a restart depends on
+cannot be dropped without breaking it.
+
 Whenever an edit would change **how any of these documented entry points
 operate** — not just edits to those files, but edits anywhere in the code they
 reach — you must **stop and prompt the user before finalizing**, explain the

@@ -255,7 +255,7 @@ MPI master/worker design, since workers finish at different times.
 ### [`islands`](./src/evolution/steady_state_islands.py)
 
 Several independent steady-state populations ("islands") are evolved in parallel.
-Islands mostly breed within themselves, which preserves distinct solution
+Islands mostly produce children from their own genomes, which preserves distinct solution
 lineages that would not survive in a single population. Periodically the worst islands
 suffer an **extinction event**: they are cleared and repopulated from the best
 island, spreading good genomes without overly collapsing diversity.
@@ -268,7 +268,7 @@ island, spreading good genomes without overly collapsing diversity.
 | `--genomes_for_next_extinction` | `200` | Genomes inserted between later extinction events |
 | `--islands_to_extinct` | `1` | Worst islands cleared and repopulated each event |
 | `--primary_parent` | `best` | Which parent leads a crossover: `best` (highest fitness first) or `island` (the target island's genome first) |
-| `--intra_island_crossover_rate` | `0.5` | Fraction of an island's children bred within that island |
+| `--intra_island_crossover_rate` | `0.5` | Fraction of an island's children produced within that island |
 | `--topology` | `fully_connected` | Inter-island connection topology; one of the values described below |
 
 Islands exchange genomes only with the neighbors defined by their **connection
@@ -459,11 +459,53 @@ and [`reinforcement_learning`](#reinforcement_learning), because all three call
 |---|---|---|
 | `--out_dir` | `artifacts` | Directory the run's outputs are written into |
 | `--shared_file_system` | off | Use SQLite settings that are safe on a shared network file system (NFS, Lustre, GPFS): a persistent rollback journal instead of write-ahead logging |
+| `--restart` | `auto` | Whether to continue the run already in `--out_dir`: `auto` continues a run when there is one and starts a new one otherwise, `require` fails when there is nothing to continue, `never` always starts a new run and refuses to write into a directory that already holds one |
+| `--overwrite_archive` | off | Discard the run already in `--out_dir` and start a new one in its place |
+| `--force_restart` | off | Restart even when this command's arguments differ from the ones the run recorded, continuing it as it was configured |
 
 Pass `--shared_file_system` when `--out_dir` is on a cluster's shared file
 system. [Write-ahead logging](https://sqlite.org/wal.html), the default, does not
 work over network file systems, but on a local disk it lets the viewer read a run
 without ever delaying the search's writes.
+
+### Restarting a run
+
+A run that was stopped, canceled or crashed is continued from its archive, which
+records everything the search needs: the arguments it was started with, every
+genome it evaluated, which of them the population held, and the highest gate
+innovation number it handed out. This is the default, so **re-running the same
+command continues the run**, and raising `--number_genomes` extends it:
+
+```
+python3 -m src.examples.teacher --teacher half_adder --input_qubits 2 --output_qubits 2 \
+    -ms uniform 1 3 -ps uniform 2 5 --out_dir ./artifacts/half_adder \
+    --number_genomes 5000 islands --n_islands 20 --max_island_size 5
+```
+
+`--number_genomes` is the **total** for the run, so a restart evaluates however
+many it has left: a run stopped after 1,200 of 5,000 genomes evaluates 1,800 more,
+and re-running a finished run does nothing. Because the default `auto` starts a
+new run when there is nothing to continue, that one command serves as both the
+first submission and every requeue of a cluster job. Pass `--restart require` to
+fail instead of starting a new run, which catches a mistyped `--out_dir`.
+
+The archive is authoritative: a restart rebuilds the search from the arguments
+the run recorded, so genome numbering, gate innovation numbers, the population,
+each island's members and connections, and the best genomes all continue rather
+than starting over. Only `--number_genomes` and the flags saying where and how
+this process runs (`--out_dir`, `--shared_file_system`, `--device`,
+`--logging_level`) may differ; any other changed argument is refused, naming
+what differs, unless `--force_restart` says to continue the run as it was
+configured. The random number generators' state is not recorded, so a restarted
+run continues the search rather than reproducing the run that would have
+happened.
+
+To start over instead of continuing, pass `--overwrite_archive`, which discards
+the run in `--out_dir` -- its archive and best-genome files -- and starts a new
+one in its place; it takes precedence over the default offer to continue. Pass
+`--restart never` to refuse to touch a directory that already holds a run at all.
+Runs written before archives recorded their arguments and gate innovation numbers
+cannot be restarted; they are still listed, browsed and charted as before.
 
 ### What a run directory holds
 
@@ -471,15 +513,15 @@ However many genomes a run evaluates, its directory holds the same files:
 
 | File | Contents |
 |---|---|
-| `genomes.sqlar` | Every evaluated genome's JSON, plus a summary and parent links for each (for sorting and tracing ancestry), how the population changed after every insertion, and what produced the run: its command line, git commit, host and library versions, and for an island search how its islands are connected |
+| `genomes.sqlar` | Every evaluated genome's JSON, plus a summary and parent links for each (for sorting and tracing ancestry), how the population changed after every insertion, and what produced the run: its command line, the arguments it was started with (so it can be [restarted](#restarting-a-run)), each restart since, its git commit, host and library versions, and for an island search how its islands are connected |
 | `best_fitness.json`, `best_fitness.png`, `best_fitness_training.png` | The best genome by the population's ranking (lowest `fitness["loss"]`): its JSON, architecture diagram and training plot, overwritten whenever it improves |
 | `best_target_metric.json`, `best_target_metric.png`, `best_target_metric_training.png` | The same for the highest `fitness["target_metric"]` |
 | `run.log` | The run's log |
 | `annotations.sqlite` | Notes and tags on the run and its genomes, written only by the [dashboard](#exaqc_dashboard) or the [MCP interface](#exaqc_mcp) when started with `--allow_annotations` (a search never creates it, and nothing writes annotations into `genomes.sqlar`) |
 
-A genome rejected as a duplicate of a better genome already in a steady-state
-population is not recorded. Nor is genome 1, the empty seed circuit every initial
-genome is mutated from: it is never evaluated, so it has no fitness and does not
+Every evaluated genome is recorded, including those discarded as duplicates of a
+better genome. Genome 1, the empty seed circuit every initial genome is mutated
+from, is not: it is never evaluated, so it has no fitness and does not
 count towards `--number_genomes` (the viewer labels it as the seed wherever it
 appears as a parent).
 
@@ -518,7 +560,17 @@ lets progress be charted against any metric a run recorded -- a loss, a return, 
 fidelity, a gate count -- rather than only the handful a search would have had to
 choose in advance, while it was still running. Each genome's summary row also carries `n_cnot` and `n_rot`
 (its circuit complexity once decomposed) and `final_metrics` (the last value of every
-per-epoch or per-episode metric it recorded). [`exaqc_mcp`](#exaqc_mcp) exposes the
+per-epoch or per-episode metric it recorded), and when and where it was evaluated:
+`generated_at_insertion` (how many genomes had been inserted when it was created, so
+`insertion - generated_at_insertion` is how many insertions happened while it was
+being evaluated), `evaluation_seconds`, `evaluated_host` and `evaluated_rank`. A
+discarded genome's row gives its `discard_reason`: `worse_than_population`,
+`duplicate_of_better` or `generated_before_repopulation`. The genome's JSON holds
+the rest -- `timing` (when it was generated, when its evaluation started and
+finished, and when it was inserted), `evaluated_by` (rank, host and process id),
+for island searches the `target_island_status` it was generated under (a
+`repopulating` island draws its parents from its best neighbor), and the genome a discarded
+genome `lost_to`. [`exaqc_mcp`](#exaqc_mcp) exposes the
 same queries to an agent.
 
 ---
@@ -866,7 +918,7 @@ Then open `http://127.0.0.1:8000/` in a browser. The page has:
   hierarchy, a 2-D mesh as its grid, a star around its hub, a ring or fully
   connected graph as a circle, and a random graph by a force-directed layout),
   each shaded by its best value of the charted metric, with every connection as
-  wide as the number of genomes bred on one of its islands from a parent on the
+  wide as the number of genomes created on one of its islands from a parent on the
   other. Rings mark the chart's focus island and its neighbors, and clicking an
   island colors the chart around it. While a genome is selected (and *highlight
   selected lineage* is on), arrows show where its ancestry crossed between

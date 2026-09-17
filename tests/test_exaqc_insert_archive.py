@@ -17,6 +17,8 @@ import matplotlib
 matplotlib.use("Agg")
 
 import os  # noqa: E402
+import platform  # noqa: E402
+import time  # noqa: E402
 from typing import Any  # noqa: E402
 from unittest.mock import MagicMock, call, patch  # noqa: E402
 
@@ -30,6 +32,8 @@ from src.circuits.pennylane_gate_specifications import (  # noqa: E402
 )
 from src.evolution import master_worker  # noqa: E402
 from src.evolution.exaqc import EXAQC, MUTATION_WEIGHTS  # noqa: E402
+from src.evolution.island import Island  # noqa: E402
+from src.evolution.objective import evaluate_genome  # noqa: E402
 from src.evolution.population_strategy import PopulationStrategy  # noqa: E402
 from src.evolution.steady_state_islands import SteadyStateIslands  # noqa: E402
 from src.evolution.steady_state_population import SteadyStatePopulation  # noqa: E402
@@ -293,8 +297,8 @@ def test_best_files_are_rewritten_only_when_a_best_changes() -> None:
     assert search.target_metric_best_genome is genome
 
 
-def test_rejected_duplicates_are_not_archived() -> None:
-    """A duplicate of a better genome is counted but never recorded."""
+def test_duplicates_of_better_genomes_are_archived_as_discarded() -> None:
+    """A duplicate of a better genome is recorded, with why and to which genome it lost."""
 
     archive = MagicMock()
     population = SteadyStatePopulation(max_population_size=4, compare=compare)
@@ -303,14 +307,115 @@ def test_rejected_duplicates_are_not_archived() -> None:
     search.insert_genome(FakeGenome(1, loss=0.5, target_metric=0.5, gates=(7,)))
     archive.reset_mock()
 
-    search.insert_genome(FakeGenome(2, loss=0.9, target_metric=0.9, gates=(7,)))
+    duplicate = FakeGenome(2, loss=0.9, target_metric=0.4, gates=(7,))
+    search.insert_genome(duplicate)
 
-    archive.add_genome.assert_not_called()
-    archive.write_current_best.assert_not_called()
-    archive.record_population.assert_not_called()
+    archive.add_genome.assert_called_once()
+    assert duplicate.metadata["insert_type"] == "discarded"
+    assert duplicate.metadata["discard_reason"] == "duplicate_of_better"
+    assert duplicate.metadata["lost_to"] == 1
     assert search.inserted_genomes == 2
     assert search.target_metric_best_genome.genome_number == 1
     assert [genome.genome_number for genome in population.get_population()] == [1]
+
+
+def test_a_genome_worse_than_a_full_population_records_the_genome_it_failed_to_beat() -> (
+    None
+):
+    """The discarded genome names the worst genome the population kept."""
+
+    population = SteadyStatePopulation(max_population_size=2, compare=compare)
+    search = build_search(population, MagicMock())
+    for number, loss in ((1, 0.1), (2, 0.2)):
+        search.insert_genome(FakeGenome(number, loss=loss, target_metric=0.0))
+
+    worse = FakeGenome(3, loss=0.9, target_metric=0.0)
+    search.insert_genome(worse)
+
+    assert worse.metadata["insert_type"] == "discarded"
+    assert worse.metadata["discard_reason"] == "worse_than_population"
+    assert worse.metadata["lost_to"] == 2
+
+
+def test_island_discards_record_their_reason() -> None:
+    """An island records each way it discards a genome."""
+
+    island = Island(max_size=1, id=0, compare=compare)
+    island.insert_genome(FakeGenome(1, loss=0.1, target_metric=0.0, gates=(5,)))
+
+    worse = FakeGenome(2, loss=0.5, target_metric=0.0)
+    island.insert_genome(worse)
+    duplicate = FakeGenome(3, loss=0.9, target_metric=0.0, gates=(5,))
+    island.insert_genome(duplicate)
+
+    # a genome generated before its island was repopulated is discarded however good it is
+    island.repopulate(repopulation_genome_number=10)
+    stale = FakeGenome(4, loss=0.01, target_metric=0.0)
+    island.insert_genome(stale)
+
+    assert (worse.metadata["discard_reason"], worse.metadata["lost_to"]) == (
+        "worse_than_population",
+        1,
+    )
+    assert (duplicate.metadata["discard_reason"], duplicate.metadata["lost_to"]) == (
+        "duplicate_of_better",
+        1,
+    )
+    assert stale.metadata["discard_reason"] == "generated_before_repopulation"
+    assert "lost_to" not in stale.metadata
+
+
+def test_evaluation_records_its_timing_and_placement() -> None:
+    """Evaluating a genome records how long it took and which process ran it."""
+
+    genome = FakeGenome(1, loss=0.0, target_metric=0.0)
+    genome.metadata["timing"] = {"generated_at": 1.0}
+
+    evaluate_genome(lambda evaluated: time.sleep(0.01), genome, rank=3)
+
+    timing = genome.metadata["timing"]
+    assert timing["generated_at"] == 1.0
+    assert timing["evaluation_started_at"] <= timing["evaluation_finished_at"]
+    assert timing["evaluation_seconds"] >= 0.01
+    assert genome.metadata["evaluated_by"] == {
+        "rank": 3,
+        "host": platform.node(),
+        "pid": os.getpid(),
+    }
+
+
+def test_generated_genomes_record_when_and_under_what_island_status_they_were_bred() -> (
+    None
+):
+    """Every genome records the insertion it was created at and its full timing."""
+
+    archive = MagicMock()
+    population = SteadyStateIslands(n_islands=2, max_island_size=2, compare=compare)
+    search = build_search(population, archive)
+
+    def objective(genome: CircuitGenome) -> None:
+        """Assigns a fitness without training, so the search runs quickly."""
+        genome.fitness = {"loss": float(genome.genome_number), "target_metric": 0.0}
+
+    search.objective = objective
+    search.run_for(10)
+
+    for recorded in archive.add_genome.call_args_list:
+        genome, insertion = recorded.args[0], recorded.kwargs["insertion"]
+        metadata = genome.metadata
+        # evaluated serially, so each genome is inserted right after it is generated
+        assert metadata["generated_at_insertion"] == insertion - 1
+        timing = metadata["timing"]
+        assert (
+            timing["generated_at"]
+            <= timing["evaluation_started_at"]
+            <= timing["evaluation_finished_at"]
+            <= timing["inserted_at"]
+        )
+        assert metadata["evaluated_by"]["rank"] == 0
+        # initial genomes are mutated from the seed, not generated for an island
+        if metadata["parent_genomes"] != [1]:
+            assert metadata["target_island_status"] in ("full", "repopulating")
 
 
 def test_island_genomes_are_archived_with_their_island() -> None:
@@ -460,6 +565,17 @@ def test_a_real_search_writes_a_fixed_set_of_files(tmp_path) -> None:
         assert info["task_target"] == "iris"
         # the operator selection survives the archive's JSON round trip intact
         assert info["operator_selection"]["mutation_weights"] == MUTATION_WEIGHTS
+        # when and where each genome was created and evaluated is queryable
+        rows = reader.connection.execute(
+            "SELECT insertion, generated_at_insertion, evaluation_seconds, "
+            "evaluated_host, evaluated_rank FROM genomes"
+        ).fetchall()
+        assert rows
+        for insertion, generated_at, seconds, host, rank in rows:
+            assert 0 <= generated_at < insertion
+            assert seconds >= 0
+            assert host == platform.node()
+            assert rank == 0
 
     best_number = min(stored)
     restored = CircuitGenome.from_dict(stored[best_number])

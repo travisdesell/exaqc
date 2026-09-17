@@ -113,6 +113,12 @@ _ROLLUP_SELECT: tuple[tuple[str, str, str], ...] = (
     ("n_parameters", "INTEGER", "n_parameters"),
     ("n_cnot", "INTEGER", "n_cnot"),
     ("n_rot", "INTEGER", "n_rot"),
+    ("max_innovation_number", "INTEGER", "max_innovation_number"),
+    ("generated_at_insertion", "INTEGER", "generated_at_insertion"),
+    ("evaluation_seconds", "REAL", "evaluation_seconds"),
+    ("evaluated_host", "TEXT", "evaluated_host"),
+    ("evaluated_rank", "INTEGER", "evaluated_rank"),
+    ("discard_reason", "TEXT", "discard_reason"),
     ("final_metrics", "TEXT", "final_metrics"),
     ("fitness", "TEXT", "fitness"),
     ("loss", "REAL", "json_extract(fitness, '$.loss')"),
@@ -1483,7 +1489,13 @@ class DashboardTools:
                 "genomes": (
                     "genome_number, insertion, saved_at, insert_type, generated_by "
                     "(JSON array), crossover_type, island, n_gates, n_enabled_gates, "
-                    "n_parameters, n_cnot, n_rot, final_metrics (JSON object), "
+                    "n_parameters, n_cnot, n_rot, max_innovation_number, "
+                    "generated_at_insertion (genomes "
+                    "inserted when it was generated; insertion - generated_at_insertion is "
+                    "how many insertions it waited), evaluation_seconds, evaluated_host, "
+                    "evaluated_rank, discard_reason (worse_than_population, "
+                    "duplicate_of_better or generated_before_repopulation), "
+                    "final_metrics (JSON object), "
                     "fitness (JSON object)"
                 ),
                 "genome_operators": (
