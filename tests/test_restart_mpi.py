@@ -8,6 +8,12 @@ is duplicated, and the population comes back. They also check that requeueing a
 run that has already evaluated everything asked for stops cleanly instead of
 hanging on the workers or evaluating more genomes.
 
+Whether MPI can run at all is established by launching a trivial program rather
+than by looking for ``mpiexec`` on the path: a machine with fewer cores than
+ranks may refuse to start them, and a launcher built against a different MPI than
+``mpi4py`` may fail to start Python. Where that cannot be made to work these
+tests skip, saying what was tried.
+
 The search itself is :mod:`tests.mpi_restart_driver`, which scores a genome by
 its number instead of training it, so a run takes seconds.
 """
@@ -25,18 +31,88 @@ import pytest
 
 from src.utils.genome_archive import GenomeArchive
 
-#: Ranks to run with: one master and two workers, so genomes really are
-#: evaluated away from the rank that owns the archive.
-RANKS = 3
+#: Ranks to run with: a master and a worker, so genomes really are evaluated
+#: away from the rank that owns the archive. Kept as low as that leaves room for
+#: machines with few cores, which an MPI launcher may refuse to oversubscribe.
+RANKS = 2
 
 #: How long a single run may take before the test gives up on it. A run that
 #: hangs (workers never told to stop) fails here rather than stalling the suite.
 TIMEOUT_SECONDS = 180
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("mpiexec") is None,
-    reason="mpiexec is not available, so the MPI paths cannot be exercised",
-)
+#: The launcher arguments that were found to work, or why none did; filled in by
+#: :func:`mpiexec_command` the first time it is asked.
+_LAUNCHER: list[str] | str | None = None
+
+
+def mpiexec_command() -> list[str]:
+    """Returns a launcher that can actually start :data:`RANKS` ranks here.
+
+    Having ``mpiexec`` on the path does not mean it can run: a machine with
+    fewer cores than ranks may refuse to start them unless oversubscription is
+    allowed, and a launcher built against a different MPI than ``mpi4py`` may
+    fail to start Python at all. Rather than assume, this launches a trivial
+    MPI program and keeps the first form that reports the expected number of
+    ranks. The answer is worked out once and reused.
+
+    Returns:
+        The launcher and its arguments, ready to have a command appended.
+
+    Raises:
+        Skipped: (via :func:`pytest.skip`) When no form could run, carrying what
+            the attempts printed so a failure elsewhere can be diagnosed.
+    """
+
+    global _LAUNCHER
+
+    if _LAUNCHER is None:
+        _LAUNCHER = _find_launcher()
+
+    if isinstance(_LAUNCHER, str):
+        pytest.skip(_LAUNCHER)
+
+    return list(_LAUNCHER)
+
+
+def _find_launcher() -> list[str] | str:
+    """Finds a working ``mpiexec`` invocation, or explains why there is none.
+
+    Returns:
+        The launcher arguments that started :data:`RANKS` ranks, or a message
+        saying what was tried and what happened.
+    """
+
+    mpiexec = shutil.which("mpiexec")
+    if mpiexec is None:
+        return "mpiexec is not available, so the MPI paths cannot be exercised"
+
+    probe = "from mpi4py import MPI; print(MPI.COMM_WORLD.Get_size())"
+    attempts: list[str] = []
+
+    # a launcher that will not oversubscribe refuses more ranks than cores, so
+    # the plain form is tried first and oversubscription only as a fallback
+    for arguments in ([mpiexec], [mpiexec, "--oversubscribe"]):
+        command = [*arguments, "-n", str(RANKS), sys.executable, "-c", probe]
+        try:
+            finished = subprocess.run(
+                command, capture_output=True, text=True, timeout=TIMEOUT_SECONDS
+            )
+        except subprocess.TimeoutExpired:
+            attempts.append(f"{' '.join(arguments)}: timed out")
+            continue
+
+        if finished.returncode == 0 and finished.stdout.split() == [str(RANKS)] * RANKS:
+            return arguments
+
+        attempts.append(
+            f"{' '.join(arguments)}: exit {finished.returncode}, "
+            f"stdout {finished.stdout.strip()!r}, stderr {finished.stderr.strip()!r}"
+        )
+
+    return (
+        f"no mpiexec invocation could start {RANKS} ranks here, so the MPI paths "
+        f"cannot be exercised ({'; '.join(attempts)})"
+    )
 
 
 def run_search(out_dir: Path, number_genomes: int) -> subprocess.CompletedProcess[str]:
@@ -52,7 +128,7 @@ def run_search(out_dir: Path, number_genomes: int) -> subprocess.CompletedProces
 
     return subprocess.run(
         [
-            shutil.which("mpiexec"),
+            *mpiexec_command(),
             "-n",
             str(RANKS),
             sys.executable,
@@ -80,6 +156,26 @@ def run_search(out_dir: Path, number_genomes: int) -> subprocess.CompletedProces
         text=True,
         timeout=TIMEOUT_SECONDS,
         cwd=Path(__file__).resolve().parent.parent,
+    )
+
+
+def assert_ran(finished: subprocess.CompletedProcess[str]) -> None:
+    """Asserts a launched run succeeded, reporting everything it printed if not.
+
+    An MPI launcher can fail with nothing on either stream, so a bare exit code
+    says very little; this puts whatever the run did print into the failure.
+
+    Args:
+        finished: The finished run.
+
+    Returns:
+        None. Fails the test when the run did not exit cleanly.
+    """
+
+    assert finished.returncode == 0, (
+        f"the run exited {finished.returncode}\n"
+        f"stdout: {finished.stdout.strip()!r}\n"
+        f"stderr: {finished.stderr.strip()!r}"
     )
 
 
@@ -117,7 +213,7 @@ def test_a_distributed_run_continues_across_a_restart(tmp_path) -> None:
     out_dir = tmp_path / "run"
 
     first = run_search(out_dir, number_genomes=6)
-    assert first.returncode == 0, first.stderr
+    assert_ran(first)
 
     stopped = archive_state(out_dir)
     # the master drains the genomes still being evaluated when the budget is
@@ -125,7 +221,7 @@ def test_a_distributed_run_continues_across_a_restart(tmp_path) -> None:
     assert len(stopped["numbers"]) >= 6
 
     second = run_search(out_dir, number_genomes=stopped["insertions"] + 5)
-    assert second.returncode == 0, second.stderr
+    assert_ran(second)
 
     continued = archive_state(out_dir)
 
@@ -155,12 +251,11 @@ def test_requeueing_a_finished_distributed_run_stops_cleanly(tmp_path) -> None:
 
     out_dir = tmp_path / "run"
 
-    assert run_search(out_dir, number_genomes=6).returncode == 0
+    assert_ran(run_search(out_dir, number_genomes=6))
     finished = archive_state(out_dir)
 
     for _ in range(2):
-        again = run_search(out_dir, number_genomes=6)
-        assert again.returncode == 0, again.stderr
+        assert_ran(run_search(out_dir, number_genomes=6))
 
     unchanged = archive_state(out_dir)
 
@@ -177,7 +272,7 @@ def test_the_driver_records_what_a_restart_needs(tmp_path) -> None:
     """
 
     out_dir = tmp_path / "run"
-    assert run_search(out_dir, number_genomes=4).returncode == 0
+    assert_ran(run_search(out_dir, number_genomes=4))
 
     with GenomeArchive.open_readonly(str(out_dir)) as reader:
         run_info = reader.run_info()
