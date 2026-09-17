@@ -22,7 +22,7 @@ from src.circuits.circuit import CircuitGenome
 from src.circuits.decoder import initialize_decoder
 from src.circuits.encoder import initialize_encoder
 from src.circuits.gate_specifications import GateSpecifications
-from src.evolution import restart
+from src.utils import restart
 from src.evolution.exaqc import EXAQC
 from src.evolution.master_worker import run_evolution
 from src.evolution.population_strategy import PopulationStrategy

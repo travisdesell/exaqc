@@ -26,7 +26,7 @@ from src.evolution.exaqc import EXAQC
 from src.evolution.master_worker import run_evolution
 from src.evolution.objective import Objective
 from src.evolution.population_strategy import PopulationStrategy
-from src.evolution import restart
+from src.utils import restart
 from src.metrics.mean_class_accuracy import MeanClassAccuracy
 from src.metrics.metric import Metric
 from src.trainer.supervised_trainer import SupervisedTrainer
@@ -350,7 +350,8 @@ def main() -> None:
     # when the file sink is added.
     logger.remove()
     logger.add(sys.stdout, level=args.logging_level)
-    # logger.add(os.path.join(args.out_dir, "run.log"))
+    if args.save_run_log:
+        logger.add(os.path.join(args.out_dir, "run.log"), level=args.logging_level)
 
     device = (
         args.device

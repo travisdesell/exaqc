@@ -1,7 +1,7 @@
 """Tests for the restart flags every search entry point exposes.
 
 Restarting is decided before anything is built, by
-:func:`src.evolution.restart.prepare`, from the ``--restart``,
+:func:`src.utils.restart.prepare`, from the ``--restart``,
 ``--overwrite_archive`` and ``--force_restart`` flags that
 :meth:`src.utils.genome_archive.GenomeArchive.initialize_parser` adds. These
 tests pin the flags each entry point offers -- a search whose parser lost them
@@ -23,7 +23,7 @@ from typing import Any, NoReturn  # noqa: E402
 
 import pytest  # noqa: E402
 
-from src.evolution import restart  # noqa: E402
+from src.utils import restart  # noqa: E402
 from src.evolution.steady_state_population import SteadyStatePopulation  # noqa: E402
 from src.utils.genome_archive import GenomeArchive  # noqa: E402
 from tests.test_restart import (  # noqa: E402
@@ -100,8 +100,8 @@ def a_stopped_run(run_dir: Any, genomes: int = 6) -> None:
 
 
 @pytest.mark.parametrize("module_name", ENTRY_POINTS)
-def test_every_entry_point_offers_the_restart_flags(module_name: str) -> None:
-    """Each search entry point exposes the restart flags with the same defaults.
+def test_every_entry_point_offers_the_run_output_flags(module_name: str) -> None:
+    """Each search entry point exposes the run-output flags with the same defaults.
 
     Args:
         module_name: The entry point under ``src.examples`` to check.
@@ -114,6 +114,9 @@ def test_every_entry_point_offers_the_restart_flags(module_name: str) -> None:
     assert set(actions["restart"].choices) == {"never", "auto", "require"}
     assert actions["overwrite_archive"].default is False
     assert actions["force_restart"].default is False
+    # the run's log is kept only when asked for: it records the search's own
+    # logging, which is far more verbose than what the console shows
+    assert actions["save_run_log"].default is False
 
 
 def test_a_new_run_starts_when_nothing_is_there(tmp_path) -> None:

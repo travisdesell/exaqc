@@ -459,6 +459,7 @@ and [`reinforcement_learning`](#reinforcement_learning), because all three call
 |---|---|---|
 | `--out_dir` | `artifacts` | Directory the run's outputs are written into |
 | `--shared_file_system` | off | Use SQLite settings that are safe on a shared network file system (NFS, Lustre, GPFS): a persistent rollback journal instead of write-ahead logging |
+| `--save_run_log` | off | Also write the run's log to `run.log` in `--out_dir`, at `--logging_level` |
 | `--restart` | `auto` | Whether to continue the run already in `--out_dir`: `auto` continues a run when there is one and starts a new one otherwise, `require` fails when there is nothing to continue, `never` always starts a new run and refuses to write into a directory that already holds one |
 | `--overwrite_archive` | off | Discard the run already in `--out_dir` and start a new one in its place |
 | `--force_restart` | off | Restart even when this command's arguments differ from the ones the run recorded, continuing it as it was configured |
@@ -516,7 +517,7 @@ However many genomes a run evaluates, its directory holds the same files:
 | `genomes.sqlar` | Every evaluated genome's JSON, plus a summary and parent links for each (for sorting and tracing ancestry), how the population changed after every insertion, and what produced the run: its command line, the arguments it was started with (so it can be [restarted](#restarting-a-run)), each restart since, its git commit, host and library versions, and for an island search how its islands are connected |
 | `best_fitness.json`, `best_fitness.png`, `best_fitness_training.png` | The best genome by the population's ranking (lowest `fitness["loss"]`): its JSON, architecture diagram and training plot, overwritten whenever it improves |
 | `best_target_metric.json`, `best_target_metric.png`, `best_target_metric_training.png` | The same for the highest `fitness["target_metric"]` |
-| `run.log` | The run's log |
+| `run.log` | The run's log, written only when `--save_run_log` is passed, at `--logging_level` (a search logs a line per gate below its default level, so a debug-level log of a long run grows to many gigabytes) |
 | `annotations.sqlite` | Notes and tags on the run and its genomes, written only by the [dashboard](#exaqc_dashboard) or the [MCP interface](#exaqc_mcp) when started with `--allow_annotations` (a search never creates it, and nothing writes annotations into `genomes.sqlar`) |
 
 Every evaluated genome is recorded, including those discarded as duplicates of a

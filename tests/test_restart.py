@@ -1,6 +1,6 @@
 """Tests for restarting a stopped search from its archive.
 
-``src.evolution.restart`` reads back what a stopped, canceled or crashed run
+``src.utils.restart`` reads back what a stopped, canceled or crashed run
 left in its ``genomes.sqlar``: the arguments it was started with, the genomes its
 population held, the counters it stopped at, and the highest gate innovation
 number it handed out. These tests run small real searches, stop them, restart
@@ -30,7 +30,7 @@ from src.circuits.encoder import initialize_encoder  # noqa: E402
 from src.circuits.pennylane_gate_specifications import (  # noqa: E402
     pennylane_gate_specifications,
 )
-from src.evolution import restart  # noqa: E402
+from src.utils import restart  # noqa: E402
 from src.evolution.exaqc import EXAQC  # noqa: E402
 from src.evolution.innovation import innovation_number_generator  # noqa: E402
 from src.evolution.population_strategy import PopulationStrategy  # noqa: E402

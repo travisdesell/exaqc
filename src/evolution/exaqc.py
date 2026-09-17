@@ -210,7 +210,7 @@ class EXAQC:
                 search history are written to. When None nothing is written,
                 e.g. in tests.
             restarting: whether this search continues a run the archive already
-                holds (see :mod:`src.evolution.restart`). A restart leaves what
+                holds (see :mod:`src.utils.restart`). A restart leaves what
                 that run recorded about itself -- its command line, start time
                 and configuration -- as it is, and records itself separately.
         """

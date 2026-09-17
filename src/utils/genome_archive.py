@@ -803,8 +803,8 @@ class GenomeArchive:
 
         Returns:
             None. Mutates ``parser`` by adding ``--out_dir``,
-            ``--shared_file_system``, ``--restart``, ``--overwrite_archive`` and
-            ``--force_restart``.
+            ``--shared_file_system``, ``--save_run_log``, ``--restart``,
+            ``--overwrite_archive`` and ``--force_restart``.
         """
 
         parser.add_argument(
@@ -825,6 +825,17 @@ class GenomeArchive:
             help=(
                 "Use SQLite settings that are safe on a shared network file system (NFS, "
                 "Lustre, GPFS): a persistent rollback journal instead of write-ahead logging."
+            ),
+        )
+
+        parser.add_argument(
+            "--save_run_log",
+            action=argparse.BooleanOptionalAction,
+            default=False,
+            help=(
+                "Also write the run's log to run.log in --out_dir, at --logging_level. Off by "
+                "default: a search logs a line per gate below its default level, so a debug-level "
+                "log of a long run grows to many gigabytes."
             ),
         )
 

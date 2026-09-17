@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 from src.circuits.circuit import CircuitGenome
 
 if TYPE_CHECKING:
-    from src.evolution.restart import RestartState
+    from src.utils.restart import RestartState
 
 #: Why a population strategy discarded a genome, recorded as its ``discard_reason``:
 #: it was worse than every genome a full population kept, it had the same enabled
@@ -151,7 +151,7 @@ class PopulationStrategy(ABC):
         Called when a run is restarted from its archive, before the search
         generates anything: the strategy takes back the genomes it held when the
         run stopped, along with whatever internal state it needs to behave as it
-        did (see :mod:`src.evolution.restart`).
+        did (see :mod:`src.utils.restart`).
 
         Args:
             state: The stopped run's state: the genomes its population held, the

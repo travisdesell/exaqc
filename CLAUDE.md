@@ -107,7 +107,7 @@ overwritten `best_*` files) are owned by
 `src.utils.genome_archive.GenomeArchive`, so changes to its layout affect every
 search entry point, the single-genome tools, the analysis scripts and the viewer.
 
-A stopped run is continued with `--restart` (`src/evolution/restart.py`), which
+A stopped run is continued with `--restart` (`src/utils/restart.py`), which
 rebuilds the search from the arguments the archive recorded rather than from the
 command line. Anything that changes what a run records -- the arguments stored in
 `run_info`, the gate innovation numbers, the population events, or a population

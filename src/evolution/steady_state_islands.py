@@ -26,7 +26,7 @@ from src.evolution.topology import assign_topology
 from src.evolution.population_strategy import PopulationStrategy
 
 if TYPE_CHECKING:
-    from src.evolution.restart import RestartState
+    from src.utils.restart import RestartState
 
 
 def island_compare(island1: Island, island2: Island) -> int:
@@ -253,7 +253,7 @@ class SteadyStateIslands(PopulationStrategy):
         a ``random`` topology would otherwise come out differently.
 
         Args:
-            state: The stopped run's state (see :mod:`src.evolution.restart`).
+            state: The stopped run's state (see :mod:`src.utils.restart`).
 
         Returns:
             None. Restores each island's population, status and repopulation

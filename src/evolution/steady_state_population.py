@@ -11,7 +11,7 @@ from src.circuits.circuit import CircuitGenome
 from src.evolution.population_strategy import PopulationStrategy, mark_discarded
 
 if TYPE_CHECKING:
-    from src.evolution.restart import RestartState
+    from src.utils.restart import RestartState
 
 
 class SteadyStatePopulation(PopulationStrategy):
@@ -71,7 +71,7 @@ class SteadyStatePopulation(PopulationStrategy):
         """Takes back the population a stopped run held, so its search continues.
 
         Args:
-            state: The stopped run's state (see :mod:`src.evolution.restart`).
+            state: The stopped run's state (see :mod:`src.utils.restart`).
 
         Returns:
             None. Refills ``population`` with the run's genomes, sorted by
