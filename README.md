@@ -37,6 +37,7 @@ classical layers train together with ordinary backpropagation and the standard P
 - [Population strategies](#population-strategies)
   - [steady_state](#steady_state)
   - [islands](#islands)
+  - [steady_state_speciation](#steady_state_speciation)
   - [Choosing a population strategy](#choosing-a-population-strategy)
 - [Trainers](#trainers)
   - [SupervisedTrainer](#supervisedtrainer)
@@ -111,7 +112,7 @@ command-line arguments group the same way:
 | Piece | What it does | Where its arguments come from |
 |---|---|---|
 | **EXAQC** | Generates new genomes by mutation and crossover | [Search arguments](#search-command-line-arguments) |
-| **Population strategy** | Decides which genomes survive and become parents | [`steady_state`](#steady_state) / [`islands`](#islands) sub-command |
+| **Population strategy** | Decides which genomes survive and become parents | [`steady_state`](#steady_state) / [`islands`](#islands) / [`steady_state_speciation`](#steady_state_speciation) sub-command |
 | **Trainer** | Trains each genome once it is generated | [Trainers](#trainers) |
 | **Objective** | Calls the trainer for a genome and sets its `fitness` | The entry point itself |
 | **Genome archive** | Records every evaluated genome, the current best genomes and the search history | [Run outputs](#run-outputs-genomearchive) |
@@ -244,6 +245,7 @@ arguments:
 ```
 python3 -m src.examples.classification <options...> steady_state --max_population_size 30
 python3 -m src.examples.classification <options...> islands --n_islands 10 --max_island_size 10 --topology ring
+python3 -m src.examples.classification <options...> steady_state_speciation --max_population_size 30 --species_threshold 0.6
 ```
 
 ### [`steady_state`](./src/evolution/steady_state_population.py)
@@ -293,6 +295,26 @@ slowly); a denser one converges faster. The available values are:
 Multi-word values take their arguments as separate tokens — for example
 `--topology 2d_mesh 3 4` arranges 12 islands in a 3×4 grid.
 
+### [`steady_state_speciation`](./src/evolution/steady_state_speciation.py)
+
+A single population with global capacity, partitioned into **species** by
+structural distance on gate innovation IDs (the same idea as NEAT-style
+speciation). A new genome joins the first compatible species or starts its own;
+parents are drawn round-robin within a species, with a small chance of
+inter-species crossover. Capacity is enforced globally (worst non-singleton
+members are preferred for eviction). Species membership is stored on each
+genome as `metadata["species_id"]`; the search archive records genomes the same
+way as for the other strategies.
+
+| Argument | Default | Description |
+|---|---|---|
+| `--max_population_size` | `30` | Genomes retained across all species |
+| `--species_threshold` | `0.6` | Join a species iff structural distance is strictly below this |
+| `--neat_c1` | `1.0` | Coefficient on excess genes in the structural distance |
+| `--neat_c2` | `1.0` | Coefficient on disjoint genes in the structural distance |
+| `--neat_c3` | `0.0` | Angle-term coefficient; must stay `0.0` (angle distance is not implemented) |
+| `--inter_species_parent_rate` | `0.1` | Fraction of multi-parent requests that mix two species |
+
 ### Choosing a population strategy
 
 - **`steady_state` is the simpler default** and is what the published
@@ -301,8 +323,13 @@ Multi-word values take their arguments as separate tokens — for example
   near-identical fitness and structure. `--islands_to_extinct 0` disables
   extinction entirely, giving fully independent parallel searches; raising it
   increases how aggressively good material is shared.
-- **Total capacity is `n_islands × max_island_size`.** Keep that in the same
-  range as a steady-state population you would otherwise use.
+- **`steady_state_speciation` protects structural niches** inside one
+  population: dissimilar circuits can survive together even when a single
+  fitness ranking would wipe them. Raise `--species_threshold` to form fewer,
+  broader species; lower it for more, tighter niches. Keep
+  `--max_population_size` in the same range as a steady-state run.
+- **Total capacity for islands is `n_islands × max_island_size`.** Keep that in
+  the same range as a steady-state population you would otherwise use.
 - **`--topology` trades diversity against spread.** A sparse topology like
   `ring` keeps islands distinct and resists premature convergence, while a dense
   `fully_connected` topology spreads strong genomes fastest; `2d_mesh`, `tree`,
