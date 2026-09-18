@@ -7,7 +7,7 @@ from mpi4py.MPI import Intracomm
 
 from src.circuits.circuit import CircuitGenome
 from src.evolution.exaqc import EXAQC
-from src.evolution.objective import Objective
+from src.evolution.objective import Objective, evaluate_genome
 
 tag_ids = {
     "genome": 1,
@@ -114,7 +114,8 @@ def worker(
 
         genome = CircuitGenome.from_dict(data)
 
-        objective(genome)
+        # records how long the evaluation took and which rank and host ran it
+        evaluate_genome(objective, genome, rank=rank)
 
         comm.send(genome.to_dict(), dest=0, tag=tag_ids["genome_response"])
 

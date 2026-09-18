@@ -282,6 +282,95 @@ main {
   color: var(--text-secondary);
 }
 
+/* ---------- annotations ---------- */
+
+.annotations {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 10px;
+  color: var(--text-secondary);
+}
+
+.tag-chip button {
+  border: none;
+  background: none;
+  padding: 0 0 0 4px;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+}
+
+.note {
+  border-left: 3px solid var(--border);
+  padding: 2px 0 2px 10px;
+  max-width: 70ch;
+}
+
+.note p {
+  margin: 0 0 2px;
+  white-space: pre-wrap;
+}
+
+.annotation-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+  width: 100%;
+}
+
+.annotation-form textarea {
+  flex: 1 1 100%;
+  min-height: 4em;
+  font: inherit;
+}
+
+.run-notes,
+.island-topology {
+  margin-top: 8px;
+}
+
+.topology-frame {
+  overflow: auto;
+  max-width: 100%;
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-1);
+}
+
+.topology-frame svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+.topology-frame svg text {
+  fill: var(--text-secondary);
+  font-size: 11px;
+}
+
+.topology-frame .island {
+  cursor: pointer;
+}
+
+.topology-frame .island:focus-visible {
+  outline: 2px solid var(--series-1);
+  outline-offset: 2px;
+}
+
 /* ---------- tables ---------- */
 
 .table-wrap {
@@ -647,6 +736,29 @@ details summary {
   cursor: pointer;
   color: var(--text-secondary);
   margin: 6px 0;
+}
+
+/* the genome panel's download link, styled as one of its buttons */
+a.download-json {
+  border: 1px solid var(--baseline);
+  border-radius: 6px;
+  padding: 4px 8px;
+  color: var(--text-primary);
+  background: var(--surface-1);
+}
+
+a.download-json:hover {
+  background: var(--surface-2);
+  text-decoration: none;
+}
+
+/* per-epoch metric tables: many narrow numeric columns */
+.detail-panel .table-wrap table {
+  font-variant-numeric: tabular-nums;
+}
+
+.detail-panel .table-wrap th {
+  white-space: nowrap;
 }
 
 /* ---------- insertion rates ---------- */

@@ -44,7 +44,8 @@ class GateSpecification:
             cnot_count: how many CNOT (two-qubit entangling) operations this gate costs once decomposed
                 into a hardware-native basis. Zero for gates that need no entangling operation. This is
                 decomposition cost, not the gate's own arity -- e.g. a controlled rotation is one gate but
-                decomposes into two CNOTs. Used by :mod:`src.utils.profiler` to score circuit complexity.
+                decomposes into two CNOTs. Used by :mod:`src.circuits.gate_complexity` to score circuit
+                complexity.
             rot_count: how many parameterized rotation operations this gate costs once decomposed into a
                 hardware-native basis. Like ``cnot_count`` this is decomposition cost rather than the number
                 of parameters the gate itself accepts -- e.g. ``crx`` takes one parameter but decomposes into
