@@ -768,6 +768,11 @@ class EXAQC:
                 else:
                     parent, metadata = self.population.get_parent()
 
+                    if parent is None:
+                        # the target island is repopulating and none of its
+                        # neighbors hold a genome to mutate, so try another island
+                        continue
+
                     mutation_count = self.get_mutation_count()
 
                     logger.info(
