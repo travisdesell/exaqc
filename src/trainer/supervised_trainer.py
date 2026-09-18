@@ -302,32 +302,14 @@ class SupervisedTrainer:
         genome.metadata["training_epoch_metrics"] = []
         genome.metadata["validation_epoch_metrics"] = []
 
-        n_trainable_parameters = sum(
-            p.numel() for p in genome.parameters() if p.requires_grad
-        )
+        # what the optimizer actually updates (encoder/decoder weights and enabled
+        # gates' parameters), recorded the same way by every trainer
+        n_trainable_parameters = genome.count_trainable_parameters()
         genome.metadata["n_trainable_parameters"] = n_trainable_parameters
 
-        # The quantum weight vector carries one entry per gate parameter for
-        # *every* gate, including disabled ones, but disabled gates are skipped
-        # in the forward pass -- so their parameters are never connected to the
-        # loss. Counting them would send a genome whose only parameterized gates
-        # are disabled down the training path, where backward() fails with
-        # "element 0 of tensors does not require grad". Base the train-vs-eval
-        # decision on the parameters that are actually used (encoder/decoder
-        # plus enabled gates).
-        disabled_gate_parameters = sum(
-            len(gate.parameters) for gate in genome.gates if not gate.enabled
-        )
-        effective_trainable_parameters = (
-            n_trainable_parameters - disabled_gate_parameters
-        )
+        logger.debug(f"hybrid model n trainable parameters: {n_trainable_parameters}")
 
-        logger.debug(
-            f"hybrid model n trainable parameters: {n_trainable_parameters} "
-            f"(effective/enabled: {effective_trainable_parameters})"
-        )
-
-        if effective_trainable_parameters == 0:
+        if n_trainable_parameters == 0:
             # this model has no parameters connected to the loss so it can't be
             # trained. instead just evaluate it on the validation data.
             logger.info("Model has no trainable (enabled) parameters; evaluating only.")

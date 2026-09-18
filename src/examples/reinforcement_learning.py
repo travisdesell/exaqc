@@ -47,6 +47,7 @@ from src.evolution.exaqc import EXAQC
 from src.evolution.master_worker import run_evolution
 from src.evolution.objective import Objective
 from src.evolution.population_strategy import PopulationStrategy
+from src.utils import restart
 
 from src.trainer.reinforcement_trainer import (
     RLEnvironment,
@@ -271,7 +272,8 @@ def build_trainer(algo: str) -> ReinforcementLearningTrainer:
 def compare(genome1: CircuitGenome, genome2: CircuitGenome) -> int:
     """Sorts genomes by fitness ``loss`` (lower is better).
 
-    Fitness ``loss`` is set to the negative mean evaluation return, so
+    Fitness ``loss`` is set to the negative of a weighted mean of the training
+    and evaluation returns (see :class:`ReinforcementLearningObjective`), so
     sorting ascending by loss is equivalent to sorting descending by return
     -- matching the convention used by the classification example.
 
@@ -303,6 +305,9 @@ class ReinforcementLearningObjective(Objective):
     Args:
         environment: The target reinforcement-learning environment.
         trainer: The reinforcement-learning trainer (algorithm) to use.
+        train_vs_validation_bias: The weight of the training return in the
+            fitness ``loss``; the evaluation return gets the rest, so the loss
+            is ``-(bias * training return + (1 - bias) * evaluation return)``.
     """
 
     def __init__(
@@ -310,17 +315,33 @@ class ReinforcementLearningObjective(Objective):
         environment: RLEnvironment,
         trainer: ReinforcementLearningTrainer,
         train_vs_validation_bias: float = 0.1,
-    ):
+    ) -> None:
+        """Stores the environment, trainer and fitness weighting.
+
+        Args:
+            environment: The target reinforcement-learning environment.
+            trainer: The reinforcement-learning trainer (algorithm) to use.
+            train_vs_validation_bias: The weight of the training return in the
+                fitness ``loss``; the evaluation return gets ``1 - bias``.
+
+        Returns:
+            None. Sets ``environment``, ``trainer`` and
+            ``train_vs_validation_bias``.
+        """
+
         self.environment = environment
         self.trainer = trainer
         self.train_vs_validation_bias = train_vs_validation_bias
 
-    def __call__(self, genome: CircuitGenome):
+    def __call__(self, genome: CircuitGenome) -> None:
         """Trains and evaluates a genome, setting its fitness.
 
         Args:
-            genome: The genome to train and evaluate. Its ``fitness``
-                attribute is populated on return.
+            genome: The genome to train and evaluate.
+
+        Returns:
+            None. Sets the genome's ``fitness``, whose ``loss`` is the negative
+            weighted mean return described on the class.
         """
 
         self.trainer.train(genome, self.environment)
@@ -328,12 +349,10 @@ class ReinforcementLearningObjective(Objective):
         training_metrics = genome.metadata["best_training_metrics"]
         validation_metrics = genome.metadata["best_validation_metrics"]
 
+        # the bias weights the training return; the evaluation return gets the rest
         mean_return = (
-            self.train_vs_validation_bias * validation_metrics["return_mean"]
-        ) + ((1.0 - self.train_vs_validation_bias) * training_metrics["return_mean"])
-
-        # mean_return = validation_metrics["return_mean"]
-        # mean_return = training_metrics["return_mean"]
+            self.train_vs_validation_bias * training_metrics["return_mean"]
+        ) + ((1.0 - self.train_vs_validation_bias) * validation_metrics["return_mean"])
 
         # "loss" (lower is better) drives population sorting via compare();
         # the remaining keys mirror the RL fields used by save_circuit's tag
@@ -438,8 +457,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--train_vs_validation_bias",
         "-tvb",
         type=float,
-        default=0.01,
-        help="Weights how the loss is calculated as (<tvb> * train_return) + ((1.0 - <tvb>) * validation_return)).",
+        default=0.1,
+        help="Weights how the loss is calculated: -((<tvb> * train_return) + ((1.0 - <tvb>) * validation_return)).",
     )
 
     parser.add_argument(
@@ -463,12 +482,18 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
+    # Decided before anything is built, and on every rank: a restarted run takes
+    # its configuration from the run it continues, so the objective a worker
+    # evaluates with matches the search the master restores.
+    args, restart_state, run_for = restart.prepare(args, parser.error)
+
     # The output directory is created by GenomeArchive.from_args (on the serial
     # run or MPI master); loguru creates the run.log parent directory as needed
     # when the file sink is added.
     logger.remove()
     logger.add(sys.stdout, level=args.logging_level)
-    logger.add(os.path.join(args.out_dir, "run.log"))
+    if args.save_run_log:
+        logger.add(os.path.join(args.out_dir, "run.log"), level=args.logging_level)
 
     # -----------------------------------------------------------------
     # Environment + trainer + objective
@@ -611,10 +636,16 @@ def main() -> None:
         # factories (which every entry point shares); only the task-specific
         # encoder/decoder sizing, hyperparameters and register layout are
         # computed here.
-        return EXAQC(
+        population = (
+            PopulationStrategy.from_args(args, compare)
+            if restart_state is None
+            else restart.restored_strategy(restart_state, args, compare)
+        )
+
+        search = EXAQC(
             gate_specifications=GateSpecifications.from_args(args),
-            population=PopulationStrategy.from_args(args, compare),
-            archive=GenomeArchive.from_args(args),
+            population=population,
+            archive=GenomeArchive.from_args(args, restarting=restart_state is not None),
             objective=objective,
             initial_encoder=initial_encoder,
             initial_decoder=initial_decoder,
@@ -628,12 +659,18 @@ def main() -> None:
             output_registers={"input": n_output_registers},
             task="reinforcement_learning",
             task_target=args.env,
+            restarting=restart_state is not None,
         )
+
+        if restart_state is not None:
+            restart.resume(search, restart_state, args)
+
+        return search
 
     run_evolution(
         objective=objective,
         build_exaqc=build_exaqc,
-        run_for=args.number_genomes,
+        run_for=run_for,
     )
 
 

@@ -12,7 +12,10 @@ escape their directory.
 from __future__ import annotations
 
 import json
+import socket
+import sqlite3
 import threading
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
@@ -21,12 +24,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import uvicorn
 
 from src.examples import exaqc_dashboard
 from src.utils.artifact_viewer import server
+from src.utils.artifact_viewer.app import create_app
 from src.utils.artifact_viewer.server import (
     ArtifactViewer,
-    ArtifactViewerServer,
     RenderService,
     RunRegistry,
     assign_groups,
@@ -121,13 +125,24 @@ def gate(
     }
 
 
-def build_run(directory, genomes: list[FakeGenome], history: bool = True) -> str:
-    """Writes a run directory holding an archive (and optionally a history CSV).
+def build_run(
+    directory,
+    genomes: list[FakeGenome],
+    history: bool = True,
+    islands: list[int | None] | None = None,
+    run_info: dict[str, Any] | None = None,
+) -> str:
+    """Writes a run directory holding an archive, and its search progress.
 
     Args:
         directory: The run directory to create.
         genomes: The genomes to store, in insertion order.
-        history: Whether to write an ``exaqc_history.csv``.
+        history: Whether to record the population changes a search would, which
+            is what the progress charts are recomputed from.
+        islands: The island each genome was inserted into, in the same order,
+            for a run that used islands.
+        run_info: Further ``run_info`` values to record, such as an island
+            topology.
 
     Returns:
         The run directory, as a string.
@@ -138,19 +153,18 @@ def build_run(directory, genomes: list[FakeGenome], history: bool = True) -> str
             task="classification",
             task_target="iris",
             population_strategy="SteadyStatePopulation",
+            **(run_info or {}),
         )
         for insertion, genome in enumerate(genomes, start=1):
-            archive.add_genome(genome, insertion=insertion)
+            island = islands[insertion - 1] if islands else None
+            archive.add_genome(genome, insertion=insertion, island=island)
 
-    history_path = directory / "exaqc_history.csv"
-    if history:
-        best = min(genome.serialized["fitness"]["loss"] for genome in genomes)
-        history_path.write_text(
-            "step,best,top5_mean\n"
-            + "".join(f"{step},{best + 1 / step},{best * 2}\n" for step in range(1, 4))
-        )
-    elif history_path.exists():
-        history_path.unlink()
+        if history:
+            # Three steps, growing the population one genome at a time, so a
+            # run's series has the same shape a real search would produce.
+            for step in range(1, 4):
+                archive.record_population(step=step, population=genomes[:step])
+
     return str(directory)
 
 
@@ -200,6 +214,50 @@ def standard_genomes() -> list[FakeGenome]:
     ]
 
 
+@contextmanager
+def _running_server(
+    registry: RunRegistry, allow_annotations: bool = False
+) -> Iterator[str]:
+    """Serves a registry's runs with uvicorn on a free port, for a block's duration.
+
+    The socket is bound here rather than by uvicorn so the port is known before
+    the server starts.
+
+    Args:
+        registry: The runs to serve.
+        allow_annotations: Whether the dashboard may write notes and tags.
+
+    Yields:
+        The base URL, e.g. ``http://127.0.0.1:54321``.
+    """
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    port = listener.getsockname()[1]
+
+    application = create_app(
+        ArtifactViewer(
+            registry, RenderService(processes=0), allow_annotations=allow_annotations
+        )
+    )
+    running = uvicorn.Server(uvicorn.Config(application, log_level="error"))
+    thread = threading.Thread(
+        target=running.run, kwargs={"sockets": [listener]}, daemon=True
+    )
+    thread.start()
+    deadline = time.monotonic() + 10
+    while not running.started and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        running.should_exit = True
+        thread.join(timeout=10)
+        listener.close()
+
+
 @pytest.fixture
 def viewer_url(tmp_path, monkeypatch) -> Iterator[str]:
     """Serves two runs (grouped as ``iris``) and yields the server's base URL.
@@ -233,40 +291,40 @@ def viewer_url(tmp_path, monkeypatch) -> Iterator[str]:
         ],
         groups=["iris"],
     )
-    httpd = ArtifactViewerServer(
-        ("127.0.0.1", 0), ArtifactViewer(registry, RenderService(processes=0))
-    )
-    httpd.rendered = rendered
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{httpd.server_address[1]}"
-    finally:
-        httpd.shutdown()
-        httpd.server_close()
+    with _running_server(registry) as url:
+        yield url
 
 
 @contextmanager
-def serving(registry: RunRegistry) -> Iterator[str]:
+def serving(registry: RunRegistry, allow_annotations: bool = False) -> Iterator[str]:
     """Serves a registry's runs on a free port for the duration of a block.
 
     Args:
         registry: The runs to serve.
+        allow_annotations: Whether the dashboard may write notes and tags.
 
     Yields:
         The base URL, e.g. ``http://127.0.0.1:54321``.
     """
 
-    httpd = ArtifactViewerServer(
-        ("127.0.0.1", 0), ArtifactViewer(registry, RenderService(processes=0))
-    )
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{httpd.server_address[1]}"
-    finally:
-        httpd.shutdown()
-        httpd.server_close()
+    with _running_server(registry, allow_annotations) as url:
+        yield url
+
+
+def _headers(response: Any) -> dict[str, str]:
+    """Collects a response's headers under lower-case names.
+
+    HTTP header names are case-insensitive and servers choose their own casing,
+    so tests compare against lower-case names rather than one server's spelling.
+
+    Args:
+        response: The response (or error) whose headers are read.
+
+    Returns:
+        The headers, keyed by lower-case name.
+    """
+
+    return {name.lower(): value for name, value in response.headers.items()}
 
 
 def get(url: str) -> tuple[int, dict[str, str], bytes]:
@@ -276,14 +334,50 @@ def get(url: str) -> tuple[int, dict[str, str], bytes]:
         url: The URL to fetch.
 
     Returns:
-        The status code, headers and body.
+        The status code, the headers (keyed by lower-case name) and the body.
     """
 
     try:
         with urllib.request.urlopen(url) as response:
-            return response.status, dict(response.headers), response.read()
+            return response.status, _headers(response), response.read()
     except urllib.error.HTTPError as error:
-        return error.code, dict(error.headers), error.read()
+        return error.code, _headers(error), error.read()
+
+
+def send(
+    url: str,
+    method: str,
+    body: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+) -> tuple[int, Any]:
+    """Sends a write request with a JSON body, returning error responses too.
+
+    Args:
+        url: The URL to send to.
+        method: The HTTP method, e.g. ``POST`` or ``DELETE``.
+        body: The JSON body to send, if any.
+        headers: Extra request headers, such as an ``Origin``.
+
+    Returns:
+        The status code and the decoded JSON response, or ``None`` when the
+        response is not JSON.
+    """
+
+    data = None if body is None else json.dumps(body).encode("utf-8")
+    request = urllib.request.Request(url, data=data, method=method)
+    if body is not None:
+        request.add_header("Content-Type", "application/json")
+    for name, value in (headers or {}).items():
+        request.add_header(name, value)
+    try:
+        with urllib.request.urlopen(request) as response:
+            status, raw = response.status, response.read()
+    except urllib.error.HTTPError as error:
+        status, raw = error.code, error.read()
+    try:
+        return status, json.loads(raw)
+    except json.JSONDecodeError:
+        return status, None
 
 
 def get_json(url: str) -> Any:
@@ -314,6 +408,7 @@ def test_parser_defaults() -> None:
     assert args.host == "127.0.0.1"
     assert args.port == 8000
     assert args.open_browser is False
+    assert args.allow_annotations is False
     assert args.logging_level == "INFO"
 
     watching = exaqc_dashboard.build_parser().parse_args(["--directory", "runs"])
@@ -469,6 +564,155 @@ def test_the_run_list_picks_up_runs_started_later(tmp_path: Path) -> None:
         # a run's page can be opened before the run list has been reloaded
         build_run(watched / "second_run", standard_genomes()[:1])
         assert get_json(f"{url}/api/runs/1")["name"] == "second_run"
+
+
+def test_a_run_page_survives_an_archive_it_cannot_fully_read(tmp_path: Path) -> None:
+    """An archive missing a column still opens, reporting what it could read.
+
+    A run written by an older version has no ``final_metrics`` column, so asking
+    what its genomes can be charted by fails. The page degrades to the rest of
+    what the archive holds rather than failing outright, since a single such run
+    under a watched directory would otherwise take its whole page down.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    watched = tmp_path / "experiments"
+    watched.mkdir()
+    build_run(watched / "older_run", standard_genomes()[:2])
+
+    connection = sqlite3.connect(watched / "older_run" / ARCHIVE_FILENAME)
+    connection.execute("ALTER TABLE genomes DROP COLUMN final_metrics")
+    connection.commit()
+    connection.close()
+
+    with serving(RunRegistry(watch_directory=str(watched))) as url:
+        assert get(f"{url}/api/runs/0")[0] == 200
+
+        payload = get_json(f"{url}/api/runs/0")
+        assert "final_metrics" in payload["error"]
+        assert payload["metrics"] == []
+        assert payload["primary_metrics"] == []
+        # everything the archive could still answer comes through
+        assert payload["genomes"] == 2
+        assert payload["fitness_keys"] == ["loss", "target_metric"]
+
+        # and the progress chart reports having nothing rather than erroring
+        assert get(f"{url}/api/runs/0/history")[0] == 200
+
+
+def test_annotations_are_read_only_unless_allowed(tmp_path: Path) -> None:
+    """A dashboard started without --allow_annotations refuses every write.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    build_run(tmp_path / "iris_1", standard_genomes())
+    with serving(RunRegistry(run_directories=[str(tmp_path / "iris_1")])) as url:
+        assert get_json(f"{url}/api/runs/0")["annotations_enabled"] is False
+        assert get_json(f"{url}/api/runs/0/annotations") == {
+            "enabled": False,
+            "genome_number": None,
+            "notes": [],
+            "tags": [],
+        }
+
+        status, body = send(f"{url}/api/runs/0/notes", "POST", {"text": "hello"})
+        assert status == 403
+        assert "--allow_annotations" in body["error"]
+        tags = f"{url}/api/runs/0/genomes/3/tags"
+        assert send(tags, "POST", {"tag": "candidate"})[0] == 403
+        assert send(f"{tags}/candidate", "DELETE")[0] == 403
+
+    # refusing, and reading, left the run directory as it was
+    assert not (tmp_path / "iris_1" / "annotations.sqlite").exists()
+
+
+def test_the_dashboard_writes_notes_and_tags_when_allowed(tmp_path: Path) -> None:
+    """Notes and tags round-trip through the API, and the archive is untouched.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    build_run(tmp_path / "iris_1", standard_genomes())
+    archive = tmp_path / "iris_1" / ARCHIVE_FILENAME
+    before = archive.read_bytes()
+    registry = RunRegistry(run_directories=[str(tmp_path / "iris_1")])
+
+    with serving(registry, allow_annotations=True) as url:
+        assert get_json(f"{url}/api/runs/0")["annotations_enabled"] is True
+
+        status, note = send(
+            f"{url}/api/runs/0/notes",
+            "POST",
+            {"text": "promising", "genome_number": 3, "author": "travis"},
+        )
+        assert status == 201
+        assert (note["source"], note["author"], note["genome_number"]) == (
+            "dashboard",
+            "travis",
+            3,
+        )
+        assert send(f"{url}/api/runs/0/notes", "POST", {"text": "run-level"})[0] == 201
+
+        tags = f"{url}/api/runs/0/genomes/3/tags"
+        status, tag = send(tags, "POST", {"tag": "candidate"})
+        assert status == 201 and tag["created"] is True
+        # tagging a genome that already carries the tag changes nothing
+        status, again = send(tags, "POST", {"tag": "candidate"})
+        assert status == 200 and again["created"] is False
+
+        genome = get_json(f"{url}/api/runs/0/annotations?genome=3")
+        assert [entry["text"] for entry in genome["notes"]] == ["promising"]
+        assert [entry["tag"] for entry in genome["tags"]] == ["candidate"]
+        assert len(get_json(f"{url}/api/runs/0/annotations")["notes"]) == 2
+
+        status, removed = send(f"{tags}/candidate", "DELETE")
+        assert status == 200 and removed["active"] is False
+        assert get_json(f"{url}/api/runs/0/annotations?genome=3")["tags"] == []
+        history = get_json(f"{url}/api/runs/0/annotations?genome=3&include_removed=1")
+        assert len(history["tags"]) == 1
+
+        # what cannot be written is refused, with a reason
+        missing = f"{url}/api/runs/0/genomes/999/tags"
+        assert send(missing, "POST", {"tag": "candidate"})[0] == 404
+        assert send(tags, "POST", {"tag": "has space"})[0] == 400
+        assert send(f"{url}/api/runs/0/notes", "POST", {"text": "   "})[0] == 400
+        assert send(f"{tags}/candidate", "DELETE")[0] == 404
+
+    assert archive.read_bytes() == before
+    assert (tmp_path / "iris_1" / "annotations.sqlite").is_file()
+
+
+def test_annotation_writes_from_other_sites_are_refused(tmp_path: Path) -> None:
+    """A write the dashboard's own page did not send is not accepted.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    build_run(tmp_path / "iris_1", standard_genomes())
+    registry = RunRegistry(run_directories=[str(tmp_path / "iris_1")])
+
+    with serving(registry, allow_annotations=True) as url:
+        notes = f"{url}/api/runs/0/notes"
+
+        # a page on another site, which the browser names as the origin
+        foreign = {"Origin": "https://elsewhere.example"}
+        assert send(notes, "POST", {"text": "x"}, headers=foreign)[0] == 403
+
+        # a plain form post needs no preflight, so it is refused for not being JSON
+        form = urllib.request.Request(notes, data=b"text=x", method="POST")
+        form.add_header("Content-Type", "application/x-www-form-urlencoded")
+        with pytest.raises(urllib.error.HTTPError) as refused:
+            urllib.request.urlopen(form)
+        assert refused.value.code == 400
+
+        # the dashboard's own page is accepted
+        assert send(notes, "POST", {"text": "ok"}, headers={"Origin": url})[0] == 201
 
 
 def test_assign_groups_uses_path_substrings(tmp_path) -> None:
@@ -630,7 +874,7 @@ def test_genome_detail_json_and_commands(viewer_url: str) -> None:
 
     status, headers, body = get(f"{viewer_url}/api/runs/0/genomes/3.json")
     assert status == 200
-    assert "genome_3.json" in headers["Content-Disposition"]
+    assert "genome_3.json" in headers["content-disposition"]
     assert json.loads(body) == detail["genome"]
 
     assert get(f"{viewer_url}/api/runs/0/genomes/99")[0] == 404
@@ -646,7 +890,7 @@ def test_images_are_rendered_once_and_missing_ones_are_404(viewer_url: str) -> N
     for _ in range(2):
         status, headers, body = get(f"{viewer_url}/api/runs/0/genomes/2/diagram.png")
         assert status == 200
-        assert headers["Content-Type"] == "image/png"
+        assert headers["content-type"] == "image/png"
         assert body.startswith(_PNG_MAGIC)
 
     status, _, body = get(f"{viewer_url}/api/runs/0/genomes/2/training.png")
@@ -711,6 +955,55 @@ def test_ancestry_includes_the_seed(viewer_url: str) -> None:
     assert sorted(node["genome_number"] for node in shallow["nodes"]) == [3, 4]
 
 
+def test_island_runs_show_their_topology_and_each_parents_island(tmp_path) -> None:
+    """An island run's page learns its topology, and a genome its parents' islands.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    topology = {"topology": ["ring"], "neighbors": [[1, 2], [0, 2], [1, 0]]}
+    build_run(
+        tmp_path / "islands",
+        standard_genomes(),
+        islands=[0, 1, 1, 2],
+        run_info={"island_topology": topology},
+    )
+    build_run(tmp_path / "steady", standard_genomes())
+    registry = RunRegistry(
+        run_directories=[str(tmp_path / "islands"), str(tmp_path / "steady")]
+    )
+
+    with serving(registry) as url:
+        indexes = {
+            run["name"]: run["index"] for run in get_json(f"{url}/api/runs")["runs"]
+        }
+        islands, steady = indexes["islands"], indexes["steady"]
+
+        assert get_json(f"{url}/api/runs/{islands}")["island_topology"] == topology
+        assert get_json(f"{url}/api/runs/{steady}")["island_topology"] is None
+
+        # genome 3 is a crossover of genomes 1 (island 0) and 2 (island 1)
+        crossover = get_json(f"{url}/api/runs/{islands}/genomes/3")
+        assert crossover["summary"]["parents"] == [1, 2]
+        assert crossover["parent_islands"] == [0, 1]
+        # the seed genome is never stored, so its island is unknown
+        assert get_json(f"{url}/api/runs/{islands}/genomes/1")["parent_islands"] == [
+            None
+        ]
+
+        ancestry = get_json(f"{url}/api/runs/{islands}/genomes/4/ancestry?depth=5")
+        assert {
+            node["genome_number"]: node["island"] for node in ancestry["nodes"]
+        } == {
+            4: 2,
+            3: 1,
+            1: 0,
+            2: 1,
+            0: None,
+        }
+
+
 def test_compare_two_genomes(viewer_url: str) -> None:
     """Two genomes are compared by fitness, hyperparameters and gates.
 
@@ -749,21 +1042,36 @@ def test_operators_history_and_groups(viewer_url: str) -> None:
     assert operators["add_gate"] == {"global_best": 1, "inserted": 1}
     assert operators["qubit_swap"] == {"discarded": 1}
 
-    history = get_json(f"{viewer_url}/api/runs/0/history")["columns"]
-    assert history["step"] == [1.0, 2.0, 3.0]
+    progress = get_json(f"{viewer_url}/api/runs/0/history")
+    assert progress["columns"]["step"] == [1, 2, 3]
+    assert progress["columns"]["population_size"] == [1, 2, 3]
+    # the series is recomputed from the archive, so it is charted per metric
+    assert progress["metric"] == "loss"
+    assert "n_gates" in progress["metrics"] and "loss" in progress["metrics"]
 
-    groups = get_json(f"{viewer_url}/api/groups?metric=top5_mean&conf=95ci")
-    assert groups["metrics"] == ["best", "top5_mean"]
+    groups = get_json(f"{viewer_url}/api/groups?metric=loss&conf=95ci")
+    assert "loss" in groups["metrics"] and "n_enabled_gates" in groups["metrics"]
     (iris,) = groups["groups"]
     assert iris["name"] == "iris"
     assert [run["name"] for run in iris["runs"]] == ["iris_1", "iris_2"]
+    # iris_2 holds two genomes, so it records no third step: it is carried
+    # forward only across its own lifetime and drops out of the average past its
+    # last recorded step, rather than appearing to level off there
     assert iris["history"]["step"] == [1, 2, 3]
+    assert iris["history"]["runs_at_step"] == [2, 2, 1]
     assert iris["history"]["n_runs"] == 2
     assert iris["best_loss"]["n"] == 2
     assert iris["best_loss"]["min"] == pytest.approx(0.3)
     assert iris["kind"] == "group"
     # operator insertion counts moved to the insertion-rate tables
     assert "operators" not in iris
+
+    # asked for no metric, the comparison picks one the runs recorded rather
+    # than charting nothing: target_metric is what a search is judged on
+    defaulted = get_json(f"{viewer_url}/api/groups")
+    assert defaulted["metric"] == "target_metric"
+    assert defaulted["groups"][0]["history"] is not None
+    assert "target_metric" in defaulted["primary_metrics"]
 
     assert get(f"{viewer_url}/api/groups?conf=wide")[0] == 400
 
@@ -861,7 +1169,7 @@ def test_static_files_are_served_safely(viewer_url: str) -> None:
 
     status, headers, body = get(f"{viewer_url}/")
     assert status == 200
-    assert headers["Content-Type"].startswith("text/html")
+    assert headers["content-type"].startswith("text/html")
     assert b"/static/app.js" in body
 
     for name in ("app.js", "app.css", "uPlot.iife.min.js", "uPlot.min.css"):

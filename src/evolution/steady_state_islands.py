@@ -16,7 +16,7 @@ import argparse
 import random
 
 from functools import cmp_to_key
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
@@ -24,6 +24,9 @@ from src.circuits.circuit import CircuitGenome
 from src.evolution.island import Island
 from src.evolution.topology import assign_topology
 from src.evolution.population_strategy import PopulationStrategy
+
+if TYPE_CHECKING:
+    from src.utils.restart import RestartState
 
 
 def island_compare(island1: Island, island2: Island) -> int:
@@ -203,6 +206,7 @@ class SteadyStateIslands(PopulationStrategy):
         ]
         self.current_island = 0
 
+        self.topology = list(topology)
         assign_topology(self.islands, topology)
 
         self.global_best_genome = None
@@ -215,6 +219,105 @@ class SteadyStateIslands(PopulationStrategy):
             exit(1)
 
         self.primary_parent = primary_parent
+
+    def run_info(self) -> dict[str, Any]:
+        """Describes how the islands are connected, for the run's archive.
+
+        The neighbors are fixed once the islands are built (extinction events
+        repopulate islands but never rewire them), so recording them when the
+        search starts describes the whole run.
+
+        Returns:
+            ``island_topology``: the ``topology`` the islands were built with
+            and, for each island in id order, the ids of its ``neighbors`` --
+            the islands it draws parents from for inter-island crossover. A
+            ``random`` topology is directed, so these need not be symmetric.
+        """
+
+        return {
+            "island_topology": {
+                "topology": list(self.topology),
+                "neighbors": [
+                    [neighbor.id for neighbor in island.neighbors]
+                    for island in self.islands
+                ],
+            }
+        }
+
+    def restore(self, state: "RestartState") -> None:
+        """Takes back the islands a stopped run held, so its search continues.
+
+        Each genome goes back to the island it was inserted into, and each
+        island works out its own status from what it holds. The connections are
+        taken from what the run recorded rather than being drawn again, because
+        a ``random`` topology would otherwise come out differently.
+
+        Args:
+            state: The stopped run's state (see :mod:`src.utils.restart`).
+
+        Returns:
+            None. Restores each island's population, status and repopulation
+            number, the global best genome, the insertion count and the
+            round-robin pointer.
+
+        Raises:
+            ValueError: If the recorded topology names a different number of
+                islands than this strategy has.
+        """
+
+        held: dict[int, list[CircuitGenome]] = {}
+        for genome in state.population:
+            island_id = genome.metadata.get("island_id")
+            if island_id is None:
+                # a genome from before the run recorded islands cannot be placed
+                continue
+            held.setdefault(int(island_id), []).append(genome)
+
+        for island in self.islands:
+            island.restore(held.get(island.id, []), state.next_genome_number)
+
+        self._restore_topology(state.island_neighbors)
+
+        self.global_best_genome = state.best_genome
+        self.insertions = state.inserted_genomes
+        # the round robin starts over: which island is offered the next child
+        # only shifts whose turn it is, and every island is still offered one
+        self.current_island = 0
+
+        logger.info(
+            "restored {} islands holding {} genomes after {} insertions",
+            len(self.islands),
+            sum(len(island.population) for island in self.islands),
+            self.insertions,
+        )
+
+    def _restore_topology(self, neighbors: list[list[int]] | None) -> None:
+        """Re-applies the connections a stopped run recorded between its islands.
+
+        Args:
+            neighbors: Each island's neighbor ids, by island id, or None when
+                the run recorded none (its connections are left as built).
+
+        Returns:
+            None. Replaces each island's ``neighbors``.
+
+        Raises:
+            ValueError: If the recorded topology covers a different number of
+                islands than this strategy has.
+        """
+
+        if neighbors is None:
+            return
+
+        if len(neighbors) != len(self.islands):
+            raise ValueError(
+                f"the run recorded {len(neighbors)} islands but this search has "
+                f"{len(self.islands)}, so its topology cannot be restored."
+            )
+
+        by_id = {island.id: island for island in self.islands}
+        for island, recorded in zip(self.islands, neighbors):
+            island.neighbors = [by_id[neighbor] for neighbor in recorded]
 
     def is_initializing(self) -> bool:
         """
@@ -289,7 +392,8 @@ class SteadyStateIslands(PopulationStrategy):
 
         Returns:
             A tuple of a single CircuitGenome and a dictionary of its metadata
-            (carrying the ``target_island_id``). Returns ``(None, None)`` when no
+            (carrying the ``target_island_id`` and ``target_island_status``).
+            Returns ``(None, None)`` when no
             parent can be selected -- i.e. the target island is repopulating and
             none of its neighbors hold any genomes.
         """
@@ -297,7 +401,11 @@ class SteadyStateIslands(PopulationStrategy):
         target_island = self.islands[self.current_island]
         self.increment_current_island()
 
-        metadata = {"target_island_id": target_island.id}
+        metadata = {
+            "target_island_id": target_island.id,
+            # a repopulating island draws its parents from its best neighbor
+            "target_island_status": target_island.status,
+        }
 
         if target_island.status == "full":
             return random.choice(target_island.population), metadata
@@ -353,7 +461,11 @@ class SteadyStateIslands(PopulationStrategy):
         target_island = self.islands[self.current_island]
         self.increment_current_island()
 
-        metadata = {"target_island_id": target_island.id}
+        metadata = {
+            "target_island_id": target_island.id,
+            # a repopulating island draws its parents from its best neighbor
+            "target_island_status": target_island.status,
+        }
 
         parents = None
 

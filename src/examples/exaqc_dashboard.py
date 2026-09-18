@@ -22,7 +22,7 @@ import sys
 
 from loguru import logger
 
-from src.utils.artifact_viewer.server import serve
+from src.utils.artifact_viewer.app import serve
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -93,6 +93,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--mcp",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Serve the MCP interface at /mcp, so an agent can query the same runs over the "
+            "same port as the dashboard."
+        ),
+    )
+
+    parser.add_argument(
+        "--allow_annotations",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Let the dashboard and its MCP interface write notes and tags, kept in each run's "
+            "annotations.sqlite beside its archive (the archive itself is never written). Anyone "
+            "who can reach the dashboard's port can then write them."
+        ),
+    )
+
+    parser.add_argument(
         "--logging_level",
         type=str,
         default="INFO",
@@ -123,6 +144,8 @@ def main() -> None:
             host=args.host,
             port=args.port,
             open_browser=args.open_browser,
+            mcp=args.mcp,
+            allow_annotations=args.allow_annotations,
         )
     except (OSError, ValueError) as error:
         parser.error(str(error))

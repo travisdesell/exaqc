@@ -15,8 +15,8 @@ and traced through their ancestry without decompressing them.
 :class:`GenomeArchive` also owns the rest of a run's output directory: the
 command-line arguments that locate and configure it (``--out_dir`` and
 ``--shared_file_system``), the current-best genome files that are overwritten
-whenever the search improves, and the search-progress history written by
-:class:`~src.utils.profiler.EXAQCProfiler`.
+whenever the search improves, and the record of how the population changed after
+every insertion.
 """
 
 from __future__ import annotations
@@ -25,8 +25,11 @@ import argparse
 import json
 import math
 import os
+import platform
 import re
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import time
 import zlib
@@ -39,13 +42,17 @@ from loguru import logger
 
 if TYPE_CHECKING:
     from src.circuits.circuit import CircuitGenome
-    from src.utils.profiler import EXAQCProfiler
 
 #: File name of the archive inside a run's output directory.
 ARCHIVE_FILENAME = "genomes.sqlar"
 
+#: Metadata entries holding a genome's per-epoch or per-episode training history.
+#: Which ones a genome has depends on its task, so they are matched by shape
+#: rather than listed.
+_METRIC_SERIES = re.compile(r"_(epoch|episode)_metrics$")
+
 #: Version of the archive layout, recorded in ``run_info``.
-ARCHIVE_FORMAT_VERSION = 1
+ARCHIVE_FORMAT_VERSION = 5
 
 #: The kinds of current-best genome files kept in the output directory: the best
 #: genome by the search's own ranking and the best by ``fitness["target_metric"]``.
@@ -75,7 +82,26 @@ SORTABLE_COLUMNS = frozenset(
         "n_gates",
         "n_enabled_gates",
         "n_parameters",
+        "n_cnot",
+        "n_rot",
+        "generated_at_insertion",
+        "evaluation_seconds",
+        "evaluated_host",
+        "evaluated_rank",
+        "discard_reason",
     }
+)
+
+#: Summary columns a population statistic can be computed over. Identifiers and
+#: text columns are left out: the mean of a genome number or an insert type says
+#: nothing about the population.
+_NUMERIC_COLUMNS = (
+    "n_gates",
+    "n_enabled_gates",
+    "n_parameters",
+    "n_cnot",
+    "n_rot",
+    "evaluation_seconds",
 )
 
 #: Filters :meth:`GenomeArchive.list_genomes` understands.
@@ -92,7 +118,10 @@ _ITERATION_BATCH_SIZE = 200
 
 _SUMMARY_COLUMNS = (
     "genome_number, insertion, saved_at, insert_type, generated_by, "
-    "crossover_type, island, n_gates, n_enabled_gates, n_parameters, fitness"
+    "crossover_type, island, n_gates, n_enabled_gates, n_parameters, "
+    "n_cnot, n_rot, max_innovation_number, generated_at_insertion, "
+    "evaluation_seconds, evaluated_host, evaluated_rank, discard_reason, "
+    "final_metrics, fitness"
 )
 
 _SCHEMA = """
@@ -114,7 +143,25 @@ CREATE TABLE IF NOT EXISTS genomes(
     n_gates INTEGER,
     n_enabled_gates INTEGER,
     n_parameters INTEGER,
-    fitness TEXT
+    n_cnot INTEGER,
+    n_rot INTEGER,
+    max_innovation_number INTEGER,
+    generated_at_insertion INTEGER,
+    evaluation_seconds REAL,
+    evaluated_host TEXT,
+    evaluated_rank INTEGER,
+    discard_reason TEXT,
+    final_metrics TEXT,
+    fitness TEXT,
+    loss REAL GENERATED ALWAYS AS (json_extract(fitness, '$.loss')) VIRTUAL,
+    target_metric REAL GENERATED ALWAYS AS
+        (json_extract(fitness, '$.target_metric')) VIRTUAL
+);
+CREATE TABLE IF NOT EXISTS population_events(
+    step INTEGER PRIMARY KEY,
+    recorded_at REAL,
+    added TEXT,
+    removed TEXT
 );
 CREATE TABLE IF NOT EXISTS genome_parents(
     child INTEGER NOT NULL,
@@ -127,6 +174,62 @@ CREATE TABLE IF NOT EXISTS run_info(
     value TEXT
 );
 """
+
+
+def _index_fitness_columns(connection: sqlite3.Connection) -> None:
+    """Indexes the generated ``loss`` and ``target_metric`` columns.
+
+    Ranking a run by either key is by far the archive's most common query, so
+    both are generated from each genome's stored fitness and indexed rather than
+    extracted from JSON on every read.
+
+    Args:
+        connection: The archive's connection, open for writing.
+
+    Returns:
+        None. Creates each column's index if it does not already exist.
+    """
+
+    for column in ("loss", "target_metric"):
+        connection.execute(
+            f"CREATE INDEX IF NOT EXISTS genomes_{column} ON genomes({column})"
+        )
+
+
+def _provenance() -> dict[str, Any]:
+    """Collects what produced a run, so results can be traced back to code.
+
+    Returns:
+        The git commit (when the search runs from a checkout), the host, the
+        platform and the versions of Python and the quantum frameworks. Anything
+        that cannot be determined is left out rather than guessed.
+    """
+
+    facts: dict[str, Any] = {
+        "host": platform.node(),
+        "platform": platform.platform(),
+        "python_version": platform.python_version(),
+    }
+
+    try:
+        facts["git_commit"] = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    for package in ("qiskit", "pennylane", "torch", "numpy"):
+        module = sys.modules.get(package)
+        version = getattr(module, "__version__", None)
+        if version is not None:
+            facts[f"{package}_version"] = str(version)
+
+    return facts
 
 
 def genome_member_name(genome_number: int) -> str:
@@ -337,6 +440,64 @@ def _finite_or_none(value: Any) -> Any:
     return value
 
 
+def _flatten_numbers(record: dict[str, Any], prefix: str = "") -> dict[str, float]:
+    """Flattens one metrics record to dotted paths holding numbers.
+
+    Args:
+        record: One recorded epoch or episode.
+        prefix: The path prefix nested values are reported under.
+
+    Returns:
+        Every numeric leaf, keyed by its dotted path; booleans are not numbers
+        here, and non-numeric leaves are dropped.
+    """
+
+    flattened: dict[str, float] = {}
+    for name, value in (record or {}).items():
+        path = f"{prefix}.{name}" if prefix else name
+        if isinstance(value, dict):
+            flattened.update(_flatten_numbers(value, path))
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            flattened[path] = value
+    return flattened
+
+
+def _final_metrics(metadata: dict[str, Any]) -> dict[str, float]:
+    """Extracts the last value of every metric a genome recorded while training.
+
+    What a genome records depends on its task, so nothing is assumed: every
+    metadata entry named ``*_epoch_metrics`` or ``*_episode_metrics`` contributes
+    its final record, flattened and prefixed by the series it came from.
+    Recording these on the summary row keeps a run's task metrics queryable --
+    and plottable against -- without reopening every genome's JSON.
+
+    Args:
+        metadata: The genome's serialized metadata.
+
+    Each series' own step counter is left out: ``epoch`` and ``episode`` number
+    the records rather than measuring anything, so summarizing them across a
+    population would say nothing about the search.
+
+    Returns:
+        Each metric's final recorded value, keyed by ``<series>.<metric>``;
+        empty when the genome recorded no series.
+    """
+
+    final: dict[str, float] = {}
+    for name, records in (metadata or {}).items():
+        match = _METRIC_SERIES.search(name)
+        if not match or not isinstance(records, list):
+            continue
+        if not records or not isinstance(records[-1], dict):
+            continue
+        step_key = match.group(1)
+        for metric, value in _flatten_numbers(records[-1]).items():
+            if metric == step_key:
+                continue
+            final[f"{name}.{metric}"] = value
+    return final
+
+
 def _encode_member(data: bytes) -> bytes:
     """Compresses member bytes the way the SQLite Archive format expects.
 
@@ -455,18 +616,24 @@ def _sort_expression(sort_key: str) -> tuple[str, list[Any]]:
     """Builds the SQL expression a genome listing is ordered by.
 
     Args:
-        sort_key: A summary column (see :data:`SORTABLE_COLUMNS`) or a key of the
-            genomes' fitness dicts.
+        sort_key: A summary column (see :data:`SORTABLE_COLUMNS`), a key of the
+            genomes' fitness dicts, or a recorded training metric.
 
     Returns:
         The SQL expression and the parameters it binds.
 
     Raises:
-        ValueError: If ``sort_key`` is neither a column nor a plain identifier.
+        ValueError: If ``sort_key`` is none of those.
     """
 
     if sort_key in SORTABLE_COLUMNS:
         return sort_key, []
+    if "." in sort_key:
+        # Training metrics are always keyed ``<series>.<metric>``, so a dotted
+        # key can only be one of those. The path is quoted rather than spliced
+        # in bare, because the key's own dots would otherwise read as steps
+        # into the JSON.
+        return "json_extract(final_metrics, ?)", [f'$."{sort_key}"']
     if re.fullmatch(r"[A-Za-z0-9_]+", sort_key):
         return "json_extract(fitness, ?)", [f"$.{sort_key}"]
     raise ValueError(f"Cannot sort genomes by {sort_key!r}.")
@@ -512,6 +679,46 @@ def _filter_clause(filters: dict[str, Any] | None) -> tuple[str, list[Any]]:
     return "WHERE " + " AND ".join(conditions), parameters
 
 
+def _discard_run(out_dir: str, archive_path: str) -> None:
+    """Removes a previous run's archive and best-genome files, to start over.
+
+    Only what a search wrote is removed: the archive (with any journal beside
+    it) and the current-best genome files. The run's log is left to be appended
+    to, and annotations someone recorded are left alone -- they are not the
+    search's to delete -- but they name genomes the new run will not have, so
+    finding them is worth reporting.
+
+    Args:
+        out_dir: The run's output directory.
+        archive_path: The archive inside it.
+
+    Returns:
+        None. Removes the files from ``out_dir``.
+    """
+
+    # Imported here so that reading an archive does not pull in the annotations
+    # sidecar's module.
+    from src.utils.annotations import ANNOTATIONS_FILENAME
+
+    for suffix in ("", "-wal", "-shm", "-journal"):
+        _remove_if_exists(f"{archive_path}{suffix}")
+
+    for kind in BEST_KINDS:
+        prefix = os.path.join(out_dir, f"best_{kind}")
+        for name in (f"{prefix}.json", f"{prefix}.png", f"{prefix}_training.png"):
+            _remove_if_exists(name)
+
+    annotations = os.path.join(out_dir, ANNOTATIONS_FILENAME)
+    if os.path.exists(annotations):
+        logger.warning(
+            "{} still holds notes and tags recorded about the run just discarded; they name "
+            "genomes the new run will not have.",
+            annotations,
+        )
+
+    logger.info("discarded the run in {}; starting a new one.", out_dir)
+
+
 def _summary_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
     """Converts a ``genomes`` table row into a summary dict.
 
@@ -533,6 +740,15 @@ def _summary_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
         n_gates,
         n_enabled_gates,
         n_parameters,
+        n_cnot,
+        n_rot,
+        max_innovation_number,
+        generated_at_insertion,
+        evaluation_seconds,
+        evaluated_host,
+        evaluated_rank,
+        discard_reason,
+        final_metrics,
         fitness,
     ) = row
 
@@ -547,6 +763,15 @@ def _summary_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
         "n_gates": n_gates,
         "n_enabled_gates": n_enabled_gates,
         "n_parameters": n_parameters,
+        "n_cnot": n_cnot,
+        "n_rot": n_rot,
+        "max_innovation_number": max_innovation_number,
+        "generated_at_insertion": generated_at_insertion,
+        "evaluation_seconds": evaluation_seconds,
+        "evaluated_host": evaluated_host,
+        "evaluated_rank": evaluated_rank,
+        "discard_reason": discard_reason,
+        "final_metrics": json.loads(final_metrics) if final_metrics else {},
         "fitness": json.loads(fitness) if fitness else None,
     }
 
@@ -564,7 +789,6 @@ class GenomeArchive:
         connection: The open SQLite connection.
         writable: Whether this archive was opened for writing.
         shared_file_system: Whether shared-file-system SQLite settings are used.
-        profiler: The search-progress profiler (writers only, else ``None``).
     """
 
     @staticmethod
@@ -578,8 +802,9 @@ class GenomeArchive:
             parser: The parser to add the arguments to.
 
         Returns:
-            None. Mutates ``parser`` by adding ``--out_dir`` and
-            ``--shared_file_system``.
+            None. Mutates ``parser`` by adding ``--out_dir``,
+            ``--shared_file_system``, ``--save_run_log``, ``--restart``,
+            ``--overwrite_archive`` and ``--force_restart``.
         """
 
         parser.add_argument(
@@ -603,24 +828,92 @@ class GenomeArchive:
             ),
         )
 
+        parser.add_argument(
+            "--save_run_log",
+            action=argparse.BooleanOptionalAction,
+            default=False,
+            help=(
+                "Also write the run's log to run.log in --out_dir, at --logging_level. Off by "
+                "default: a search logs a line per gate below its default level, so a debug-level "
+                "log of a long run grows to many gigabytes."
+            ),
+        )
+
+        parser.add_argument(
+            "--restart",
+            type=str,
+            choices=("never", "auto", "require"),
+            default="auto",
+            help=(
+                "Whether to continue the run already in --out_dir: 'auto' (the default) continues "
+                "a run when there is one and starts a new one otherwise, so the same command can "
+                "be requeued; 'require' fails when there is nothing to continue; 'never' always "
+                "starts a new run, and refuses to write into a directory that already holds one. "
+                "A restart takes its configuration from the run it continues, evaluating genomes "
+                "until the run has --number_genomes of them."
+            ),
+        )
+
+        parser.add_argument(
+            "--overwrite_archive",
+            action=argparse.BooleanOptionalAction,
+            default=False,
+            help=(
+                "Discard the run already in --out_dir and start a new one in its place, replacing "
+                "its archive and best-genome files."
+            ),
+        )
+
+        parser.add_argument(
+            "--force_restart",
+            action=argparse.BooleanOptionalAction,
+            default=False,
+            help=(
+                "Restart even when this command's arguments differ from the ones the run being "
+                "continued recorded. The run's own arguments are used for everything except "
+                "--number_genomes and where and how this process runs."
+            ),
+        )
+
     @classmethod
-    def from_args(cls, args: argparse.Namespace) -> GenomeArchive:
+    def from_args(
+        cls, args: argparse.Namespace, restarting: bool = False
+    ) -> GenomeArchive:
         """Creates a writable archive from parsed command-line arguments.
 
+        The arguments are recorded with the run (see :meth:`create`), so what the
+        search was configured to do is part of its own record rather than
+        something a reader has to parse back out of the command line.
+
         Args:
-            args: Parsed arguments carrying ``out_dir`` and
-                ``shared_file_system`` (see :meth:`initialize_parser`).
+            args: Parsed arguments carrying ``out_dir``, ``shared_file_system``
+                and ``overwrite_archive`` (see :meth:`initialize_parser`), and
+                the rest of the run's configuration.
+            restarting: Whether this search continues the run the archive already
+                holds, in which case the archive is appended to rather than
+                discarded or warned about.
 
         Returns:
             The archive, opened for writing.
         """
 
         return cls.create(
-            out_dir=args.out_dir, shared_file_system=args.shared_file_system
+            out_dir=args.out_dir,
+            shared_file_system=args.shared_file_system,
+            arguments=vars(args),
+            overwrite=getattr(args, "overwrite_archive", False) and not restarting,
+            expect_existing=restarting,
         )
 
     @classmethod
-    def create(cls, out_dir: str, shared_file_system: bool = False) -> GenomeArchive:
+    def create(
+        cls,
+        out_dir: str,
+        shared_file_system: bool = False,
+        arguments: dict[str, Any] | None = None,
+        overwrite: bool = False,
+        expect_existing: bool = False,
+    ) -> GenomeArchive:
         """Creates (or reopens) a run's output directory and archive for writing.
 
         Local disks use write-ahead logging, so readers such as the artifact
@@ -629,20 +922,32 @@ class GenomeArchive:
         is used instead, which also avoids creating and deleting a journal file
         on every commit.
 
+        An archive that already holds a run keeps the format version,
+        provenance and arguments that run recorded: they describe the search
+        that produced the genomes in it, so restarting a run leaves them intact
+        and records itself separately.
+
         Args:
             out_dir: The run's output directory; created if missing.
             shared_file_system: Whether to use shared-file-system settings.
+            arguments: The run's parsed command-line arguments, recorded for a
+                new archive so a restart can rebuild the same search.
+            overwrite: Whether to discard a run already in ``out_dir`` -- its
+                archive and best-genome files -- and start a new one in its
+                place.
+            expect_existing: Whether an archive that already holds genomes is
+                expected (this run continues it), so finding one is reported as
+                continuing the run rather than warned about.
 
         Returns:
             The archive, opened for writing.
         """
 
-        # Imported here so that reading an archive does not load the profiler's
-        # quantum-framework dependencies.
-        from src.utils.profiler import EXAQCProfiler
-
         os.makedirs(out_dir, exist_ok=True)
         path = os.path.join(out_dir, ARCHIVE_FILENAME)
+
+        if overwrite:
+            _discard_run(out_dir, path)
 
         connection = _connect(path)
         connection.execute(
@@ -650,24 +955,39 @@ class GenomeArchive:
         )
         connection.execute("PRAGMA synchronous=NORMAL")
         connection.executescript(_SCHEMA)
+        _index_fitness_columns(connection)
 
         archive = cls(
             path,
             connection,
             writable=True,
             shared_file_system=shared_file_system,
-            profiler=EXAQCProfiler(out_dir=out_dir),
         )
 
+        # A reopened archive goes on appending deltas, so membership starts from
+        # what its existing events describe rather than from nothing -- otherwise
+        # the first delta would read as though the whole population had just
+        # arrived.
+        archive._population_members = set(archive.population_at())
+
         existing = archive.count()
-        if existing:
+        if existing and expect_existing:
+            logger.info(
+                "continuing the run in {}: it already holds {} genomes.", path, existing
+            )
+        elif existing:
             logger.warning(
                 "{} already holds {} genomes; genomes with the same numbers will be replaced.",
                 path,
                 existing,
             )
 
-        archive.set_run_info(format_version=ARCHIVE_FORMAT_VERSION)
+        if not archive.run_info():
+            archive.set_run_info(
+                format_version=ARCHIVE_FORMAT_VERSION,
+                **_provenance(),
+                **({} if arguments is None else {"arguments": arguments}),
+            )
         return archive
 
     @classmethod
@@ -699,7 +1019,6 @@ class GenomeArchive:
         *,
         writable: bool,
         shared_file_system: bool = False,
-        profiler: EXAQCProfiler | None = None,
     ) -> None:
         """Wraps an open archive connection; use the factory methods instead.
 
@@ -708,7 +1027,6 @@ class GenomeArchive:
             connection: The open SQLite connection to it.
             writable: Whether the archive was opened for writing.
             shared_file_system: Whether shared-file-system settings are in use.
-            profiler: The search-progress profiler (writers only).
         """
 
         self.path = path
@@ -716,7 +1034,7 @@ class GenomeArchive:
         self.connection = connection
         self.writable = writable
         self.shared_file_system = shared_file_system
-        self.profiler = profiler
+        self._population_members: set[int] = set()
         self._closed = False
 
     def __enter__(self) -> GenomeArchive:
@@ -851,6 +1169,28 @@ class GenomeArchive:
         metadata = serialized.get("metadata") or {}
         gates = serialized.get("gates") or []
 
+        # Imported here so that reading an archive does not load the circuit
+        # package, matching how the rest of this module treats the search's own
+        # dependencies.
+        from src.circuits.gate_complexity import gate_counts_from_serialized
+
+        try:
+            counts = gate_counts_from_serialized(
+                serialized.get("target") or "pennylane", gates
+            )
+        except (KeyError, ValueError) as error:
+            # A gate the specifications do not know must not stop the search from
+            # recording the genome; its complexity is simply not scored.
+            logger.warning(
+                "Could not score genome {}'s circuit complexity: {}",
+                genome_number,
+                error,
+            )
+            counts = {}
+
+        timing = metadata.get("timing") or {}
+        placement = metadata.get("evaluated_by") or {}
+
         summary = (
             genome_number,
             int(insertion),
@@ -862,6 +1202,24 @@ class GenomeArchive:
             len(gates),
             sum(1 for gate in gates if gate.get("enabled", True)),
             sum(len(gate.get("parameters") or {}) for gate in gates),
+            int(counts["gates_cnot"]) if counts else None,
+            int(counts["gates_rot"]) if counts else None,
+            # the highest innovation number this genome holds, so a restarted
+            # search can continue numbering gates without reusing one
+            max(
+                (
+                    int(gate["innovation_number"])
+                    for gate in gates
+                    if gate.get("innovation_number") is not None
+                ),
+                default=None,
+            ),
+            metadata.get("generated_at_insertion"),
+            timing.get("evaluation_seconds"),
+            placement.get("host"),
+            placement.get("rank"),
+            metadata.get("discard_reason"),
+            json.dumps(_finite_or_none(_final_metrics(metadata))),
             json.dumps(_finite_or_none(serialized.get("fitness"))),
         )
         parents = sorted(
@@ -882,7 +1240,7 @@ class GenomeArchive:
                 ),
             )
             connection.execute(
-                f"INSERT OR REPLACE INTO genomes({_SUMMARY_COLUMNS}) VALUES ({', '.join('?' * 11)})",
+                f"INSERT OR REPLACE INTO genomes({_SUMMARY_COLUMNS}) VALUES ({', '.join('?' * len(summary))})",
                 summary,
             )
             connection.execute(
@@ -949,41 +1307,220 @@ class GenomeArchive:
             prefix,
         )
 
-    def record_history(self, step: int, population: list[CircuitGenome]) -> None:
-        """Appends a search-progress row for the current population.
+    def record_population(self, step: int, population: list[CircuitGenome]) -> None:
+        """Records how the population changed at one insertion.
+
+        Only the difference from the previous step is stored -- which genome
+        numbers entered the population and which left it -- so a step costs a
+        couple of numbers however large the population is. Membership at any step
+        is then everything added up to it minus everything removed, which makes
+        every population-level statistic recomputable for any metric a genome
+        recorded rather than only for a fixed set chosen in advance.
+
+        Membership is *observed* rather than reported by the population strategy,
+        so steady-state truncation, duplicate eviction and island extinction are
+        all captured the same way, and a new strategy needs no changes here.
 
         Args:
             step: The insertion the snapshot was taken at.
-            population: The population, sorted best first.
+            population: The population after the insertion, sorted best first.
 
         Returns:
-            None. Appends a row to ``exaqc_history.csv``.
+            None. Writes one ``population_events`` row when membership changed,
+            and nothing at all when it did not.
 
         Raises:
             RuntimeError: If the archive is read-only.
         """
 
         self._require_writable()
-        if self.profiler is not None:
-            self.profiler.record(step=step, population=population)
 
-    def plot_history(self) -> None:
-        """Redraws the search-progress curves (``exaqc_curves.png``).
-
-        Returns:
-            None. Replaces the plot; a drawing failure is logged, not raised.
-
-        Raises:
-            RuntimeError: If the archive is read-only.
-        """
-
-        self._require_writable()
-        if self.profiler is None:
+        members = {int(genome.genome_number) for genome in population}
+        added = sorted(members - self._population_members)
+        removed = sorted(self._population_members - members)
+        if not added and not removed:
             return
-        try:
-            self.profiler.plot_single_run()
-        except Exception as error:
-            logger.warning("Could not plot the search history: {}", error)
+
+        def store(connection: sqlite3.Connection) -> None:
+            """Writes the population delta for this step."""
+
+            connection.execute(
+                "INSERT OR REPLACE INTO population_events(step, recorded_at, added, removed) "
+                "VALUES (?, ?, ?, ?)",
+                (int(step), time.time(), json.dumps(added), json.dumps(removed)),
+            )
+
+        # Only advance the remembered membership once the delta is safely stored:
+        # a write given up on because the database stayed locked would otherwise
+        # leave every later delta measured from a state no row describes.
+        if self._write(f"population step {step}", store):
+            self._population_members = members
+
+    def population_at(self, step: int | None = None) -> list[int]:
+        """Reconstructs which genomes the population held at a step.
+
+        Args:
+            step: The insertion to reconstruct membership at; the last recorded
+                step when omitted.
+
+        Returns:
+            The genome numbers in the population then, in ascending order.
+        """
+
+        where = "" if step is None else "WHERE step <= ?"
+        parameters: list[Any] = [] if step is None else [int(step)]
+
+        members: set[int] = set()
+        for added, removed in self.connection.execute(
+            f"SELECT added, removed FROM population_events {where} ORDER BY step",
+            parameters,
+        ):
+            members.difference_update(json.loads(removed or "[]"))
+            members.update(json.loads(added or "[]"))
+        return sorted(members)
+
+    def final_metric_keys(self) -> list[str]:
+        """Lists the training metrics genomes recorded a final value for.
+
+        Returns:
+            Every key stored in the genomes' ``final_metrics``, sorted; empty
+            when no genome recorded a per-epoch or per-episode series.
+        """
+
+        return sorted(
+            row[0]
+            for row in self.connection.execute(
+                "SELECT DISTINCT metric.key FROM genomes, json_each(genomes.final_metrics) AS metric"
+            )
+        )
+
+    def series_metrics(self) -> list[str]:
+        """Lists everything a population series can be computed over.
+
+        Returns:
+            The numeric summary columns, the genomes' fitness keys and their
+            recorded training metrics, in that order.
+        """
+
+        return [*_NUMERIC_COLUMNS, *self.fitness_keys(), *self.final_metric_keys()]
+
+    def primary_series_metrics(self) -> list[str]:
+        """Lists the metrics worth offering ahead of the long tail.
+
+        A task that records a per-class breakdown contributes one key per class
+        per statistic, which on a ten-class dataset buries the handful of metrics
+        anyone actually charts under dozens of per-class counts. Nothing is
+        hidden -- :meth:`series_metrics` still lists everything, and a query can
+        ask for any of it -- this is just the shorter list to show first: the
+        numeric columns, the fitness keys, and each series' own values together
+        with any ``mean`` that already summarizes a breakdown.
+
+        Returns:
+            The subset of :meth:`series_metrics` to offer before the rest.
+        """
+
+        primary = [*_NUMERIC_COLUMNS, *self.fitness_keys()]
+        for key in self.final_metric_keys():
+            _, _, leaf = key.partition(".")
+            if "." not in leaf or (leaf.count(".") == 1 and leaf.endswith(".mean")):
+                primary.append(key)
+        return primary
+
+    def _metric_values(self, metric: str) -> dict[int, float]:
+        """Reads one value per genome, whatever kind of metric is asked for.
+
+        A metric is resolved in the order :meth:`series_metrics` lists: a numeric
+        summary column, then a fitness key, then a training metric recorded in
+        ``final_metrics``. Fitness keys are checked before training metrics so a
+        run that happens to record both under one name keeps its fitness meaning.
+
+        Args:
+            metric: The summary column, fitness key or training metric to read.
+
+        Returns:
+            Each genome's value for it, keyed by genome number, omitting genomes
+            that have no numeric value.
+
+        Raises:
+            ValueError: If ``metric`` is not a column, fitness key or recorded
+                training metric.
+        """
+
+        # Checked against what the run actually recorded, rather than resolved
+        # permissively: charting a metric no genome has would otherwise draw an
+        # empty series instead of saying so.
+        if metric not in self.series_metrics():
+            raise ValueError(f"{metric!r} was not recorded by this run's genomes.")
+        expression, parameters = _sort_expression(metric)
+
+        return {
+            int(number): float(value)
+            for number, value in self.connection.execute(
+                f"SELECT genome_number, {expression} FROM genomes", parameters
+            )
+            if isinstance(value, (int, float))
+        }
+
+    def population_series(
+        self, metric: str = "loss", higher_is_better: bool = False
+    ) -> dict[str, list[Any]]:
+        """Recomputes population statistics at every recorded step.
+
+        The population's membership is replayed from the recorded deltas and the
+        statistics are computed over whichever genomes were alive at each step.
+        Because the values come from the genomes themselves, a run's progress can
+        be plotted against any metric it recorded -- a loss, a return, a fidelity,
+        a gate count -- rather than only the fixed set a profiler chose while the
+        search was running.
+
+        Args:
+            metric: The summary column, fitness key or training metric to
+                summarize.
+            higher_is_better: Whether a larger value of ``metric`` is an
+                improvement, which decides which end of the population is best.
+
+        Returns:
+            Parallel lists keyed ``step``, ``population_size``, ``best``,
+            ``mean`` and ``worst``; a step whose population had no numeric value
+            contributes ``None`` for the three statistics.
+
+        Raises:
+            ValueError: If ``metric`` was not recorded by this run's genomes.
+        """
+
+        values = self._metric_values(metric)
+        columns: dict[str, list[Any]] = {
+            "step": [],
+            "population_size": [],
+            "best": [],
+            "mean": [],
+            "worst": [],
+        }
+
+        members: set[int] = set()
+        for step, added, removed in self.connection.execute(
+            "SELECT step, added, removed FROM population_events ORDER BY step"
+        ):
+            members.difference_update(json.loads(removed or "[]"))
+            members.update(json.loads(added or "[]"))
+
+            present = [values[number] for number in members if number in values]
+            columns["step"].append(step)
+            columns["population_size"].append(len(members))
+            if present:
+                columns["best"].append(
+                    max(present) if higher_is_better else min(present)
+                )
+                columns["mean"].append(sum(present) / len(present))
+                columns["worst"].append(
+                    min(present) if higher_is_better else max(present)
+                )
+            else:
+                columns["best"].append(None)
+                columns["mean"].append(None)
+                columns["worst"].append(None)
+
+        return columns
 
     def set_run_info(self, **values: Any) -> None:
         """Records facts about the run, such as its task and command line.
@@ -1194,7 +1731,8 @@ class GenomeArchive:
             ``nodes``: the genome and its ancestors, each with its
             ``genome_number``, ``generation`` (the fewest steps back it is
             reached in), whether it is ``in_archive`` (the seed genome never is),
-            and its ``insert_type``, ``generated_by`` and ``fitness``; and
+            and its ``insert_type``, ``island``, ``generated_by`` and
+            ``fitness``; and
             ``edges``: the ``child``/``parent`` links among them.
         """
 
@@ -1238,6 +1776,7 @@ class GenomeArchive:
                     "generation": generations[genome],
                     "in_archive": genome in summaries,
                     "insert_type": summary.get("insert_type"),
+                    "island": summary.get("island"),
                     "generated_by": summary.get("generated_by", []),
                     "fitness": summary.get("fitness"),
                 }
@@ -1457,6 +1996,27 @@ class GenomeArchive:
             (int(genome_number),),
         ).fetchall()
         return [row[0] for row in rows]
+
+    def islands_of(self, genome_numbers: list[int]) -> list[int | None]:
+        """Looks up the island each of several genomes was inserted into.
+
+        Args:
+            genome_numbers: The genomes to look up, e.g. a genome's parents.
+
+        Returns:
+            Each genome's island, in the order given: ``None`` for a genome that
+            is not stored (the seed genome) or was not evolved on an island.
+        """
+
+        islands: dict[int, int | None] = {}
+        for chunk in _chunks(sorted({int(number) for number in genome_numbers})):
+            islands.update(
+                self.connection.execute(
+                    f"SELECT genome_number, island FROM genomes WHERE genome_number IN ({', '.join('?' * len(chunk))})",
+                    chunk,
+                ).fetchall()
+            )
+        return [islands.get(int(number)) for number in genome_numbers]
 
     def _parents_of(self, genome_numbers: list[int]) -> dict[int, list[int]]:
         """Looks up the parents of several genomes at once.

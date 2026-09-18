@@ -1,10 +1,54 @@
+from __future__ import annotations
+
 import argparse
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from src.circuits.circuit import CircuitGenome
+
+if TYPE_CHECKING:
+    from src.utils.restart import RestartState
+
+#: Why a population strategy discarded a genome, recorded as its ``discard_reason``:
+#: it was worse than every genome a full population kept, it had the same enabled
+#: gates as a better genome already held, or it was generated for an island that was
+#: repopulated while it was being evaluated.
+DISCARD_REASONS = (
+    "worse_than_population",
+    "duplicate_of_better",
+    "generated_before_repopulation",
+)
+
+
+def mark_discarded(
+    genome: CircuitGenome, reason: str, lost_to: int | None = None
+) -> None:
+    """Records that a population strategy discarded a genome, and why.
+
+    Args:
+        genome: The discarded genome.
+        reason: One of :data:`DISCARD_REASONS`.
+        lost_to: The number of the genome it lost to -- the better duplicate, or
+            the worst genome the full population kept -- when there is one.
+
+    Returns:
+        None. Sets the genome's ``insert_type`` metadata to ``"discarded"``, its
+        ``discard_reason``, and its ``lost_to`` when given.
+
+    Raises:
+        ValueError: If ``reason`` is not one of :data:`DISCARD_REASONS`.
+    """
+
+    if reason not in DISCARD_REASONS:
+        raise ValueError(
+            f"Unknown discard reason {reason!r}; expected one of {DISCARD_REASONS}."
+        )
+    genome.metadata["insert_type"] = "discarded"
+    genome.metadata["discard_reason"] = reason
+    if lost_to is not None:
+        genome.metadata["lost_to"] = int(lost_to)
 
 
 class PopulationStrategy(ABC):
@@ -101,6 +145,25 @@ class PopulationStrategy(ABC):
         )
 
     @abstractmethod
+    def restore(self, state: "RestartState") -> None:
+        """Restores the state a stopped run left, so its search can continue.
+
+        Called when a run is restarted from its archive, before the search
+        generates anything: the strategy takes back the genomes it held when the
+        run stopped, along with whatever internal state it needs to behave as it
+        did (see :mod:`src.utils.restart`).
+
+        Args:
+            state: The stopped run's state: the genomes its population held, the
+                best genome it ever inserted, how many genomes it inserted, and
+                the number the next genome will take.
+
+        Returns:
+            None. Restores the strategy in place.
+        """
+        pass
+
+    @abstractmethod
     def is_initializing(self) -> bool:
         """
         Used to determine if the strategy is still initializing so EXAQC
@@ -119,6 +182,18 @@ class PopulationStrategy(ABC):
             have been inserted yet (i.e., the very beginning of the search).
         """
         pass
+
+    def run_info(self) -> dict[str, Any]:
+        """Describes the strategy's fixed configuration, for the run's archive.
+
+        Recorded in the archive's ``run_info`` when the search starts, so tools
+        reading a run can see how its population was arranged.
+
+        Returns:
+            Extra ``run_info`` values keyed by name; none by default.
+        """
+
+        return {}
 
     @abstractmethod
     def get_population(self) -> list[CircuitGenome]:

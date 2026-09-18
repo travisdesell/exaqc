@@ -3,12 +3,15 @@ import bisect
 import random
 
 from functools import cmp_to_key
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
 from src.circuits.circuit import CircuitGenome
-from src.evolution.population_strategy import PopulationStrategy
+from src.evolution.population_strategy import PopulationStrategy, mark_discarded
+
+if TYPE_CHECKING:
+    from src.utils.restart import RestartState
 
 
 class SteadyStatePopulation(PopulationStrategy):
@@ -63,6 +66,26 @@ class SteadyStatePopulation(PopulationStrategy):
 
         # used to store the population, should be kept in sorted order.
         self.population: list[CircuitGenome] = []
+
+    def restore(self, state: "RestartState") -> None:
+        """Takes back the population a stopped run held, so its search continues.
+
+        Args:
+            state: The stopped run's state (see :mod:`src.utils.restart`).
+
+        Returns:
+            None. Refills ``population`` with the run's genomes, sorted by
+            fitness, and restores the insertion count.
+        """
+
+        self.population = sorted(state.population, key=cmp_to_key(self.compare))
+        self.insertions = state.inserted_genomes
+
+        logger.info(
+            "restored a steady state population of {} genomes after {} insertions",
+            len(self.population),
+            self.insertions,
+        )
 
     def is_initializing(self) -> bool:
         """
@@ -151,10 +174,12 @@ class SteadyStatePopulation(PopulationStrategy):
         Inserts a genome back into the population.
 
         A genome whose enabled gates match a genome already in the population
-        replaces it only if its fitness is better; otherwise it is rejected. An
+        replaces it only if its fitness is better; otherwise it is discarded. An
         inserted genome that falls past the maximum population size is discarded
         straight away. The genome's ``insert_type`` metadata records the outcome
-        (``inserted``, ``global_best`` or ``discarded``).
+        (``inserted``, ``global_best`` or ``discarded``), and a discarded genome
+        also records its ``discard_reason`` and the genome it ``lost_to`` (see
+        :func:`~src.evolution.population_strategy.mark_discarded`).
 
         Args:
             genome: is the genome to insert into the population.
@@ -162,9 +187,8 @@ class SteadyStatePopulation(PopulationStrategy):
                 inserting the genome, such as an island or species it came from.
 
         Returns:
-            False if the genome was rejected as a duplicate of a better genome
-            (it is not recorded as evaluated), True otherwise -- including when
-            it was inserted and then immediately discarded.
+            True: every genome is recorded as evaluated, whether it was kept or
+            discarded.
         """
 
         # don't add duplicate genomes to the population
@@ -193,7 +217,10 @@ class SteadyStatePopulation(PopulationStrategy):
                 else:
                     # discard the new genome
                     self.insertions += 1
-                    return False
+                    mark_discarded(
+                        genome, "duplicate_of_better", match_genome.genome_number
+                    )
+                    return True
 
         bisect.insort(
             self.population,
@@ -215,8 +242,13 @@ class SteadyStatePopulation(PopulationStrategy):
         if len(self.population) > self.max_population_size:
             # remove the last genome from the population
             if genome == self.population[-1]:
-                # the genome that was inserted is going to be discarded, so flag its metadata
-                genome.metadata["insert_type"] = "discarded"
+                # the genome that was inserted is about to be removed: it failed to
+                # beat the worst genome the population keeps
+                mark_discarded(
+                    genome,
+                    "worse_than_population",
+                    self.population[-2].genome_number,
+                )
             del self.population[-1]
 
         return True

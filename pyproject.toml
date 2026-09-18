@@ -66,6 +66,13 @@ dependencies = [
     "gymnasium",
     "gymnasium[mujoco]",
     "minigrid",
+
+    # The dashboard serves its web UI, JSON API and MCP endpoint from one
+    # Starlette application run by uvicorn; the MCP SDK (2.x, where FastMCP
+    # became MCPServer) provides the protocol and generates the tool schemas.
+    "mcp>=2,<3",
+    "starlette",
+    "uvicorn",
 ]
 
 [tool.black]

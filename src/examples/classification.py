@@ -26,6 +26,7 @@ from src.evolution.exaqc import EXAQC
 from src.evolution.master_worker import run_evolution
 from src.evolution.objective import Objective
 from src.evolution.population_strategy import PopulationStrategy
+from src.utils import restart
 from src.metrics.mean_class_accuracy import MeanClassAccuracy
 from src.metrics.metric import Metric
 from src.trainer.supervised_trainer import SupervisedTrainer
@@ -339,12 +340,18 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
+    # Decided before anything is built, and on every rank: a restarted run takes
+    # its configuration from the run it continues, so the objective a worker
+    # evaluates with matches the search the master restores.
+    args, restart_state, run_for = restart.prepare(args, parser.error)
+
     # The output directory is created by GenomeArchive.from_args (on the serial
     # run or MPI master); loguru creates the run.log parent directory as needed
     # when the file sink is added.
     logger.remove()
     logger.add(sys.stdout, level=args.logging_level)
-    logger.add(os.path.join(args.out_dir, "run.log"))
+    if args.save_run_log:
+        logger.add(os.path.join(args.out_dir, "run.log"), level=args.logging_level)
 
     device = (
         args.device
@@ -454,10 +461,16 @@ def main() -> None:
         # The gate set and population strategy are built from `args` by their own
         # factories (which every entry point shares); only the task-specific
         # encoder/decoder, hyperparameters and register layout are computed here.
-        return EXAQC(
+        population = (
+            PopulationStrategy.from_args(args, compare)
+            if restart_state is None
+            else restart.restored_strategy(restart_state, args, compare)
+        )
+
+        search = EXAQC(
             gate_specifications=GateSpecifications.from_args(args),
-            population=PopulationStrategy.from_args(args, compare),
-            archive=GenomeArchive.from_args(args),
+            population=population,
+            archive=GenomeArchive.from_args(args, restarting=restart_state is not None),
             objective=objective,
             initial_encoder=initial_encoder,
             initial_decoder=initial_decoder,
@@ -471,14 +484,20 @@ def main() -> None:
             output_registers={"input": args.output_qubits},
             task="classification",
             task_target=args.dataset,
+            restarting=restart_state is not None,
         )
+
+        if restart_state is not None:
+            restart.resume(search, restart_state, args)
+
+        return search
 
     # Every rank builds the objective (workers evaluate genomes with it); only
     # the serial run and the MPI master build the EXAQC search, via build_exaqc.
     run_evolution(
         objective=objective,
         build_exaqc=build_exaqc,
-        run_for=args.number_genomes,
+        run_for=run_for,
     )
 
 
