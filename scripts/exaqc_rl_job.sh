@@ -29,6 +29,21 @@ set -eu
 #: Where each run's genome archive is written.
 ARCHIVE_DIR=/home/tjdvse/genome_archives
 
+#: The environments whose reward carries an "alive" bonus, and so accept
+#: --healthy_reward. Mirrors what
+#: src.examples.reinforcement_learning.supported_env_knobs() reads off each
+#: Gymnasium environment, and is checked against it by
+#: tests/test_exaqc_rl_job_script.py so the two cannot drift apart. Note that
+#: HalfCheetah is MuJoCo locomotion but cannot terminate, so it has no healthy
+#: bonus at all. Kept space-delimited for an exact-token match below.
+HEALTHY_REWARD_ENVIRONMENTS="hopper walker2d ant humanoid"
+
+#: Per-step bonus for staying upright, for the environments that have one. The
+#: Gymnasium default of 1.0 makes standing still for a full --max_steps 1000
+#: episode worth ~1000, which can swamp the forward-progress reward and leave
+#: the search selecting policies that balance rather than walk.
+HEALTHY_REWARD=0.2
+
 if [ $# -lt 8 ]; then
     echo "usage: $0 <env> <input_qubits> <output_qubits> <run> <n_islands> <max_island_size> <topology_tag> <topology> [topology arguments...]" >&2
     exit 2
@@ -50,6 +65,16 @@ shift 7
 # silently resume the wrong experiment.
 OUT_DIR="${ARCHIVE_DIR}/${ENVIRONMENT}_i${N_ISLANDS}_${TOPOLOGY_TAG}_${RUN}"
 
+# Only the environments with an alive bonus take --healthy_reward: the entry
+# point rejects it for the others rather than quietly ignoring it, so it is
+# added only where it applies and this script stays usable for every --env.
+HEALTHY_REWARD_ARGUMENTS=()
+case " ${HEALTHY_REWARD_ENVIRONMENTS} " in
+    *" ${ENVIRONMENT} "*)
+        HEALTHY_REWARD_ARGUMENTS=(--healthy_reward "$HEALTHY_REWARD")
+        ;;
+esac
+
 # --topology takes any number of values, so it comes last: a flag after it would
 # be read as another one of its arguments.
 #
@@ -66,9 +91,14 @@ COMMAND=(
     --max_steps 1000
     --input_qubits "$INPUT_QUBITS"
     --output_qubits "$OUTPUT_QUBITS"
-    --number_genomes 5000
+    --number_genomes 10000
     --entropy_coef 0.015
     --episodes 100
+    # expands to nothing for an environment without an alive bonus; written
+    # this way because `set -u` rejects a bare empty-array expansion on bash
+    # older than 4.4, which the cluster may still be running
+    ${HEALTHY_REWARD_ARGUMENTS[@]+"${HEALTHY_REWARD_ARGUMENTS[@]}"}
+    --eval_episodes 20
     --ema_alpha 0.1
     --log_every 5
     --mutation_strategy uniform 1 3
@@ -78,7 +108,7 @@ COMMAND=(
     --encoding linear
     --decoding linear
     --out_dir "$OUT_DIR"
-    --improvement_cutoff 10
+    --improvement_cutoff 30
     --shared_file_system
     islands
     --n_islands "$N_ISLANDS"

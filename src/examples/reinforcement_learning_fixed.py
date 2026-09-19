@@ -43,12 +43,14 @@ from typing import Any
 from loguru import logger
 from torch import Tensor
 
-from src.trainer.reinforcement_trainer import RLEnvironment
+from src.trainer.reinforcement_trainer import EVAL_POLICY_CHOICES, RLEnvironment
 from src.trainer.rl_trainer_registry import TRAINER_REGISTRY
 
 from src.examples.reinforcement_learning import (
+    add_environment_knob_arguments,
     build_trainer,
     ENV_CHOICES,
+    environment_knob_kwargs,
     make_environment,
 )
 
@@ -305,6 +307,15 @@ if __name__ == "__main__":
     # RL hyperparameters (become genome.hyperparameters, mutable by the search)
     p.add_argument("--episodes", type=int, default=60)
     p.add_argument("--eval_episodes", type=int, default=10)
+    p.add_argument(
+        "--eval_policy",
+        choices=EVAL_POLICY_CHOICES,
+        default="match",
+        help=(
+            "Action-selection regime the classical baseline is evaluated "
+            "under; 'match' uses the regime --algo optimizes."
+        ),
+    )
     p.add_argument("--max_steps", type=int, default=500)
     p.add_argument("--gamma", type=float, default=0.99)
     p.add_argument("--learning_rate", "-lr", type=float, default=1e-2)
@@ -339,6 +350,8 @@ if __name__ == "__main__":
     p.add_argument("--epsilon_decay", type=float, default=0.995)
 
     # FrozenLake options
+    add_environment_knob_arguments(p)
+
     p.add_argument("--map_name", choices=["4x4", "8x8"], default="4x4")
     p.add_argument("--is_slippery", action="store_true")
 
@@ -387,23 +400,39 @@ if __name__ == "__main__":
     # -----------------------------------------------------------------
     # Environment + trainer + objective
     # -----------------------------------------------------------------
+    try:
+        env_kwargs = environment_knob_kwargs(args, args.env)
+    except ValueError as error:
+        p.error(str(error))
+
     environment = make_environment(
         args.env,
+        env_kwargs=env_kwargs,
         map_name=args.map_name,
         is_slippery=args.is_slippery,
     )
-
-    if environment.deterministic and args.eval_episodes > 1:
-        logger.warning(
-            f"environment {environment.env_id} is deterministic, so greedy "
-            f"evaluation yields identical episodes; --eval_episodes="
-            f"{args.eval_episodes} will be reduced to 1 during evaluation."
-        )
 
     # All training hyperparameters are carried per genome and resolved by the
     # trainer at train time, so the trainer is constructed with only the
     # algorithm choice.
     trainer = build_trainer(args.algo)
+
+    resolved_eval_policy = (
+        trainer.natural_eval_policy if args.eval_policy == "match" else args.eval_policy
+    )
+
+    # Identical episodes are only a concern for a greedy rollout: a stochastic
+    # policy varies episode to episode even in a deterministic environment.
+    if (
+        environment.deterministic
+        and args.eval_episodes > 1
+        and resolved_eval_policy == "greedy"
+    ):
+        logger.warning(
+            f"environment {environment.env_id} is deterministic, so greedy "
+            f"evaluation yields identical episodes; --eval_episodes="
+            f"{args.eval_episodes} will be reduced to 1 during evaluation."
+        )
 
     # Value-based trainers (q_learning / sarsa) enumerate discrete actions and
     # cannot drive a continuous Box-action environment; fail fast with a clear
@@ -419,6 +448,7 @@ if __name__ == "__main__":
     hyperparameters = {
         "episodes": args.episodes,
         "eval_episodes": args.eval_episodes,
+        "eval_policy": args.eval_policy,
         "max_steps": args.max_steps,
         "gamma": args.gamma,
         "learning_rate": args.learning_rate,
@@ -434,6 +464,8 @@ if __name__ == "__main__":
         "epsilon_min": args.epsilon_min,
         "epsilon_decay": args.epsilon_decay,
         "seed": args.seed,
+        "eval_seed": args.eval_seed,
+        "env_kwargs": env_kwargs,
         "log_every": args.log_every,
         "ema_alpha": args.ema_alpha,
     }

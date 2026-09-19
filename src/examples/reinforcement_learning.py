@@ -31,13 +31,18 @@ automatically by :func:`~src.evolution.master_worker.run_evolution`)::
 from __future__ import annotations
 
 import argparse
+import importlib
+import inspect
 import os
 import sys
 
 import numpy as np
 
 import gymnasium as gym
+from gymnasium.envs.registration import registry
 from loguru import logger
+
+from typing import Any
 
 from src.circuits.circuit import CircuitGenome
 from src.circuits.decoder import initialize_decoder
@@ -108,6 +113,160 @@ CONTINUOUS_ENVS: frozenset[str] = frozenset(
 #: they are offered on the command line (derived from :data:`ENV_IDS`).
 ENV_CHOICES: tuple[str, ...] = tuple(ENV_IDS)
 
+#: The MuJoCo reward / termination / reset knobs exposed on the command line,
+#: mapped to their help text. Each name is passed straight through to
+#: ``gym.make`` as a constructor keyword, so these spellings are Gymnasium's,
+#: not ours -- note ``healthy_reward`` carries no ``_weight`` suffix because it
+#: *is* the per-step bonus rather than a coefficient multiplying something, the
+#: way ``forward_reward_weight`` and ``ctrl_cost_weight`` are.
+#:
+#: Not every environment accepts every knob (HalfCheetah cannot terminate, so
+#: it has no health concept at all), so what a given environment supports is
+#: read from its own constructor by :func:`supported_env_knobs` rather than
+#: hardcoded here.
+MUJOCO_ENV_KNOBS: dict[str, str] = {
+    "forward_reward_weight": (
+        "Weight on the forward-progress reward (reward += weight * dx/dt)."
+    ),
+    "ctrl_cost_weight": (
+        "Weight on the control cost penalizing large actions "
+        "(reward -= weight * sum(action^2))."
+    ),
+    "healthy_reward": (
+        "Per-step bonus for staying 'healthy' (upright and within bounds). "
+        "This is the bonus itself, not a coefficient: at the Gymnasium default "
+        "of 1.0 with --max_steps 1000, simply standing still is worth ~1000, "
+        "which can dominate the forward-progress reward."
+    ),
+    "contact_cost_weight": (
+        "Weight on the contact-force cost (Ant and Humanoid only)."
+    ),
+    "reset_noise_scale": (
+        "Scale of the random perturbation applied to the initial state at "
+        "reset. Raising it varies the episodes a genome is evaluated on; "
+        "raising it far past the environment's default changes the task."
+    ),
+}
+
+#: The one boolean MuJoCo knob, kept apart from :data:`MUJOCO_ENV_KNOBS` because
+#: argparse needs ``BooleanOptionalAction`` rather than a typed value.
+MUJOCO_ENV_FLAGS: dict[str, str] = {
+    "terminate_when_unhealthy": (
+        "Whether an episode ends as soon as the body leaves its healthy range. "
+        "Disabling it lets an episode run to --max_steps after a fall, during "
+        "which no healthy_reward accrues."
+    ),
+}
+
+
+def supported_env_knobs(env_id: str) -> frozenset[str]:
+    """Returns the knobs from :data:`MUJOCO_ENV_KNOBS` an environment accepts.
+
+    Read from the environment class's own ``__init__`` signature rather than a
+    hardcoded table, so it stays correct across Gymnasium versions and across
+    environments that share only part of the locomotion reward structure.
+
+    Args:
+        env_id: A Gymnasium environment id, e.g. ``"Walker2d-v5"``.
+
+    Returns:
+        The subset of the documented knob names the environment's constructor
+        takes; empty when the environment is not registered.
+    """
+
+    entry_point = registry[env_id].entry_point if env_id in registry else None
+    if entry_point is None:
+        return frozenset()
+
+    if isinstance(entry_point, str):
+        module_name, _, class_name = entry_point.partition(":")
+        entry_point = getattr(importlib.import_module(module_name), class_name)
+
+    known = set(MUJOCO_ENV_KNOBS) | set(MUJOCO_ENV_FLAGS)
+    return frozenset(known & set(inspect.signature(entry_point.__init__).parameters))
+
+
+def add_environment_knob_arguments(parser: argparse.ArgumentParser) -> None:
+    """Adds the MuJoCo reward / termination / reset knobs to a parser.
+
+    Every knob defaults to ``None``, meaning "leave the environment's own
+    default alone", so an unset knob is never forwarded to ``gym.make`` and the
+    Gymnasium defaults stay authoritative. Shared by the entry points that
+    build an environment so they expose an identical interface.
+
+    Args:
+        parser: The parser to add the arguments to.
+
+    Returns:
+        None. Mutates ``parser`` by adding one argument per key of
+        :data:`MUJOCO_ENV_KNOBS` and :data:`MUJOCO_ENV_FLAGS`.
+    """
+
+    group = parser.add_argument_group(
+        "MuJoCo environment knobs",
+        "Reward, termination and reset settings for the MuJoCo environments. "
+        "Each defaults to the environment's own value; not every environment "
+        "accepts every knob.",
+    )
+
+    for name, help_text in MUJOCO_ENV_KNOBS.items():
+        group.add_argument(
+            f"--{name}",
+            type=float,
+            default=None,
+            help=f"{help_text} (default: the environment's own value)",
+        )
+
+    for name, help_text in MUJOCO_ENV_FLAGS.items():
+        group.add_argument(
+            f"--{name}",
+            action=argparse.BooleanOptionalAction,
+            default=None,
+            help=f"{help_text} (default: the environment's own value)",
+        )
+
+
+def environment_knob_kwargs(args: argparse.Namespace, env_name: str) -> dict[str, Any]:
+    """Collects the knobs that were explicitly set, checked against the env.
+
+    Only knobs the caller actually passed are returned, so the environment's
+    own defaults are used for everything else. Asking for a knob the chosen
+    environment does not have is a mistake worth failing on rather than
+    silently ignoring -- ``--healthy_reward`` means nothing to HalfCheetah,
+    which cannot terminate.
+
+    Args:
+        args: Parsed arguments carrying the knob values.
+        env_name: The friendly ``--env`` name the knobs are destined for.
+
+    Returns:
+        The ``gym.make`` keyword arguments to build the environment with;
+        empty when no knob was set.
+
+    Raises:
+        ValueError: If a knob was set that ``env_name`` does not accept.
+    """
+
+    requested = {
+        name: getattr(args, name)
+        for name in (*MUJOCO_ENV_KNOBS, *MUJOCO_ENV_FLAGS)
+        if getattr(args, name, None) is not None
+    }
+    if not requested:
+        return {}
+
+    supported = supported_env_knobs(ENV_IDS.get(env_name, ""))
+    unsupported = sorted(set(requested) - supported)
+    if unsupported:
+        offered = ", ".join(f"--{name}" for name in sorted(supported)) or "none"
+        raise ValueError(
+            f"environment {env_name!r} does not accept "
+            + ", ".join(f"--{name}" for name in unsupported)
+            + f"; it accepts: {offered}."
+        )
+
+    return requested
+
 
 def make_continuous_environment(env_id: str, **env_kwargs) -> RLEnvironment:
     """Builds a continuous-action :class:`RLEnvironment` by probing the env.
@@ -149,7 +308,9 @@ def make_continuous_environment(env_id: str, **env_kwargs) -> RLEnvironment:
     )
 
 
-def make_environment(name: str, **kwargs) -> RLEnvironment:
+def make_environment(
+    name: str, *, env_kwargs: dict[str, Any] | None = None, **kwargs
+) -> RLEnvironment:
     """Builds an :class:`RLEnvironment` for one of the supported tasks.
 
     Adding a new environment is a matter of returning another
@@ -164,6 +325,13 @@ def make_environment(name: str, **kwargs) -> RLEnvironment:
             members of :data:`CONTINUOUS_ENVS` (``"mountaincar_continuous"``,
             ``"pendulum"``, ``"hopper"``, ``"walker2d"``, ``"halfcheetah"``,
             ``"ant"``, ``"humanoid"``).
+        env_kwargs: Extra ``gym.make`` keyword arguments -- the MuJoCo reward,
+            termination and reset knobs collected by
+            :func:`environment_knob_kwargs`. Only the continuous tasks take
+            these. Passing them matters beyond the search itself: a genome
+            evolved under a modified reward has to be *refined* and *replayed*
+            under that same reward, so the tools that rebuild an environment
+            from a saved genome read them back off it.
         **kwargs: Environment-specific options (e.g. ``map_name`` and
             ``is_slippery`` for FrozenLake).
 
@@ -171,7 +339,8 @@ def make_environment(name: str, **kwargs) -> RLEnvironment:
         A configured :class:`RLEnvironment`.
 
     Raises:
-        ValueError: If ``name`` is not a supported environment.
+        ValueError: If ``name`` is not a supported environment, or if
+            ``env_kwargs`` is given for an environment that takes none.
     """
 
     if name not in ENV_IDS:
@@ -182,7 +351,14 @@ def make_environment(name: str, **kwargs) -> RLEnvironment:
     if name in CONTINUOUS_ENVS:
         # Continuous Box-action tasks (Pendulum + MuJoCo); only the policy-
         # gradient trainers (reinforce, actor_critic, ppo) support these.
-        return make_continuous_environment(env_id)
+        return make_continuous_environment(env_id, **(env_kwargs or {}))
+
+    if env_kwargs:
+        raise ValueError(
+            f"environment {name!r} takes no reward knobs, but "
+            + ", ".join(f"--{knob}" for knob in sorted(env_kwargs))
+            + " were given."
+        )
 
     if name == "cartpole":
         # 4 continuous observation features, 2 discrete actions.
@@ -365,7 +541,17 @@ class ReinforcementLearningObjective(Objective):
             "train_return_mean": training_metrics["return_mean"],
             "best_episode_return": training_metrics["best_episode_return"],
             "env_id": self.environment.env_id,
+            # which policy the evaluation returns describe; genomes scored
+            # under different regimes are not comparable with one another
+            "eval_policy": genome.metadata.get("eval_policy", "greedy"),
         }
+
+        # under eval_policy="both" the regime that did not drive fitness is
+        # carried alongside it, so the gap between the two can be analyzed
+        for regime in ("greedy", "stochastic"):
+            recorded = validation_metrics.get(f"{regime}_return_mean")
+            if recorded is not None:
+                genome.fitness[f"eval_{regime}_return_mean"] = recorded
 
         logger.info(
             f"[{genome.genome_number:04d}] "
@@ -373,6 +559,7 @@ class ReinforcementLearningObjective(Objective):
             f"best_episode_return={genome.fitness['best_episode_return']:.2f} "
             f"eval_return_mean={genome.fitness['eval_return_mean']:.2f} "
             f"eval_return_std={genome.fitness['eval_return_std']:.2f} "
+            f"eval_policy={genome.fitness['eval_policy']} "
             f"env={self.environment.env_id}"
         )
 
@@ -439,6 +626,9 @@ def build_parser() -> argparse.ArgumentParser:
     PPOTrainer.initialize_parser(parser)
     QLearningTrainer.initialize_parser(parser)
 
+    # MuJoCo reward / termination / reset knobs
+    add_environment_knob_arguments(parser)
+
     # FrozenLake options
     parser.add_argument(
         "--map_name",
@@ -498,23 +688,47 @@ def main() -> None:
     # -----------------------------------------------------------------
     # Environment + trainer + objective
     # -----------------------------------------------------------------
+    try:
+        env_kwargs = environment_knob_kwargs(args, args.env)
+    except ValueError as error:
+        parser.error(str(error))
+
     environment = make_environment(
         args.env,
+        env_kwargs=env_kwargs,
         map_name=args.map_name,
         is_slippery=args.is_slippery,
     )
 
-    if environment.deterministic and args.eval_episodes > 1:
+    if env_kwargs:
+        logger.info(f"environment knobs overriding {args.env} defaults: {env_kwargs}")
+
+    # All training hyperparameters are carried per genome (see the
+    # ``hyperparameters`` dict below) and resolved by the trainer at train time,
+    # so the trainer itself is constructed with only the algorithm choice.
+    trainer = build_trainer(args.algo)
+
+    resolved_eval_policy = (
+        trainer.natural_eval_policy if args.eval_policy == "match" else args.eval_policy
+    )
+
+    # Identical episodes are only a concern for a greedy rollout: a stochastic
+    # policy varies episode to episode even in a deterministic environment.
+    if (
+        environment.deterministic
+        and args.eval_episodes > 1
+        and resolved_eval_policy == "greedy"
+    ):
         logger.warning(
             f"environment {environment.env_id} is deterministic, so greedy "
             f"evaluation yields identical episodes; --eval_episodes="
             f"{args.eval_episodes} will be reduced to 1 during evaluation."
         )
 
-    # All training hyperparameters are carried per genome (see the
-    # ``hyperparameters`` dict below) and resolved by the trainer at train time,
-    # so the trainer itself is constructed with only the algorithm choice.
-    trainer = build_trainer(args.algo)
+    logger.info(
+        f"evaluating genomes under the {resolved_eval_policy!r} policy "
+        f"(--eval_policy {args.eval_policy}, --algo {args.algo})"
+    )
 
     # Value-based trainers (q_learning / sarsa) enumerate discrete actions and
     # cannot drive a continuous Box-action environment; fail fast with a clear
@@ -558,6 +772,7 @@ def main() -> None:
             "quantum_dropout_rate": args.quantum_dropout_rate,
             "episodes": args.episodes,
             "eval_episodes": args.eval_episodes,
+            "eval_policy": args.eval_policy,
             "max_steps": args.max_steps,
             "gamma": args.gamma,
             "learning_rate": args.learning_rate,
@@ -573,6 +788,10 @@ def main() -> None:
             "epsilon_min": args.epsilon_min,
             "epsilon_decay": args.epsilon_decay,
             "seed": args.seed,
+            "eval_seed": args.eval_seed,
+            # the environment a genome was evolved against is part of what its
+            # fitness means, so the single-genome tools can rebuild it exactly
+            "env_kwargs": env_kwargs,
             "log_every": args.log_every,
             "ema_alpha": args.ema_alpha,
             "improvement_cutoff": args.improvement_cutoff,

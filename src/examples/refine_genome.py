@@ -309,7 +309,13 @@ def build_reinforcement_learning_objective(
             "'algo' hyperparameter), so it cannot be refined."
         )
 
-    environment = make_environment(genome.task_target)
+    # Refining continues the genome's own training, so it has to optimize the
+    # same objective: an environment rebuilt with default rewards would refine
+    # against a different reward than the one the genome was evolved under.
+    environment = make_environment(
+        genome.task_target,
+        env_kwargs=genome.hyperparameters.get("env_kwargs") or None,
+    )
     trainer = build_trainer(algorithm)
 
     if environment.continuous and not trainer.supports_continuous:

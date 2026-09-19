@@ -120,6 +120,30 @@ from src.dropout.quantum_dropout import sample_quantum_dropout
 LOG_STD_MIN: float = -5.0
 LOG_STD_MAX: float = 2.0
 
+#: Action-selection regimes :meth:`ReinforcementLearningTrainer.evaluate` can
+#: score a genome under.
+#:
+#: * ``"match"`` -- use the regime the trainer's own objective optimizes, which
+#:   each trainer declares as
+#:   :attr:`ReinforcementLearningTrainer.natural_eval_policy`. This is the
+#:   default, and is the only value that keeps evaluation consistent with
+#:   training across *all* algorithms: the policy-gradient trainers optimize the
+#:   sampled policy, while the value-based trainers learn a greedy target
+#:   policy and explore only epsilon-greedily.
+#: * ``"greedy"`` -- always take the deterministic action. For a continuous
+#:   environment this discards the learned log-standard-deviation, so it scores
+#:   a policy that the policy-gradient trainers never optimize.
+#: * ``"stochastic"`` -- always sample from the policy.
+#: * ``"both"`` -- score under both regimes; the trainer's natural regime drives
+#:   fitness and the other is recorded alongside it as a diagnostic. Costs one
+#:   extra set of evaluation episodes.
+EVAL_POLICY_CHOICES: tuple[str, ...] = ("match", "greedy", "stochastic", "both")
+
+#: Width of the seed block a trainer whose outer episode spans several
+#: environment episodes (PPO) reserves per outer episode, so one outer
+#: episode's seeds cannot run into the next one's.
+SEED_BLOCK: int = 10_000
+
 # ---------------------------------------------------------------------------
 # Environment abstraction
 # ---------------------------------------------------------------------------
@@ -409,6 +433,52 @@ def split_policy_value(
 
 
 @torch.no_grad()
+def select_action(
+    genome: CircuitGenome,
+    environment: RLEnvironment,
+    observation: Any,
+    *,
+    stochastic: bool,
+) -> Any:
+    """Selects an action for an observation under one action-selection regime.
+
+    Both regimes read the same policy outputs, so this is the single place the
+    policy is turned into an action; :func:`greedy_action` and
+    :func:`stochastic_action` are thin wrappers over it. Keeping them together
+    matters because the two regimes score *different policies*: the greedy
+    action of a continuous environment ignores the learned
+    log-standard-deviation half of the policy output entirely, while the
+    stochastic action is drawn using it.
+
+    Args:
+        genome: The genome policy.
+        environment: The environment (provides observation encoding and action
+            metadata).
+        observation: A raw environment observation.
+        stochastic: When True, sample from the policy distribution (the
+            behaviour the policy-gradient trainers collect rollouts under).
+            When False, take the deterministic action: the argmax over the
+            policy logits for a discrete environment, or the distribution
+            mean for a continuous one.
+
+    Returns:
+        The action in the environment's native ``env.step`` format (an ``int``
+        for discrete spaces, a clipped ``float32`` NumPy array for continuous
+        spaces).
+    """
+
+    part = policy_output(genome, environment, observation)
+
+    if stochastic:
+        action = action_distribution(part, environment).sample()
+        return to_env_action(action, environment)
+
+    if environment.continuous:
+        mean = part[: environment.n_actions]
+        return to_env_action(mean, environment)
+    return int(torch.argmax(part).item())
+
+
 def greedy_action(
     genome: CircuitGenome, environment: RLEnvironment, observation: Any
 ) -> Any:
@@ -430,11 +500,32 @@ def greedy_action(
         discrete spaces, a ``float32`` NumPy array for continuous spaces).
     """
 
-    part = policy_output(genome, environment, observation)
-    if environment.continuous:
-        mean = part[: environment.n_actions]
-        return to_env_action(mean, environment)
-    return int(torch.argmax(part).item())
+    return select_action(genome, environment, observation, stochastic=False)
+
+
+def stochastic_action(
+    genome: CircuitGenome, environment: RLEnvironment, observation: Any
+) -> Any:
+    """Samples an action from the policy for an observation.
+
+    This is the regime the policy-gradient trainers collect their rollouts
+    under, so it is what their objective actually optimizes: a ``Categorical``
+    draw over the policy logits for a discrete environment, or a draw from the
+    diagonal ``Normal`` built by :func:`action_distribution` (clipped to the
+    action bounds) for a continuous one.
+
+    Args:
+        genome: The genome policy.
+        environment: The environment (provides observation encoding and action
+            metadata).
+        observation: A raw environment observation.
+
+    Returns:
+        The sampled action in the environment's native format (an ``int`` for
+        discrete spaces, a ``float32`` NumPy array for continuous spaces).
+    """
+
+    return select_action(genome, environment, observation, stochastic=True)
 
 
 # ---------------------------------------------------------------------------
@@ -458,12 +549,22 @@ def greedy_action(
 #:     learning_rate: Adam learning rate.
 #:     gamma: Reward discount factor.
 #:     max_steps: Maximum number of steps per episode.
-#:     eval_episodes: Number of episodes used for greedy evaluation.
-#:     seed: Base random seed for training and evaluation episodes, or ``None``
-#:         (the default) to draw a fresh random seed each time a genome's
-#:         hyperparameters are resolved, so genomes do not all train and get
-#:         scored on the same episodes. :meth:`ReinforcementLearningTrainer.train`
-#:         records the seed a genome used in its ``training_seed`` metadata.
+#:     eval_episodes: Number of episodes used to evaluate a genome's return.
+#:     eval_policy: Action-selection regime evaluation scores a genome under,
+#:         one of :data:`EVAL_POLICY_CHOICES`. ``"match"`` (the default) uses
+#:         the regime the trainer's objective optimizes.
+#:     seed: Base random seed for *training* episodes, or ``None`` (the
+#:         default) to draw a fresh random seed each time a genome's
+#:         hyperparameters are resolved, so genomes do not all train on the
+#:         same episodes. :meth:`ReinforcementLearningTrainer.train` records the
+#:         seed a genome used in its ``training_seed`` metadata.
+#:     eval_seed: Base random seed for *evaluation* episodes, kept in a range
+#:         disjoint from the training seeds so a genome is never scored on an
+#:         episode it trained on (see
+#:         :meth:`ReinforcementLearningTrainer._separate_evaluation_seed`).
+#:         ``None`` (the default) draws a fresh one per genome; setting it
+#:         evaluates every genome on the same episodes, which makes their
+#:         fitnesses directly comparable.
 #:     log_every: Logging / evaluation frequency, in episodes.
 #:     ema_alpha: Smoothing factor for the exponential moving average (EMA) of
 #:         episode returns reported as the training return mean. Each episode
@@ -486,14 +587,16 @@ def greedy_action(
 #:     quantum_dropout: Master switch for quantum dropout during training. When
 #:         false no quantum dropout is ever applied; when true it is sampled per
 #:         training episode from the genome's ``quantum_dropout_type`` /
-#:         ``quantum_dropout_rate`` and never applied during greedy evaluation.
+#:         ``quantum_dropout_rate`` and never applied during evaluation.
 RL_HYPERPARAMETER_DEFAULTS: dict[str, Any] = {
     "episodes": 60,
     "learning_rate": 1e-2,
     "gamma": 0.99,
     "max_steps": 500,
     "eval_episodes": 10,
+    "eval_policy": "match",
     "seed": None,
+    "eval_seed": None,
     "log_every": 10,
     "ema_alpha": 0.01,
     "baseline": "mean",
@@ -640,6 +743,15 @@ class ReinforcementLearningTrainer(ABC):
             which enumerate discrete actions via argmax / epsilon-greedy, do
             not. :meth:`train` raises a clear error when a continuous
             environment is paired with a trainer that does not support it.
+        natural_eval_policy: The action-selection regime this algorithm's
+            objective actually optimizes, used to resolve an ``eval_policy``
+            of ``"match"``. Defaults to ``"stochastic"``, which is correct for
+            the policy-gradient trainers (REINFORCE, actor-critic, PPO): they
+            collect rollouts by sampling from the policy, so the sampled
+            policy is what their loss improves. The value-based trainers
+            override it to ``"greedy"``, because Q-learning's target policy
+            *is* the greedy one and epsilon-greedy is only its behaviour
+            policy.
     """
 
     #: Extra decoder outputs required beyond the policy outputs (see above).
@@ -647,6 +759,9 @@ class ReinforcementLearningTrainer(ABC):
 
     #: Whether the algorithm supports continuous (``Box``) action spaces.
     supports_continuous: bool = True
+
+    #: Action-selection regime this algorithm's objective optimizes (see above).
+    natural_eval_policy: str = "stochastic"
 
     @staticmethod
     def initialize_parser(parser: argparse.ArgumentParser) -> None:
@@ -669,10 +784,10 @@ class ReinforcementLearningTrainer(ABC):
 
         Returns:
             None. Mutates ``parser`` by adding ``--episodes``,
-            ``--eval_episodes``, ``--max_steps``, ``--gamma``,
-            ``--learning_rate``/``-lr``, ``--entropy_coef``, ``--value_coef``,
-            ``--seed``, ``--log_every``, ``--ema_alpha`` and
-            ``--improvement_cutoff``.
+            ``--eval_episodes``, ``--eval_policy``, ``--max_steps``,
+            ``--gamma``, ``--learning_rate``/``-lr``, ``--entropy_coef``,
+            ``--value_coef``, ``--eval_seed``, ``--seed``, ``--log_every``,
+            ``--ema_alpha`` and ``--improvement_cutoff``.
         """
 
         parser.add_argument(
@@ -686,7 +801,21 @@ class ReinforcementLearningTrainer(ABC):
             "--eval_episodes",
             type=int,
             default=10,
-            help="Number of greedy episodes used to evaluate a genome's return.",
+            help="Number of episodes used to evaluate a genome's return.",
+        )
+
+        parser.add_argument(
+            "--eval_policy",
+            choices=EVAL_POLICY_CHOICES,
+            default="match",
+            help=(
+                "Action-selection regime a genome is evaluated under. 'match' "
+                "(the default) uses the regime the chosen --algo optimizes: "
+                "sampled for the policy-gradient algorithms (reinforce, "
+                "actor_critic, a2c, ppo), greedy for the value-based ones "
+                "(q_learning, sarsa). 'both' scores under both regimes and "
+                "records the non-selected one as a diagnostic."
+            ),
         )
 
         parser.add_argument(
@@ -726,13 +855,27 @@ class ReinforcementLearningTrainer(ABC):
         )
 
         parser.add_argument(
+            "--eval_seed",
+            type=int,
+            default=None,
+            help=(
+                "Base seed for the evaluation episodes, kept in a range "
+                "disjoint from the training seeds so a genome is never scored "
+                "on an episode it trained on. By default each genome draws its "
+                "own; give one to evaluate every genome on the same episodes, "
+                "which makes their fitnesses directly comparable."
+            ),
+        )
+
+        parser.add_argument(
             "--seed",
             type=int,
             default=None,
             help=(
-                "Base random seed for the environment, PyTorch, and NumPy. By default each genome "
-                "draws its own random seed (recorded as training_seed in its metadata); give a "
-                "seed to train every genome on the same episodes."
+                "Base random seed for training episodes, PyTorch, and NumPy. By default each "
+                "genome draws its own random seed (recorded as training_seed in its metadata); "
+                "give a seed to train every genome on the same episodes. Evaluation episodes are "
+                "seeded separately -- see --eval_seed."
             ),
         )
 
@@ -823,12 +966,107 @@ class ReinforcementLearningTrainer(ABC):
                 for name, default in RL_HYPERPARAMETER_DEFAULTS.items()
             }
         )
-        if hp.seed is None:
+        seed_was_given = hp.seed is not None
+        if not seed_was_given:
             # Drawn from the operating system rather than Python's, NumPy's or
             # PyTorch's generators, which training reseeds: a seed derived from
             # those could repeat from one genome to the next.
             hp.seed = secrets.randbits(31)
+
+        self._separate_evaluation_seed(hp, seed_was_given=seed_was_given)
         return hp
+
+    def training_seed_span(self, hp: SimpleNamespace) -> tuple[int, int]:
+        """Returns the half-open range of seeds this trainer's training uses.
+
+        Evaluation must not reuse an episode training has already learned from,
+        so it needs to know which seeds training consumes. The base scaffold
+        rolls one environment episode per outer episode, seeded
+        ``hp.seed + episode_index``; a trainer whose outer episode spans several
+        environment episodes (PPO) overrides this with its own, wider range.
+
+        Args:
+            hp: Resolved hyperparameters, with ``seed`` already drawn.
+
+        Returns:
+            ``(first, last_exclusive)`` -- an upper bound is fine and expected,
+            since a genome that stops early simply uses fewer of these seeds.
+        """
+
+        return hp.seed, hp.seed + hp.episodes
+
+    def _separate_evaluation_seed(
+        self, hp: SimpleNamespace, *, seed_was_given: bool
+    ) -> None:
+        """Ensures evaluation episodes never reuse a training episode's seed.
+
+        Training and evaluation seeds used to be derived from the same base, so
+        they could coincide -- with PPO's ``hp.seed + episode_index * 10_000 +
+        episode``, outer episode 1 landed exactly on the evaluation seeds, and
+        a genome was scored on episodes it had just trained on.
+
+        How the overlap is resolved depends on which seeds are pinned:
+
+        * ``eval_seed`` unset -- a fresh random evaluation seed is drawn per
+          genome, rejecting any draw that would overlap training. Genomes are
+          therefore scored on their own episodes, as they are trained on their
+          own.
+        * ``eval_seed`` set -- it is shared deliberately, so every genome faces
+          the same evaluation episodes (common random numbers). It is left
+          alone and the genome's *training* seed is redrawn instead, which is
+          free because it was random anyway.
+        * both ``eval_seed`` and ``seed`` set and overlapping -- neither can
+          move without breaking what was asked for, so this raises.
+
+        Args:
+            hp: Resolved hyperparameters, mutated in place.
+            seed_was_given: Whether ``seed`` was pinned rather than drawn.
+
+        Returns:
+            None. Sets ``hp.eval_seed`` (when it was unset) or redraws
+            ``hp.seed``, so that the two seed ranges are disjoint.
+
+        Raises:
+            ValueError: If both seeds are pinned and their ranges overlap.
+        """
+
+        def overlaps(candidate: int) -> bool:
+            """Reports whether evaluating from ``candidate`` touches training.
+
+            Args:
+                candidate: The evaluation base seed to test.
+
+            Returns:
+                True when the evaluation range intersects the training range.
+            """
+
+            first, last = self.training_seed_span(hp)
+            return candidate < last and first < candidate + hp.eval_episodes
+
+        if hp.eval_seed is None:
+            hp.eval_seed = secrets.randbits(31)
+            while overlaps(hp.eval_seed):
+                hp.eval_seed = secrets.randbits(31)
+            return
+
+        if not overlaps(hp.eval_seed):
+            return
+
+        if seed_was_given:
+            first, last = self.training_seed_span(hp)
+            raise ValueError(
+                f"eval_seed={hp.eval_seed} evaluates on seeds "
+                f"[{hp.eval_seed}, {hp.eval_seed + hp.eval_episodes}), which "
+                f"overlaps the training seeds [{first}, {last}) that seed="
+                f"{hp.seed} produces, so genomes would be scored on episodes "
+                "they trained on. Move --eval_seed clear of that range, or "
+                "leave --seed unset so it can be drawn around it."
+            )
+
+        # the training seed was drawn, not asked for, so move it instead and
+        # keep every genome evaluating on the same episodes
+        while overlaps(hp.eval_seed):
+            hp.seed = secrets.randbits(31)
 
     def policy_logits(
         self, genome: CircuitGenome, environment: RLEnvironment, observation: Any
@@ -852,19 +1090,115 @@ class ReinforcementLearningTrainer(ABC):
         return output[: environment.n_actions]
 
     @torch.no_grad()
+    def resolve_eval_policy(self, hp: SimpleNamespace) -> str:
+        """Resolves the configured evaluation regime to a concrete one.
+
+        Args:
+            hp: Resolved hyperparameters, whose ``eval_policy`` is one of
+                :data:`EVAL_POLICY_CHOICES`.
+
+        Returns:
+            ``"greedy"``, ``"stochastic"`` or ``"both"``; ``"match"`` resolves
+            to this trainer's :attr:`natural_eval_policy`.
+
+        Raises:
+            ValueError: If ``hp.eval_policy`` is not a known regime.
+        """
+
+        policy = getattr(hp, "eval_policy", "match")
+        if policy not in EVAL_POLICY_CHOICES:
+            raise ValueError(
+                f"Unknown eval_policy {policy!r}; choices: "
+                f"{', '.join(EVAL_POLICY_CHOICES)}."
+            )
+        return self.natural_eval_policy if policy == "match" else policy
+
+    def selected_eval_policy(self, hp: SimpleNamespace) -> str:
+        """Names the regime whose returns become the genome's fitness.
+
+        This differs from :meth:`resolve_eval_policy` only under
+        ``eval_policy="both"``, which scores under two regimes but can only
+        report one of them as *the* evaluation return.
+
+        Args:
+            hp: Resolved hyperparameters.
+
+        Returns:
+            ``"greedy"`` or ``"stochastic"`` -- never ``"both"``.
+
+        Raises:
+            ValueError: If ``hp.eval_policy`` is not a known regime.
+        """
+
+        policy = self.resolve_eval_policy(hp)
+        return self.natural_eval_policy if policy == "both" else policy
+
+    def _evaluate_regime(
+        self,
+        genome: CircuitGenome,
+        environment: RLEnvironment,
+        hp: SimpleNamespace,
+        *,
+        stochastic: bool,
+    ) -> list[float]:
+        """Rolls the evaluation episodes for one action-selection regime.
+
+        Under a greedy policy the only source of variation between episodes is
+        the environment, so a deterministic environment
+        (``environment.deterministic``) is rolled once instead of
+        ``eval_episodes`` identical copies. That shortcut does **not** apply to
+        a stochastic policy, whose own sampling makes every episode differ even
+        in a deterministic environment.
+
+        Args:
+            genome: The genome policy to evaluate.
+            environment: The environment to evaluate on.
+            hp: Resolved hyperparameters.
+            stochastic: Whether to sample actions rather than take the greedy
+                action.
+
+        Returns:
+            The per-episode returns.
+        """
+
+        n_episodes = (
+            1 if environment.deterministic and not stochastic else hp.eval_episodes
+        )
+
+        returns: list[float] = []
+        for episode in range(n_episodes):
+            env = environment.make()
+            # a seed range kept disjoint from training's; see
+            # :meth:`_separate_evaluation_seed`
+            observation, _ = env.reset(seed=hp.eval_seed + episode)
+            episode_return = 0.0
+            for _ in range(hp.max_steps):
+                action = select_action(
+                    genome, environment, observation, stochastic=stochastic
+                )
+                observation, reward, terminated, truncated, _ = env.step(action)
+                episode_return += float(reward)
+                if terminated or truncated:
+                    break
+            env.close()
+            returns.append(episode_return)
+
+        return returns
+
     def evaluate(
         self,
         genome: CircuitGenome,
         environment: RLEnvironment,
         hp: SimpleNamespace,
     ) -> dict[str, float]:
-        """Evaluates the genome greedily over several episodes.
+        """Evaluates the genome over several episodes, under ``hp.eval_policy``.
 
-        Because evaluation is greedy (deterministic policy), the only source
-        of variation between episodes is the environment. For a deterministic
-        environment (``environment.deterministic``) every episode is therefore
-        identical, so a single episode is run instead of ``eval_episodes``
-        redundant copies.
+        The regime matters: a greedy rollout of a continuous policy ignores the
+        learned log-standard-deviation entirely, so it scores a policy the
+        policy-gradient trainers never optimize. ``"match"`` (the default)
+        therefore evaluates each algorithm under the regime its own objective
+        improves -- see :data:`EVAL_POLICY_CHOICES` and
+        :attr:`natural_eval_policy`.
 
         Args:
             genome: The genome policy to evaluate.
@@ -873,34 +1207,41 @@ class ReinforcementLearningTrainer(ABC):
 
         Returns:
             A dict with ``return_mean``, ``return_std`` and
-            ``best_episode_return``.
+            ``best_episode_return`` for the selected regime. Under
+            ``eval_policy="both"`` it also carries ``greedy_return_mean`` and
+            ``stochastic_return_mean``, with the trainer's
+            :attr:`natural_eval_policy` providing the selected values.
         """
 
-        # Evaluation is always greedy on the complete evolved circuit; make
-        # sure any dropout sampled during a training episode is cleared first.
+        # Evaluation always runs the complete evolved circuit; make sure any
+        # dropout sampled during a training episode is cleared first.
         genome.clear_quantum_dropout()
 
-        n_episodes = 1 if environment.deterministic else hp.eval_episodes
+        policy = self.resolve_eval_policy(hp)
+        regimes = ("greedy", "stochastic") if policy == "both" else (policy,)
+        selected = self.selected_eval_policy(hp)
 
-        returns: list[float] = []
-        for episode in range(n_episodes):
-            env = environment.make()
-            observation, _ = env.reset(seed=hp.seed + 10_000 + episode)
-            episode_return = 0.0
-            for _ in range(hp.max_steps):
-                action = greedy_action(genome, environment, observation)
-                observation, reward, terminated, truncated, _ = env.step(action)
-                episode_return += float(reward)
-                if terminated or truncated:
-                    break
-            env.close()
-            returns.append(episode_return)
+        by_regime: dict[str, list[float]] = {
+            regime: self._evaluate_regime(
+                genome, environment, hp, stochastic=regime == "stochastic"
+            )
+            for regime in regimes
+        }
 
-        return {
+        returns = by_regime[selected]
+        results = {
             "return_mean": float(np.mean(returns)) if returns else 0.0,
             "return_std": float(np.std(returns)) if returns else 0.0,
             "best_episode_return": float(np.max(returns)) if returns else 0.0,
         }
+
+        if policy == "both":
+            for regime, regime_returns in by_regime.items():
+                results[f"{regime}_return_mean"] = (
+                    float(np.mean(regime_returns)) if regime_returns else 0.0
+                )
+
+        return results
 
     # -- main entry point -----------------------------------------------------
 
@@ -911,9 +1252,10 @@ class ReinforcementLearningTrainer(ABC):
         :meth:`run_update`), evaluates periodically, and restores the
         best-evaluated weights. On completion the genome's ``metadata``
         contains ``training_episode_metrics`` (per-episode returns),
-        ``best_training_metrics``, ``best_validation_metrics`` and the
+        ``best_training_metrics``, ``best_validation_metrics``, the
         ``training_seed`` its episodes were seeded from (drawn at random unless
-        the genome's hyperparameters fix a ``seed``).
+        the genome's hyperparameters fix a ``seed``) and the ``eval_policy``
+        the evaluation returns were measured under.
 
         Args:
             genome: The genome to train (its model is initialized here).
@@ -938,6 +1280,18 @@ class ReinforcementLearningTrainer(ABC):
 
         # recorded so a genome's training episodes can be reproduced later
         genome.metadata["training_seed"] = hp.seed
+
+        # recorded separately because it is drawn separately: evaluation runs
+        # on a seed range disjoint from training's, so a genome is never scored
+        # on an episode it learned from
+        genome.metadata["evaluation_seed"] = hp.eval_seed
+
+        # recorded because it decides which policy the fitness describes: a
+        # genome scored greedily is not comparable with one scored
+        # stochastically. This names the regime that *drove* fitness, so under
+        # eval_policy="both" it is the selected one, not "both"; the genome's
+        # own hyperparameters still record what was requested.
+        genome.metadata["eval_policy"] = self.selected_eval_policy(hp)
         torch.manual_seed(hp.seed)
         np.random.seed(hp.seed)
 
@@ -1017,7 +1371,8 @@ class ReinforcementLearningTrainer(ABC):
                     f"[{type(self).__name__}] genome {genome.genome_number:4d} episode {episode:4d} "
                     f"train_return={episode_return:.1f} "
                     f"train_return_ema={ema_return:.1f} "
-                    f"eval_return_mean={evaluation['return_mean']:.1f}"
+                    f"eval_return_mean={evaluation['return_mean']:.1f} "
+                    f"({genome.metadata['eval_policy']})"
                 )
 
                 if evaluation["return_mean"] > best_return:
