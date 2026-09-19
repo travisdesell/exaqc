@@ -1,0 +1,16 @@
+Genome 433
+Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
+
+0.124  iswap  [('input', 1), ('input', 3)]  {}
+0.147  cz  [('input', 2), ('input', 1)]  {}
+0.268  cp  [('input', 1), ('input', 3)]  {'phi': 1.8397339783549826}
+0.292  ccx  [('input', 0), ('input', 1), ('input', 3)]  {}
+0.370  cry  [('input', 3), ('input', 0)]  {'phi': 3.015001539174876}
+0.440  ryy  [('input', 3), ('input', 0)]  {'phi': 2.8617451871701602}
+0.617  rz  [('output', 0)]  {'phi': 1.128532509461662}
+0.689  iswap  [('input', 1), ('output', 0)]  {}
+0.696  rzz  [('input', 1), ('output', 0)]  {'phi': -1.522403042445707}
+0.936  rxx  [('output', 1), ('input', 3)]  {'phi': -0.11601768651092303}
+0.951  iswap  [('output', 1), ('input', 2)]  {}
+0.954  ccz  [('output', 1), ('output', 0), ('input', 3)]  {}
+0.958  cry  [('input', 3), ('output', 1)]  {'phi': -2.820340305934675}
