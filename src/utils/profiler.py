@@ -641,7 +641,7 @@ class EXAQCProfiler:
         plt.grid(True, alpha=0.25)
 
         os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-        fig.savefig(out_path, dpi=220, bbox_inches="tight")
+        fig.savefig(os.path.join(out_path, "master_plot.png"), dpi=220, bbox_inches="tight")
         plt.close(fig)
 
     @staticmethod
@@ -728,7 +728,7 @@ class EXAQCProfiler:
             plt.fill_between(common_steps, lo, hi, alpha=0.14, color=color)
 
         plt.xlabel("Insertion / step")
-        plt.xlim(0, 1000)
+        # plt.xlim(0, 1000)
         plt.ylabel("Count")
         plt.title(f"{title}")
         plt.legend()
@@ -736,6 +736,6 @@ class EXAQCProfiler:
 
         os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
         fig.savefig(
-            os.path.join(out_path, "master_plot.png"), dpi=220, bbox_inches="tight"
+            os.path.join(out_path, "complexity_summary.png"), dpi=220, bbox_inches="tight"
         )
         plt.close(fig)

@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH -J cnn_fashion_mnist
+#SBATCH -J cnn_fmnist
 #SBATCH -t 0-05:00:00
 #SBATCH -A cps -p tier3
 #SBATCH --nodes=1
@@ -15,7 +15,7 @@ source .venv/bin/activate
 DATASET="fashion_mnist"
 MODEL="cnn"
 # MODEL_CONFIGS=("configs/classical/cifar10_cnn_4.json" "configs/classical/cifar10_cnn_5.json" "configs/classical/cifar10_cnn_6.json")
-MODEL_CONFIGS=("configs/classical/fashion_mnist_cnn_1.json")
+MODEL_CONFIGS=("configs/fashion_mnist_cnn_2.json")
 BATCH_SIZE=32
 
 # MODEL_FILENAME=$(basename "$MODEL_CONFIG" .json)

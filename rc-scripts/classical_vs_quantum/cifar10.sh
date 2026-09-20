@@ -44,6 +44,25 @@ MIN_COUNT=$1
 MAX_COUNT=$2
 
 for i in $(seq $MIN_COUNT $MAX_COUNT); do
+    TARGET_DIR="./outs/$DATASET/runs/$i"
+
+    # Check if the directory does NOT exist
+    if [ ! -d "$TARGET_DIR" ]; then
+        echo "Directory does not exist. Creating it now..."
+        mkdir -p "$TARGET_DIR"
+    else
+        echo "Directory already exists. Skipping."
+    fi
+
+    TARGET_DIR="./logs/$DATASET/runs/$i"
+
+    # Check if the directory does NOT exist
+    if [ ! -d "$TARGET_DIR" ]; then
+        echo "Directory does not exist. Creating it now..."
+        mkdir -p "$TARGET_DIR"
+    else
+        echo "Directory already exists. Skipping."
+    fi
     srun python3.11 -m src.examples.classification \
         --dataset $DATASET \
         --target pennylane \

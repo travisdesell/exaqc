@@ -6,7 +6,7 @@
 #SBATCH --ntasks=6
 #SBATCH --ntasks-per-node=6
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=32GB
+#SBATCH --mem=16GB
 #SBATCH --gres=gpu:a100:1
 
 spack env activate default-ml-x86_64-25052701
@@ -17,7 +17,7 @@ DATASET="cifar10"
 QUBITS=8
 ENCODING="cnn"
 DECODING="linear"
-QUANTUM_ENC="u3"
+QUANTUM_ENC="ry"
 QUANTUM_OUT="probs"
 BATCH_SIZE=64
 N_GENOMES=1000
@@ -43,12 +43,31 @@ MIN_COUNT=$1
 MAX_COUNT=$2
 
 for i in $(seq $MIN_COUNT $MAX_COUNT); do
+    TARGET_DIR="./outs/$DATASET/runs/$i"
+
+    # Check if the directory does NOT exist
+    if [ ! -d "$TARGET_DIR" ]; then
+        echo "Directory does not exist. Creating it now..."
+        mkdir -p "$TARGET_DIR"
+    else
+        echo "Directory already exists. Skipping."
+    fi
+
+    TARGET_DIR="./logs/$DATASET/runs/$i"
+
+    # Check if the directory does NOT exist
+    if [ ! -d "$TARGET_DIR" ]; then
+        echo "Directory does not exist. Creating it now..."
+        mkdir -p "$TARGET_DIR"
+    else
+        echo "Directory already exists. Skipping."
+    fi
     srun python3.11 -m src.examples.classification \
         --dataset $DATASET \
         --target pennylane \
         --encoding $ENCODING \
         --decoding $DECODING \
-        --encoder_config configs/cifar10_cnn_3.json \
+        --encoder_config $MODEL_CONFIG \
         --input_qubits $QUBITS \
         --output_qubits $QUBITS \
         --quantum_input_mode $QUANTUM_ENC \

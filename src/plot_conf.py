@@ -21,7 +21,7 @@ def plot(args: Namespace) -> None:
     )
     plotter.aggregate_and_plot_complexity(
         csv_glob=os.path.join(args.input_dir, "*", "*.csv"),
-        out_path=os.path.join(args.out_path, "complexity_summary.png"),
+        out_path=args.out_path,
         conf="std",
         title="EXAQC Gates and Parameters",
     )
