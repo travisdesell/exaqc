@@ -107,9 +107,7 @@ def save_figure_to_run_directories(
         run_directory = Path(directory)
 
         if not run_directory.is_dir():
-            logger.warning(
-                f"Skipping invalid run directory: {run_directory}"
-            )
+            logger.warning(f"Skipping invalid run directory: {run_directory}")
             continue
 
         output_file = run_directory / filename
@@ -166,8 +164,7 @@ if __name__ == "__main__":
         required=False,
         default="search_progress.png",
         help=(
-            "Filename used when saving the progress plot into each "
-            "run directory."
+            "Filename used when saving the progress plot into each " "run directory."
         ),
     )
 

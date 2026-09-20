@@ -535,6 +535,7 @@ class LinearEncoder(Encoder, torch.nn.Module):
         """
         return copy.deepcopy(self)
 
+
 class PiTanh(torch.nn.Module):
     """Applies tanh activation scaled by pi."""
 
@@ -548,6 +549,7 @@ class PiTanh(torch.nn.Module):
             Tensor with values bounded to [-pi, pi].
         """
         return torch.pi * torch.tanh(inputs)
+
 
 class CNNEncoder(Encoder, torch.nn.Module):
     """Configurable convolutional encoder for image classification.

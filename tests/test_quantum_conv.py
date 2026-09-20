@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import copy
-
 import pytest
 import torch
 
@@ -143,12 +141,15 @@ def test_quantum_conv_encoder_tanh_bounds(
     quantum_conv_encoder,
 ):
     """Tanh encoding should restrict quantum inputs to [-1, 1]."""
-    inputs = torch.randn(
-        2,
-        3,
-        32,
-        32,
-    ) * 100.0
+    inputs = (
+        torch.randn(
+            2,
+            3,
+            32,
+            32,
+        )
+        * 100.0
+    )
 
     outputs = quantum_conv_encoder(inputs)
 
@@ -243,12 +244,7 @@ def test_quantum_conv_encoder_is_trainable(
     loss = outputs.sum()
     loss.backward()
 
-    weight_gradient = (
-        quantum_conv_encoder
-        .channel_compression
-        .weight
-        .grad
-    )
+    weight_gradient = quantum_conv_encoder.channel_compression.weight.grad
 
     assert weight_gradient is not None
     assert torch.isfinite(weight_gradient).all()
@@ -337,8 +333,7 @@ def test_quantum_conv_decoder_classifier_shape(
     """Classifier should preserve the original 512->256->128->10 head."""
     linear_layers = [
         module
-        for module
-        in quantum_conv_decoder.classifier.modules()
+        for module in quantum_conv_decoder.classifier.modules()
         if isinstance(module, torch.nn.Linear)
     ]
 
@@ -372,12 +367,7 @@ def test_quantum_conv_decoder_is_trainable(
     loss = logits.sum()
     loss.backward()
 
-    gradient = (
-        quantum_conv_decoder
-        .channel_expansion
-        .weight
-        .grad
-    )
+    gradient = quantum_conv_decoder.channel_expansion.weight.grad
 
     assert gradient is not None
     assert torch.isfinite(gradient).all()
@@ -389,20 +379,13 @@ def test_quantum_conv_encoder_copy_is_independent(
     """Copied encoders should not share parameter storage."""
     copied_encoder = quantum_conv_encoder.copy()
 
-    original_parameter = next(
-        quantum_conv_encoder.parameters()
-    )
+    original_parameter = next(quantum_conv_encoder.parameters())
 
-    copied_parameter = next(
-        copied_encoder.parameters()
-    )
+    copied_parameter = next(copied_encoder.parameters())
 
     assert copied_encoder is not quantum_conv_encoder
 
-    assert (
-        original_parameter.data_ptr()
-        != copied_parameter.data_ptr()
-    )
+    assert original_parameter.data_ptr() != copied_parameter.data_ptr()
 
     assert torch.equal(
         original_parameter,
@@ -416,20 +399,13 @@ def test_quantum_conv_decoder_copy_is_independent(
     """Copied decoders should not share parameter storage."""
     copied_decoder = quantum_conv_decoder.copy()
 
-    original_parameter = next(
-        quantum_conv_decoder.parameters()
-    )
+    original_parameter = next(quantum_conv_decoder.parameters())
 
-    copied_parameter = next(
-        copied_decoder.parameters()
-    )
+    copied_parameter = next(copied_decoder.parameters())
 
     assert copied_decoder is not quantum_conv_decoder
 
-    assert (
-        original_parameter.data_ptr()
-        != copied_parameter.data_ptr()
-    )
+    assert original_parameter.data_ptr() != copied_parameter.data_ptr()
 
     assert torch.equal(
         original_parameter,
@@ -501,9 +477,7 @@ def test_quantum_conv_end_to_end_shape(
     # [B, 3, 32, 32]
     # ->
     # [B * 16, 8]
-    quantum_inputs = quantum_conv_encoder(
-        inputs
-    )
+    quantum_inputs = quantum_conv_encoder(inputs)
 
     assert quantum_inputs.shape == (
         batch_size * 16,
