@@ -2,9 +2,12 @@
 #
 # Runs a single EXAQC reinforcement-learning search as a Slurm job.
 #
-#   sbatch scripts/exaqc_rl_job.sh <env> <input_qubits> <output_qubits> <run> \
-#                                  <n_islands> <max_island_size> <topology_tag> \
+#   sbatch scripts/exaqc_rl_job.sh <env> <input_qubits> <output_qubits> <run_name> \
+#                                  <n_islands> <max_island_size> \
 #                                  <topology> [topology arguments...]
+#
+# <run_name> names both the Slurm job and its archive directory, and is built by
+# the submitting script so the two cannot disagree.
 #
 # This is normally submitted by scripts/submit_exaqc_rl_jobs.sh, which validates
 # the arguments and sets the job name and log paths per run. One job is one run:
@@ -38,42 +41,69 @@ ARCHIVE_DIR=/home/tjdvse/genome_archives
 #: bonus at all. Kept space-delimited for an exact-token match below.
 HEALTHY_REWARD_ENVIRONMENTS="hopper walker2d ant humanoid"
 
-#: Per-step bonus for staying upright, for the environments that have one. The
-#: Gymnasium default of 1.0 makes standing still for a full --max_steps 1000
-#: episode worth ~1000, which can swamp the forward-progress reward and leave
-#: the search selecting policies that balance rather than walk.
-HEALTHY_REWARD=0.2
+#: Per-step bonus for staying upright, for the environments that have one.
+#: Unset by default, so --healthy_reward is not passed at all and each
+#: environment's own Gymnasium value applies -- which keeps a run comparable
+#: with the published baselines. Set HEALTHY_REWARD to override it:
+#:
+#:     HEALTHY_REWARD=0.2 sbatch scripts/exaqc_rl_job.sh ...
+#:
+#: Worth overriding because the Gymnasium default of 1.0 makes standing still
+#: for a full --max_steps 1000 episode worth ~1000, which can swamp the
+#: forward-progress reward and leave the search selecting policies that balance
+#: rather than walk.
+HEALTHY_REWARD=${HEALTHY_REWARD:-}
 
-if [ $# -lt 8 ]; then
-    echo "usage: $0 <env> <input_qubits> <output_qubits> <run> <n_islands> <max_island_size> <topology_tag> <topology> [topology arguments...]" >&2
+if [ $# -lt 7 ]; then
+    echo "usage: $0 <env> <input_qubits> <output_qubits> <run_name> <n_islands> <max_island_size> <topology> [topology arguments...]" >&2
     exit 2
 fi
 
 ENVIRONMENT=$1
 INPUT_QUBITS=$2
 OUTPUT_QUBITS=$3
-RUN=$4
+RUN_NAME=$4
 N_ISLANDS=$5
 MAX_ISLAND_SIZE=$6
-TOPOLOGY_TAG=$7
-shift 7
+shift 6
 # whatever is left is the topology and its own arguments
 
-# The tag carries the topology's arguments (2d_mesh_4x5, tree_2, random_2_4), so
-# two shapes of the same topology land in different archives rather than one
-# continuing the other -- --restart defaults to auto, so a shared directory would
-# silently resume the wrong experiment.
-OUT_DIR="${ARCHIVE_DIR}/${ENVIRONMENT}_i${N_ISLANDS}_${TOPOLOGY_TAG}_${RUN}"
+# The archive directory *is* the job name, so a job in the queue and the archive
+# it writes carry the same label. The submitting script builds that name from
+# everything that has to separate one experiment from another -- the run type,
+# the topology and its arguments, the environment, the island count and the run
+# index -- because --restart defaults to auto, and two experiments sharing a
+# directory would silently resume one another.
+OUT_DIR="${ARCHIVE_DIR}/${RUN_NAME}"
 
-# Only the environments with an alive bonus take --healthy_reward: the entry
-# point rejects it for the others rather than quietly ignoring it, so it is
-# added only where it applies and this script stays usable for every --env.
+# --healthy_reward is passed only when HEALTHY_REWARD asks for it, so by
+# default the environment's own value stands.
+#
+# Asking for it on an environment that has no alive bonus is an error rather
+# than something to quietly drop: the run would otherwise be tagged as one
+# reward setting while having been trained under another. This mirrors
+# src.examples.reinforcement_learning.environment_knob_kwargs(), which raises
+# instead of ignoring -- but catching it here costs an error message rather
+# than a scheduled job that dies on startup.
 HEALTHY_REWARD_ARGUMENTS=()
-case " ${HEALTHY_REWARD_ENVIRONMENTS} " in
-    *" ${ENVIRONMENT} "*)
-        HEALTHY_REWARD_ARGUMENTS=(--healthy_reward "$HEALTHY_REWARD")
-        ;;
-esac
+if [ -n "$HEALTHY_REWARD" ]; then
+    case "$HEALTHY_REWARD" in
+        '' | *[!0-9.-]* | *.*.* | *-*-*)
+            echo "error: HEALTHY_REWARD must be a number, but found: $HEALTHY_REWARD" >&2
+            exit 2
+            ;;
+    esac
+
+    case " ${HEALTHY_REWARD_ENVIRONMENTS} " in
+        *" ${ENVIRONMENT} "*)
+            HEALTHY_REWARD_ARGUMENTS=(--healthy_reward "$HEALTHY_REWARD")
+            ;;
+        *)
+            echo "error: HEALTHY_REWARD=$HEALTHY_REWARD was given, but the $ENVIRONMENT environment has no healthy (alive) bonus; it applies to: $HEALTHY_REWARD_ENVIRONMENTS" >&2
+            exit 2
+            ;;
+    esac
+fi
 
 # --topology takes any number of values, so it comes last: a flag after it would
 # be read as another one of its arguments.
@@ -94,9 +124,9 @@ COMMAND=(
     --number_genomes 10000
     --entropy_coef 0.015
     --episodes 100
-    # expands to nothing for an environment without an alive bonus; written
-    # this way because `set -u` rejects a bare empty-array expansion on bash
-    # older than 4.4, which the cluster may still be running
+    # expands to nothing unless HEALTHY_REWARD asked for it; written this way
+    # because `set -u` rejects a bare empty-array expansion on bash older than
+    # 4.4, which the cluster may still be running
     ${HEALTHY_REWARD_ARGUMENTS[@]+"${HEALTHY_REWARD_ARGUMENTS[@]}"}
     --eval_episodes 20
     --ema_alpha 0.1
