@@ -64,7 +64,7 @@
   };
 
   /** Chart options that only restyle the chart, so changing them keeps the zoom. */
-  const STYLE_ONLY_OPTIONS = new Set(["mode", "highlightLineage", "islandFocus"]);
+  const STYLE_ONLY_OPTIONS = new Set(["mode", "highlightLineage", "islandFocus", "speciesFocus"]);
 
   /** Why the seed genome, a parent of every initial genome, has no page of its own. */
   const SEED_EXPLANATION =
@@ -467,10 +467,10 @@
   /**
    * The categories a color encoding splits genomes into, each with a fixed
    * palette color: insert type (global best stands out; discarded recedes),
-   * operator family, or island. With a `focus` island (`{island, neighbors}`),
-   * island colors go to that island and the islands it draws parents from, with
-   * every other island gray: listed focus first, but drawn gray first so the
-   * focus stays on top.
+   * operator family, island, or species. With a `focus` island or species
+   * (`{island|species, neighbors}`), colors go to that partition (and, for
+   * islands, the ones it draws parents from), with every other gray: listed
+   * focus first, but drawn gray first so the focus stays on top.
    */
   function categoriesFor(encoding, points, focus = null) {
     const muted = token("--text-muted");
@@ -481,6 +481,11 @@
         ...(focus.neighbors.size ? [{ key: "neighbor", label: neighborLabel(focus.neighbors), color: slotColor(2), legendRank: 1 }] : []),
         { key: "focus", label: `island ${focus.island}`, color: slotColor(1), legendRank: 0 },
       ];
+    } else if (encoding === "species" && focus) {
+      categories = [
+        { key: "other", label: "other species", color: muted, legendRank: 2 },
+        { key: "focus", label: `species ${focus.species}`, color: slotColor(1), legendRank: 0 },
+      ];
     } else if (encoding === "insert_type") {
       categories = [
         { key: "global_best", label: "global best", color: slotColor(2) },
@@ -490,12 +495,17 @@
       ];
     } else if (encoding === "family") {
       categories = Object.keys(FAMILY_SLOTS).map((family) => ({ key: family, label: family, color: familyColor(family) }));
+    } else if (encoding === "species") {
+      const speciesIds = [...new Set((points.species || []).filter((id) => id !== null && id !== undefined))].sort((a, b) => a - b);
+      categories = speciesIds.slice(0, CATEGORICAL_SLOTS - 1).map((id, i) => ({ key: String(id), label: `species ${id}`, color: slotColor(i + 1) }));
+      if (speciesIds.length > CATEGORICAL_SLOTS - 1) categories.push({ key: "other", label: "other species", color: muted });
     } else {
-      const islands = [...new Set(points.island.filter((island) => island !== null))].sort((a, b) => a - b);
+      const islands = [...new Set((points.island || []).filter((island) => island !== null))].sort((a, b) => a - b);
       categories = islands.slice(0, CATEGORICAL_SLOTS - 1).map((island, i) => ({ key: String(island), label: `island ${island}`, color: slotColor(i + 1) }));
       if (islands.length > CATEGORICAL_SLOTS - 1) categories.push({ key: "other", label: "other islands", color: muted });
     }
-    categories.push({ key: "unknown", label: encoding === "island" ? "no island" : "unknown", color: muted });
+    const unknownLabel = encoding === "island" ? "no island" : encoding === "species" ? "no species" : "unknown";
+    categories.push({ key: "unknown", label: unknownLabel, color: muted });
     return categories;
   }
 
@@ -513,18 +523,25 @@
       if (island === focus.island) return "focus";
       return focus.neighbors.has(island) ? "neighbor" : "other";
     }
+    if (encoding === "species" && focus) {
+      const species = points.species[i];
+      if (species === null || species === undefined) return "unknown";
+      return species === focus.species ? "focus" : "other";
+    }
     if (encoding === "insert_type") key = points.insert_type[i];
     else if (encoding === "family") key = operatorFamily(points.operator[i]);
+    else if (encoding === "species") key = points.species[i] === null || points.species[i] === undefined ? null : String(points.species[i]);
     else key = points.island[i] === null ? null : String(points.island[i]);
     if (key === null || key === undefined) return "unknown";
     if (known.has(key)) return key;
-    return encoding === "island" ? "other" : "unknown";
+    return encoding === "island" || encoding === "species" ? "other" : "unknown";
   }
 
   function passesFilters(points, i, filters) {
     if (filters.insert_type && points.insert_type[i] !== filters.insert_type) return false;
     if (filters.crossover_type && points.crossover_type[i] !== filters.crossover_type) return false;
     if (filters.island !== "" && filters.island !== undefined && String(points.island[i]) !== String(filters.island)) return false;
+    if (filters.species !== "" && filters.species !== undefined && String(points.species[i]) !== String(filters.species)) return false;
     if (filters.generated_by && !(points.generated_by[i] || []).includes(filters.generated_by)) return false;
     return true;
   }
@@ -751,21 +768,35 @@
     let lineageCache = { genome: null, value: null };
 
     /**
-     * The island the chart colors around when coloring by island, or null when
-     * each island gets its own color: the pinned `islandFocus`, or else the
-     * selected genome's island, falling back to the best plotted genome's.
+     * The island or species the chart colors around when coloring by that
+     * partition, or null when each gets its own color: the pinned focus, or else
+     * the selected genome's value, falling back to the best plotted genome's.
      */
-    function islandFocus(indexOf, bestIndex) {
-      if (config.encoding !== "island" || config.islandFocus === "each") return null;
-      let island = null;
-      if (Number.isInteger(config.islandFocus)) island = config.islandFocus;
-      else {
-        const i = selected !== null && indexOf.has(selected) ? indexOf.get(selected) : bestIndex;
-        island = i >= 0 ? points.island[i] : null;
+    function partitionFocus(indexOf, bestIndex) {
+      if (config.encoding === "island") {
+        if (config.islandFocus === "each") return null;
+        let island = null;
+        if (Number.isInteger(config.islandFocus)) island = config.islandFocus;
+        else {
+          const i = selected !== null && indexOf.has(selected) ? indexOf.get(selected) : bestIndex;
+          island = i >= 0 ? points.island[i] : null;
+        }
+        if (island === null || island === undefined) return null;
+        const neighbors = config.islandNeighbors ? config.islandNeighbors[island] : null;
+        return { island, neighbors: new Set(neighbors || []) };
       }
-      if (island === null || island === undefined) return null;
-      const neighbors = config.islandNeighbors ? config.islandNeighbors[island] : null;
-      return { island, neighbors: new Set(neighbors || []) };
+      if (config.encoding === "species") {
+        if (config.speciesFocus === "each") return null;
+        let species = null;
+        if (Number.isInteger(config.speciesFocus)) species = config.speciesFocus;
+        else {
+          const i = selected !== null && indexOf.has(selected) ? indexOf.get(selected) : bestIndex;
+          species = i >= 0 ? points.species[i] : null;
+        }
+        if (species === null || species === undefined) return null;
+        return { species, neighbors: new Set() };
+      }
+      return null;
     }
 
     function buildModel() {
@@ -784,8 +815,8 @@
         if (visible[i] && (bestIndex < 0 || better(ys[i], ys[bestIndex]))) bestIndex = i;
       }
 
-      // the island focus can follow the best genome, so categories come after it is found
-      const focus = islandFocus(indexOf, bestIndex);
+      // the partition focus can follow the best genome, so categories come after it is found
+      const focus = partitionFocus(indexOf, bestIndex);
       const categories = categoriesFor(config.encoding, points, focus);
       const known = new Set(categories.map((entry) => entry.key));
       const categoryIndex = new Map(categories.map((entry, i) => [entry.key, i]));
@@ -1016,6 +1047,7 @@
         h("div", {}, legendItem(categoryInfo.color, categoryInfo.label)),
         // an island's genomes colored as its neighbors or as "other islands" still name their island
         points.island[i] !== null && points.island[i] !== undefined && categoryInfo.label !== `island ${points.island[i]}` ? h("div", { class: "muted", text: `island ${points.island[i]}` }) : null,
+        points.species && points.species[i] !== null && points.species[i] !== undefined && categoryInfo.label !== `species ${points.species[i]}` ? h("div", { class: "muted", text: `species ${points.species[i]}` }) : null,
         h("div", { class: "muted", text: (points.generated_by[i] || []).map(label).join(", ") || "no operators recorded" }),
         parents && parents.length
           ? h("div", { class: "muted", text: `parents: ${parents.map((parent) => (config.seeds && config.seeds.has(parent) ? `${parent} (seed)` : parent)).join(", ")}` })
@@ -1162,8 +1194,11 @@
         if (points) render();
       },
       setSelected(genome) {
-        // hiding dead ends always keeps the selected genome, and island colors can follow it
-        const needsRebuild = (config.hideDeadEnds && links) || (config.encoding === "island" && config.islandFocus === "selected");
+        // hiding dead ends always keeps the selected genome, and partition colors can follow it
+        const needsRebuild =
+          (config.hideDeadEnds && links) ||
+          (config.encoding === "island" && config.islandFocus === "selected") ||
+          (config.encoding === "species" && config.speciesFocus === "selected");
         selected = genome;
         lineageCache = { genome: null, value: null };
         if (needsRebuild && points) render();
@@ -1328,6 +1363,7 @@
 
     const keys = run.fitness_keys || [];
     const islandCount = run.filter_options && run.filter_options.island ? run.filter_options.island.length : 0;
+    const speciesCount = run.filter_options && run.filter_options.species ? run.filter_options.species.length : 0;
     const state = {
       mode: "progress",
       yKey: keys.includes("loss") ? "loss" : keys[0] || "n_gates",
@@ -1335,6 +1371,8 @@
       // what coloring by island colors: "each" island its own color (offered only while the
       // palette has a color per island), the "selected" genome's island, or a pinned island
       islandFocus: islandCount <= CATEGORICAL_SLOTS - 1 ? "each" : "selected",
+      // same focus choices for species coloring
+      speciesFocus: speciesCount <= CATEGORICAL_SLOTS - 1 ? "each" : "selected",
       hideDeadEnds: false,
       highlightLineage: true,
       showHistory: true,
@@ -1344,7 +1382,7 @@
       showAllMetrics: false,
       sort: keys.includes("loss") ? "loss" : "genome_number",
       desc: !keys.includes("loss"),
-      filters: { insert_type: "", generated_by: "", crossover_type: "", island: "" },
+      filters: { insert_type: "", generated_by: "", crossover_type: "", island: "", species: "" },
       selected: null,
       tab: "diagram",
       knownGenomes: run.genomes || 0,
@@ -1413,6 +1451,7 @@
       yKey: state.yKey,
       encoding: state.encoding,
       islandFocus: state.islandFocus,
+      speciesFocus: state.speciesFocus,
       // each island's neighbors by island id, when the run recorded its topology
       islandNeighbors: run.island_topology ? run.island_topology.neighbors : null,
       filters: state.filters,
@@ -1432,6 +1471,11 @@
       run.island_topology && (run.island_topology.neighbors || []).length
         ? h("details", { class: "island-topology", ontoggle: () => renderTopology() }, h("summary", { text: `Island topology (${(run.island_topology.topology || []).join(" ")})` }), h("div"))
         : null;
+    // a speciation search's species sizes: drawn once opened, then redrawn as genomes arrive
+    const speciesSummaryNode =
+      run.filter_options && run.filter_options.species && run.filter_options.species.length
+        ? h("details", { class: "species-summary", ontoggle: () => renderSpeciesSummary() }, h("summary", { text: `Species (${run.filter_options.species.length})` }), h("div"))
+        : null;
 
     function renderHeader() {
       const summary = state.summary;
@@ -1450,7 +1494,8 @@
         ),
         summary.command_line ? h("details", {}, h("summary", { text: "Command line" }), h("div", { class: "command" }, h("pre", { text: summary.command_line }), copyButton(summary.command_line))) : null,
         runNotesNode,
-        topologyNode
+        topologyNode,
+        speciesSummaryNode
       );
     }
 
@@ -1471,6 +1516,9 @@
           : null,
         options.island && options.island.length
           ? h("label", {}, "island", select(all(options.island, (island) => `island ${island}`), state.filters.island, setFilter("island"), "Island filter"))
+          : null,
+        options.species && options.species.length
+          ? h("label", {}, "species", select(all(options.species, (id) => `species ${id}`), state.filters.species, setFilter("species"), "Species filter"))
           : null,
         h("span", { class: "spacer" }),
         h(
@@ -1531,6 +1579,7 @@
               ["insert_type", "insert type"],
               ["family", "operator family"],
               ...(run.filter_options && run.filter_options.island && run.filter_options.island.length ? [["island", "island"]] : []),
+              ...(run.filter_options && run.filter_options.species && run.filter_options.species.length ? [["species", "species"]] : []),
             ],
             state.encoding,
             (encoding) => {
@@ -1538,6 +1587,7 @@
               renderChartControls();
               chart.setOptions({ encoding });
               renderTopology();
+              renderSpeciesSummary();
             },
             "Color by"
           )
@@ -1563,8 +1613,29 @@
               )
             )
           : null,
+        state.encoding === "species"
+          ? h(
+              "label",
+              {},
+              "focus",
+              select(
+                [
+                  ...(speciesCount <= CATEGORICAL_SLOTS - 1 ? [["each", "each species"]] : []),
+                  ["selected", "selected genome's species"],
+                  ...run.filter_options.species.map((id) => [String(id), `species ${id}`]),
+                ],
+                String(state.speciesFocus),
+                (value) => {
+                  state.speciesFocus = value === "each" || value === "selected" ? value : Number(value);
+                  chart.setOptions({ speciesFocus: state.speciesFocus });
+                  renderSpeciesSummary();
+                },
+                "Species to color"
+              )
+            )
+          : null,
         checkbox("hide dead ends", state.hideDeadEnds, (value) => ((state.hideDeadEnds = value), chart.setOptions({ hideDeadEnds: value }))),
-        checkbox("highlight selected lineage", state.highlightLineage, (value) => ((state.highlightLineage = value), chart.setOptions({ highlightLineage: value }), renderTopology())),
+        checkbox("highlight selected lineage", state.highlightLineage, (value) => ((state.highlightLineage = value), chart.setOptions({ highlightLineage: value }), renderTopology(), renderSpeciesSummary())),
         run.has_history ? checkbox("search progress", state.showHistory, (value) => ((state.showHistory = value), loadHistory())) : null,
         h("span", { class: "meta", text: "drag to zoom · double-click to reset · click a point to open or close it · click empty space to clear" })
       );
@@ -1583,6 +1654,7 @@
         if (!destroyed) {
           chart.setData(state.points, state.links, changes);
           renderTopology();
+          renderSpeciesSummary();
         }
       } catch (error) {
         setChildren(chartNode, notice(`Could not load the chart: ${error.message}`, true));
@@ -1767,6 +1839,7 @@
         { key: null, label: "generated by", cell: (row) => row.generated_by.map(label).join(", ") || "—" },
         { key: null, label: "parents", cell: (row) => (row.parents.length ? parentLinks(row.parents) : "—") },
         ...(run.filter_options && run.filter_options.island && run.filter_options.island.length ? [{ key: "island", label: "island", number: true, cell: (row) => formatNumber(row.island) }] : []),
+        ...(run.filter_options && run.filter_options.species && run.filter_options.species.length ? [{ key: "species", label: "species", number: true, cell: (row) => formatNumber(row.species) }] : []),
         { key: "n_enabled_gates", label: "gates", number: true, cell: (row) => `${row.n_enabled_gates}/${row.n_gates}` },
         { key: "n_parameters", label: "params", number: true, cell: (row) => formatNumber(row.n_parameters) },
       ];
@@ -1838,14 +1911,14 @@
     }
 
     /** Links to a genome's parents, labelling the (unstored) seed genome rather than linking to it. */
-    function parentLinks(parents, islands = null) {
+    function parentLinks(parents, partitions = null, partitionLabel = "island") {
       return parents.map((parent, i) => [
         i ? ", " : "",
         state.seeds.has(parent)
           ? h("span", { class: "seed", title: SEED_EXPLANATION, text: `${parent} (seed)` })
           : h("a", { href: genomeHref(index, parent), text: parent }),
-        // `islands` lines up with `parents`, so an inter-island crossover shows where each parent came from
-        islands && islands[i] !== null && islands[i] !== undefined ? h("span", { class: "meta", text: ` (island ${islands[i]})` }) : "",
+        // `partitions` lines up with `parents`, so inter-species/island crossover shows where each parent came from
+        partitions && partitions[i] !== null && partitions[i] !== undefined ? h("span", { class: "meta", text: ` (${partitionLabel} ${partitions[i]})` }) : "",
       ]);
     }
 
@@ -2070,6 +2143,81 @@
       );
     }
 
+    /**
+     * Draws each species' genome count and best charted metric into its section,
+     * when the run recorded species membership and the section is open. Clicking
+     * a species colors the chart around it.
+     */
+    function renderSpeciesSummary() {
+      if (!speciesSummaryNode || !speciesSummaryNode.open) return;
+      const body = speciesSummaryNode.lastElementChild;
+      if (!state.points || !state.points.species) {
+        setChildren(body, notice("Loading the run's genomes…"));
+        return;
+      }
+      const better = lowerIsBetter(state.yKey) ? (a, b) => a < b : (a, b) => a > b;
+      const bySpecies = new Map();
+      for (let i = 0; i < state.points.genome_number.length; i++) {
+        const id = state.points.species[i];
+        if (id === null || id === undefined) continue;
+        if (!bySpecies.has(id)) bySpecies.set(id, { genomes: 0, best: null, bestGenome: null });
+        const entry = bySpecies.get(id);
+        entry.genomes += 1;
+        const value = state.points.y[i];
+        if (isNumber(value) && (entry.best === null || better(value, entry.best))) {
+          entry.best = value;
+          entry.bestGenome = state.points.genome_number[i];
+        }
+      }
+      const rows = [...bySpecies.entries()].sort((a, b) => a[0] - b[0]);
+      const config = run.speciation || {};
+      setChildren(
+        body,
+        Object.keys(config).length
+          ? h(
+              "div",
+              { class: "meta" },
+              h("span", {}, "threshold ", h("b", { text: String(config.species_threshold) })),
+              h("span", {}, "capacity ", h("b", { text: String(config.max_population_size) })),
+              h("span", {}, "inter-species rate ", h("b", { text: String(config.inter_species_parent_rate) }))
+            )
+          : null,
+        h(
+          "table",
+          {},
+          h(
+            "thead",
+            {},
+            h("tr", {}, h("th", { text: "species" }), h("th", { class: "number", text: "genomes" }), h("th", { class: "number", text: `best ${state.yKey}` }), h("th", { text: "best genome" }))
+          ),
+          h(
+            "tbody",
+            {},
+            rows.map(([id, entry]) =>
+              h(
+                "tr",
+                {
+                  class: "clickable",
+                  title: `Color the chart around species ${id}`,
+                  onclick: () => {
+                    state.encoding = "species";
+                    state.speciesFocus = id;
+                    renderChartControls();
+                    chart.setOptions({ encoding: "species", speciesFocus: id });
+                    renderSpeciesSummary();
+                  },
+                },
+                h("td", { text: String(id) }),
+                h("td", { class: "number", text: formatNumber(entry.genomes) }),
+                h("td", { class: "number", text: formatNumber(entry.best) }),
+                h("td", {}, entry.bestGenome !== null ? h("a", { href: genomeHref(index, entry.bestGenome), text: entry.bestGenome }) : "—")
+              )
+            )
+          )
+        )
+      );
+    }
+
     /** Selects a genome, or clears the selection if it is already the selected one. */
     function toggleGenome(genome) {
       location.hash = genome === state.selected ? `#/run/${index}` : genomeHref(index, genome);
@@ -2088,6 +2236,7 @@
       chart.setSelected(genome);
       highlightTableRow();
       renderTopology();
+      renderSpeciesSummary();
       if (genome === null || genome === undefined) {
         detailRequest++;
         detailNode.hidden = true;
@@ -2129,7 +2278,7 @@
     }
 
     function renderDetail(payload) {
-      const { summary, genome, children, commands, parent_islands: parentIslands } = payload;
+      const { summary, genome, children, commands, parent_islands: parentIslands, parent_species: parentSpecies } = payload;
       const number = genome.genome_number;
       const tabContent = h("div");
 
@@ -2171,7 +2320,7 @@
         if (tab === "metrics") return renderMetrics(series);
         if (tab === "fitness") return renderFitness(summary, genome);
         if (tab === "gates") return renderGates(genome);
-        if (tab === "lineage") return renderLineage(summary, genome, children, parentIslands);
+        if (tab === "lineage") return renderLineage(summary, genome, children, parentIslands, parentSpecies);
         if (tab === "notes") return [renderAnnotations(number)];
         return renderCommands(number, commands);
       }
@@ -2539,6 +2688,7 @@
           ["generated by", summary.generated_by.map(label).join(", ") || "—"],
           ["crossover type", summary.crossover_type ?? "—"],
           ["island", formatNumber(summary.island)],
+          ["species", formatNumber(summary.species)],
           ...provenanceFacts(summary, genome),
           ["gates", `${summary.n_enabled_gates} enabled of ${summary.n_gates}`],
           ["gate parameters", formatNumber(summary.n_parameters)],
@@ -2599,7 +2749,7 @@
       return [];
     }
 
-    function renderLineage(summary, genome, children, parentIslands = null) {
+    function renderLineage(summary, genome, children, parentIslands = null, parentSpecies = null) {
       const links = (numbers) => numbers.map((other, i) => [i ? ", " : "", h("a", { href: genomeHref(index, other), text: other })]);
       const depthSelect = select(
         [1, 2, 3, 5, 8, 12, 20].map((depth) => [String(depth), `${depth} generation${depth === 1 ? "" : "s"}`]),
@@ -2619,12 +2769,18 @@
       }
       loadAncestry(5);
 
+      const parentPartition = parentIslands && parentIslands.some((value) => value !== null && value !== undefined)
+        ? parentIslands
+        : parentSpecies;
+      const partitionName = parentIslands && parentIslands.some((value) => value !== null && value !== undefined) ? "island" : "species";
+
       return [
         factsList([
           ["generated by", summary.generated_by.map(label).join(", ") || "—"],
           ["crossover type", summary.crossover_type ?? "—"],
           ...islandFacts(summary, genome),
-          ["parents", summary.parents.length ? parentLinks(summary.parents, parentIslands) : "—"],
+          ...(Number.isInteger(summary.species) ? [["species", String(summary.species)]] : []),
+          ["parents", summary.parents.length ? parentLinks(summary.parents, parentPartition, partitionName) : "—"],
           [
             `children (${children.length.toLocaleString()})`,
             children.length ? [links(children.slice(0, MAX_CHILDREN_SHOWN)), children.length > MAX_CHILDREN_SHOWN ? ` … and ${(children.length - MAX_CHILDREN_SHOWN).toLocaleString()} more` : ""] : "none",
@@ -2686,7 +2842,7 @@
       for (const { x, y, node } of position.values()) {
         const value = node.fitness ? node.fitness[state.yKey] : null;
         const title = node.in_archive
-          ? `Genome ${node.genome_number} · generation ${node.generation} back · ${state.yKey}: ${formatNumber(value)} · ${label(node.insert_type)}${node.island !== null && node.island !== undefined ? ` · island ${node.island}` : ""} · ${(node.generated_by || []).map(label).join(", ")}`
+          ? `Genome ${node.genome_number} · generation ${node.generation} back · ${state.yKey}: ${formatNumber(value)} · ${label(node.insert_type)}${node.island !== null && node.island !== undefined ? ` · island ${node.island}` : ""}${node.species !== null && node.species !== undefined ? ` · species ${node.species}` : ""} · ${(node.generated_by || []).map(label).join(", ")}`
           : `Genome ${node.genome_number}. ${SEED_EXPLANATION}`;
         const group = s(
           "g",

@@ -36,6 +36,7 @@ from src.evolution.innovation import innovation_number_generator  # noqa: E402
 from src.evolution.population_strategy import PopulationStrategy  # noqa: E402
 from src.evolution.steady_state_islands import SteadyStateIslands  # noqa: E402
 from src.evolution.steady_state_population import SteadyStatePopulation  # noqa: E402
+from src.evolution.steady_state_speciation import SteadyStateSpeciation  # noqa: E402
 from src.utils.genome_archive import GenomeArchive  # noqa: E402
 
 #: The arguments a steady-state run records, as an entry point would.
@@ -59,6 +60,19 @@ ISLAND_ARGUMENTS: dict[str, Any] = {
     "intra_island_crossover_rate": 0.5,
     "topology": ["random", "1", "2"],
     "number_genomes": 8,
+}
+
+#: The arguments a speciation run records.
+SPECIATION_ARGUMENTS: dict[str, Any] = {
+    "population_strategy": "steady_state_speciation",
+    "max_population_size": 4,
+    "species_threshold": 0.6,
+    "neat_c1": 1.0,
+    "neat_c2": 1.0,
+    "neat_c3": 0.0,
+    "inter_species_parent_rate": 0.1,
+    "number_genomes": 6,
+    "out_dir": "recorded/by/the/run",
 }
 
 
@@ -306,6 +320,48 @@ def test_restarted_islands_keep_the_connections_the_run_used(tmp_path) -> None:
 
     assert restored.insertions == state.inserted_genomes
     assert restored.global_best_genome.genome_number == state.best_genome.genome_number
+
+
+def test_restarted_speciation_keeps_species_membership(tmp_path) -> None:
+    """Speciation comes back with genomes regrouped by their recorded species_id.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    run_dir = tmp_path / "speciation"
+    population = SteadyStateSpeciation(
+        max_population_size=4,
+        compare=compare,
+        species_threshold=0.6,
+        inter_species_parent_rate=0.1,
+        rng_seed=0,
+    )
+    run_a_search(run_dir, population, SPECIATION_ARGUMENTS, genomes=6)
+
+    state = restart.load(str(run_dir))
+    assert state.arguments["population_strategy"] == "steady_state_speciation"
+    assert "speciation" in state.run_info
+
+    restored = restored_population(state)
+    assert isinstance(restored, SteadyStateSpeciation)
+    assert restored.insertions == state.inserted_genomes
+    held = {genome.genome_number for genome in restored.get_population()}
+    assert held == {genome.genome_number for genome in state.population}
+    assert all(
+        genome.metadata.get("species_id") is not None
+        for genome in restored.get_population()
+    )
+    assert restored.next_species_id == (
+        max(
+            (
+                int(genome.metadata["species_id"])
+                for genome in restored.get_population()
+            ),
+            default=-1,
+        )
+        + 1
+    )
 
 
 def test_an_archive_that_predates_restarts_says_so(tmp_path) -> None:

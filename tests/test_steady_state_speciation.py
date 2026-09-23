@@ -174,6 +174,43 @@ def test_assignment_joins_compatible_and_creates_otherwise() -> None:
     assert len(pop.species_list) == 2
 
 
+def test_assignment_joins_at_exact_threshold() -> None:
+    """A genome with distance exactly equal to the threshold joins (non-strict)."""
+
+    pop = make_pop(species_threshold=0.5)
+    # H={1,2} vs H={1,2,3}: E=1, D=0, N=3 → δ=1/3 ≤ 0.5 → join
+    first = MockGenome(1, [1, 2], 0.4)
+    second = MockGenome(2, [1, 2, 3], 0.3)
+    pop.insert_genome(first)
+    pop.insert_genome(second)
+    assert len(pop.species_list) == 1
+    # Force δ = threshold: H={1} vs H={2} gives δ=2/1=2.0 > 0.5 → new
+    # For exact equality: histories of size 2 with one mismatch: {1,2} vs {1,3}
+    # M={2,3}, τ=3, E=0, D=2, N=2 → δ=1.0
+    pop2 = make_pop(species_threshold=1.0)
+    pop2.insert_genome(MockGenome(1, [1, 2], 0.4))
+    pop2.insert_genome(MockGenome(2, [1, 3], 0.3))
+    assert len(pop2.species_list) == 1
+
+
+def test_assignment_is_cyclic_not_shuffled() -> None:
+    """Equal-threshold ties prefer species in cyclic order from the cursor."""
+
+    # Build two species under a tight threshold, then raise it so a new genome
+    # is compatible with both (δ=2 ≤ 2) and must join the first examined.
+    pop = make_pop(species_threshold=0.5, rng_seed=0)
+    pop.insert_genome(MockGenome(1, [1], 0.5))
+    pop.insert_genome(MockGenome(2, [10], 0.5))
+    assert len(pop.species_list) == 2
+    pop.species_threshold = 2.0
+    pop.assignment_species = 0
+    child = MockGenome(3, [100, 200], 0.4)
+    pop.insert_genome(child)
+    assert child.metadata["species_id"] == pop.species_list[0].species_id
+    assert len(pop.species_list[0].genomes) == 2
+    assert pop.assignment_species == 1
+
+
 def test_singleton_protection_and_all_singleton_fallback() -> None:
     """Eviction prefers a non-singleton; all-singletons drop the global worst."""
 
@@ -223,13 +260,91 @@ def test_duplicate_replace_stays_in_same_species() -> None:
     pop.insert_genome(original)
     species_id = original.metadata["species_id"]
     worse = MockGenome(2, [1, 2], 0.9, enabled=[True, False])
-    assert not pop.insert_genome(worse)
+    assert pop.insert_genome(worse)
     assert worse.metadata["insert_type"] == "discarded"
+    assert worse.metadata["discard_reason"] == "duplicate_of_better"
+    assert worse.metadata["lost_to"] == 1
     better = MockGenome(3, [1, 2], 0.1, enabled=[True, False])
     assert pop.insert_genome(better)
     assert better.metadata["species_id"] == species_id
     assert pop.species_list[0].latest_genome.genome_number == 3
     assert original not in pop._all_genomes()
+
+
+def test_capacity_discard_records_reason() -> None:
+    """A capacity discard is archived with worse_than_population provenance."""
+
+    pop = make_pop(max_population_size=1)
+    pop.insert_genome(compatible(1, 0.1, 0))
+    worse = compatible(2, 0.9, 1)
+    assert pop.insert_genome(worse)
+    assert worse.metadata["insert_type"] == "discarded"
+    assert worse.metadata["discard_reason"] == "worse_than_population"
+    assert worse.metadata["lost_to"] == 1
+
+
+def test_restore_rebuilds_species_from_metadata() -> None:
+    """``restore`` regroups held genomes by species_id and resumes numbering."""
+
+    from types import SimpleNamespace
+
+    pop = make_pop(max_population_size=10, rng_seed=1)
+    a = compatible(1, 0.2, 0)
+    b = compatible(2, 0.3, 1)
+    c = distant(3, 0.4, (10, 20))
+    for genome in (a, b, c):
+        pop.insert_genome(genome)
+
+    restored = make_pop(max_population_size=10, rng_seed=99)
+    restored.restore(
+        SimpleNamespace(
+            population=[a, b, c],
+            inserted_genomes=3,
+            best_genome=a,
+            next_genome_number=4,
+        )
+    )
+    assert len(restored.species_list) == 2
+    assert restored.insertions == 3
+    assert restored.generation_species == 0
+    assert (
+        restored.next_species_id == max(s.species_id for s in restored.species_list) + 1
+    )
+    by_id = {species.species_id: species for species in restored.species_list}
+    assert {g.genome_number for g in by_id[a.metadata["species_id"]].genomes} == {1, 2}
+    assert {g.genome_number for g in by_id[c.metadata["species_id"]].genomes} == {3}
+
+
+def test_run_info_records_speciation_config() -> None:
+    """``run_info`` exposes the fixed speciation hyperparameters."""
+
+    pop = make_pop(
+        max_population_size=12,
+        species_threshold=0.4,
+        inter_species_parent_rate=0.2,
+    )
+    info = pop.run_info()
+    assert info["speciation"] == {
+        "max_population_size": 12,
+        "species_threshold": 0.4,
+        "neat_c1": 1.0,
+        "neat_c2": 1.0,
+        "inter_species_parent_rate": 0.2,
+    }
+
+
+def test_parent_metadata_omits_species_id() -> None:
+    """Parent selection stamps crossover_type only; membership is set on insert."""
+
+    pop = make_pop(inter_species_parent_rate=0.0, rng_seed=0)
+    pop.insert_genome(compatible(1, 0.1, 0))
+    pop.insert_genome(compatible(2, 0.2, 1))
+    _, mutation_meta = pop.get_parent()
+    assert mutation_meta == {"crossover_type": "mutation"}
+    _, intra_meta = pop.get_parents(2)
+    assert intra_meta == {"crossover_type": "intra"}
+    assert "species_id" not in mutation_meta
+    assert "species_id" not in intra_meta
 
 
 def test_parents_intra_inter_unique_and_unavailable() -> None:
@@ -385,7 +500,7 @@ def test_constructor_and_parser_bounds() -> None:
     assert args.neat_c3 == 0.0
     assert args.max_population_size == 30
 
-    with pytest.raises(ValueError, match="angle distance is not implemented"):
+    with pytest.raises(ValueError, match="reserved for later investigation"):
         make_pop(neat_c3=0.4)
     with pytest.raises(ValueError, match="max_population_size"):
         make_pop(max_population_size=0)
