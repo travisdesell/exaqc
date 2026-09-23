@@ -346,7 +346,7 @@ stops early after `improvement_cutoff` epochs without improvement.
 ### [Reinforcement-learning trainers](./src/trainer/reinforcement_trainer.py)
 
 [`src/trainer/reinforcement_trainer.py`](./src/trainer/reinforcement_trainer.py) provides the shared training scaffold — the
-environment abstraction, greedy evaluation, best-weight snapshotting — and each
+environment abstraction, evaluation, best-weight snapshotting — and each
 algorithm subclasses it. Choose one with `--algo`.
 
 Terminology used throughout: a **step** is one interaction with the environment,
@@ -366,9 +366,81 @@ genome and is evolved and serialized along with the policy. Because those
 outputs must be unconstrained, use `--decoding linear` (not `clipped`) with
 `actor_critic`, `a2c` and `ppo`.
 
-Shared arguments: `--episodes`, `--eval_episodes`, `--max_steps`, `--gamma`,
-`--learning_rate`, `--entropy_coef`, `--log_every`, `--improvement_cutoff`,
-`--ema_alpha`.
+**On a continuous environment, prefer `--decoding linear` for every algorithm,
+including `reinforce`.** A continuous policy reads `2 * n_actions` outputs — the
+per-dimension action mean *and* its log-standard-deviation. `--decoding clipped`
+passes circuit outputs through unchanged, so with `-qom probs` (which are
+non-negative) both halves are forced non-negative: the action mean can never go
+below `0` on a `[-1, 1]` action space, and `log_std >= 0` pins the sampled
+action noise at `sigma >= 1`. Measured on Walker2d, `clipped` yields means in
+`[0.00, 1.00]` and `sigma` in `[1.00, 1.44]`, where `linear` yields means in
+`[-0.27, 0.22]` and `sigma` in `[0.85, 1.17]`. Greedy evaluation hides the
+second half of this, because it reads only the mean and discards `log_std` —
+see [`--eval_policy`](#evaluation-regime---eval_policy).
+
+Shared arguments: `--episodes`, `--eval_episodes`, `--eval_policy`,
+`--max_steps`, `--gamma`, `--learning_rate`, `--entropy_coef`, `--log_every`,
+`--improvement_cutoff`, `--ema_alpha`, `--seed`, `--eval_seed`.
+
+##### Evaluation seeds (`--seed` and `--eval_seed`)
+
+Training and evaluation episodes are seeded from **separate** bases, held in
+ranges that cannot overlap — otherwise a genome could be scored on an episode
+it had just trained on, which flatters it. Each trainer declares the seed range
+its training consumes (`training_seed_span`), and the evaluation range is kept
+clear of it.
+
+| | `--seed` (training) | `--eval_seed` (evaluation) |
+|---|---|---|
+| unset (default) | each genome draws its own, so genomes do not all train on the same episodes | each genome draws its own, so each is scored on its own episodes |
+| set | every genome trains on the same episodes | every genome is scored on the **same** episodes |
+
+Setting `--eval_seed` is worth considering when you care about *ranking*
+genomes against each other. With it unset, each genome is scored on its own
+draw of episodes, so a search that keeps the best of many thousands partly
+selects for a lucky draw; pinning it gives every genome the same episodes
+(common random numbers) at the cost of tuning the population to that one set.
+
+If `--eval_seed` is set and `--seed` is not, the training seed is moved out of
+the way rather than the evaluation seed, so every genome keeps facing the same
+evaluation episodes. Pinning **both** into overlapping ranges is a
+configuration error and is rejected.
+
+##### Evaluation regime (`--eval_policy`)
+
+A genome's fitness is the return it achieves during evaluation, and
+`--eval_policy` decides **which policy** that measures. It matters because the
+two regimes are genuinely different policies: on a continuous environment the
+greedy action is the distribution mean, which discards the learned
+log-standard-deviation — half of the policy outputs — while the policy-gradient
+trainers collect every rollout by *sampling* using it.
+
+| `--eval_policy` | Evaluation uses |
+|---|---|
+| `match` (default) | the regime the chosen `--algo` optimizes (see below) |
+| `greedy` | the deterministic action: argmax over logits, or the distribution mean |
+| `stochastic` | an action sampled from the policy |
+| `both` | both regimes; the `match` one drives fitness, the other is recorded beside it |
+
+`match` resolves per algorithm, because the correct regime is not the same for
+all of them:
+
+| `--algo` | `match` resolves to | Why |
+|---|---|---|
+| `reinforce`, `actor_critic`, `a2c`, `ppo` | `stochastic` | the objective is the expected return of the *sampled* policy |
+| `q_learning`, `sarsa` | `greedy` | Q-learning's target policy is the greedy one; ε-greedy is only its behaviour policy |
+
+Two consequences worth knowing:
+
+- **Fitness under different regimes is not comparable.** The regime each genome
+  was scored under is recorded in its `fitness` as `eval_policy`, and under
+  `--eval_policy both` the unselected regime is recorded as
+  `eval_greedy_return_mean` / `eval_stochastic_return_mean`.
+- **A stochastic evaluation is noisier than a greedy one**, since the policy's
+  own sampling adds variance on top of the environment's. `--eval_episodes`
+  (default `10`) buys down that noise, and `--improvement_cutoff` — measured in
+  episodes, so patience is `improvement_cutoff / log_every` evaluations — can
+  stop a genome early on an unlucky evaluation if it is set too tight.
 
 #### [REINFORCE](./src/trainer/reinforce_trainer.py)
 
@@ -747,7 +819,15 @@ environments work only with `reinforce`, `actor_critic`/`a2c` and `ppo`.
 | `--input_qubits` | *required* | Input qubits |
 | `--output_qubits` | *required* | Readout qubits. Must be wide enough to carry the policy's outputs — at least `ceil(log2(n_policy_outputs))`, where a discrete policy needs one output per action and a continuous one two per action dimension |
 | `--episodes` | `60` | Training episodes per genome |
-| `--eval_episodes` | `10` | Greedy episodes used to score a genome |
+| `--eval_episodes` | `10` | Episodes used to score a genome |
+| `--eval_policy` | `match` | Action-selection regime evaluation scores under: `match`, `greedy`, `stochastic` or `both` |
+| `--eval_seed` | random per genome | Base seed for evaluation episodes, kept disjoint from the training seeds; set it to score every genome on the same episodes |
+| `--forward_reward_weight` | the environment's own | MuJoCo: weight on forward progress (`reward += weight * dx/dt`) |
+| `--ctrl_cost_weight` | the environment's own | MuJoCo: weight on the control cost (`reward -= weight * sum(a^2)`) |
+| `--healthy_reward` | the environment's own | MuJoCo: per-step bonus for staying upright — the bonus itself, not a coefficient (not accepted by `halfcheetah`) |
+| `--contact_cost_weight` | the environment's own | MuJoCo: weight on the contact-force cost (`ant` and `humanoid` only) |
+| `--terminate_when_unhealthy` / `--no-terminate_when_unhealthy` | the environment's own | MuJoCo: whether a fall ends the episode (not accepted by `halfcheetah`) |
+| `--reset_noise_scale` | the environment's own | MuJoCo: scale of the random initial-state perturbation at reset |
 | `--max_steps` | `500` | Step cap per episode |
 | `--log_every` | `10` | Evaluate and log every N episodes |
 | `--improvement_cutoff` | `30` | Episodes without an improved evaluation before stopping, 0 to disable |
@@ -758,12 +838,52 @@ environments work only with `reinforce`, `actor_critic`/`a2c` and `ppo`.
 
 Plus the per-algorithm arguments in [Trainers](#trainers).
 
+#### MuJoCo reward knobs
+
+The MuJoCo locomotion rewards are the sum of three terms, each exposed as a
+flag that defaults to the environment's own value — pass nothing and Gymnasium's
+defaults apply unchanged:
+
+| term | flag | Walker2d default |
+|---|---|---|
+| forward progress | `--forward_reward_weight` × `dx/dt` | `1.0` |
+| staying upright | `--healthy_reward` per step | `1.0` |
+| control effort | −`--ctrl_cost_weight` × `sum(a^2)` | `0.001` |
+
+Not every environment has every term, and the flags are checked against the
+chosen `--env` rather than silently ignored: `halfcheetah` cannot fall over, so
+it has no `--healthy_reward` or `--terminate_when_unhealthy`, and only `ant` and
+`humanoid` have `--contact_cost_weight`.
+
+**`--healthy_reward` is usually the one that matters**, because it is a flat
+per-step bonus rather than a coefficient. At the default of `1.0` with
+`--max_steps 1000`, a policy that merely stays upright for the whole episode
+banks 1000 — which can be far more than walking earns. A measured example: a
+Walker2d genome scoring 1067.9 scored 67.9 with `--healthy_reward 0.0`, so 94%
+of its fitness was the survival bonus and its actual forward progress over the
+8 simulated seconds was about half a metre. Lowering it (say `0.1`) or raising
+`--forward_reward_weight` rebalances the two.
+
+`--reset_noise_scale` is not a reward term but is exposed alongside them, since
+it sets how much the episodes a genome is evaluated on differ from one another.
+Raising it well past the default changes the task rather than the measurement:
+on Walker2d, going from `0.025` to `0.05` roughly halves the achievable return.
+
+A genome records the knobs it was evolved under, so `refine_genome` and
+`visualize_rl` rebuild the same environment rather than reverting to the
+defaults. Runs with different knobs are not comparable with one another.
+
 **Guidance.** The decoder must produce one output per action (plus one more for
 `actor_critic`/`a2c`/`ppo`), which the entry point sizes automatically from the
 environment — so use `--decoding linear` for those algorithms. `cartpole` is the
 fastest environment to sanity-check a configuration. Fitness records
-`train_return_mean`, `eval_return_mean` and `best_episode_return`. Genomes are
-ranked by `loss`, which weights the evaluation return (greedy episodes on the
+`train_return_mean`, `eval_return_mean`, `best_episode_return` and the
+`eval_policy` those evaluation returns were measured under (see
+[`--eval_policy`](#evaluation-regime---eval_policy); under `--eval_policy both`
+it also records `eval_greedy_return_mean` and `eval_stochastic_return_mean`).
+Genomes scored under different regimes are not comparable, so `eval_policy` is
+what tells you whether two runs can be put on the same axes. Genomes are
+ranked by `loss`, which weights the evaluation return (episodes on the
 best checkpoint) far above the smoothed training return by default: the training
 return is a short, noisy sample, so ranking mostly on it selects genomes that got
 lucky episodes rather than ones whose policies evaluate well.
@@ -824,7 +944,10 @@ python3 -m src.examples.evaluate --archive ./artifacts/mnist --genome_number 42 
 ### [`visualize_rl`](./src/examples/visualize_rl.py)
 
 Replays a trained RL genome in its environment so you can *watch* the evolved
-circuit control it, optionally saving an animated GIF.
+circuit control it, optionally saving an animated GIF. By default it replays the
+action-selection regime the genome was *scored* under, read back from the genome
+itself — rolling a stochastically scored genome greedily would show a policy
+that never produced its fitness.
 
 ```
 python3 -m src.examples.visualize_rl --archive ./artifacts/cartpole --genome_number 42 \
@@ -838,6 +961,7 @@ python3 -m src.examples.visualize_rl --archive ./artifacts/cartpole --genome_num
 | `--genome_number` | — | Genome to load from `--archive` (required with it) |
 | `--env` | from the genome | Override the environment |
 | `--episodes` | `3` | Episodes to play |
+| `--eval_policy` | `match` | Regime to roll out under: `match` replays the one the genome was scored under, or force `greedy` / `stochastic` |
 | `--max_steps` | from the genome, else `500` | Step cap |
 | `--seed` | random | Base environment seed |
 | `--output_file` | — | Save the rollout as a GIF instead of rendering to screen |

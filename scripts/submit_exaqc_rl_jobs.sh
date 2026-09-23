@@ -2,12 +2,16 @@
 #
 # Submits one Slurm job per EXAQC reinforcement-learning run.
 #
-#   sh scripts/submit_exaqc_rl_jobs.sh <runs> <env> <input_qubits> <output_qubits> \
+#   sh scripts/submit_exaqc_rl_jobs.sh <min_run> <max_run> <tag> <env> \
+#                                      <input_qubits> <output_qubits> \
 #                                      <topology> [topology arguments...]
 #
 # for example:
 #
-#   sh scripts/submit_exaqc_rl_jobs.sh 5 walker2d 6 6 2d_mesh 4 5
+#   sh scripts/submit_exaqc_rl_jobs.sh 1 5 healthy02 walker2d 6 6 2d_mesh 4 5
+#
+# The run range is inclusive, so a finished experiment can be extended with more
+# runs later without resubmitting the ones already done.
 #
 # Each run is scheduled as its own job (there is no loop inside the job script),
 # so the runs of an experiment are queued independently and a failure in one
@@ -25,6 +29,14 @@
 #   N_ISLANDS        islands per run (default 20); the 2d_mesh and random
 #                    topologies are validated against it
 #   MAX_ISLAND_SIZE  genomes per island (default 5)
+#   HEALTHY_REWARD   per-step upright bonus for the MuJoCo environments that
+#                    have one (hopper, walker2d, ant, humanoid); unset leaves
+#                    each environment's own Gymnasium value. Read by the job
+#                    script, which sbatch reaches through its default
+#                    environment export -- so set it on this command line:
+#                      HEALTHY_REWARD=0.2 sh scripts/submit_exaqc_rl_jobs.sh ...
+#                    Giving it for an environment with no alive bonus is an
+#                    error rather than ignored, so tag such runs accordingly
 #   DRY_RUN          when set, print the sbatch commands instead of submitting
 
 set -eu
@@ -50,9 +62,14 @@ TOPOLOGIES="fully_connected ring star 2d_mesh tree random"
 
 usage() {
     cat >&2 <<'USAGE'
-usage: sh scripts/submit_exaqc_rl_jobs.sh <runs> <env> <input_qubits> <output_qubits> <topology> [topology arguments...]
+usage: sh scripts/submit_exaqc_rl_jobs.sh <min_run> <max_run> <tag> <env> <input_qubits> <output_qubits> <topology> [topology arguments...]
 
-  runs           number of runs to submit for this experiment, one job each
+  min_run        first run index to submit (inclusive)
+  max_run        last run index to submit (inclusive); one job per index
+  tag            keyword distinguishing this run type from others with the
+                 same environment and topology (letters, digits, - and _).
+                 It names both the job and its archive directory, so two run
+                 types cannot resume one another's archives
   env            reinforcement-learning environment to evolve for
   input_qubits   qubits the encoder feeds the circuit
   output_qubits  qubits the circuit hands the decoder
@@ -68,9 +85,10 @@ usage: sh scripts/submit_exaqc_rl_jobs.sh <runs> <env> <input_qubits> <output_qu
                                                    max_edges < the island count
 
 examples:
-  sh scripts/submit_exaqc_rl_jobs.sh 5 walker2d 6 6 2d_mesh 4 5
-  sh scripts/submit_exaqc_rl_jobs.sh 5 walker2d 6 6 ring
-  N_ISLANDS=30 sh scripts/submit_exaqc_rl_jobs.sh 3 hopper 6 3 tree 2
+  sh scripts/submit_exaqc_rl_jobs.sh 1 5 healthy02 walker2d 6 6 2d_mesh 4 5
+  sh scripts/submit_exaqc_rl_jobs.sh 1 5 baseline walker2d 6 6 ring
+  sh scripts/submit_exaqc_rl_jobs.sh 6 10 baseline walker2d 6 6 ring
+  N_ISLANDS=30 sh scripts/submit_exaqc_rl_jobs.sh 1 3 stochastic hopper 6 3 tree 2
 USAGE
     exit 2
 }
@@ -88,6 +106,16 @@ is_whole_number() {
     return 0
 }
 
+# A tag is used unquoted in a job name and, more importantly, in an archive
+# directory name, so it is restricted to characters that are safe in a path and
+# cannot be read as shell syntax.
+is_tag() {
+    case "$1" in
+        '' | *[!A-Za-z0-9_-]*) return 1 ;;
+    esac
+    return 0
+}
+
 contains_word() {
     # $1 is the space-delimited list, $2 the word; the padding makes this an
     # exact-token match rather than a substring one.
@@ -97,18 +125,29 @@ contains_word() {
     return 1
 }
 
-[ $# -ge 5 ] || usage
+[ $# -ge 7 ] || usage
 
-RUNS=$1
-ENVIRONMENT=$2
-INPUT_QUBITS=$3
-OUTPUT_QUBITS=$4
-TOPOLOGY=$5
-shift 5
+MIN_RUN=$1
+MAX_RUN=$2
+TAG=$3
+ENVIRONMENT=$4
+INPUT_QUBITS=$5
+OUTPUT_QUBITS=$6
+TOPOLOGY=$7
+shift 7
 # whatever is left is the topology's own arguments
 
-is_whole_number "$RUNS" && [ "$RUNS" -gt 0 ] ||
-    die "runs must be a positive integer, but found: $RUNS"
+is_whole_number "$MIN_RUN" && [ "$MIN_RUN" -gt 0 ] ||
+    die "min_run must be a positive integer, but found: $MIN_RUN"
+
+is_whole_number "$MAX_RUN" && [ "$MAX_RUN" -gt 0 ] ||
+    die "max_run must be a positive integer, but found: $MAX_RUN"
+
+[ "$MAX_RUN" -ge "$MIN_RUN" ] ||
+    die "max_run ($MAX_RUN) must be >= min_run ($MIN_RUN)"
+
+is_tag "$TAG" ||
+    die "tag must be non-empty and contain only letters, digits, '-' and '_', but found: $TAG"
 
 contains_word "$ENVIRONMENTS" "$ENVIRONMENT" ||
     die "unknown environment: $ENVIRONMENT (choose one of: $ENVIRONMENTS)"
@@ -175,6 +214,13 @@ esac
 # iteration of the loop below, which is easy to get subtly wrong.
 TOPOLOGY_ARGUMENTS="$*"
 
+# What separates one experiment's archives from another's. The tag comes first
+# so runs of the same topology but a different run type (a changed reward, a
+# different evaluation regime) sort together yet never share a directory: the
+# job script builds its --out_dir from this, and --restart defaults to auto, so
+# a shared directory would silently resume the wrong experiment.
+RUN_TAG="${TAG}_${TOPOLOGY_TAG}"
+
 SCRIPT_DIR=$(dirname "$0")
 JOB_SCRIPT="$SCRIPT_DIR/exaqc_rl_job.sh"
 
@@ -190,10 +236,16 @@ fi
 # The runs of an experiment differ only by their index, which separates their
 # archives. Note that a run whose archive already exists is *continued* rather
 # than restarted from scratch, since --restart defaults to auto: submitting the
-# same experiment twice resumes it instead of starting over.
-run=1
-while [ "$run" -le "$RUNS" ]; do
-    name="exaqc_${ENVIRONMENT}_${TOPOLOGY_TAG}_${run}"
+# same experiment twice resumes it instead of starting over. That is what makes
+# an inclusive range useful -- runs 6..10 can be added to an experiment later
+# without touching runs 1..5.
+run=$MIN_RUN
+while [ "$run" -le "$MAX_RUN" ]; do
+    # This single string names the Slurm job, its two log files and the archive
+    # directory the run writes, so all four agree. The island count is part of
+    # it because two island counts of the same experiment are different
+    # experiments and must not share an archive.
+    name="exaqc_${RUN_TAG}_${ENVIRONMENT}_i${N_ISLANDS}_${run}"
 
     # The topology and its arguments go last, and stay last all the way into the
     # search: --topology takes any number of values, so anything after it would
@@ -207,10 +259,9 @@ while [ "$run" -le "$RUNS" ]; do
         "$ENVIRONMENT" \
         "$INPUT_QUBITS" \
         "$OUTPUT_QUBITS" \
-        "$run" \
+        "$name" \
         "$N_ISLANDS" \
         "$MAX_ISLAND_SIZE" \
-        "$TOPOLOGY_TAG" \
         "$TOPOLOGY" \
         $TOPOLOGY_ARGUMENTS
 

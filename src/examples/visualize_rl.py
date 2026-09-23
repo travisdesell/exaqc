@@ -4,8 +4,15 @@ Loads a circuit genome produced by ``src.examples.reinforcement_learning`` --
 from a JSON file (i.e. one written by ``CircuitGenome.to_dict``, such as
 ``best_fitness.json``), or from the run's ``genomes.sqlar`` archive by its genome
 number -- rebuilds the quantum circuit, reconnects it to the Gymnasium
-environment it was trained on, and rolls the greedy policy so you can *watch*
-the evolved circuit control the environment.
+environment it was trained on, and rolls its policy so you can *watch* the
+evolved circuit control the environment.
+
+By default the rollout replays the action-selection regime the genome was
+*scored* under, recovered from the genome itself (``--eval_policy match``).
+That matters for a continuous environment, where the greedy action ignores the
+policy's learned log-standard-deviation entirely: rolling a stochastically
+scored genome greedily shows a policy that never produced its fitness. Pass
+``--eval_policy greedy`` or ``--eval_policy stochastic`` to override.
 
 The environment the genome was evolved for is recorded in the genome's
 ``task_target`` (e.g. ``"cartpole"``, the friendly ``--env`` name stamped by
@@ -41,7 +48,12 @@ from loguru import logger
 
 from src.circuits.circuit import CircuitGenome
 from src.examples.reinforcement_learning import ENV_CHOICES, make_environment
-from src.trainer.reinforcement_trainer import RLEnvironment, greedy_action
+from src.trainer.reinforcement_trainer import (
+    EVAL_POLICY_CHOICES,
+    RLEnvironment,
+    select_action,
+)
+from src.trainer.rl_trainer_registry import TRAINER_REGISTRY
 from src.utils.genome_archive import (
     add_genome_source_arguments,
     check_genome_source_arguments,
@@ -139,7 +151,16 @@ def resolve_environment(
             f"auto-detected environment '{env_name}' from the genome's task_target"
         )
 
-    environment = make_environment(env_name, map_name=map_name, is_slippery=is_slippery)
+    # A genome evolved under modified rewards has to be replayed under them
+    # too, or the returns reported here describe a different task than its
+    # recorded fitness does.
+    environment = make_environment(
+        env_name,
+        env_kwargs=(getattr(genome, "hyperparameters", {}) or {}).get("env_kwargs")
+        or None,
+        map_name=map_name,
+        is_slippery=is_slippery,
+    )
 
     # The genome's encoder expects exactly this many observation features; a
     # mismatch means the wrong environment was selected.
@@ -169,8 +190,9 @@ def play_episode(
     seed: int,
     max_steps: int,
     collect_frames: bool,
+    stochastic: bool,
 ) -> tuple[float, list[np.ndarray]]:
-    """Plays one greedy episode, optionally collecting rendered frames.
+    """Plays one episode, optionally collecting rendered frames.
 
     Args:
         genome: The initialized genome policy.
@@ -180,6 +202,9 @@ def play_episode(
         max_steps: Maximum number of steps to take.
         collect_frames: If True, append ``gym_env.render()`` frames (requires
             the env to have been created with ``render_mode="rgb_array"``).
+        stochastic: If True, sample actions from the policy; otherwise take
+            the greedy action. This must match the regime the genome was
+            scored under, or the rollout shown is not the rollout evaluated.
 
     Returns:
         A tuple ``(episode_return, frames)``; ``frames`` is empty unless
@@ -194,9 +219,9 @@ def play_episode(
         if collect_frames:
             frames.append(np.asarray(gym_env.render()))
 
-        # greedy_action returns the action already in the env's native format:
+        # select_action returns the action already in the env's native format:
         # an int for discrete spaces, a clipped float array for continuous ones.
-        action = greedy_action(genome, environment, observation)
+        action = select_action(genome, environment, observation, stochastic=stochastic)
         observation, reward, terminated, truncated, _ = gym_env.step(action)
         episode_return += float(reward)
 
@@ -217,8 +242,9 @@ def visualize(
     max_steps: int,
     seed: int,
     render_mode: str,
+    stochastic: bool,
 ) -> tuple[list[float], list[np.ndarray]]:
-    """Rolls the greedy policy for several episodes, rendering each one.
+    """Rolls the policy for several episodes, rendering each one.
 
     Args:
         genome: The initialized genome policy.
@@ -228,6 +254,8 @@ def visualize(
         seed: Base seed; episode ``i`` uses ``seed + i``.
         render_mode: ``"human"`` for a live window, or ``"rgb_array"`` to
             collect frames for saving.
+        stochastic: If True, sample actions from the policy rather than taking
+            the greedy action.
 
     Returns:
         A tuple ``(returns, frames)`` where ``returns`` holds each episode's
@@ -252,6 +280,7 @@ def visualize(
             seed=seed + episode,
             max_steps=max_steps,
             collect_frames=collect_frames,
+            stochastic=stochastic,
         )
         gym_env.close()
 
@@ -284,6 +313,52 @@ def save_gif(frames: list[np.ndarray], path: str, fps: int) -> None:
     logger.info(f"saved rollout animation ({len(frames)} frames) to {path}")
 
 
+def resolve_eval_policy(genome: CircuitGenome, requested: str) -> str:
+    """Decides which action-selection regime to replay a genome under.
+
+    A rollout shown under a different regime than the genome was scored under
+    is not the rollout that produced its fitness -- for a continuous
+    environment the greedy action ignores the policy's learned
+    log-standard-deviation entirely. ``"match"`` therefore recovers the regime
+    from the genome itself.
+
+    Args:
+        genome: The loaded genome. Its ``metadata`` records the regime its
+            fitness was actually measured under; its ``hyperparameters`` record
+            what was requested (which may be ``"both"``) and the ``algo`` that
+            trained it.
+        requested: The ``--eval_policy`` value; ``"match"`` to recover the
+            genome's own regime, or an explicit ``"greedy"``/``"stochastic"``.
+
+    Returns:
+        ``"greedy"`` or ``"stochastic"``. A genome that recorded no regime (or
+        recorded ``"both"``, which scores under two) falls back to the natural
+        regime of the algorithm that trained it, and to ``"greedy"`` when that
+        is unknown too.
+    """
+
+    if requested != "match":
+        return requested
+
+    # metadata carries the regime the recorded fitness was measured under,
+    # which is exact; hyperparameters carry what was asked for, which may be
+    # "both" and so does not identify a single rollout policy.
+    metadata = getattr(genome, "metadata", {}) or {}
+    hyperparameters = getattr(genome, "hyperparameters", {}) or {}
+    recorded = metadata.get("eval_policy") or hyperparameters.get("eval_policy")
+    if recorded in ("greedy", "stochastic"):
+        return recorded
+
+    trainer_class = TRAINER_REGISTRY.get(hyperparameters.get("algo", ""))
+    if trainer_class is None:
+        logger.warning(
+            "genome records no eval_policy and no known algo; rolling out "
+            "greedily, which may not be the policy it was scored under."
+        )
+        return "greedy"
+    return trainer_class.natural_eval_policy
+
+
 def main() -> None:
     """Parses arguments, loads the genome, and visualizes it in its env.
 
@@ -305,6 +380,16 @@ def main() -> None:
         help="Environment to evaluate in (default: auto-detected from the genome).",
     )
     parser.add_argument("--episodes", type=int, default=3, help="Episodes to play.")
+    parser.add_argument(
+        "--eval_policy",
+        choices=[choice for choice in EVAL_POLICY_CHOICES if choice != "both"],
+        default="match",
+        help=(
+            "Action-selection regime to roll out under. 'match' (the default) "
+            "replays the regime the genome was scored under, read back from "
+            "the genome's own hyperparameters."
+        ),
+    )
     parser.add_argument(
         "--max_steps",
         type=int,
@@ -361,6 +446,9 @@ def main() -> None:
     seed = args.seed if args.seed is not None else random.randrange(2**31)
     logger.info(f"using seed {seed}")
 
+    eval_policy = resolve_eval_policy(genome, args.eval_policy)
+    logger.info(f"rolling out under the {eval_policy!r} policy")
+
     render_mode = "rgb_array" if args.output_file is not None else "human"
 
     try:
@@ -371,6 +459,7 @@ def main() -> None:
             max_steps=max_steps,
             seed=seed,
             render_mode=render_mode,
+            stochastic=eval_policy == "stochastic",
         )
     except Exception:
         if render_mode == "human":

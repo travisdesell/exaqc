@@ -82,11 +82,16 @@ def test_resolve_hyperparameters_falls_back_to_defaults() -> None:
     resolved = trainer.resolve_hyperparameters(genome)
 
     assert isinstance(resolved, SimpleNamespace)
-    # every default key is present as an attribute, and only those keys; the
-    # seed defaults to None, which resolves to a freshly drawn random seed
+    # every default key is present as an attribute, and only those keys; both
+    # seeds default to None, which resolves to a freshly drawn random seed --
+    # a separate one each, so evaluation never reuses a training episode
     assert RL_HYPERPARAMETER_DEFAULTS["seed"] is None
+    assert RL_HYPERPARAMETER_DEFAULTS["eval_seed"] is None
     assert isinstance(resolved.seed, int)
-    assert {**vars(resolved), "seed": None} == dict(RL_HYPERPARAMETER_DEFAULTS)
+    assert isinstance(resolved.eval_seed, int)
+    assert {**vars(resolved), "seed": None, "eval_seed": None} == dict(
+        RL_HYPERPARAMETER_DEFAULTS
+    )
     assert resolved.episodes == RL_HYPERPARAMETER_DEFAULTS["episodes"]
     assert (
         resolved.improvement_cutoff == RL_HYPERPARAMETER_DEFAULTS["improvement_cutoff"]
