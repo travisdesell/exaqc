@@ -85,8 +85,9 @@ documented there, and most are also wrapped by a script in
   `--directory` (server and static app in `src/utils/artifact_viewer/`). It has
   no wrapper script; it depends on the archive layout, the fitness keys, the
   recorded population events, the island topology an island search records in
-  `run_info`, and the insert types and `generated_by` operators its
-  insertion-rate tables count (mirroring
+  `run_info`, the speciation config a speciation search records there, the
+  indexed `island` / `species` summary columns, and the insert types and
+  `generated_by` operators its insertion-rate tables count (mirroring
   `src.analysis.analyze_genome_generation`).
 - **MCP interface:** `python3 -m src.examples.exaqc_mcp`, which serves the
   dashboard's analysis tools to an agent over stdio; the dashboard mounts the

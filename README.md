@@ -37,6 +37,7 @@ classical layers train together with ordinary backpropagation and the standard P
 - [Population strategies](#population-strategies)
   - [steady_state](#steady_state)
   - [islands](#islands)
+  - [steady_state_speciation](#steady_state_speciation)
   - [Choosing a population strategy](#choosing-a-population-strategy)
 - [Trainers](#trainers)
   - [SupervisedTrainer](#supervisedtrainer)
@@ -111,7 +112,7 @@ command-line arguments group the same way:
 | Piece | What it does | Where its arguments come from |
 |---|---|---|
 | **EXAQC** | Generates new genomes by mutation and crossover | [Search arguments](#search-command-line-arguments) |
-| **Population strategy** | Decides which genomes survive and become parents | [`steady_state`](#steady_state) / [`islands`](#islands) sub-command |
+| **Population strategy** | Decides which genomes survive and become parents | [`steady_state`](#steady_state) / [`islands`](#islands) / [`steady_state_speciation`](#steady_state_speciation) sub-command |
 | **Trainer** | Trains each genome once it is generated | [Trainers](#trainers) |
 | **Objective** | Calls the trainer for a genome and sets its `fitness` | The entry point itself |
 | **Genome archive** | Records every evaluated genome, the current best genomes and the search history | [Run outputs](#run-outputs-genomearchive) |
@@ -244,6 +245,7 @@ arguments:
 ```
 python3 -m src.examples.classification <options...> steady_state --max_population_size 30
 python3 -m src.examples.classification <options...> islands --n_islands 10 --max_island_size 10 --topology ring
+python3 -m src.examples.classification <options...> steady_state_speciation --max_population_size 30 --species_threshold 0.6
 ```
 
 ### [`steady_state`](./src/evolution/steady_state_population.py)
@@ -293,6 +295,28 @@ slowly); a denser one converges faster. The available values are:
 Multi-word values take their arguments as separate tokens — for example
 `--topology 2d_mesh 3 4` arranges 12 islands in a 3×4 grid.
 
+### [`steady_state_speciation`](./src/evolution/steady_state_speciation.py)
+
+A single population with global capacity, partitioned into **species** by
+structural distance on gate innovation IDs (the same idea as NEAT-style
+speciation). A new genome joins the first compatible species or starts its own;
+parents are drawn round-robin within a species, with a small chance of
+inter-species crossover. Capacity is enforced globally (worst non-singleton
+members are preferred for eviction). Species membership is stored on each
+genome as `metadata["species_id"]`; the search archive indexes that as the
+summary `species` column (alongside `island` for island searches) so the
+dashboard and MCP can filter and color by species the same way they do for
+islands.
+
+| Argument | Default | Description |
+|---|---|---|
+| `--max_population_size` | `30` | Genomes retained across all species |
+| `--species_threshold` | `0.6` | Join a species iff structural distance is at most this |
+| `--neat_c1` | `1.0` | Coefficient on excess genes in the structural distance |
+| `--neat_c2` | `1.0` | Coefficient on disjoint genes in the structural distance |
+| `--neat_c3` | `0.0` | Angle-term coefficient; must stay `0.0` (matching-gene angle term reserved for later investigation) |
+| `--inter_species_parent_rate` | `0.1` | Fraction of multi-parent requests that mix two species |
+
 ### Choosing a population strategy
 
 - **`steady_state` is the simpler default** and is what the published
@@ -301,8 +325,13 @@ Multi-word values take their arguments as separate tokens — for example
   near-identical fitness and structure. `--islands_to_extinct 0` disables
   extinction entirely, giving fully independent parallel searches; raising it
   increases how aggressively good material is shared.
-- **Total capacity is `n_islands × max_island_size`.** Keep that in the same
-  range as a steady-state population you would otherwise use.
+- **`steady_state_speciation` protects structural niches** inside one
+  population: dissimilar circuits can survive together even when a single
+  fitness ranking would wipe them. Raise `--species_threshold` to form fewer,
+  broader species; lower it for more, tighter niches. Keep
+  `--max_population_size` in the same range as a steady-state run.
+- **Total capacity for islands is `n_islands × max_island_size`.** Keep that in
+  the same range as a steady-state population you would otherwise use.
 - **`--topology` trades diversity against spread.** A sparse topology like
   `ring` keeps islands distinct and resists premature convergence, while a dense
   `fully_connected` topology spreads strong genomes fastest; `2d_mesh`, `tree`,
@@ -591,7 +620,7 @@ However many genomes a run evaluates, its directory holds the same files:
 
 | File | Contents |
 |---|---|
-| `genomes.sqlar` | Every evaluated genome's JSON, plus a summary and parent links for each (for sorting and tracing ancestry), how the population changed after every insertion, and what produced the run: its command line, the arguments it was started with (so it can be [restarted](#restarting-a-run)), each restart since, its git commit, host and library versions, and for an island search how its islands are connected |
+| `genomes.sqlar` | Every evaluated genome's JSON, plus a summary and parent links for each (for sorting and tracing ancestry), how the population changed after every insertion, and what produced the run: its command line, the arguments it was started with (so it can be [restarted](#restarting-a-run)), each restart since, its git commit, host and library versions, for an island search how its islands are connected, and for a speciation search its species threshold and related hyperparameters |
 | `best_fitness.json`, `best_fitness.png`, `best_fitness_training.png` | The best genome by the population's ranking (lowest `fitness["loss"]`): its JSON, architecture diagram and training plot, overwritten whenever it improves |
 | `best_target_metric.json`, `best_target_metric.png`, `best_target_metric_training.png` | The same for the highest `fitness["target_metric"]` |
 | `run.log` | The run's log, written only when `--save_run_log` is passed, at `--logging_level` (a search logs a line per gate below its default level, so a debug-level log of a long run grows to many gigabytes) |
@@ -647,7 +676,9 @@ discarded genome's row gives its `discard_reason`: `worse_than_population`,
 the rest -- `timing` (when it was generated, when its evaluation started and
 finished, and when it was inserted), `evaluated_by` (rank, host and process id),
 for island searches the `target_island_status` it was generated under (a
-`repopulating` island draws its parents from its best neighbor), and the genome a discarded
+`repopulating` island draws its parents from its best neighbor), for speciation
+searches the `species_id` it was assigned (also indexed as the summary
+`species` column), and the genome a discarded
 genome `lost_to`. [`exaqc_mcp`](#exaqc_mcp) exposes the
 same queries to an agent.
 
@@ -1007,16 +1038,20 @@ Then open `http://127.0.0.1:8000/` in a browser. The page has:
   which would bury the handful of metrics anyone charts, so the pickers offer the
   shorter list until *all metrics* asks for the rest — nothing is hidden from a
   query, only from the dropdown. Genomes are colored by
-  insert type, operator family or island, with a line joining the genomes that
-  improved the best value and every parent-to-child link in the run (links fade
-  as they crowd the chart, so runs of tens of thousands of genomes stay legible).
+  insert type, operator family, island or species, with a line joining the
+  genomes that improved the best value and every parent-to-child link in the run
+  (links fade as they crowd the chart, so runs of tens of thousands of genomes
+  stay legible).
   Coloring by island gives each island its own color only while there are no
   more than seven; beyond that the chart colors around one *focus* island
   instead (a run with fewer islands can choose to as well). The focus follows
   the selected genome's island (the best genome's until one is selected) unless
   an island is picked from the *focus* menu. Its genomes get one color, the
   islands it draws parents from (its neighbors in `--topology`) a second, and
-  every other island is gray. The
+  every other island is gray. Coloring by species works the same way for a
+  speciation run (without neighbor highlighting, since species are not a fixed
+  graph): each species its own color while there are few enough, otherwise a
+  focus species versus the rest. The
   **Progress** view emphasizes the best-so-far line and the **Genealogy** view the
   links; either can highlight a genome's full lineage or hide genomes that had no
   children. On the right, a sortable, filterable table of the genomes that loads
@@ -1052,7 +1087,9 @@ Then open `http://127.0.0.1:8000/` in a browser. The page has:
   other. Rings mark the chart's focus island and its neighbors, and clicking an
   island colors the chart around it. While a genome is selected (and *highlight
   selected lineage* is on), arrows show where its ancestry crossed between
-  islands.
+  islands. A speciation search has a **Species** section instead: each species'
+  genome count and best charted metric, with the run's speciation hyperparameters
+  and a click-to-focus on the chart.
 - **Insertion rates**: for one run, one group (summed over its runs, then each
   run on its own) or every group side by side, the share of each operator's
   genomes that became a global best or a local best, were inserted or were

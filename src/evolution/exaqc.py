@@ -860,6 +860,7 @@ class EXAQC:
             genome,
             insertion=self.inserted_genomes,
             island=genome.metadata.get("island_id"),
+            species=genome.metadata.get("species_id"),
         )
 
         best = self.population.get_best_genome()

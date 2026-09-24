@@ -992,9 +992,10 @@ class ArtifactViewer:
             the values they can be filtered by, the ``unarchived_parents``
             (parents of stored genomes that are not stored themselves, i.e. the
             seed genome), the ``island_topology`` an island search recorded
-            (``None`` otherwise), and whether it recorded a search history. An archive
-            that cannot be read fully is reported under ``error``, with those
-            fields empty.
+            (``None`` otherwise), the ``speciation`` config a speciation search
+            recorded (``None`` otherwise), and whether it recorded a search
+            history. An archive that cannot be read fully is reported under
+            ``error``, with those fields empty.
 
         Raises:
             KeyError: If there is no such run.
@@ -1010,6 +1011,7 @@ class ArtifactViewer:
                 "filter_options": {},
                 "unarchived_parents": [],
                 "island_topology": None,
+                "speciation": None,
             }
         )
         try:
@@ -1019,7 +1021,9 @@ class ArtifactViewer:
                 payload["primary_metrics"] = reader.primary_series_metrics()
                 payload["filter_options"] = reader.filter_options()
                 payload["unarchived_parents"] = reader.unarchived_parents()
-                payload["island_topology"] = reader.run_info().get("island_topology")
+                info = reader.run_info()
+                payload["island_topology"] = info.get("island_topology")
+                payload["speciation"] = info.get("speciation")
         except sqlite3.DatabaseError as error:
             # An archive the viewer cannot read in full still lists and browses:
             # the run page falls back to what its summary holds rather than
@@ -1059,11 +1063,11 @@ class ArtifactViewer:
             index: The run's index.
             query: ``sort`` (a fitness key or summary column, default ``loss``),
                 ``desc`` (``1`` to sort descending), ``offset``, ``limit``, the
-                filters ``insert_type``, ``generated_by``, ``crossover_type`` and
-                ``island``, and ``max_genome``: list only genomes numbered at
-                most this. A client paging through a live run passes the first
-                page's ``max_genome_number`` back, so genomes saved in between
-                don't shift later pages (repeating or skipping rows).
+                filters ``insert_type``, ``generated_by``, ``crossover_type``,
+                ``island`` and ``species``, and ``max_genome``: list only genomes
+                numbered at most this. A client paging through a live run passes
+                the first page's ``max_genome_number`` back, so genomes saved in
+                between don't shift later pages (repeating or skipping rows).
 
         Returns:
             ``total`` (matching genomes), ``offset``, ``limit``,
@@ -1091,6 +1095,11 @@ class ArtifactViewer:
             "island": (
                 query_int(query, "island", -1, minimum=0)
                 if query.get("island")
+                else None
+            ),
+            "species": (
+                query_int(query, "species", -1, minimum=0)
+                if query.get("species")
                 else None
             ),
         }
@@ -1122,7 +1131,7 @@ class ArtifactViewer:
         Returns:
             Parallel arrays: ``genome_number``, ``insertion``, ``y``,
             ``insert_type``, ``generated_by``, ``operator`` (the first generating
-            operator), ``crossover_type`` and ``island``.
+            operator), ``crossover_type``, ``island`` and ``species``.
 
         Raises:
             KeyError: If there is no such run.
@@ -1235,7 +1244,8 @@ class ArtifactViewer:
         Returns:
             ``summary``, the full serialized ``genome``, its ``children``, the
             ``parent_islands`` (each parent's island, in ``summary["parents"]``
-            order) and ready-to-run ``commands``.
+            order), ``parent_species`` (each parent's species, same order) and
+            ready-to-run ``commands``.
 
         Raises:
             KeyError: If there is no such run or genome.
@@ -1252,6 +1262,7 @@ class ArtifactViewer:
                 # beside the parents rather than in the summary, which every
                 # genome listing shares
                 "parent_islands": reader.islands_of(summary["parents"]),
+                "parent_species": reader.species_of(summary["parents"]),
                 "commands": genome_commands(run, genome),
             }
 

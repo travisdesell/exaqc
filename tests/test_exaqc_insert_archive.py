@@ -37,6 +37,7 @@ from src.evolution.objective import evaluate_genome  # noqa: E402
 from src.evolution.population_strategy import PopulationStrategy  # noqa: E402
 from src.evolution.steady_state_islands import SteadyStateIslands  # noqa: E402
 from src.evolution.steady_state_population import SteadyStatePopulation  # noqa: E402
+from src.evolution.steady_state_speciation import SteadyStateSpeciation  # noqa: E402
 from src.utils.genome_archive import ARCHIVE_FILENAME, GenomeArchive  # noqa: E402
 
 
@@ -206,6 +207,28 @@ def test_island_topology_is_recorded_when_the_search_starts() -> None:
     }
 
 
+def test_speciation_config_is_recorded_when_the_search_starts() -> None:
+    """A speciation search records its fixed hyperparameters in run_info."""
+
+    archive = MagicMock()
+    population = SteadyStateSpeciation(
+        max_population_size=12,
+        compare=compare,
+        species_threshold=0.4,
+        inter_species_parent_rate=0.2,
+    )
+    build_search(population, archive)
+
+    info = archive.set_run_info.call_args.kwargs
+    assert info["speciation"] == {
+        "max_population_size": 12,
+        "species_threshold": 0.4,
+        "neat_c1": 1.0,
+        "neat_c2": 1.0,
+        "inter_species_parent_rate": 0.2,
+    }
+
+
 def test_mutations_are_drawn_from_the_weighted_list() -> None:
     """mutate draws from the weights expanded in their fixed order.
 
@@ -257,8 +280,8 @@ def test_inserted_genomes_are_archived_in_insertion_order() -> None:
         search.insert_genome(genome)
 
     assert archive.add_genome.call_args_list == [
-        call(genomes[0], insertion=1, island=None),
-        call(genomes[1], insertion=2, island=None),
+        call(genomes[0], insertion=1, island=None, species=None),
+        call(genomes[1], insertion=2, island=None, species=None),
     ]
     assert [
         recorded.kwargs["step"] for recorded in archive.record_population.call_args_list
