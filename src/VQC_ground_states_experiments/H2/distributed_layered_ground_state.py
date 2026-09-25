@@ -212,7 +212,6 @@ def main():
     else:
         raise ValueError(f"Unknown problem: {args.problem}")
 
-    comm.Barrier()
     start_time = MPI.Wtime()
 
     results = run_distributed_layer_sweep(
@@ -226,6 +225,7 @@ def main():
         comm=comm,
     )
 
+    comm.Barrier()
     end_time = MPI.Wtime()
 
     elapsed_time = end_time - start_time
