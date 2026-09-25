@@ -4,7 +4,7 @@
 #SBATCH --account=examm-rnn
 #SBATCH --partition=tigris
 
-#SBATCH --array=1-3
+#SBATCH --array=1-10
 
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=2G
@@ -40,7 +40,7 @@ echo "============================================"
 
 python -u slurm_layered_ground_state.py \
     --layers "${SLURM_ARRAY_TASK_ID}" \
-    --steps 10 \
+    --steps 300 \
     --stepsize 0.1 \
     --seed 0 \
     --output "results/layer_${SLURM_ARRAY_TASK_ID}.csv"
