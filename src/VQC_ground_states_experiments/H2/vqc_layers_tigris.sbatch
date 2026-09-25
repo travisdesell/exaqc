@@ -1,7 +1,7 @@
 #!/bin/bash -l
 
 #SBATCH --job-name=vqc-layers
-#SBATCH --account=rc-default
+#SBATCH --account=examm-rnn
 #SBATCH --partition=tigris
 
 #SBATCH --array=1-3
