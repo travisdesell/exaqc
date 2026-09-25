@@ -62,15 +62,48 @@ def optimize_layer_count(
 
 
 def load_h2_problem():
-    dataset = qml.data.load(
-        "qchem",
-        molname="H2",
-        bondlength=0.742,
-        basis="STO-3G",
-    )[0]
+    coeffs = [
+        -0.09963387941370971,
+        0.17110545123720233,
+        0.17110545123720225,
+        0.16859349595532533,
+        0.04533062254573469,
+        -0.04533062254573469,
+        -0.04533062254573469,
+        0.04533062254573469,
+        -0.22250914236600539,
+        0.12051027989546245,
+        -0.22250914236600539,
+        0.16584090244119712,
+        0.16584090244119712,
+        0.12051027989546245,
+        0.1743207725924201,
+    ]
 
-    hamiltonian = dataset.hamiltonian
-    initial_state = np.array([1, 1, 0, 0], dtype=int)
+    ops = [
+        qml.Identity(0),
+        qml.PauliZ(0),
+        qml.PauliZ(1),
+        qml.PauliZ(0) @ qml.PauliZ(1),
+        qml.PauliY(0) @ qml.PauliX(1) @ qml.PauliX(2) @ qml.PauliY(3),
+        qml.PauliY(0) @ qml.PauliY(1) @ qml.PauliX(2) @ qml.PauliX(3),
+        qml.PauliX(0) @ qml.PauliX(1) @ qml.PauliY(2) @ qml.PauliY(3),
+        qml.PauliX(0) @ qml.PauliY(1) @ qml.PauliY(2) @ qml.PauliX(3),
+        qml.PauliZ(2),
+        qml.PauliZ(0) @ qml.PauliZ(2),
+        qml.PauliZ(3),
+        qml.PauliZ(0) @ qml.PauliZ(3),
+        qml.PauliZ(1) @ qml.PauliZ(2),
+        qml.PauliZ(1) @ qml.PauliZ(3),
+        qml.PauliZ(2) @ qml.PauliZ(3),
+    ]
+
+    hamiltonian = qml.Hamiltonian(coeffs, ops)
+
+    initial_state = np.array(
+        [1, 1, 0, 0],
+        dtype=int,
+    )
 
     return hamiltonian, 4, initial_state
 
