@@ -1,31 +1,23 @@
-"""Evolve quantum genomes for reinforcement learning with EXAQC.
+"""Train a fixed classical MLP policy as the baseline for the RL experiments.
 
-This is the reinforcement-learning counterpart to
-:mod:`src.examples.classification`, refactored to reuse the same modular
-building blocks:
+This is the classical control for :mod:`src.examples.reinforcement_learning`.
+Instead of evolving quantum circuits it trains a single
+:class:`ClassicalModel` (a multi-layer perceptron, by default two 64-unit
+``tanh`` layers) with the same RL trainers from
+:mod:`src.trainer.reinforcement_trainer`, on the same environments from
+:mod:`src.objectives.reinforcement_learning_objective`. Its trainer arguments
+come from the trainer classes' own parsers, so they carry the same flags and
+defaults as the quantum search.
 
-* the genome's ``initialize_model`` / ``forward`` hybrid-model interface,
-* the existing ``LinearEncoder`` / ``LinearDecoder`` (and identity/clipped
-  variants) for embedding observations into the circuit and mapping circuit
-  outputs to per-action values,
-* an :class:`~src.evolution.objective.Objective` that wraps a *trainer* and
-  sets genome fitness,
-* the same ``master_worker`` evolutionary driver.
+There is no evolutionary search and no MPI: one model is trained in a single
+process, its best-evaluated weights are kept, and the result can be shown in a
+live window (``--live``) and/or saved as a GIF (``--output_file``).
 
-The RL algorithms live in :mod:`src.trainer.reinforcement_trainer` as
-pluggable trainer classes (REINFORCE, actor-critic, PPO, Q-learning), exactly
-mirroring how ``SupervisedTrainer`` is a pluggable component of the
-classification objective. The environment is described by a pluggable
-:class:`~src.trainer.reinforcement_trainer.RLEnvironment`, which the
-:class:`ReinforcementLearningObjective` receives together with a trainer.
+Example::
 
-Example (single-process smoke run is driven programmatically via the
-objective; the ``__main__`` block wires everything into ``master_worker`` for
-an MPI evolutionary search)::
-
-    mpirun -n 4 python -m src.examples.reinforcement_learning \\
-        --env cartpole --algo ppo -ms "uniform 1 3" -ps "uniform 2 3" \\
-        --batch_placeholder steady_state
+    python3 -m src.examples.reinforcement_learning_fixed --env cartpole \\
+        --algo ppo --out_dir ./artifacts/cartpole_classical \\
+        --output_file ./artifacts/cartpole_classical/rollout.gif
 """
 
 from __future__ import annotations
@@ -43,10 +35,16 @@ from typing import Any
 from loguru import logger
 from torch import Tensor
 
-from src.trainer.reinforcement_trainer import EVAL_POLICY_CHOICES, RLEnvironment
+from src.trainer.ppo_trainer import PPOTrainer
+from src.trainer.q_learning_trainer import QLearningTrainer
+from src.trainer.reinforce_trainer import ReinforceTrainer
+from src.trainer.reinforcement_trainer import (
+    ReinforcementLearningTrainer,
+    RLEnvironment,
+)
 from src.trainer.rl_trainer_registry import TRAINER_REGISTRY
 
-from src.examples.reinforcement_learning import (
+from src.objectives.reinforcement_learning_objective import (
     add_environment_knob_arguments,
     build_trainer,
     ENV_CHOICES,
@@ -178,6 +176,28 @@ class ClassicalModel(torch.nn.Module):
                 for name, tensor in self.state_dict().items()
             }
 
+    def count_trainable_parameters(self) -> int:
+        """Counts the parameters training updates.
+
+        The RL trainers call this (as they do on a ``CircuitGenome``) to record
+        the count and to skip training when there is nothing to optimize.
+
+        Returns:
+            The number of parameters that require gradients.
+        """
+
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+    def clear_quantum_dropout(self) -> None:
+        """Does nothing: a classical model has no quantum dropout to clear.
+
+        The RL trainers clear a genome's quantum dropout around evaluation, so
+        the model needs this method to be trained by them.
+
+        Returns:
+            None.
+        """
+
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         """
         Applies all the layers of the model to the inputs and returns the
@@ -220,26 +240,30 @@ def run_visualization(
     episodes: int,
     max_steps: int,
     seed: int,
+    stochastic: bool,
     output_file: str | None = None,
     fps: int = 30,
 ) -> list[float]:
-    """Rolls the greedy policy for several episodes and logs best-episode stats.
+    """Rolls the policy for several episodes and logs best-episode stats.
 
     Reuses ``visualize`` / ``save_gif`` from :mod:`src.examples.visualize_rl`
-    to drive the model greedily in the requested render mode, then logs the
-    rollout's best-episode return along with the mean and standard deviation.
-    When ``render_mode`` is ``"rgb_array"`` and ``output_file`` is given, the
+    to drive the model in the requested render mode, then logs the rollout's
+    best-episode return along with the mean and standard deviation. When
+    ``render_mode`` is ``"rgb_array"`` and ``output_file`` is given, the
     collected frames are written to that GIF path.
 
     Args:
         model: The trained model to visualize (its best weights); only its
-            ``forward`` is used, via ``greedy_action``.
+            ``forward`` is used, via ``select_action``.
         environment: The environment to roll episodes in.
         render_mode: ``"human"`` for a live window, or ``"rgb_array"`` to
             collect frames for a GIF.
         episodes: Number of episodes to roll.
         max_steps: Maximum number of steps per episode.
         seed: Base seed; episode ``i`` uses ``seed + i``.
+        stochastic: If True, sample actions from the policy; otherwise take
+            the greedy action. Should match the regime the model was scored
+            under.
         output_file: Destination GIF path, used only when ``render_mode`` is
             ``"rgb_array"``; ignored otherwise.
         fps: Frames per second for the saved GIF.
@@ -256,6 +280,7 @@ def run_visualization(
         max_steps=max_steps,
         seed=seed,
         render_mode=render_mode,
+        stochastic=stochastic,
     )
 
     if returns:
@@ -278,16 +303,29 @@ def run_visualization(
 
 
 # ---------------------------------------------------------------------
-# Main
+# Command-line interface
 # ---------------------------------------------------------------------
 
-if __name__ == "__main__":
-    p = argparse.ArgumentParser()
+
+def build_parser() -> argparse.ArgumentParser:
+    """Builds the command-line parser for the classical RL baseline.
+
+    Returns:
+        The configured :class:`argparse.ArgumentParser`.
+    """
+
+    p = argparse.ArgumentParser(
+        description=(
+            "Train a fixed classical MLP policy with the EXAQC RL trainers, as "
+            "the classical control for the reinforcement-learning experiments."
+        )
+    )
 
     p.add_argument(
         "--env",
         choices=list(ENV_CHOICES),
         required=True,
+        help="Gymnasium environment to train the classical policy on.",
     )
 
     p.add_argument(
@@ -295,6 +333,7 @@ if __name__ == "__main__":
         choices=sorted(TRAINER_REGISTRY.keys()),
         required=True,
         default="reinforce",
+        help="Reinforcement-learning algorithm used to train the model.",
     )
 
     p.add_argument(
@@ -304,54 +343,20 @@ if __name__ == "__main__":
         help="Output directory to store results from runs",
     )
 
-    # RL hyperparameters (become genome.hyperparameters, mutable by the search)
-    p.add_argument("--episodes", type=int, default=60)
-    p.add_argument("--eval_episodes", type=int, default=10)
-    p.add_argument(
-        "--eval_policy",
-        choices=EVAL_POLICY_CHOICES,
-        default="match",
-        help=(
-            "Action-selection regime the classical baseline is evaluated "
-            "under; 'match' uses the regime --algo optimizes."
-        ),
-    )
-    p.add_argument("--max_steps", type=int, default=500)
-    p.add_argument("--gamma", type=float, default=0.99)
-    p.add_argument("--learning_rate", "-lr", type=float, default=1e-2)
-    p.add_argument("--entropy_coef", type=float, default=0.0)
-    p.add_argument("--baseline", choices=["mean", "none"], default="mean")
-    p.add_argument("--value_coef", type=float, default=0.5)
-    p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--log_every", type=int, default=10)
-    p.add_argument(
-        "--ema_alpha",
-        type=float,
-        default=0.05,
-        help="Smoothing factor for the exponential moving average of episode "
-        "returns reported as the training return mean.",
-    )
+    # The training-loop hyperparameters are owned by the RL trainer classes, as
+    # in src.examples.reinforcement_learning, so the classical baseline accepts
+    # exactly the flags (and defaults) the quantum search does: the base trainer
+    # owns the knobs common to every algorithm, and each algorithm's extras come
+    # from its own class.
+    ReinforcementLearningTrainer.initialize_parser(p)
+    ReinforceTrainer.initialize_parser(p)
+    PPOTrainer.initialize_parser(p)
+    QLearningTrainer.initialize_parser(p)
 
-    # PPO extras
-    p.add_argument("--rollout_steps", type=int, default=512)
-    p.add_argument(
-        "--ppo_passes",
-        type=int,
-        default=4,
-        help="Passes over each PPO rollout (PPO literature calls these 'epochs').",
-    )
-    p.add_argument("--ppo_minibatch", type=int, default=128)
-    p.add_argument("--ppo_clip", type=float, default=0.2)
-    p.add_argument("--gae_lambda", type=float, default=0.95)
-
-    # Value-based extras
-    p.add_argument("--epsilon", type=float, default=0.2)
-    p.add_argument("--epsilon_min", type=float, default=0.05)
-    p.add_argument("--epsilon_decay", type=float, default=0.995)
-
-    # FrozenLake options
+    # MuJoCo reward / termination / reset knobs
     add_environment_knob_arguments(p)
 
+    # FrozenLake options
     p.add_argument("--map_name", choices=["4x4", "8x8"], default="4x4")
     p.add_argument("--is_slippery", action="store_true")
 
@@ -380,7 +385,7 @@ if __name__ == "__main__":
         action="store_true",
         help="Show a live human-rendered window of the trained model. "
         "Independent of --output_file (you can do both); if neither is given, "
-        "a live window is shown by default.",
+        "the trained model is not visualized.",
     )
     p.add_argument(
         "--output_file",
@@ -390,6 +395,24 @@ if __name__ == "__main__":
     )
     p.add_argument("--fps", type=int, default=30, help="GIF frames per second.")
 
+    return p
+
+
+# ---------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------
+
+
+def main() -> None:
+    """Trains the classical baseline on one environment and visualizes it.
+
+    Returns:
+        None. Writes ``run.log`` into ``--out_dir`` and, when ``--output_file``
+        is given, a GIF of the trained policy; with ``--live`` it also shows
+        the policy in a window.
+    """
+
+    p = build_parser()
     args = p.parse_args()
 
     logger.remove()
@@ -468,6 +491,7 @@ if __name__ == "__main__":
         "env_kwargs": env_kwargs,
         "log_every": args.log_every,
         "ema_alpha": args.ema_alpha,
+        "improvement_cutoff": args.improvement_cutoff,
     }
 
     classical_model = ClassicalModel(
@@ -497,8 +521,8 @@ if __name__ == "__main__":
     # Visualize the trained (best-weights) model
     # -----------------------------------------------------------------
     # --live shows a live window; --output_file saves a GIF. They are
-    # independent (you can do both); when neither is given we default to a live
-    # window so there is always a visualization.
+    # independent (you can do both); when neither is given nothing is
+    # visualized.
     if environment.deterministic and args.visualize_episodes > 1:
         logger.warning(
             f"environment {environment.env_id} is deterministic, so the greedy "
@@ -513,9 +537,17 @@ if __name__ == "__main__":
     )
     save_gif_requested = args.output_file is not None
     show_live = args.live
+
+    # roll out the policy the model was scored under; "both" scores under two
+    # regimes, so it falls back to the one the algorithm optimizes
+    visualize_policy = (
+        resolved_eval_policy
+        if resolved_eval_policy in ("greedy", "stochastic")
+        else trainer.natural_eval_policy
+    )
     logger.info(
-        f"visualizing best model (seed={visualize_seed}, live={show_live}, "
-        f"gif={save_gif_requested})"
+        f"visualizing best model (seed={visualize_seed}, policy={visualize_policy}, "
+        f"live={show_live}, gif={save_gif_requested})"
     )
 
     # Save the GIF first (headless, always works) so a live-render failure on a
@@ -528,6 +560,7 @@ if __name__ == "__main__":
             episodes=args.visualize_episodes,
             max_steps=args.max_steps,
             seed=visualize_seed,
+            stochastic=visualize_policy == "stochastic",
             output_file=args.output_file,
             fps=args.fps,
         )
@@ -541,6 +574,7 @@ if __name__ == "__main__":
                 episodes=args.visualize_episodes,
                 max_steps=args.max_steps,
                 seed=visualize_seed,
+                stochastic=visualize_policy == "stochastic",
             )
         except Exception:
             logger.error(
@@ -548,3 +582,7 @@ if __name__ == "__main__":
                 "--output_file PATH to save a GIF instead (and omit --live)."
             )
             raise
+
+
+if __name__ == "__main__":
+    main()

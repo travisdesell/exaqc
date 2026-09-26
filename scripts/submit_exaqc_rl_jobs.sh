@@ -52,8 +52,8 @@ N_ISLANDS=${N_ISLANDS:-20}
 #: Genomes per island.
 MAX_ISLAND_SIZE=${MAX_ISLAND_SIZE:-5}
 
-#: The environments src.examples.reinforcement_learning accepts, from its
-#: ENV_IDS mapping. Kept space-delimited for an exact-token match below, so
+#: The environments src.examples.reinforcement_learning accepts, from the
+#: ENV_IDS mapping in src.objectives.reinforcement_learning_objective. Kept space-delimited for an exact-token match below, so
 #: `mountaincar` does not match `mountaincar_continuous`.
 ENVIRONMENTS="cartpole acrobot mountaincar mountaincar_continuous frozenlake pendulum hopper walker2d halfcheetah ant humanoid"
 

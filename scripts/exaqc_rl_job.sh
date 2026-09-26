@@ -34,7 +34,7 @@ ARCHIVE_DIR=/home/tjdvse/genome_archives
 
 #: The environments whose reward carries an "alive" bonus, and so accept
 #: --healthy_reward. Mirrors what
-#: src.examples.reinforcement_learning.supported_env_knobs() reads off each
+#: src.objectives.reinforcement_learning_objective.supported_env_knobs() reads off each
 #: Gymnasium environment, and is checked against it by
 #: tests/test_exaqc_rl_job_script.py so the two cannot drift apart. Note that
 #: HalfCheetah is MuJoCo locomotion but cannot terminate, so it has no healthy
@@ -82,7 +82,7 @@ OUT_DIR="${ARCHIVE_DIR}/${RUN_NAME}"
 # Asking for it on an environment that has no alive bonus is an error rather
 # than something to quietly drop: the run would otherwise be tagged as one
 # reward setting while having been trained under another. This mirrors
-# src.examples.reinforcement_learning.environment_knob_kwargs(), which raises
+# src.objectives.reinforcement_learning_objective.environment_knob_kwargs(), which raises
 # instead of ignoring -- but catching it here costs an error message rather
 # than a scheduled job that dies on startup.
 HEALTHY_REWARD_ARGUMENTS=()

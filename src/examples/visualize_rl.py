@@ -47,7 +47,10 @@ import gymnasium as gym
 from loguru import logger
 
 from src.circuits.circuit import CircuitGenome
-from src.examples.reinforcement_learning import ENV_CHOICES, make_environment
+from src.objectives.reinforcement_learning_objective import (
+    ENV_CHOICES,
+    make_environment,
+)
 from src.trainer.reinforcement_trainer import (
     EVAL_POLICY_CHOICES,
     RLEnvironment,

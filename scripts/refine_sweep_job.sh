@@ -64,7 +64,18 @@ fi
 # one CPU per task: keep PyTorch and the numeric libraries from oversubscribing it
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 
+# refine_genome imports the search entry points, which import mpi4py, and
+# mpi4py calls MPI_Init on import. Inside a Slurm job that initialization tries
+# to reach Slurm's PMI and aborts. refine_genome never uses MPI, so tell mpi4py
+# (4.0 or later) not to initialize it at all.
+export MPI4PY_RC_INITIALIZE=0
+
+# In case the cluster's mpi4py predates that variable, also set up MPI the way
+# scripts/exaqc_rl_job.sh does, which is known to initialize under srun.
+export PMIX_MCA_psec="^munge"
+spack load openmpi /ttqroyz
+
 source /home/tjdvse/envs/exaqc/bin/activate
 
 echo "task $TASK_ID: $RUN_NAME genome $GENOME_NUMBER ($TIER), replicate $REPLICATE, arm $ARM"
-"${COMMAND[@]}"
+srun "${COMMAND[@]}"

@@ -3,107 +3,31 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from typing import Any
 
 import json
 from pathlib import Path
 
 import torch
 from loguru import logger
-from torch.utils.data import DataLoader
 
 from src.circuits.circuit import CircuitGenome
 from src.circuits.decoder import initialize_decoder
 from src.circuits.encoder import initialize_encoder
 from src.circuits.gate_specifications import GateSpecifications
-from src.datasets.classification_loaders import (
-    CLASSIFICATION_DATASETS,
-    IMAGE_DATASETS,
-    get_image_dataloaders,
-    get_uci_dataloaders,
-)
+from src.datasets.classification_loaders import CLASSIFICATION_DATASETS
 from src.evolution.exaqc import EXAQC
 from src.evolution.master_worker import run_evolution
-from src.evolution.objective import Objective
 from src.evolution.population_strategy import PopulationStrategy
+from src.objectives.classification_objective import (
+    ClassificationObjective,
+    compare,
+    load_data,
+)
 from src.utils import restart
 from src.metrics.mean_class_accuracy import MeanClassAccuracy
 from src.metrics.metric import Metric
 from src.trainer.supervised_trainer import SupervisedTrainer
 from src.utils.genome_archive import GenomeArchive
-
-
-def compare(
-    genome1: CircuitGenome,
-    genome2: CircuitGenome,
-) -> int:
-    """Compares genomes using the minimized loss objective.
-
-    Args:
-        genome1: First genome.
-        genome2: Second genome.
-
-    Returns:
-        Negative when ``genome1`` is better, positive when ``genome2`` is
-        better, and zero when they are equal.
-    """
-    return genome1.fitness["loss"] - genome2.fitness["loss"]
-
-
-class ClassificationObjective(Objective):
-    """Classification objective backed by :class:`SupervisedTrainer`."""
-
-    def __init__(
-        self,
-        training_dataloader: DataLoader,
-        validation_dataloader: DataLoader,
-        training_loss_function: Any,
-        validation_loss_function: Any,
-        metrics: dict[str, Metric],
-        device: str | None = None,
-    ) -> None:
-        """Initializes the classification objective.
-
-        Quantum dropout is not configured here: it is carried per genome via
-        the ``quantum_dropout`` hyperparameter and read by the trainer at train
-        time, so the evolutionary search can carry and mutate it per genome.
-
-        Args:
-            training_dataloader: Batched training loader.
-            validation_dataloader: Batched validation loader.
-            training_loss_function: Training loss function.
-            validation_loss_function: Validation loss function.
-            metrics: Evaluation metrics.
-            device: PyTorch device to train on, or ``None`` to auto-select.
-        """
-        self.trainer = SupervisedTrainer(
-            training_dataloader=training_dataloader,
-            validation_dataloader=validation_dataloader,
-            training_loss_function=training_loss_function,
-            validation_loss_function=validation_loss_function,
-            metrics=metrics,
-            device=device,
-        )
-
-    def __call__(self, genome: CircuitGenome) -> None:
-        """Trains a genome and assigns classification fitness.
-
-        Args:
-            genome: Genome to train and evaluate.
-        """
-        self.trainer.train(genome)
-
-        training = genome.metadata["best_training_metrics"]
-        validation = genome.metadata["best_validation_metrics"]
-
-        genome.fitness = {
-            "loss": (float(training["loss"]) + float(validation["loss"])) / 2.0,
-            "target_metric": (
-                float(training["mean_class_accuracy"]["mean"])
-                + float(validation["mean_class_accuracy"]["mean"])
-            )
-            / 2.0,
-        }
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -268,42 +192,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     return parser
-
-
-def load_data(
-    args: argparse.Namespace,
-) -> tuple[DataLoader, DataLoader]:
-    """Loads tabular or image dataloaders.
-
-    Args:
-        args: Parsed command-line arguments.
-
-    Returns:
-        Training and validation dataloaders.
-    """
-    if args.dataset in IMAGE_DATASETS:
-        training_loader, validation_loader = get_image_dataloaders(
-            args.dataset,
-            data_dir=args.data_dir,
-            batch_size=args.batch_size,
-            validation_batch_size=args.validation_batch_size,
-            validation_fraction=args.validation_fraction,
-            training_samples=args.training_samples,
-            validation_samples=args.validation_samples,
-            seed=args.seed,
-            download=args.download_dataset,
-            num_workers=args.num_workers,
-            pin_memory=args.pin_memory,
-        )
-        return training_loader, validation_loader
-
-    training_loader, validation_loader = get_uci_dataloaders(
-        args.dataset,
-        normalize=args.normalization,
-        batch_size=args.batch_size,
-        seed=args.seed,
-    )
-    return training_loader, validation_loader
 
 
 def load_encoder_config(

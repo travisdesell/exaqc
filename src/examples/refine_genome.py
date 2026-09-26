@@ -38,14 +38,14 @@ import torch
 from src.circuits.circuit import CircuitGenome
 from src.datasets.teacher_loaders import get_teacher_dataloaders
 from src.evolution.objective import Objective
-from src.examples.classification import ClassificationObjective, load_data
-from src.examples.reinforcement_learning import (
+from src.metrics.mean_class_accuracy import MeanClassAccuracy
+from src.objectives.classification_objective import ClassificationObjective, load_data
+from src.objectives.reinforcement_learning_objective import (
     ReinforcementLearningObjective,
     build_trainer,
     make_environment,
 )
-from src.examples.teacher import TeacherObjective
-from src.metrics.mean_class_accuracy import MeanClassAccuracy
+from src.objectives.teacher_objective import TeacherObjective
 from src.utils.genome_archive import (
     add_genome_source_arguments,
     check_genome_source_arguments,

@@ -21,10 +21,10 @@ from pathlib import Path
 
 import pytest
 
-from src.examples.reinforcement_learning import (
+from src.examples.reinforcement_learning import build_parser
+from src.objectives.reinforcement_learning_objective import (
     ENV_CHOICES,
     ENV_IDS,
-    build_parser,
     environment_knob_kwargs,
     supported_env_knobs,
 )

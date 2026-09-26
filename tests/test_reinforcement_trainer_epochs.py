@@ -28,7 +28,8 @@ import numpy as np
 import pytest
 
 from src.circuits.circuit import CircuitGenome
-from src.examples.reinforcement_learning import (
+from src.examples.reinforcement_learning import build_parser
+from src.objectives.reinforcement_learning_objective import (
     CONTINUOUS_ENVS,
     ENV_IDS,
     MUJOCO_ENV_FLAGS,
@@ -36,7 +37,6 @@ from src.examples.reinforcement_learning import (
     environment_knob_kwargs,
     supported_env_knobs,
     ReinforcementLearningObjective,
-    build_parser,
     make_environment,
 )
 

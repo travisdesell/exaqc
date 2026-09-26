@@ -1191,8 +1191,41 @@ standard image model so quantum results have something to be compared against.
 
 A variant of the RL entry point that trains a **fixed classical MLP**
 (`ClassicalModel`, two 64-unit `tanh` layers) instead of an evolved quantum
-circuit. It accepts the same RL hyperparameters and serves as the classical
-control for RL experiments.
+circuit. It trains one model with the same RL trainers, and takes the same
+trainer arguments with the same defaults, so it serves as the classical
+control for RL experiments. It runs as a single process (no MPI).
+
+```
+python3 -m src.examples.reinforcement_learning_fixed --env cartpole --algo ppo --out_dir ./artifacts/cartpole_classical --output_file ./artifacts/cartpole_classical/rollout.gif
+```
+
+| Argument | Default | Description |
+|---|---|---|
+| `--env` | *required* | Environment, as for [`reinforcement_learning`](#reinforcement_learning) |
+| `--algo` | *required* | `reinforce`, `actor_critic`, `a2c`, `ppo`, `q_learning`, `sarsa` |
+| `--out_dir` | `artifacts` | Where `run.log` is written |
+| `--episodes` | `60` | Training episodes |
+| `--eval_episodes` | `10` | Episodes used to score the model |
+| `--eval_policy` | `match` | Action-selection regime evaluation scores under: `match`, `greedy`, `stochastic` or `both` |
+| `--eval_seed` | random | Base seed for evaluation episodes, kept disjoint from the training seeds |
+| `--max_steps` | `500` | Step cap per episode |
+| `--log_every` | `10` | Evaluate and log every N episodes |
+| `--improvement_cutoff` | `30` | Episodes without an improved evaluation before stopping, 0 to disable |
+| `--ema_alpha` | `0.05` | Smoothing for the reported training return |
+| `--seed` | random | Base seed for training episodes, PyTorch and NumPy |
+| MuJoCo knobs | the environment's own | `--forward_reward_weight`, `--ctrl_cost_weight`, `--healthy_reward`, `--contact_cost_weight`, `--terminate_when_unhealthy`, `--reset_noise_scale`, as for [`reinforcement_learning`](#reinforcement_learning) |
+| `--map_name` / `--is_slippery` | `4x4` / off | FrozenLake only |
+| `--logging_level` | `INFO` | Terminal log level |
+| `--visualize_episodes` | `3` | Episodes to roll the trained model for when visualizing |
+| `--visualize_seed` | random | Base seed for the visualization episodes |
+| `--output_file` | — | Save the trained model's rollout to this GIF (headless) |
+| `--live` | off | Show the rollout in a live window; without it or `--output_file` nothing is visualized |
+| `--fps` | `30` | GIF frames per second |
+
+Plus the shared trainer arguments (`--gamma`, `--learning_rate`,
+`--entropy_coef`, ...) and the per-algorithm arguments in
+[Trainers](#trainers). The rollout uses the policy the model was scored under
+(the algorithm's own regime for `--eval_policy both`).
 
 ---
 
