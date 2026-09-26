@@ -461,10 +461,10 @@ def main() -> None:
     logger.info("refined fitness: {}", genome.fitness)
     if starting_fitness:
         for key, refined in genome.fitness.items():
-            if key in starting_fitness:
-                logger.info(
-                    "  {}: {:.6f} -> {:.6f}", key, starting_fitness[key], refined
-                )
+            starting = starting_fitness.get(key)
+            # RL fitness also records text fields (env_id, eval_policy)
+            if isinstance(starting, (int, float)) and isinstance(refined, (int, float)):
+                logger.info("  {}: {:.6f} -> {:.6f}", key, starting, refined)
 
     refined_path = os.path.join(
         args.out_dir, f"refined_genome_{genome.genome_number}.json"
