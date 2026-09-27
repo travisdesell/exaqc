@@ -11,8 +11,13 @@
 #
 # Submit from the repository root, since refine_genome is run as a module.
 #
+# The time limit is sized for the 1000-episode sweep: the 50-episode sweep took
+# on the order of 1.5 hours per task, and a task's time grows with its episode
+# count (strong genomes, whose episodes run the full --max_steps, take longest).
+# Override it with sbatch -t for a sweep of a different length.
+#
 #SBATCH -J exaqc_refine_sweep
-#SBATCH -t 0-08:00:00
+#SBATCH -t 5-00:00:00
 #SBATCH -A neuroevolution -p tigris
 #SBATCH -o /home/tjdvse/logs/exaqc_refine_sweep/output_%A_%a.o
 #SBATCH -e /home/tjdvse/logs/exaqc_refine_sweep/error_%A_%a.e

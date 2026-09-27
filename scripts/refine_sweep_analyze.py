@@ -6,17 +6,21 @@ each arm's evaluations are compared with the control's mean as a paired
 difference. Reported per tier and arm:
 
 * ``d@<episode>`` -- mean eval return at that episode minus the control mean.
+  The columns are the episodes of :data:`CANDIDATE_EPISODES` the sweep
+  evaluated, plus its final evaluation, so they fit a sweep of any length.
 * ``d_best`` -- the arm's best evaluation minus the *best* control evaluation,
   which compares like with like: both are a maximum over the same number of
   noisy evaluations, so the selection bias cancels.
 * ``win`` -- fraction of pairs whose best evaluation beats the control's best.
 * ``p_ep0`` -- fraction of pairs whose best evaluation came at episode 0.
+* ``ep_best`` -- median episode of the arm's best evaluation, showing how long
+  training kept paying off.
 
 It also reports, per tier, how far the genomes' recorded search fitness sits
 above the control's mean: the selection bias of taking a best-of-N evaluation
 as fitness.
 
-    python3 -m scripts.refine_sweep_analyze --sweep_dir /home/tjdvse/refine_sweep
+    python3 -m scripts.refine_sweep_analyze --sweep_dir /home/tjdvse/refine_sweep_1000
 """
 
 from __future__ import annotations
@@ -28,8 +32,32 @@ import os
 import statistics
 from collections import defaultdict
 
-#: Evaluation episodes shown as columns (the last is the final evaluation).
-SHOWN_EPISODES: list[int] = [0, 5, 10, 20, 30, 49]
+#: Episodes shown as ``d@`` columns when the sweep evaluated them; the final
+#: evaluation is always shown as well (see :func:`shown_episodes`).
+CANDIDATE_EPISODES: list[int] = [0, 10, 25, 50, 100, 250, 500, 750]
+
+
+def shown_episodes(curves: list[dict[int, float]]) -> list[int]:
+    """Picks the episodes to show as columns for the curves a sweep recorded.
+
+    Args:
+        curves: Every finished task's curve, mapping evaluated episode to return.
+
+    Returns:
+        The candidate episodes that were evaluated and come before the final
+        evaluation, followed by the final evaluation's episode; empty when no
+        curve has finished.
+    """
+
+    evaluated = {episode for curve in curves for episode in curve}
+    if not evaluated:
+        return []
+    final = max(evaluated)
+    return [
+        episode
+        for episode in CANDIDATE_EPISODES
+        if episode in evaluated and episode < final
+    ] + [final]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -121,6 +149,9 @@ def main() -> None:
         tiers[pair] = task["tier"]
 
     print(f"{finished} of {len(tasks)} tasks finished")
+    episodes = shown_episodes(
+        [curve for arm_curves in curves.values() for curve in arm_curves.values()]
+    )
 
     for tier in sorted(set(tiers.values())):
         pairs = [
@@ -150,8 +181,8 @@ def main() -> None:
 
         header = (
             f"  {'arm':18s} {'n':>3s} "
-            + " ".join(f"{'d@' + str(episode):>7s}" for episode in SHOWN_EPISODES)
-            + f" {'d_best':>7s} {'win':>5s} {'p_ep0':>5s}"
+            + " ".join(f"{'d@' + str(episode):>7s}" for episode in episodes)
+            + f" {'d_best':>7s} {'win':>5s} {'p_ep0':>5s} {'ep_best':>7s}"
         )
         print(header)
         for arm in arms:
@@ -159,7 +190,7 @@ def main() -> None:
             if not arm_pairs:
                 continue
             columns = []
-            for episode in SHOWN_EPISODES:
+            for episode in episodes:
                 differences = [
                     curves[pair][arm][episode] - control_means[pair]
                     for pair in arm_pairs
@@ -170,8 +201,8 @@ def main() -> None:
                 max(curves[pair][arm].values()) - max(curves[pair]["control"].values())
                 for pair in arm_pairs
             ]
-            best_at_zero = [
-                max(curves[pair][arm], key=curves[pair][arm].__getitem__) == 0
+            best_episodes = [
+                max(curves[pair][arm], key=curves[pair][arm].__getitem__)
                 for pair in arm_pairs
             ]
             print(
@@ -179,7 +210,8 @@ def main() -> None:
                 + " ".join(columns)
                 + f" {mean(best_differences):+7.0f}"
                 + f" {mean([float(d > 0) for d in best_differences]):5.2f}"
-                + f" {mean([float(b) for b in best_at_zero]):5.2f}"
+                + f" {mean([float(b == 0) for b in best_episodes]):5.2f}"
+                + f" {statistics.median(best_episodes):7.0f}"
             )
 
 

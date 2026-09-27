@@ -20,7 +20,13 @@ Two things make the arms comparable:
 
 Run from the repository root on the machine that holds the archives:
 
-    python3 -m scripts.refine_sweep_prepare --sweep_dir /home/tjdvse/refine_sweep
+    python3 -m scripts.refine_sweep_prepare --sweep_dir /home/tjdvse/refine_sweep_1000
+
+Each sweep needs its own ``--sweep_dir``: the job script skips any task whose
+refined genome already exists there, so reusing a finished sweep's directory
+runs nothing. The default seed is fixed, so sweeps of different lengths draw
+the same seeds for each (genome, replicate) pair and their curves should agree
+over the episodes they share (given the same ``--log_every``).
 
 It writes ``<sweep_dir>/genomes/*.json`` (one per genome and replicate) and
 ``<sweep_dir>/tasks.tsv`` (one row per job), and prints the ``sbatch`` command
@@ -103,8 +109,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--episodes",
         type=int,
-        default=50,
-        help="Training episodes per refinement (evaluated every log_every episodes).",
+        default=1000,
+        help="Training episodes per refinement (the first sweep ran 50).",
+    )
+    parser.add_argument(
+        "--log_every",
+        type=int,
+        default=5,
+        help=(
+            "Evaluate every this many episodes (and at the last one). Each "
+            "evaluation plays eval_episodes (20) full episodes, so at the "
+            "search's value of 5 evaluation costs about twice what training "
+            "does; raising it shortens every job but coarsens the curves."
+        ),
     )
     parser.add_argument(
         "--seed",
@@ -131,7 +148,7 @@ def read_genome_list(path: str) -> list[dict[str, str]]:
 
 
 def pinned_genome(
-    serialized: dict[str, Any], seed: int, episodes: int
+    serialized: dict[str, Any], seed: int, episodes: int, log_every: int
 ) -> dict[str, Any]:
     """Returns a copy of a serialized genome with its seeds and schedule pinned.
 
@@ -140,11 +157,13 @@ def pinned_genome(
         seed: Training seed; the evaluation seed is offset from it by
             :data:`EVAL_SEED_OFFSET`.
         episodes: Training episodes to run.
+        log_every: Evaluate every this many episodes.
 
     Returns:
-        The modified copy. Its ``seed``, ``eval_seed``, ``episodes`` and
-        ``improvement_cutoff`` hyperparameters are set (the cutoff to 0, so
-        every arm records a full-length curve); everything else is unchanged.
+        The modified copy. Its ``seed``, ``eval_seed``, ``episodes``,
+        ``log_every`` and ``improvement_cutoff`` hyperparameters are set (the
+        cutoff to 0, so every arm records a full-length curve); everything else
+        is unchanged.
     """
 
     genome = json.loads(json.dumps(serialized))
@@ -152,6 +171,7 @@ def pinned_genome(
     hyperparameters["seed"] = seed
     hyperparameters["eval_seed"] = seed + EVAL_SEED_OFFSET
     hyperparameters["episodes"] = episodes
+    hyperparameters["log_every"] = log_every
     hyperparameters["improvement_cutoff"] = 0
     return genome
 
@@ -182,7 +202,10 @@ def main() -> None:
             stem = f"{run_name}_g{genome_number}_r{replicate}"
             genome_json = os.path.join(genome_dir, f"{stem}.json")
             with open(genome_json, "w", encoding="utf-8") as genome_file:
-                json.dump(pinned_genome(serialized, seed, args.episodes), genome_file)
+                json.dump(
+                    pinned_genome(serialized, seed, args.episodes, args.log_every),
+                    genome_file,
+                )
 
             for arm, learning_rate, entropy_coef in ARMS:
                 tasks.append(
