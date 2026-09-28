@@ -1,0 +1,10 @@
+Genome 175
+Qubits: [('input', 0), ('input', 1), ('input', 2), ('input', 3), ('output', 0), ('output', 1)]
+
+0.056  y  [('input', 3)]  {}
+0.068  rxx  [('input', 3), ('input', 2)]  {'phi': 2.8368292995851565}
+0.297  swap  [('output', 0), ('input', 3)]  {}
+0.368  rxx  [('input', 3), ('input', 2)]  {'phi': 2.8368292995851565}
+0.472  cz  [('input', 2), ('output', 0)]  {}
+0.516  cx  [('input', 1), ('output', 1)]  {}
+0.697  swap  [('input', 2), ('output', 0)]  {}
