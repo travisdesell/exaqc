@@ -340,6 +340,9 @@ stops early after `improvement_cutoff` epochs without improvement.
 | `epochs` | `--epochs` | Maximum training epochs per genome |
 | `learning_rate` | `--learning_rate`, `-lr` | Adam learning rate |
 | `weight_decay` | `--weight_decay` | Adam L2 regularisation |
+| `adam_beta1` | `--adam_beta1` | Adam first-moment decay rate (`0.9`, PyTorch's default) |
+| `adam_beta2` | `--adam_beta2` | Adam second-moment decay rate (`0.999`, PyTorch's default) |
+| `adam_epsilon` | `--adam_epsilon` | Adam numerical-stability term (`1e-8`, PyTorch's default) |
 | `improvement_cutoff` | `--improvement_cutoff` | Epochs without validation improvement before stopping, 0 to disable |
 | `batch_size` | `--batch_size` | Samples per gradient step |
 
@@ -695,6 +698,7 @@ mpiexec -n 12 python3 -m src.examples.classification \
 | `--epochs` | `30` | Training epochs per genome |
 | `--learning_rate`, `-lr` | `5e-3` | Adam learning rate |
 | `--weight_decay` | `0.0` | Adam L2 regularisation |
+| `--adam_beta1` / `--adam_beta2` / `--adam_epsilon` | `0.9` / `0.999` / `1e-8` | Adam's moment decay rates and stability term (PyTorch's defaults) |
 | `--improvement_cutoff` | `3` | Epochs without validation improvement before stopping, 0 to disable |
 | `--batch_size` | `5` | Samples per gradient step |
 | `--validation_batch_size` | = `--batch_size` | Validation batch size |
@@ -709,7 +713,7 @@ mpiexec -n 12 python3 -m src.examples.classification \
 | `--cnn_pooled_size` | `4` | Spatial size the CNN pools down to |
 | `--cnn_dropout` | `0.0` | Dropout inside the CNN encoder |
 | `--hyperparameter_strategy` | `fixed` | `fixed` trains every genome with the values above; `simplex` co-evolves the `--sho_tune` ones (see [Co-evolving training hyperparameters](#co-evolving-training-hyperparameters)) |
-| `--sho_tune` | `learning_rate=log:1e-3:5e-2:1e-5:0.3` | One or more `NAME=SCALE:INITIAL_MIN:INITIAL_MAX[:MIN:MAX]`. `NAME` is `learning_rate`, `weight_decay`, `quantum_dropout_rate`, `epochs` or `improvement_cutoff`; `SCALE` is `linear`, `log` (steps in log10) or `int` (rounded); `MIN:MAX` defaults to the initial range |
+| `--sho_tune` | `learning_rate=log:1e-3:5e-2:1e-5:0.3` | One or more `NAME=SCALE:INITIAL_MIN:INITIAL_MAX[:MIN:MAX]`. `NAME` is `learning_rate`, `weight_decay`, `adam_beta1`, `adam_beta2`, `adam_epsilon`, `quantum_dropout_rate`, `epochs` or `improvement_cutoff`; `SCALE` is `linear`, `log` (steps in log10) or `int` (rounded); `MIN:MAX` defaults to the initial range |
 | `--sho_genomes` | `4` | Genomes picked at random per SHO step: the best of them against the average of the rest (at least 2) |
 | `--sho_l1` / `--sho_l2` | `2.0` / `0.5` | SHO step `r = U(0, 1) * l1 - l2` |
 
@@ -757,6 +761,11 @@ Tune the learning rate on a `log` scale. Avoid tuning `epochs` or
 fitness, so they tend to drift to their maximum. Put `--sho_tune` before another
 flag rather than directly before the population sub-command, since it takes
 several values.
+
+To also co-evolve Adam's settings with the paper's ranges, tune
+`--sho_tune learning_rate=log:1e-3:5e-2:1e-5:0.3 adam_beta1=linear:0.9:0.99 adam_beta2=linear:0.9:0.99 adam_epsilon=log:1e-9:1e-8`.
+PyTorch adds `adam_epsilon` outside the square root of the second moment, while
+the paper's update adds it inside, so equal values are not exactly equivalent.
 
 ### [`teacher`](./src/examples/teacher.py)
 
@@ -1094,7 +1103,18 @@ Then open `http://127.0.0.1:8000/` in a browser. The page has:
   other. Rings mark the chart's focus island and its neighbors, and clicking an
   island colors the chart around it. While a genome is selected (and *highlight
   selected lineage* is on), arrows show where its ancestry crossed between
-  islands.
+  islands. A run that co-evolved its training hyperparameters
+  (`--hyperparameter_strategy simplex`, see
+  [Co-evolving training hyperparameters](#co-evolving-training-hyperparameters))
+  also has a **Hyperparameter optimization** section. It shows the strategy's
+  settings and how many genomes' values came from the burn-in or a simplex step.
+  A **Best hyperparameters** table gives the tuned values of the best genome by
+  each fitness key, the final population's mean, standard deviation and range,
+  and each value's burn-in and allowed ranges. One chart per tuned
+  hyperparameter follows it across the population at every insertion (mean, with
+  a min–max band, on a log axis for `log`-scale values). A genome's **Fitness**
+  tab says how its values were chosen: a burn-in draw, or a simplex step with the
+  genomes it stepped from and its `r`.
 - **Insertion rates**: for one run, one group (summed over its runs, then each
   run on its own) or every group side by side, the share of each operator's
   genomes that became a global best or a local best, were inserted or were

@@ -1180,7 +1180,7 @@
   }
 
   /** A line chart of several series over a shared x axis, with an optional band per series. */
-  function createLineChart(container, { xLabel, yLabel, x, series, height = 300 }) {
+  function createLineChart(container, { xLabel, yLabel, x, series, height = 300, yLog = false }) {
     const legend = h(
       "div",
       { class: "chart-legend" },
@@ -1208,7 +1208,8 @@
       {
         width: Math.max(320, host.clientWidth),
         height,
-        scales: { x: { time: false } },
+        // a log y axis (for values spanning orders of magnitude, such as a learning rate)
+        scales: yLog ? { x: { time: false }, y: { distr: 3 } } : { x: { time: false } },
         axes: [axisStyle(xLabel), { ...axisStyle(yLabel), size: 70 }],
         series: uplotSeries,
         bands,
@@ -1216,6 +1217,112 @@
         cursor: { drag: { x: true, y: false } },
       },
       data,
+      host
+    );
+
+    const resizeObserver = new ResizeObserver(() => {
+      if (host.clientWidth && Math.abs(plot.width - host.clientWidth) > 2) plot.setSize({ width: host.clientWidth, height });
+    });
+    resizeObserver.observe(host);
+
+    return {
+      destroy() {
+        resizeObserver.disconnect();
+        plot.destroy();
+      },
+    };
+  }
+
+  /**
+   * Labels a log axis's ticks: a range spanning a decade or more labels only its powers of ten
+   * (the rest are minor gridlines), a narrower one labels every tick.
+   *
+   * @param {number[]} splits The tick values.
+   * @returns {string[]} A label per tick, empty for unlabelled ones.
+   */
+  function logTickLabels(splits) {
+    const shown = splits.filter((value) => value > 0);
+    const wide = shown.length > 0 && Math.max(...shown) / Math.min(...shown) >= 10;
+    const short = (value) => (Math.abs(value) >= 1e-3 ? String(Number(value.toPrecision(3))) : value.toExponential(1));
+    return splits.map((value) => {
+      if (!(value > 0)) return "";
+      const exponent = Math.log10(value);
+      return !wide || Math.abs(exponent - Math.round(exponent)) < 1e-9 ? short(value) : "";
+    });
+  }
+
+  /**
+   * Charts one co-evolved hyperparameter over a search: the population's min – max as a band, its
+   * mean, the value of its best genome, and every genome's own value as a point colored by how it
+   * was chosen (a burn-in draw or a simplex step), with a dashed line where the burn-in ended.
+   *
+   * @param {HTMLElement} container Where to draw the legend and chart.
+   * @param {object} options `name` (the hyperparameter), `x` (insertions), `columns` (parallel
+   *   `min`, `mean`, `max`, `best`, `burn_in` and `simplex` lists over `x`), `yLog` (a log y axis)
+   *   and `burnInEnd` (the insertion to mark, or null).
+   * @returns {{destroy: Function}} Tears the chart down.
+   */
+  function createHyperparameterChart(container, { name, x, columns, yLog = false, burnInEnd = null, height = 220 }) {
+    const rangeColor = slotColor(1);
+    const meanColor = slotColor(1);
+    const bestColor = slotColor(4);
+    const burnInColor = token("--text-secondary");
+    const simplexColor = slotColor(2);
+    const legend = h(
+      "div",
+      { class: "chart-legend" },
+      legendItem(withAlpha(rangeColor, 0.3), "population range"),
+      legendItem(meanColor, "population mean", true),
+      legendItem(bestColor, "best genome", true),
+      legendItem(burnInColor, "burn-in genome"),
+      legendItem(simplexColor, "simplex genome")
+    );
+    const host = h("div", { class: "chart-host" });
+    setChildren(container, legend, host);
+
+    const noLine = () => null;
+    const dots = (color) => ({ show: true, size: 6, width: 0, stroke: color, fill: color });
+    const plot = new uPlot(
+      {
+        width: Math.max(280, host.clientWidth),
+        height,
+        scales: yLog ? { x: { time: false }, y: { distr: 3 } } : { x: { time: false } },
+        // uPlot's own tick labels round small values (e.g. a weight decay or Adam epsilon) to
+        // repeated labels or 0
+        axes: [axisStyle("Insertion"), { ...axisStyle(name), size: 70, values: (u, splits) => (yLog ? logTickLabels(splits) : splits.map(formatNumber)) }],
+        series: [
+          { label: "Insertion" },
+          { label: "max", stroke: "transparent", width: 0, points: { show: false }, spanGaps: true },
+          { label: "min", stroke: "transparent", width: 0, points: { show: false }, spanGaps: true },
+          { label: "population mean", stroke: meanColor, width: 2, points: { show: false }, spanGaps: true },
+          { label: "best genome", stroke: bestColor, width: 1.5, points: { show: false }, spanGaps: true, paths: uPlot.paths.stepped({ align: 1 }) },
+          { label: "burn-in genome", stroke: burnInColor, paths: noLine, points: dots(burnInColor) },
+          { label: "simplex genome", stroke: simplexColor, paths: noLine, points: dots(simplexColor) },
+        ],
+        bands: [{ series: [1, 2], fill: withAlpha(rangeColor, 0.15) }],
+        legend: { show: false },
+        cursor: { drag: { x: true, y: false } },
+        hooks: {
+          draw: [
+            (u) => {
+              if (burnInEnd === null || burnInEnd === undefined) return;
+              const left = u.valToPos(burnInEnd, "x", true);
+              if (!Number.isFinite(left)) return;
+              const { ctx } = u;
+              ctx.save();
+              ctx.strokeStyle = token("--text-secondary");
+              ctx.lineWidth = 1;
+              ctx.setLineDash([4, 4]);
+              ctx.beginPath();
+              ctx.moveTo(left, u.bbox.top);
+              ctx.lineTo(left, u.bbox.top + u.bbox.height);
+              ctx.stroke();
+              ctx.restore();
+            },
+          ],
+        },
+      },
+      [x, columns.max, columns.min, columns.mean, columns.best, columns.burn_in, columns.simplex],
       host
     );
 
@@ -1433,6 +1540,148 @@
         ? h("details", { class: "island-topology", ontoggle: () => renderTopology() }, h("summary", { text: `Island topology (${(run.island_topology.topology || []).join(" ")})` }), h("div"))
         : null;
 
+    // how the run's training hyperparameters were co-evolved (e.g. with SHO), when they were:
+    // read once opened, then re-read as genomes arrive
+    const hyperparameterStrategy = run.hyperparameter_strategy;
+    const hyperparameterNode = hyperparameterStrategy
+      ? h(
+          "details",
+          { class: "hyperparameter-optimization", ontoggle: () => loadHyperparameters() },
+          h("summary", {
+            text: `Hyperparameter optimization (${hyperparameterStrategy.name}: ${(hyperparameterStrategy.tuned || []).map((entry) => entry.name).join(", ")})`,
+          }),
+          h("div")
+        )
+      : null;
+    let hyperparameterCharts = [];
+    let hyperparameterRequest = 0;
+
+    function destroyHyperparameterCharts() {
+      for (const hyperparameterChart of hyperparameterCharts) hyperparameterChart.destroy();
+      hyperparameterCharts = [];
+    }
+
+    /** Reads how the run's hyperparameters were optimized and redraws the panel, while it is open. */
+    async function loadHyperparameters() {
+      if (!hyperparameterNode || !hyperparameterNode.open) return;
+      const request = ++hyperparameterRequest;
+      const body = hyperparameterNode.lastElementChild;
+      if (!body.childElementCount) setChildren(body, notice("Reading the genomes' hyperparameters…"));
+      try {
+        const payload = await api(`/api/runs/${index}/hyperparameters`);
+        if (destroyed || request !== hyperparameterRequest) return;
+        renderHyperparameters(body, payload);
+      } catch (error) {
+        if (destroyed || request !== hyperparameterRequest) return;
+        destroyHyperparameterCharts();
+        setChildren(body, notice(`Could not load the hyperparameters: ${error.message}`, true));
+      }
+    }
+
+    /**
+     * Draws the hyperparameter panel: the strategy's settings and the best genome's values, one
+     * card per tuned hyperparameter charting it over the search, and a table of the best genomes'
+     * and the final population's values.
+     *
+     * @param {HTMLElement} body The panel's body.
+     * @param {object} payload The run's `/hyperparameters` payload.
+     */
+    function renderHyperparameters(body, payload) {
+      destroyHyperparameterCharts();
+      const strategy = payload.strategy || {};
+      const specs = Object.fromEntries((strategy.tuned || []).map((entry) => [entry.name, entry]));
+      const tuned = payload.tuned || [];
+      const phases = payload.phases || {};
+      const finalPopulation = payload.final_population || {};
+      const stats = finalPopulation.statistics || {};
+      const ranking = payload.ranking || {};
+      const isLog = (name) => Boolean(specs[name] && specs[name].scale === "log");
+      const range = (pair) => (pair ? `[${formatNumber(pair[0])}, ${formatNumber(pair[1])}]` : "—");
+      const genomeLink = (number) => h("a", { href: genomeHref(index, number), text: String(number) });
+      const fact = (name, value) => h("span", {}, `${name} `, typeof value === "string" ? h("b", { text: value }) : value);
+      const l1 = isNumber(strategy.l1) ? strategy.l1 : 2;
+      const l2 = isNumber(strategy.l2) ? strategy.l2 : 0.5;
+      const rankedBest = (payload.best || []).find((best) => best.metric === ranking.metric) || (payload.best || [])[0];
+
+      const settings = h(
+        "div",
+        { class: "meta" },
+        fact("donors per step", formatNumber(strategy.n_genomes)),
+        fact("donors from", payload.population_strategy === "SteadyStateIslands" ? "the child's island" : "the population"),
+        fact("line search", `r in [${formatNumber(-l2)}, ${formatNumber(l1 - l2)}]`),
+        ...Object.entries(phases).map(([phase, count]) => h("span", {}, h("b", { text: formatNumber(count) }), ` ${label(phase)} genomes`)),
+        payload.burn_in_end !== null && payload.burn_in_end !== undefined
+          ? h("span", { text: `burn-in ended at insertion ${formatNumber(payload.burn_in_end)} (dashed)` })
+          : h("span", { text: "still in burn-in" })
+      );
+      const bestLine = rankedBest
+        ? h(
+            "div",
+            { class: "meta" },
+            h("span", {}, `best ${rankedBest.metric} genome `, genomeLink(rankedBest.genome_number), ` (${label(rankedBest.phase ?? "unrecorded")})`),
+            ...tuned.map((name) => fact(name, formatNumber(rankedBest.hyperparameters[name])))
+          )
+        : null;
+
+      const cards = h("div", { class: "hyperparameter-charts" });
+      const cell = (text) => h("td", { class: "number", text });
+      const statistic = (name, key) => cell(stats[name] && stats[name].n ? formatNumber(stats[name][key]) : "—");
+      const row = (heading, cells) => h("tr", {}, h("th", {}, heading), ...cells);
+      const rows = [
+        ...(payload.best || []).map((best) =>
+          row(
+            h("span", {}, `best ${best.metric} (${formatNumber(best.value)}): `, h("a", { href: genomeHref(index, best.genome_number), text: `genome ${best.genome_number}` })),
+            tuned.map((name) => cell(formatNumber(best.hyperparameters[name])))
+          )
+        ),
+        row(`final population mean (${formatNumber(finalPopulation.size || 0)} genomes)`, tuned.map((name) => statistic(name, "mean"))),
+        row("final population std", tuned.map((name) => statistic(name, "std"))),
+        row("final population min – max", tuned.map((name) => cell(stats[name] && stats[name].n ? `${formatNumber(stats[name].min)} – ${formatNumber(stats[name].max)}` : "—"))),
+      ];
+
+      setChildren(
+        body,
+        settings,
+        bestLine,
+        h("p", {
+          class: "meta",
+          text: `Each simplex genome takes h_avg + r × (h_best − h_avg) over its donors, clamped to the full range. Shaded: the population's range after each insertion; "best genome" follows the population's best by ${ranking.metric ?? "fitness"}.`,
+        }),
+        cards,
+        h("h3", { text: "Best hyperparameters" }),
+        h(
+          "div",
+          { class: "table-wrap" },
+          h(
+            "table",
+            {},
+            h("thead", {}, h("tr", {}, h("th", {}), ...tuned.map((name) => h("th", { class: "number", text: name })))),
+            h("tbody", {}, rows)
+          )
+        )
+      );
+
+      const chartData = payload.chart || {};
+      for (const name of tuned) {
+        const spec = specs[name] || {};
+        const host = h("div");
+        cards.append(
+          h(
+            "section",
+            { class: "card hyperparameter-card", "aria-label": `${name} over the search` },
+            h("h4", { class: "hyperparameter-name", text: name }),
+            h("div", { class: "meta", text: `burn-in ${range(spec.initial_range)} · full ${range(spec.range)}${isLog(name) ? " · log scale" : ""}` }),
+            host
+          )
+        );
+        if (!chartData.x || !chartData.x.length || !chartData[name]) {
+          setChildren(host, notice(`No genome has been inserted with ${name} yet.`));
+          continue;
+        }
+        hyperparameterCharts.push(createHyperparameterChart(host, { name, x: chartData.x, columns: chartData[name], yLog: isLog(name), burnInEnd: payload.burn_in_end }));
+      }
+    }
+
     function renderHeader() {
       const summary = state.summary;
       setChildren(headerNode,
@@ -1450,7 +1699,8 @@
         ),
         summary.command_line ? h("details", {}, h("summary", { text: "Command line" }), h("div", { class: "command" }, h("pre", { text: summary.command_line }), copyButton(summary.command_line))) : null,
         runNotesNode,
-        topologyNode
+        topologyNode,
+        hyperparameterNode
       );
     }
 
@@ -2549,7 +2799,32 @@
         ]),
         h("h3", { text: "Hyperparameters" }),
         factsList(valueEntries(genome.hyperparameters)),
+        ...hyperparameterChoice(genome),
       ];
+    }
+
+    /**
+     * How a genome's hyperparameters were chosen by the run's hyperparameter strategy (e.g. an SHO
+     * burn-in draw, or a simplex step from other genomes), when it recorded that.
+     *
+     * @param {object} genome The serialized genome.
+     * @returns {Array} The nodes to show, or none.
+     */
+    function hyperparameterChoice(genome) {
+      const choice = (genome.metadata || {}).hyperparameter_generation;
+      if (!choice) return [];
+      const link = (number) => h("a", { href: genomeHref(index, number), text: String(number) });
+      const joined = (numbers) => (numbers || []).flatMap((number, i) => (i ? [", ", link(number)] : [link(number)]));
+      const facts = [
+        ["strategy", choice.strategy ?? "—"],
+        ["phase", label(choice.phase)],
+      ];
+      if (choice.phase === "simplex") {
+        facts.push(["best of step", choice.best_genome !== undefined ? link(choice.best_genome) : "—"]);
+        facts.push(["averaged", h("span", {}, ...joined(choice.other_genomes))]);
+        facts.push(["r", formatNumber(choice.r)]);
+      }
+      return [h("h3", { text: "Hyperparameter choice" }), factsList(facts)];
     }
 
     function renderGates(genome) {
@@ -2733,6 +3008,7 @@
         renderTableToolbar();
         await loadChart();
         if (state.showHistory) loadHistory();
+        loadHyperparameters();
       }
     }
 
@@ -2762,6 +3038,7 @@
         historyObserver.disconnect();
         chart.destroy();
         if (historyChart) historyChart.destroy();
+        destroyHyperparameterCharts();
       },
     };
   }

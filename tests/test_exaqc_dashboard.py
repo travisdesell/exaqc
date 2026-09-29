@@ -1004,6 +1004,113 @@ def test_island_runs_show_their_topology_and_each_parents_island(tmp_path) -> No
         }
 
 
+def test_hyperparameter_optimization_is_summarized(tmp_path) -> None:
+    """A run that co-evolved hyperparameters gets their trajectory and best values.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    strategy = {
+        "name": "simplex",
+        "tuned": [
+            {"name": "epochs", "scale": "int", "initial_range": [1, 3], "range": [1, 5]}
+        ],
+        "n_genomes": 2,
+        "l1": 2.0,
+        "l2": 0.5,
+    }
+    genomes = standard_genomes()
+    # each fake genome trains for as many epochs as its number
+    genomes[1].serialized["metadata"]["hyperparameter_generation"] = {
+        "strategy": "simplex",
+        "phase": "burn_in",
+    }
+    genomes[2].serialized["metadata"]["hyperparameter_generation"] = {
+        "strategy": "simplex",
+        "phase": "simplex",
+        "best_genome": 2,
+        "other_genomes": [1],
+        "r": 0.5,
+    }
+    genomes[2].serialized["metadata"]["generated_at_insertion"] = 2
+    build_run(
+        tmp_path / "sho",
+        genomes,
+        run_info={"hyperparameter_strategy": strategy},
+    )
+    build_run(tmp_path / "fixed", standard_genomes())
+    registry = RunRegistry(
+        run_directories=[str(tmp_path / "sho"), str(tmp_path / "fixed")]
+    )
+
+    with serving(registry) as url:
+        indexes = {
+            run["name"]: run["index"] for run in get_json(f"{url}/api/runs")["runs"]
+        }
+        sho, fixed = indexes["sho"], indexes["fixed"]
+
+        assert get_json(f"{url}/api/runs/{sho}")["hyperparameter_strategy"] == strategy
+        assert get_json(f"{url}/api/runs/{fixed}")["hyperparameter_strategy"] is None
+        assert get_json(f"{url}/api/runs/{fixed}/hyperparameters") == {"strategy": None}
+
+        # read twice: the second request is served from what the first one read
+        for _ in range(2):
+            payload = get_json(f"{url}/api/runs/{sho}/hyperparameters")
+            assert payload["tuned"] == ["epochs"]
+            assert payload["phases"] == {
+                "unrecorded": 2,
+                "burn_in": 1,
+                "simplex": 1,
+            }
+
+            assert payload["ranking"] == {"metric": "loss", "higher_is_better": False}
+            assert payload["population_strategy"] == "SteadyStatePopulation"
+            # genome 3's simplex step was the first, taken after 2 insertions
+            assert payload["burn_in_end"] == 2
+
+            # the population grows 1, 1-2, 1-3 genomes over the three recorded
+            # steps and is carried forward to genome 4's insertion; each genome
+            # is plotted at its insertion by how its values were chosen
+            chart = payload["chart"]
+            assert chart["x"] == [1, 2, 3, 4]
+            assert chart["epochs"] == {
+                "min": [1.0, 1.0, 1.0, 1.0],
+                "mean": [1.0, 1.5, 2.0, 2.0],
+                "max": [1.0, 2.0, 3.0, 3.0],
+                # the lowest loss in the population: genome 1, then 2, then 3
+                "best": [1.0, 2.0, 3.0, 3.0],
+                "burn_in": [None, 2.0, None, None],
+                "simplex": [None, None, 3.0, None],
+            }
+
+            final = payload["final_population"]
+            assert final["size"] == 3
+            assert final["statistics"]["epochs"]["mean"] == pytest.approx(2.0)
+            assert final["statistics"]["epochs"]["min"] == 1.0
+            assert final["statistics"]["epochs"]["max"] == 3.0
+
+            # genome 3 has both the lowest loss and the highest target_metric
+            assert {best["metric"]: best for best in payload["best"]} == {
+                "loss": {
+                    "metric": "loss",
+                    "higher_is_better": False,
+                    "genome_number": 3,
+                    "value": pytest.approx(0.3),
+                    "phase": "simplex",
+                    "hyperparameters": {"epochs": 3.0},
+                },
+                "target_metric": {
+                    "metric": "target_metric",
+                    "higher_is_better": True,
+                    "genome_number": 3,
+                    "value": pytest.approx(0.8),
+                    "phase": "simplex",
+                    "hyperparameters": {"epochs": 3.0},
+                },
+            }
+
+
 def test_compare_two_genomes(viewer_url: str) -> None:
     """Two genomes are compared by fitness, hyperparameters and gates.
 
