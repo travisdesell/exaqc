@@ -767,6 +767,14 @@ To also co-evolve Adam's settings with the paper's ranges, tune
 PyTorch adds `adam_epsilon` outside the square root of the second moment, while
 the paper's update adds it inside, so equal values are not exactly equivalent.
 
+[`scripts/run_breast_cancer_sho.sh`](scripts/run_breast_cancer_sho.sh) runs that
+tuning on `breast_cancer`, with the rest of the settings from
+`scripts/run_breast_cancer.sh`:
+
+```
+bash scripts/run_breast_cancer_sho.sh 1 10 ./artifacts/breast_sho
+```
+
 ### [`teacher`](./src/examples/teacher.py)
 
 Evolves **purely quantum** circuits to reproduce the outputs of a known
