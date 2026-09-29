@@ -23,6 +23,7 @@ from src.datasets.classification_loaders import (
     get_uci_dataloaders,
 )
 from src.evolution.exaqc import EXAQC
+from src.evolution.hyperparameter_strategy import HyperparameterStrategy
 from src.evolution.master_worker import run_evolution
 from src.evolution.objective import Objective
 from src.evolution.population_strategy import PopulationStrategy
@@ -31,6 +32,21 @@ from src.metrics.mean_class_accuracy import MeanClassAccuracy
 from src.metrics.metric import Metric
 from src.trainer.supervised_trainer import SupervisedTrainer
 from src.utils.genome_archive import GenomeArchive
+
+#: The hyperparameters ``--sho_tune`` may name: the training settings
+#: :class:`SupervisedTrainer` reads per genome. ``batch_size`` is left out
+#: because the dataloaders are built once per run.
+TUNABLE_HYPERPARAMETERS: tuple[str, ...] = (
+    "learning_rate",
+    "weight_decay",
+    "quantum_dropout_rate",
+    "epochs",
+    "improvement_cutoff",
+)
+
+#: What SHO tunes when ``--sho_tune`` is not given: the learning rate, on a log
+#: scale, with the burn-in and full ranges used by Kini et al. (GECCO '23).
+DEFAULT_SHO_TUNE: list[str] = ["learning_rate=log:1e-3:5e-2:1e-5:0.3"]
 
 
 def compare(
@@ -139,6 +155,13 @@ def build_parser() -> argparse.ArgumentParser:
     # improvement cutoff, batch size) are owned by SupervisedTrainer so the
     # classification and teacher entry points stay in sync.
     SupervisedTrainer.initialize_parser(parser)
+
+    # Whether those training flags are used as given for every genome or some of
+    # them are co-evolved (--hyperparameter_strategy, --sho_*) is owned by
+    # HyperparameterStrategy.
+    HyperparameterStrategy.initialize_parser(
+        parser, tunable=TUNABLE_HYPERPARAMETERS, default_tune=DEFAULT_SHO_TUNE
+    )
 
     # The backend (--target) and optional gate-set restriction (--use_only) are
     # owned by GateSpecifications.
@@ -485,6 +508,7 @@ def main() -> None:
             task="classification",
             task_target=args.dataset,
             restarting=restart_state is not None,
+            hyperparameter_strategy=HyperparameterStrategy.from_args(args),
         )
 
         if restart_state is not None:

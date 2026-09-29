@@ -28,6 +28,10 @@ from src.evolution.mutation import (
     reorder_gate,
     qubit_swap,
 )
+from src.evolution.hyperparameter_strategy import (
+    FixedHyperparameters,
+    HyperparameterStrategy,
+)
 from src.evolution.objective import Objective, evaluate_genome
 from src.evolution.population_strategy import PopulationStrategy
 from src.utils.genome_archive import GenomeArchive
@@ -152,6 +156,7 @@ class EXAQC:
         task_target: str | None = None,
         archive: GenomeArchive | None = None,
         restarting: bool = False,
+        hyperparameter_strategy: HyperparameterStrategy | None = None,
     ) -> None:
         """
         Creates an instance of Evolutionary Exploration of Augmenting Quantum Circuits given a
@@ -213,12 +218,22 @@ class EXAQC:
                 holds (see :mod:`src.utils.restart`). A restart leaves what
                 that run recorded about itself -- its command line, start time
                 and configuration -- as it is, and records itself separately.
+            hyperparameter_strategy: how each child's training hyperparameters
+                are chosen from ``hyperparameters`` (see
+                :mod:`src.evolution.hyperparameter_strategy`). When None every
+                child gets a copy of ``hyperparameters``
+                (:class:`FixedHyperparameters`).
         """
 
         self.gate_specifications = gate_specifications
         self.population = population
         self.objective = objective
         self.hyperparameters = hyperparameters
+        self.hyperparameter_strategy: HyperparameterStrategy = (
+            hyperparameter_strategy
+            if hyperparameter_strategy is not None
+            else FixedHyperparameters()
+        )
         # The quantum backend (qiskit/pennylane) is a property of the gate set,
         # so it is taken from there rather than passed separately, and stamped
         # onto every genome this search creates.
@@ -331,6 +346,9 @@ class EXAQC:
                 # whatever the population strategy records about itself, such as
                 # how an island search's islands are connected
                 **self.population.run_info(),
+                # how children's hyperparameters are chosen, when they are not
+                # simply the configured ones
+                **self.hyperparameter_strategy.run_info(),
             )
 
     def validate_mutation_strategy(self, mutation_strategy: list[str]):
@@ -431,18 +449,43 @@ class EXAQC:
             logger.error(f"Unknown parent strategy was provided: {parent_strategy}")
             exit(1)
 
-    def get_hyperparameters(self):
-        """
-        Return:
-            hyperparameters for a newly created child
+    def get_hyperparameters(
+        self, metadata: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Chooses the training hyperparameters for a newly created child.
+
+        Delegates to the search's hyperparameter strategy, giving it the
+        genomes the child is generated among: the child's own sub-population
+        (e.g. its target island), or the whole population when that holds fewer
+        genomes than the strategy needs.
+
+        Args:
+            metadata: The child's metadata (which may name its target island,
+                and which the strategy may record how it chose the values in),
+                or None for the search's seed genome.
+
+        Returns:
+            The hyperparameters for the child.
         """
 
         if self.genome_number > 0 and self.genome_number % 100 == 0:
             # increase epochs every 100 genomes
             self.saved_epochs += 1
 
-        # TODO: make an evolutionary strategy for handling hyperparameter options
-        hyperparameters = self.hyperparameters.copy()
+        # A strategy that does not learn from the population (the default,
+        # fixed one) is not handed it, so no ranking is built per child.
+        population: list[CircuitGenome] = []
+        if self.hyperparameter_strategy.min_population > 0:
+            population = self.population.get_population_for_child(metadata or {})
+            if len(population) < self.hyperparameter_strategy.min_population:
+                population = self.population.get_population()
+
+        hyperparameters = self.hyperparameter_strategy.generate(
+            base=self.hyperparameters,
+            population=population,
+            initializing=self.population.is_initializing(),
+            metadata=metadata,
+        )
 
         """
         hyperparameters["learning_rate"] = random.choice(
@@ -678,7 +721,7 @@ class EXAQC:
                     )
 
             child.genome_number = self.next_genome_number()
-            child.hyperparameters = self.get_hyperparameters()
+            child.hyperparameters = self.get_hyperparameters(child.metadata)
             # record what this genome was evolved for, so it can be
             # reloaded and refined later without being told
             child.task = self.task
@@ -796,7 +839,7 @@ class EXAQC:
 
             # successfully generated a child
             child.genome_number = self.next_genome_number()
-            child.hyperparameters = self.get_hyperparameters()
+            child.hyperparameters = self.get_hyperparameters(child.metadata)
             # record what this genome was evolved for, so it can be
             # reloaded and refined later without being told
             child.task = self.task

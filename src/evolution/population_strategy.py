@@ -207,6 +207,24 @@ class PopulationStrategy(ABC):
         """
         pass
 
+    def get_population_for_child(self, metadata: dict[str, Any]) -> list[CircuitGenome]:
+        """Returns the genomes a child is generated among, best first.
+
+        Used by hyperparameter strategies that learn from the population (see
+        :mod:`src.evolution.hyperparameter_strategy`). By default this is the
+        whole population; a strategy with sub-populations can narrow it to the
+        one the child's metadata targets.
+
+        Args:
+            metadata: The child's metadata, as returned with its parents by
+                :meth:`get_parent` or :meth:`get_parents`.
+
+        Returns:
+            A new list of genomes, sorted best first.
+        """
+
+        return self.get_population()
+
     @abstractmethod
     def get_parent(self, **kwargs: Any) -> tuple[CircuitGenome, dict[str, Any]]:
         """

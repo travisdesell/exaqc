@@ -708,6 +708,10 @@ mpiexec -n 12 python3 -m src.examples.classification \
 | `--cnn_channels` | `[16, 32]` | Channels for the two CNN encoder conv layers |
 | `--cnn_pooled_size` | `4` | Spatial size the CNN pools down to |
 | `--cnn_dropout` | `0.0` | Dropout inside the CNN encoder |
+| `--hyperparameter_strategy` | `fixed` | `fixed` trains every genome with the values above; `simplex` co-evolves the `--sho_tune` ones (see [Co-evolving training hyperparameters](#co-evolving-training-hyperparameters)) |
+| `--sho_tune` | `learning_rate=log:1e-3:5e-2:1e-5:0.3` | One or more `NAME=SCALE:INITIAL_MIN:INITIAL_MAX[:MIN:MAX]`. `NAME` is `learning_rate`, `weight_decay`, `quantum_dropout_rate`, `epochs` or `improvement_cutoff`; `SCALE` is `linear`, `log` (steps in log10) or `int` (rounded); `MIN:MAX` defaults to the initial range |
+| `--sho_genomes` | `4` | Genomes picked at random per SHO step: the best of them against the average of the rest (at least 2) |
+| `--sho_l1` / `--sho_l2` | `2.0` / `0.5` | SHO step `r = U(0, 1) * l1 - l2` |
 
 **Guidance.** Image datasets need `--encoding cnn`, which convolves and pools
 before the circuit; tabular data must *not* use it. `--encoding identity` passes
@@ -715,6 +719,44 @@ features straight through, so the feature count must equal the circuit's input
 width — pair it with `-qim amplitude`, which absorbs many features into few
 qubits. `--decoding clipped` normalises circuit outputs into class scores and
 suits `probs`. Fitness records `loss` and `target_metric` (mean class accuracy).
+
+#### Co-evolving training hyperparameters
+
+With `--hyperparameter_strategy simplex`, the `--sho_tune` hyperparameters are
+co-evolved with simplex hyperparameter optimization (SHO;
+[Kini et al., GECCO '23](https://doi.org/10.1145/3583133.3596407)) instead of
+being fixed:
+
+```
+mpiexec -n 12 python3 -m src.examples.classification \
+    --dataset iris --input_qubits 4 --output_qubits 2 --batch_size 3 \
+    --number_genomes 1000 \
+    -ms uniform 1 3 -ps uniform 5 5 \
+    --binary_crossover_rate 0.1 --n_ary_crossover_rate 0.1 --exponential_crossover_rate 0.1 \
+    -qim amplitude -qom probs --encoding identity --decoding clipped \
+    --hyperparameter_strategy simplex --sho_tune learning_rate=log:1e-3:5e-2:1e-5:0.3 \
+    --out_dir ./artifacts/iris_sho \
+    steady_state --max_population_size 30
+```
+
+While the population is still filling up, each tuned value is drawn uniformly
+from its initial range. After that, `--sho_genomes` genomes are picked at random
+from the child's population (its target island under `islands`, or the whole
+population if that island holds too few), independently of how the child's
+parents were picked. The child's value is `h_avg + r * (h_best - h_avg)`, where
+`h_best` is the best picked genome's value, `h_avg` is the average of the
+others, and one `r` is shared by all tuned values. The result is clamped to
+`[MIN, MAX]`. Untuned hyperparameters keep their command-line values, and a
+tuned one's command-line value (e.g. `-lr`) is used only by the unevaluated seed
+genome. Each genome records the values it trained with in its `hyperparameters`,
+and how they were chosen (burn-in or simplex step, the genomes used and `r`) in
+its `hyperparameter_generation` metadata.
+
+Tune the learning rate on a `log` scale. Avoid tuning `epochs` or
+`improvement_cutoff` unless you want that: more training nearly always improves
+fitness, so they tend to drift to their maximum. Put `--sho_tune` before another
+flag rather than directly before the population sub-command, since it takes
+several values.
 
 ### [`teacher`](./src/examples/teacher.py)
 
