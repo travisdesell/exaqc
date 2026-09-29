@@ -857,6 +857,55 @@ def test_points_and_genealogy(viewer_url: str) -> None:
     ]
 
 
+def test_search_space(viewer_url: str) -> None:
+    """The search space places a run's genomes and traces its global best.
+
+    The fake genomes name no qubits, so the unitary metric (the default) cannot
+    simulate them and reports each as left out, while the structural metric
+    places them all.
+
+    Args:
+        viewer_url: The test server's base URL.
+    """
+
+    payload = get_json(
+        f"{viewer_url}/api/runs/0/search_space?metric=jaccard&projection=classical_mds&y=loss"
+    )
+    assert payload["metric"] == "jaccard"
+    assert payload["genome_number"] == [1, 2, 3, 4]
+    assert len(payload["coordinates"]) == 2
+    assert payload["fitness"] == [0.5, 0.4, 0.3, 0.9]
+    assert payload["best_path"] == [1, 2, 3]
+    assert list(zip(payload["links"]["child"], payload["links"]["parent"])) == [
+        (3, 1),
+        (3, 2),
+        (4, 3),
+    ]
+    assert [entry["name"] for entry in payload["options"]["metrics"]][:2] == [
+        "fubini_study",
+        "jaccard",
+    ]
+    assert "classical_mds" in [
+        entry["name"] for entry in payload["options"]["projections"]
+    ]
+
+    three = get_json(
+        f"{viewer_url}/api/runs/0/search_space?metric=jaccard&dimensions=3&y=target_metric"
+    )
+    assert len(three["coordinates"]) == 3
+    assert three["higher_is_better"] is True
+
+    default = get_json(f"{viewer_url}/api/runs/0/search_space")
+    assert default["metric"] == "fubini_study"
+    assert default["genome_number"] == []
+    assert [entry["genome_number"] for entry in default["skipped"]] == [1, 2, 3, 4]
+
+    status, _, body = get(f"{viewer_url}/api/runs/0/search_space?metric=nope")
+    assert status == 400
+    assert "Unknown distance metric" in json.loads(body)["error"]
+    assert get(f"{viewer_url}/api/runs/9/search_space")[0] == 404
+
+
 def test_genome_detail_json_and_commands(viewer_url: str) -> None:
     """A genome's detail, download and commands are served.
 

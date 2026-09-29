@@ -802,3 +802,34 @@ table.rates .muted-cell {
 table.rates thead .count {
   font-weight: 400;
 }
+
+/* ---------- search space ---------- */
+
+.space-canvas {
+  display: block;
+  border-radius: 6px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.space-status {
+  margin-bottom: 8px;
+  align-items: center;
+}
+
+.space-scale {
+  display: inline-block;
+  width: 90px;
+  height: 10px;
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
+.space-slider-label {
+  flex: 1 1 260px;
+}
+
+.space-slider {
+  flex: 1 1 auto;
+  min-width: 160px;
+}

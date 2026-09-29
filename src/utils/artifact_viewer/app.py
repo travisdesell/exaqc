@@ -42,6 +42,7 @@ from src.utils.artifact_viewer.server import (
     ArtifactViewer,
     RenderService,
     RunRegistry,
+    SearchSpaceService,
     json_safe,
     query_int,
 )
@@ -211,6 +212,12 @@ def create_app(viewer: ArtifactViewer, mcp_server: Any | None = None) -> Starlet
             viewer.genealogy_payload(
                 request.path_params["run"], query.get("y") or "loss"
             )
+        )
+
+    def api_search_space(request: Request) -> Response:
+        """Projects a run's genomes (``metric``, ``projection``, ``dimensions`` and ``y`` parameters)."""
+        return _json(
+            viewer.search_space_payload(request.path_params["run"], _query(request))
         )
 
     def api_history(request: Request) -> Response:
@@ -482,6 +489,7 @@ def create_app(viewer: ArtifactViewer, mcp_server: Any | None = None) -> Starlet
         Route("/api/runs/{run:int}/points", api_points),
         Route("/api/runs/{run:int}/genealogy", api_genealogy),
         Route("/api/runs/{run:int}/history", api_history),
+        Route("/api/runs/{run:int}/search_space", api_search_space),
         Route("/api/runs/{run:int}/operators", api_operators),
         Route("/api/runs/{run:int}/compare", api_compare),
         Route("/api/runs/{run:int}/genomes/{genome:int}.json", api_genome_json),
@@ -601,8 +609,14 @@ def serve(
             allow_annotations=allow_annotations,
         )
 
+    search_spaces = SearchSpaceService(processes=1 if render_processes > 0 else 0)
     application = create_app(
-        ArtifactViewer(registry, renderer, allow_annotations=allow_annotations),
+        ArtifactViewer(
+            registry,
+            renderer,
+            allow_annotations=allow_annotations,
+            search_spaces=search_spaces,
+        ),
         mcp_server,
     )
     url = f"http://{host}:{bound_port}/"
@@ -649,3 +663,4 @@ def serve(
     finally:
         listener.close()
         renderer.close()
+        search_spaces.close()

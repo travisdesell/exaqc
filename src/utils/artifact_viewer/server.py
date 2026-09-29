@@ -677,6 +677,90 @@ class RenderService:
             self._executor.shutdown(wait=False, cancel_futures=True)
 
 
+class SearchSpaceService:
+    """Builds runs' search-space projections away from the request threads.
+
+    Projections go through a single worker process, which keeps the quantum
+    frameworks (needed to compute unitaries) out of the server and keeps each
+    run's computed features between requests, so a live run only has its new
+    genomes featurized. Identical concurrent requests share one build.
+    """
+
+    def __init__(self, processes: int = 1) -> None:
+        """Starts the service.
+
+        Args:
+            processes: ``1`` builds in a worker process; ``0`` builds in the
+                calling thread instead (useful for tests).
+        """
+
+        self._executor = (
+            ProcessPoolExecutor(
+                max_workers=1, mp_context=multiprocessing.get_context("spawn")
+            )
+            if processes > 0
+            else None
+        )
+        self._pending: dict[tuple[Any, ...], Future] = {}
+        self._lock = threading.Lock()
+
+    def build(
+        self,
+        archive_path: str,
+        metric: str,
+        projection: str,
+        dimensions: int,
+        fitness_key: str,
+    ) -> dict[str, Any]:
+        """Projects every genome of a run.
+
+        Args:
+            archive_path: The run's archive.
+            metric: The distance metric's name.
+            projection: The projection's name.
+            dimensions: 2 or 3.
+            fitness_key: The fitness key genomes are valued by.
+
+        Returns:
+            See :meth:`src.analysis.search_space.SearchSpaceBuilder.build`.
+
+        Raises:
+            ValueError: If an option is not valid.
+        """
+
+        from src.analysis.search_space import build_search_space
+
+        key = (archive_path, metric, projection, dimensions, fitness_key)
+        with self._lock:
+            future = self._pending.get(key)
+            if future is None:
+                if self._executor is not None:
+                    future = self._executor.submit(build_search_space, *key)
+                else:
+                    future = Future()
+                    try:
+                        future.set_result(build_search_space(*key))
+                    except BaseException as error:
+                        future.set_exception(error)
+                self._pending[key] = future
+        try:
+            return future.result()
+        finally:
+            with self._lock:
+                if self._pending.get(key) is future:
+                    self._pending.pop(key, None)
+
+    def close(self) -> None:
+        """Stops the worker process, abandoning builds still queued.
+
+        Returns:
+            None.
+        """
+
+        if self._executor is not None:
+            self._executor.shutdown(wait=False, cancel_futures=True)
+
+
 def compare_gates(
     gates_a: list[dict[str, Any]], gates_b: list[dict[str, Any]]
 ) -> dict[str, Any]:
@@ -885,6 +969,7 @@ class ArtifactViewer:
         renderer: Renders genome images.
         allow_annotations: Whether notes and tags may be written; they can always
             be read.
+        search_spaces: Builds runs' search-space projections.
     """
 
     def __init__(
@@ -892,6 +977,7 @@ class ArtifactViewer:
         registry: RunRegistry,
         renderer: RenderService,
         allow_annotations: bool = False,
+        search_spaces: SearchSpaceService | None = None,
     ) -> None:
         """Creates the viewer.
 
@@ -901,11 +987,14 @@ class ArtifactViewer:
             allow_annotations: Whether notes and tags may be written. Reading them
                 is always allowed, and writing them changes only each run's
                 ``annotations.sqlite`` -- never its archive.
+            search_spaces: Builds search-space projections; when not given, they
+                are built in the requesting thread.
         """
 
         self.registry = registry
         self.renderer = renderer
         self.allow_annotations = allow_annotations
+        self.search_spaces = search_spaces or SearchSpaceService(processes=0)
 
     def run(self, index: int) -> Run:
         """Looks up a served run.
@@ -1150,6 +1239,43 @@ class ArtifactViewer:
 
         with GenomeArchive.open_readonly(self.run(index).archive_path) as reader:
             return {"points": reader.points(y_key), "links": reader.parent_links()}
+
+    def search_space_payload(self, index: int, query: dict[str, str]) -> dict[str, Any]:
+        """Projects a run's genomes into a 2-D or 3-D search space.
+
+        Args:
+            index: The run's index.
+            query: ``metric`` (a distance metric, default the unitary
+                Fubini–Study angle), ``projection`` (default classical MDS),
+                ``dimensions`` (2 or 3, default 2) and ``y`` (the fitness key
+                genomes are valued and the global best is traced by, default
+                ``loss``).
+
+        Returns:
+            The projection (see :meth:`src.analysis.search_space
+            .SearchSpaceBuilder.build`) plus ``options``: the metrics and
+            projections that can be chosen.
+
+        Raises:
+            KeyError: If there is no such run.
+            ValueError: If an option is not valid.
+        """
+
+        from src.analysis.search_space import (
+            DEFAULT_METRIC,
+            DEFAULT_PROJECTION,
+            options,
+        )
+
+        run = self.run(index)
+        payload = self.search_spaces.build(
+            run.archive_path,
+            query.get("metric") or DEFAULT_METRIC,
+            query.get("projection") or DEFAULT_PROJECTION,
+            query_int(query, "dimensions", 2, minimum=2, maximum=3),
+            query.get("y") or "loss",
+        )
+        return {**payload, "options": options()}
 
     def history_payload(self, index: int, metric: str | None = None) -> dict[str, Any]:
         """Returns a run's search progress, recomputed from its archive.

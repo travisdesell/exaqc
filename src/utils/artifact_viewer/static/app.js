@@ -13,6 +13,7 @@
  *   #/run/<run>                 a run: progress/genealogy chart, genome table
  *   #/run/<run>/genome/<n>      ... with genome <n> open in the detail panel
  *   #/run/<run>/compare/<a>/<b> two genomes side by side
+ *   #/run/<run>/space           the run's genomes projected into a search space
  */
 "use strict";
 
@@ -1446,7 +1447,8 @@
           h("span", {}, h("b", { text: formatNumber(summary.genomes) }), " genomes"),
           h("span", { title: formatTime(summary.last_saved_at) }, "updated ", h("b", { text: formatAgo(summary.last_saved_at) })),
           h("span", { text: `started ${formatTime(summary.start_time)}` }),
-          h("a", { href: insertionHref({ kind: "run", index }), text: "insertion rates →" })
+          h("a", { href: insertionHref({ kind: "run", index }), text: "insertion rates →" }),
+          h("a", { href: `#/run/${index}/space`, text: "search space →" })
         ),
         summary.command_line ? h("details", {}, h("summary", { text: "Command line" }), h("div", { class: "command" }, h("pre", { text: summary.command_line }), copyButton(summary.command_line))) : null,
         runNotesNode,
@@ -3175,6 +3177,623 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Search space page
+  // ---------------------------------------------------------------------------
+
+  /** Frames a search-space replay of the whole run takes, at most (about 15 seconds). */
+  const SPACE_REPLAY_FRAMES = 300;
+  /** Delay between replay frames, in milliseconds. */
+  const SPACE_PLAY_INTERVAL_MS = 50;
+  /** Margin kept around the projected genomes, in CSS pixels. */
+  const SPACE_MARGIN_PX = 28;
+
+  /**
+   * Draws a run's genomes where a projection placed them, on a canvas: each
+   * genome a point colored by fitness (or by island, insert type or operator),
+   * faint parent->child links, and the global best's path through the space as
+   * a line from each global best to the next. Only genomes inserted up to
+   * `config.until` are drawn, so the search can be replayed. The wheel zooms
+   * about the cursor, dragging pans, a double-click resets the view, and
+   * clicking a genome calls `config.onSelect`.
+   *
+   * @param {HTMLElement} container Where the chart goes.
+   * @param {object} config `color` ("fitness", "island", "insert_type",
+   *   "family"), `showLinks`, `showBestPath`, `until` (an insertion, or null
+   *   for every genome) and `onSelect(genomeNumber)`.
+   * @returns {{setData: Function, setOptions: Function, destroy: Function}}
+   */
+  function createSearchSpaceChart(container, config) {
+    const legend = h("div", { class: "chart-legend" });
+    const canvas = h("canvas", { class: "space-canvas", role: "img", "aria-label": "Genomes projected into the search space" });
+    const tooltip = h("div", { class: "chart-tooltip", hidden: true });
+    const host = h("div", { class: "chart-host" }, canvas, tooltip);
+    setChildren(container, legend, host);
+
+    let data = null;
+    let model = null;
+    let view = null;
+    let hovered = -1;
+    let drag = null;
+
+    /** Positions each genome's fitness among the others: 0 worst, 1 best (ranks, so outliers don't wash out the scale). */
+    function fitnessRanks() {
+      const order = [];
+      data.fitness.forEach((value, i) => isNumber(value) && order.push(i));
+      order.sort((a, b) => (data.higher_is_better ? data.fitness[a] - data.fitness[b] : data.fitness[b] - data.fitness[a]));
+      const ranks = new Float64Array(data.genome_number.length).fill(NaN);
+      order.forEach((i, position) => (ranks[i] = order.length > 1 ? position / (order.length - 1) : 1));
+      return ranks;
+    }
+
+    function buildModel() {
+      const count = data.genome_number.length;
+      const indexOf = new Map(data.genome_number.map((number, i) => [number, i]));
+      const [xs, ys] = data.coordinates;
+      const visible = new Uint8Array(count);
+      for (let i = 0; i < count; i++) visible[i] = config.until === null || (data.insertion[i] !== null && data.insertion[i] <= config.until) ? 1 : 0;
+
+      let colors;
+      let categories = null;
+      let ranks = null;
+      if (config.color === "fitness") {
+        ranks = fitnessRanks();
+        const worse = token("--sequential-light");
+        const better = token("--sequential-dark");
+        colors = Array.from(ranks, (t) => (Number.isNaN(t) ? token("--text-muted") : mixColors(worse, better, t)));
+      } else {
+        categories = categoriesFor(config.color, data);
+        const known = new Set(categories.map((entry) => entry.key));
+        const byKey = new Map(categories.map((entry) => [entry.key, entry]));
+        colors = data.genome_number.map((_, i) => byKey.get(categoryKey(config.color, data, i, known)).color);
+      }
+
+      // draw the worst first, so better genomes stay on top
+      const drawOrder = [...Array(count).keys()];
+      if (ranks) drawOrder.sort((a, b) => (Number.isNaN(ranks[a]) ? -1 : ranks[a]) - (Number.isNaN(ranks[b]) ? -1 : ranks[b]));
+
+      // the global bests inserted so far, in the order they became it
+      const path = data.best_path.map((number) => indexOf.get(number)).filter((i) => i !== undefined && visible[i]);
+      const pathStep = new Map(path.map((i, step) => [i, step]));
+
+      let visibleCount = 0;
+      for (let i = 0; i < count; i++) visibleCount += visible[i];
+      return { count, indexOf, xs, ys, visible, visibleCount, colors, categories, ranks, drawOrder, path, pathStep };
+    }
+
+    /** Fits the view to every placed genome (not just those drawn), so a replay keeps its frame. */
+    function fitView(width, height) {
+      let [minX, maxX, minY, maxY] = [Infinity, -Infinity, Infinity, -Infinity];
+      for (let i = 0; i < model.count; i++) {
+        minX = Math.min(minX, model.xs[i]);
+        maxX = Math.max(maxX, model.xs[i]);
+        minY = Math.min(minY, model.ys[i]);
+        maxY = Math.max(maxY, model.ys[i]);
+      }
+      if (!Number.isFinite(minX)) [minX, maxX, minY, maxY] = [-1, 1, -1, 1];
+      const spanX = Math.max(maxX - minX, 1e-9);
+      const spanY = Math.max(maxY - minY, 1e-9);
+      const scale = Math.min((width - 2 * SPACE_MARGIN_PX) / spanX, (height - 2 * SPACE_MARGIN_PX) / spanY);
+      // an automatic view is refit whenever the canvas changes size, until the user zooms or pans
+      return { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, scale: Number.isFinite(scale) && scale > 0 ? scale : 1, auto: true, width, height };
+    }
+
+    function size() {
+      const width = Math.max(280, host.clientWidth);
+      const top = host.getBoundingClientRect().top;
+      const height = Math.max(420, Math.min(900, window.innerHeight - Math.max(top, 0) - 40));
+      return { width, height };
+    }
+
+    function toScreen(i, width, height) {
+      return [width / 2 + (model.xs[i] - view.cx) * view.scale, height / 2 - (model.ys[i] - view.cy) * view.scale];
+    }
+
+    function draw() {
+      if (!model) return;
+      const { width, height } = size();
+      const ratio = window.devicePixelRatio || 1;
+      if (canvas.width !== Math.round(width * ratio) || canvas.height !== Math.round(height * ratio)) {
+        canvas.width = Math.round(width * ratio);
+        canvas.height = Math.round(height * ratio);
+        canvas.style.width = `${width}px`;
+        canvas.style.height = `${height}px`;
+      }
+      if (!view || (view.auto && (view.width !== width || view.height !== height))) view = fitView(width, height);
+      const ctx = canvas.getContext("2d");
+      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      ctx.clearRect(0, 0, width, height);
+      ctx.fillStyle = token("--surface-1");
+      ctx.fillRect(0, 0, width, height);
+      ctx.strokeStyle = token("--gridline");
+      ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
+
+      const place = (i) => toScreen(i, width, height);
+
+      if (config.showLinks) {
+        let drawn = 0;
+        const segments = [];
+        for (let k = 0; k < data.links.child.length; k++) {
+          const c = model.indexOf.get(data.links.child[k]);
+          const p = model.indexOf.get(data.links.parent[k]);
+          if (c === undefined || p === undefined || !model.visible[c] || !model.visible[p]) continue;
+          segments.push(place(p), place(c));
+          drawn++;
+        }
+        // links fade as they multiply, so thousands stay legible
+        ctx.strokeStyle = withAlpha(token("--text-muted"), Math.max(0.04, Math.min(0.45, 40 / Math.max(drawn, 1))));
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let k = 0; k < segments.length; k += 2) {
+          ctx.moveTo(...segments[k]);
+          ctx.lineTo(...segments[k + 1]);
+        }
+        ctx.stroke();
+      }
+
+      const radius = model.visibleCount > 2000 ? 3 : 4.5;
+      const surface = token("--surface-1");
+      for (const i of model.drawOrder) {
+        if (!model.visible[i]) continue;
+        const [x, y] = place(i);
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, 2 * Math.PI);
+        ctx.fillStyle = model.colors[i];
+        ctx.fill();
+        ctx.lineWidth = 0.75;
+        ctx.strokeStyle = surface;
+        ctx.stroke();
+      }
+
+      if (config.showBestPath && model.path.length) {
+        const ink = token("--text-primary");
+        const accent = token("--series-2");
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = ink;
+        ctx.beginPath();
+        model.path.forEach((i, step) => (step ? ctx.lineTo(...place(i)) : ctx.moveTo(...place(i))));
+        ctx.stroke();
+        // an arrowhead half way along each step shows which way the best moved
+        ctx.fillStyle = ink;
+        for (let step = 1; step < model.path.length; step++) {
+          const [x0, y0] = place(model.path[step - 1]);
+          const [x1, y1] = place(model.path[step]);
+          const length = Math.hypot(x1 - x0, y1 - y0);
+          if (length < 14) continue;
+          const angle = Math.atan2(y1 - y0, x1 - x0);
+          const [mx, my] = [(x0 + x1) / 2, (y0 + y1) / 2];
+          ctx.beginPath();
+          ctx.moveTo(mx + 6 * Math.cos(angle), my + 6 * Math.sin(angle));
+          ctx.lineTo(mx - 5 * Math.cos(angle - 0.5), my - 5 * Math.sin(angle - 0.5));
+          ctx.lineTo(mx - 5 * Math.cos(angle + 0.5), my - 5 * Math.sin(angle + 0.5));
+          ctx.closePath();
+          ctx.fill();
+        }
+        model.path.forEach((i, step) => {
+          const [x, y] = place(i);
+          const last = step === model.path.length - 1;
+          ctx.beginPath();
+          ctx.arc(x, y, last ? 9 : 6, 0, 2 * Math.PI);
+          ctx.lineWidth = last ? 3 : 2;
+          ctx.strokeStyle = last ? accent : ink;
+          ctx.stroke();
+        });
+        const [bx, by] = place(model.path[model.path.length - 1]);
+        ctx.font = `600 12px ${token("--font") || "sans-serif"}`;
+        ctx.fillStyle = accent;
+        ctx.fillText(`best #${data.genome_number[model.path[model.path.length - 1]]}`, bx + 12, by - 10);
+      }
+
+      if (hovered >= 0 && model.visible[hovered]) {
+        const [x, y] = place(hovered);
+        ctx.beginPath();
+        ctx.arc(x, y, radius + 4, 0, 2 * Math.PI);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = token("--text-primary");
+        ctx.stroke();
+      }
+    }
+
+    function nearest(x, y) {
+      const { width, height } = size();
+      let best = -1;
+      let bestDistance = HIT_RADIUS * HIT_RADIUS;
+      for (let i = 0; i < model.count; i++) {
+        if (!model.visible[i]) continue;
+        const [px, py] = toScreen(i, width, height);
+        // genomes with the same circuit share a point; the global best among them is the one drawn on top
+        const distance = ((px - x) ** 2 + (py - y) ** 2) * (config.showBestPath && model.pathStep.has(i) ? 0.5 : 1);
+        if (distance <= bestDistance) {
+          bestDistance = distance;
+          best = i;
+        }
+      }
+      return best;
+    }
+
+    function showTooltip(i, x, y) {
+      if (i < 0) {
+        tooltip.hidden = true;
+        return;
+      }
+      const step = model.pathStep.get(i);
+      setChildren(tooltip,
+        h("div", {}, h("b", { text: `Genome ${data.genome_number[i]}` })),
+        h("div", {}, h("span", { class: "muted", text: `${data.fitness_key}: ` }), formatNumber(data.fitness[i])),
+        h("div", { class: "muted", text: `insertion ${formatNumber(data.insertion[i])}` }),
+        data.island[i] !== null && data.island[i] !== undefined ? h("div", { class: "muted", text: `island ${data.island[i]}` }) : null,
+        h("div", { class: "muted", text: `${label(data.insert_type[i])} · ${data.operator[i] ? label(data.operator[i]) : "no operator recorded"}` }),
+        step !== undefined ? h("div", {}, h("b", { text: step === model.path.length - 1 ? "current global best" : `global best #${step + 1} of ${model.path.length}` })) : null
+      );
+      tooltip.hidden = false;
+      const flip = x + tooltip.offsetWidth + 20 > host.clientWidth;
+      tooltip.style.left = `${flip ? x - tooltip.offsetWidth - 14 : x + 14}px`;
+      tooltip.style.top = `${Math.max(0, y - tooltip.offsetHeight / 2)}px`;
+    }
+
+    function renderLegend() {
+      const items = [];
+      if (config.color === "fitness") {
+        const values = data.fitness.filter(isNumber);
+        const low = values.length ? Math.min(...values) : null;
+        const high = values.length ? Math.max(...values) : null;
+        const [worst, best] = data.higher_is_better ? [low, high] : [high, low];
+        items.push(
+          h("span", {}, `${data.fitness_key}: worse ${formatNumber(worst)} `,
+            h("span", { class: "space-scale", style: `background:linear-gradient(90deg, ${token("--sequential-light")}, ${token("--sequential-dark")})` }),
+            ` better ${formatNumber(best)}`),
+          h("span", { class: "muted", text: "(colored by rank)" })
+        );
+      } else {
+        const counts = new Map();
+        const known = new Set(model.categories.map((entry) => entry.key));
+        for (let i = 0; i < model.count; i++) {
+          if (!model.visible[i]) continue;
+          const key = categoryKey(config.color, data, i, known);
+          counts.set(key, (counts.get(key) || 0) + 1);
+        }
+        for (const category of model.categories) if (counts.get(category.key)) items.push(legendItem(category.color, `${category.label} (${counts.get(category.key).toLocaleString()})`));
+      }
+      if (config.showBestPath) items.push(legendItem(token("--text-primary"), "global best path", true), legendItem(token("--series-2"), "current best"));
+      if (config.showLinks) items.push(legendItem(token("--text-muted"), "parent → child", true));
+      setChildren(legend, ...items);
+    }
+
+    function render(resetView) {
+      if (!data) return;
+      model = buildModel();
+      if (resetView) view = null;
+      renderLegend();
+      draw();
+    }
+
+    canvas.addEventListener("mousemove", (event) => {
+      if (!model) return;
+      const rect = canvas.getBoundingClientRect();
+      const [x, y] = [event.clientX - rect.left, event.clientY - rect.top];
+      if (drag) {
+        view.cx = drag.cx - (x - drag.x) / view.scale;
+        view.cy = drag.cy + (y - drag.y) / view.scale;
+        drag.moved = drag.moved || Math.hypot(x - drag.x, y - drag.y) > 4;
+        if (drag.moved) view.auto = false;
+        tooltip.hidden = true;
+        draw();
+        return;
+      }
+      const i = nearest(x, y);
+      canvas.style.cursor = i >= 0 ? "pointer" : "grab";
+      if (i !== hovered) {
+        hovered = i;
+        draw();
+      }
+      showTooltip(i, x, y);
+    });
+    canvas.addEventListener("mouseleave", () => {
+      tooltip.hidden = true;
+      drag = null;
+      if (hovered >= 0) {
+        hovered = -1;
+        draw();
+      }
+    });
+    canvas.addEventListener("mousedown", (event) => {
+      if (!view) return;
+      const rect = canvas.getBoundingClientRect();
+      drag = { x: event.clientX - rect.left, y: event.clientY - rect.top, cx: view.cx, cy: view.cy, moved: false };
+    });
+    canvas.addEventListener("mouseup", (event) => {
+      const wasDrag = drag && drag.moved;
+      drag = null;
+      if (wasDrag || !model) return;
+      const rect = canvas.getBoundingClientRect();
+      const i = nearest(event.clientX - rect.left, event.clientY - rect.top);
+      if (i >= 0) config.onSelect(data.genome_number[i]);
+    });
+    canvas.addEventListener(
+      "wheel",
+      (event) => {
+        if (!view) return;
+        event.preventDefault();
+        const rect = canvas.getBoundingClientRect();
+        const { width, height } = size();
+        const [x, y] = [event.clientX - rect.left, event.clientY - rect.top];
+        // keep the point under the cursor where it is
+        const dataX = view.cx + (x - width / 2) / view.scale;
+        const dataY = view.cy - (y - height / 2) / view.scale;
+        view.scale *= Math.exp(-event.deltaY * 0.0015);
+        view.auto = false;
+        view.cx = dataX - (x - width / 2) / view.scale;
+        view.cy = dataY + (y - height / 2) / view.scale;
+        draw();
+      },
+      { passive: false }
+    );
+    canvas.addEventListener("dblclick", () => {
+      view = null;
+      draw();
+    });
+
+    const resizeObserver = new ResizeObserver(() => draw());
+    resizeObserver.observe(host);
+    window.addEventListener("resize", draw);
+
+    return {
+      /** Shows a new projection; the view is refit unless `keepView` is set (e.g. new genomes on a live run). */
+      setData(payload, keepView = false) {
+        data = payload;
+        render(!keepView);
+      },
+      /** Applies option changes, keeping the current zoom. */
+      setOptions(changes) {
+        Object.assign(config, changes);
+        render(false);
+      },
+      destroy() {
+        resizeObserver.disconnect();
+        window.removeEventListener("resize", draw);
+      },
+    };
+  }
+
+  async function showSearchSpacePage(index) {
+    const run = await api(`/api/runs/${index}`);
+    setBreadcrumbs([{ label: "Runs", href: "#/" }, { label: run.name, href: `#/run/${index}` }, { label: "Search space" }]);
+
+    const keys = run.fitness_keys || [];
+    const state = {
+      metric: null,
+      projection: null,
+      yKey: keys.includes("loss") ? "loss" : keys[0] || "loss",
+      color: "fitness",
+      showLinks: true,
+      showBestPath: true,
+      until: null,
+      playing: null,
+      payload: null,
+      knownGenomes: run.genomes || 0,
+    };
+
+    let destroyed = false;
+    let request = 0;
+    let timer = null;
+
+    const headerNode = h("div", { class: "page-header" });
+    const controls = h("div", { class: "toolbar" });
+    const replay = h("div", { class: "toolbar" });
+    const status = h("div", { class: "meta space-status" });
+    const chartNode = h("div");
+    setChildren(app, headerNode, h("section", { class: "card", "aria-label": "Search space" }, controls, replay, status, chartNode));
+
+    const chart = createSearchSpaceChart(chartNode, {
+      color: state.color,
+      showLinks: state.showLinks,
+      showBestPath: state.showBestPath,
+      until: state.until,
+      onSelect: (genome) => (location.hash = genomeHref(index, genome)),
+    });
+
+    setChildren(headerNode,
+      h("h1", { text: "Search space" }),
+      h("div", { class: "meta" },
+        h("span", {}, "run ", h("a", { href: `#/run/${index}`, text: run.name })),
+        h("span", {}, "task ", h("b", { text: `${label(run.task)} · ${run.task_target ?? "—"}` })),
+        h("span", {}, "strategy ", h("b", { text: run.population_strategy ?? "—" }))
+      )
+    );
+
+    function renderControls() {
+      const payload = state.payload;
+      const options = payload ? payload.options : { metrics: [], projections: [] };
+      const describe = (entries, value) => (entries.find((entry) => entry.name === value) || {}).description || "";
+      const colorOptions = [["fitness", "fitness"], ["island", "island"], ["insert_type", "insert type"], ["family", "operator"]];
+      setChildren(controls,
+        h("label", { title: describe(options.metrics, state.metric) }, "distance", select(options.metrics.map((entry) => [entry.name, entry.label]), state.metric, (value) => {
+          state.metric = value;
+          load(false);
+        }, "Distance metric")),
+        h("label", { title: describe(options.projections, state.projection) }, "projection", select(options.projections.map((entry) => [entry.name, entry.label]), state.projection, (value) => {
+          state.projection = value;
+          load(false);
+        }, "Projection")),
+        h("label", {}, "fitness", select((keys.length ? keys : ["loss"]).map((key) => [key, key]), state.yKey, (value) => {
+          state.yKey = value;
+          load(true);
+        }, "Fitness key")),
+        h("label", {}, "color by", select(colorOptions, state.color, (value) => {
+          state.color = value;
+          chart.setOptions({ color: value });
+        }, "Color by")),
+        checkbox("parent links", state.showLinks, (checked) => {
+          state.showLinks = checked;
+          chart.setOptions({ showLinks: checked });
+        }),
+        checkbox("global best path", state.showBestPath, (checked) => {
+          state.showBestPath = checked;
+          chart.setOptions({ showBestPath: checked });
+        }),
+        h("span", { class: "spacer" }),
+        h("a", { href: `#/run/${index}`, text: "← back to the run" })
+      );
+    }
+
+    function stopPlaying() {
+      if (state.playing) clearInterval(state.playing);
+      state.playing = null;
+    }
+
+    /** The replay's slider and readout, as last rendered, so a running replay moves the ones on the page. */
+    let replayNodes = null;
+
+    /** Shows the genomes inserted up to `until`, moving the slider and readout to match. */
+    function showUntil(until, maxInsertion) {
+      state.until = until >= maxInsertion ? null : until;
+      if (replayNodes) {
+        replayNodes.slider.value = until;
+        replayNodes.readout.textContent = `up to insertion ${formatNumber(until)} of ${formatNumber(maxInsertion)}`;
+      }
+      chart.setOptions({ until: state.until });
+    }
+
+    function renderReplay() {
+      const payload = state.payload;
+      const insertions = payload ? payload.insertion.filter(isNumber) : [];
+      if (!insertions.length) {
+        replayNodes = null;
+        setChildren(replay);
+        return;
+      }
+      const maxInsertion = Math.max(...insertions);
+      const minInsertion = Math.min(...insertions);
+      const value = state.until === null ? maxInsertion : state.until;
+      const readout = h("span", { class: "meta", text: `up to insertion ${formatNumber(value)} of ${formatNumber(maxInsertion)}` });
+      const slider = h("input", {
+        type: "range",
+        class: "space-slider",
+        min: minInsertion,
+        max: maxInsertion,
+        step: 1,
+        value,
+        "aria-label": "Show genomes inserted up to",
+        oninput: (event) => {
+          if (state.playing) {
+            stopPlaying();
+            renderReplay();
+          }
+          showUntil(Number(event.target.value), maxInsertion);
+        },
+      });
+      const play = h("button", {
+        type: "button",
+        text: state.playing ? "Pause" : "Replay",
+        onclick: () => {
+          if (state.playing) {
+            stopPlaying();
+            renderReplay();
+            return;
+          }
+          let until = state.until === null || state.until >= maxInsertion ? minInsertion : state.until;
+          const step = Math.max(1, Math.ceil((maxInsertion - minInsertion) / SPACE_REPLAY_FRAMES));
+          showUntil(until, maxInsertion);
+          state.playing = setInterval(() => {
+            until = Math.min(maxInsertion, until + step);
+            showUntil(until, maxInsertion);
+            if (until >= maxInsertion) {
+              stopPlaying();
+              renderReplay();
+            }
+          }, SPACE_PLAY_INTERVAL_MS);
+          renderReplay();
+        },
+      });
+      replayNodes = { slider, readout };
+      setChildren(replay, play, h("label", { class: "space-slider-label" }, "insertion", slider), readout);
+    }
+
+    function renderStatus(message = null, isError = false) {
+      const payload = state.payload;
+      if (message) {
+        setChildren(status, h("span", { class: isError ? "notice error" : "notice", text: message }));
+        return;
+      }
+      if (!payload) {
+        setChildren(status);
+        return;
+      }
+      const quality = payload.quality || {};
+      const qualityParts = [];
+      if (isNumber(quality.explained)) qualityParts.push(`${(quality.explained * 100).toFixed(1)}% of variance kept`);
+      if (isNumber(quality.stress)) qualityParts.push(`stress ${formatNumber(quality.stress)}`);
+      if (isNumber(quality.kl_divergence)) qualityParts.push(`KL ${formatNumber(quality.kl_divergence)}`);
+      const distance = payload.distance || {};
+      const qubits = payload.context && payload.context.qubits ? payload.context.qubits : null;
+      const newGenomes = state.knownGenomes - (payload.genome_number.length + payload.skipped.length);
+      setChildren(status,
+        h("span", {}, h("b", { text: formatNumber(payload.genome_number.length) }), " genomes placed"),
+        payload.skipped.length ? h("span", { title: payload.skipped.slice(0, 20).map((entry) => `#${entry.genome_number}: ${entry.reason}`).join("\n") }, h("b", { text: formatNumber(payload.skipped.length) }), " left out") : null,
+        h("span", {}, "global best changed ", h("b", { text: formatNumber(Math.max(0, payload.best_path.length - 1)) }), " times"),
+        isNumber(distance.mean) ? h("span", {}, `distance ${formatNumber(distance.min)}–${formatNumber(distance.max)}, mean ${formatNumber(distance.mean)}`) : null,
+        qualityParts.length ? h("span", { text: qualityParts.join(" · ") }) : null,
+        qubits ? h("span", { text: `over ${qubits.length} qubit${qubits.length === 1 ? "" : "s"}: ${formatQubits(qubits)}` }) : null,
+        newGenomes > 0 ? h("button", { type: "button", text: `Add ${formatNumber(newGenomes)} new genome${newGenomes === 1 ? "" : "s"}`, onclick: () => load(true) }) : null
+      );
+    }
+
+    async function load(keepView) {
+      const current = ++request;
+      stopPlaying();
+      renderStatus("Computing the projection… (the first one for a run computes every genome's features, which can take a while)");
+      const parameters = new URLSearchParams({ y: state.yKey, dimensions: "2" });
+      if (state.metric) parameters.set("metric", state.metric);
+      if (state.projection) parameters.set("projection", state.projection);
+      try {
+        const payload = await api(`/api/runs/${index}/search_space?${parameters}`);
+        if (destroyed || current !== request) return;
+        state.payload = payload;
+        state.metric = payload.metric;
+        state.projection = payload.projection;
+        if (state.until !== null && payload.insertion.every((insertion) => insertion === null || insertion <= state.until)) state.until = null;
+        renderControls();
+        renderReplay();
+        renderStatus();
+        if (!payload.genome_number.length) {
+          renderStatus(payload.skipped.length ? `No genome could be placed: ${payload.skipped[0].reason}.` : "This run has no genomes to place yet.", Boolean(payload.skipped.length));
+        }
+        chart.setOptions({ until: state.until });
+        chart.setData(payload, keepView);
+      } catch (error) {
+        if (destroyed || current !== request) return;
+        renderStatus(error.message, true);
+      }
+    }
+
+    // the projection is only rebuilt on request; polling just offers the new genomes
+    async function poll() {
+      try {
+        const summary = await api(`/api/runs/${index}`);
+        if (destroyed) return;
+        state.knownGenomes = summary.genomes || 0;
+        if (state.payload) renderStatus();
+      } catch {
+        // a failed poll is retried at the next interval
+      }
+    }
+
+    renderControls();
+    await load(false);
+    timer = setInterval(poll, POLL_INTERVAL_MS);
+
+    return {
+      kind: "space",
+      index,
+      destroy() {
+        destroyed = true;
+        clearInterval(timer);
+        stopPlaying();
+        chart.destroy();
+      },
+    };
+  }
+
+  // ---------------------------------------------------------------------------
   // Routing
   // ---------------------------------------------------------------------------
 
@@ -3198,6 +3817,7 @@
     if (parts[0] === "run" && number(parts[1]) !== null) {
       const index = number(parts[1]);
       if (parts[2] === "compare" && number(parts[3]) !== null && number(parts[4]) !== null) return { page: "compare", index, a: number(parts[3]), b: number(parts[4]) };
+      if (parts[2] === "space") return { page: "space", index };
       return { page: "run", index, genome: parts[2] === "genome" ? number(parts[3]) : null };
     }
     return { page: "runs" };
@@ -3216,6 +3836,7 @@
       else if (target.page === "insertions") currentPage = await showInsertionRatesPage(target);
       else if (target.page === "run") currentPage = await showRunPage(target.index, target.genome);
       else if (target.page === "compare") currentPage = await showComparePage(target.index, target.a, target.b);
+      else if (target.page === "space") currentPage = await showSearchSpacePage(target.index);
       else currentPage = await showRunsPage();
     } catch (error) {
       setChildren(app, notice(error.message, true), h("p", {}, h("a", { href: "#/", text: "Back to the runs" })));
