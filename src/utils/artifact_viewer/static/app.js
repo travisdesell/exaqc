@@ -3186,20 +3186,28 @@
   const SPACE_PLAY_INTERVAL_MS = 50;
   /** Margin kept around the projected genomes, in CSS pixels. */
   const SPACE_MARGIN_PX = 28;
+  /** The 3-D view's starting orientation: turned about the vertical axis, and tilted to look down on it (radians). */
+  const SPACE_ORBIT_DEFAULT = { yaw: -0.7, pitch: 0.35, zoom: 1, panX: 0, panY: 0 };
+  /** Share of the canvas's smaller side the 3-D view's unit cube spans. */
+  const SPACE_CUBE_SHARE = 0.62;
 
   /**
    * Draws a run's genomes where a projection placed them, on a canvas: each
    * genome a point colored by fitness (or by island, insert type or operator),
    * faint parent->child links, and the global best's path through the space as
    * a line from each global best to the next. Only genomes inserted up to
-   * `config.until` are drawn, so the search can be replayed. The wheel zooms
-   * about the cursor, dragging pans, a double-click resets the view, and
-   * clicking a genome calls `config.onSelect`.
+   * `config.until` are drawn, so the search can be replayed. In 2-D the wheel
+   * zooms about the cursor and dragging pans. With a `zAxis` the genomes are
+   * drawn in 3-D, the projection's two axes across and the Z axis up: dragging
+   * turns the view, Shift-dragging pans and the wheel zooms. Either way a
+   * double-click resets the view and clicking a genome calls `config.onSelect`.
    *
    * @param {HTMLElement} container Where the chart goes.
    * @param {object} config `color` ("fitness", "island", "insert_type",
    *   "family"), `showLinks`, `showBestPath`, `until` (an insertion, or null
-   *   for every genome) and `onSelect(genomeNumber)`.
+   *   for every genome), `zAxis` (null for 2-D, "insertion" to raise each
+   *   genome by when it was inserted, or "projection" for the projection's
+   *   third axis) and `onSelect(genomeNumber)`.
    * @returns {{setData: Function, setOptions: Function, destroy: Function}}
    */
   function createSearchSpaceChart(container, config) {
@@ -3212,6 +3220,8 @@
     let data = null;
     let model = null;
     let view = null;
+    // the 3-D view's orientation, zoom and pan, kept while options change
+    let orbit = { ...SPACE_ORBIT_DEFAULT };
     let hovered = -1;
     let drag = null;
 
@@ -3257,7 +3267,100 @@
 
       let visibleCount = 0;
       for (let i = 0; i < count; i++) visibleCount += visible[i];
-      return { count, indexOf, xs, ys, visible, visibleCount, colors, categories, ranks, drawOrder, path, pathStep };
+
+      // the Z values of a 3-D view, and how every axis maps into a unit cube around the origin
+      let zs = null;
+      let cube = null;
+      if (config.zAxis) {
+        const raw = config.zAxis === "insertion" ? data.insertion : data.coordinates[2] || [];
+        const known = raw.filter(isNumber);
+        const fallback = known.length ? Math.min(...known) : 0;
+        zs = Array.from({ length: count }, (_, i) => (isNumber(raw[i]) ? raw[i] : fallback));
+        const range = (values) => {
+          let [low, high] = [Infinity, -Infinity];
+          for (const value of values) {
+            low = Math.min(low, value);
+            high = Math.max(high, value);
+          }
+          return Number.isFinite(low) ? [low, high] : [0, 0];
+        };
+        const [xLow, xHigh] = range(xs);
+        const [yLow, yHigh] = range(ys);
+        const [zLow, zHigh] = range(zs);
+        cube = {
+          cx: (xLow + xHigh) / 2,
+          cy: (yLow + yHigh) / 2,
+          cz: (zLow + zHigh) / 2,
+          // x and y share one scale, so the projection's proportions are kept
+          span: Math.max(xHigh - xLow, yHigh - yLow, 1e-9),
+          zSpan: Math.max(zHigh - zLow, 1e-9),
+          zLow,
+          zHigh,
+        };
+      }
+      return { count, indexOf, xs, ys, zs, cube, visible, visibleCount, colors, categories, ranks, drawOrder, path, pathStep };
+    }
+
+    /**
+     * Where a point of the 3-D view's unit cube is drawn, as [left, top, depth]
+     * in CSS pixels, depth growing away from the viewer. The cube is turned by
+     * `orbit.yaw` about its vertical (Z) axis and tilted by `orbit.pitch`.
+     */
+    function projectCube(x, y, z, width, height) {
+      const scale = Math.min(width, height) * SPACE_CUBE_SHARE * orbit.zoom;
+      const [cosYaw, sinYaw] = [Math.cos(orbit.yaw), Math.sin(orbit.yaw)];
+      const [cosPitch, sinPitch] = [Math.cos(orbit.pitch), Math.sin(orbit.pitch)];
+      const across = x * cosYaw - y * sinYaw;
+      const away = x * sinYaw + y * cosYaw;
+      const up = z * cosPitch + away * sinPitch;
+      return [width / 2 + orbit.panX + scale * across, height / 2 + orbit.panY - scale * up, away * cosPitch - z * sinPitch];
+    }
+
+    /** The unit-cube coordinates of genome `i` in the 3-D view. */
+    function cubePoint(i) {
+      const cube = model.cube;
+      return [(model.xs[i] - cube.cx) / cube.span, (model.ys[i] - cube.cy) / cube.span, (model.zs[i] - cube.cz) / cube.zSpan];
+    }
+
+    /** Draws the 3-D view's frame: the floor of the cube, and the Z axis with its scale. */
+    function drawCube(ctx, width, height) {
+      const corner = (x, y, z) => projectCube(x, y, z, width, height);
+      ctx.strokeStyle = token("--gridline");
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      const floor = [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]].map(([x, y]) => corner(x, y, -0.5));
+      floor.forEach(([x, y], k) => (k ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+      ctx.closePath();
+      ctx.stroke();
+
+      const [bottomX, bottomY] = corner(-0.5, -0.5, -0.5);
+      const [topX, topY] = corner(-0.5, -0.5, 0.5);
+      ctx.strokeStyle = token("--baseline");
+      ctx.beginPath();
+      ctx.moveTo(bottomX, bottomY);
+      ctx.lineTo(topX, topY);
+      ctx.stroke();
+
+      const cube = model.cube;
+      ctx.font = `11px ${token("--font") || "sans-serif"}`;
+      ctx.fillStyle = token("--text-secondary");
+      ctx.textAlign = "right";
+      ctx.textBaseline = "middle";
+      const ticks = 4;
+      for (let k = 0; k <= ticks; k++) {
+        const value = cube.zLow + ((cube.zHigh - cube.zLow) * k) / ticks;
+        const [x, y] = corner(-0.5, -0.5, -0.5 + k / ticks);
+        ctx.beginPath();
+        ctx.moveTo(x - 3, y);
+        ctx.lineTo(x + 3, y);
+        ctx.stroke();
+        ctx.fillText(config.zAxis === "insertion" ? formatNumber(Math.round(value)) : formatNumber(value), x - 6, y);
+      }
+      ctx.textAlign = "center";
+      ctx.textBaseline = "bottom";
+      ctx.fillText(config.zAxis === "insertion" ? "insertion" : "axis 3", topX, topY - 8);
+      ctx.textAlign = "start";
+      ctx.textBaseline = "alphabetic";
     }
 
     /** Fits the view to every placed genome (not just those drawn), so a replay keeps its frame. */
@@ -3284,8 +3387,10 @@
       return { width, height };
     }
 
+    /** Where genome `i` is drawn, as [left, top, depth] in CSS pixels (depth is 0 in 2-D). */
     function toScreen(i, width, height) {
-      return [width / 2 + (model.xs[i] - view.cx) * view.scale, height / 2 - (model.ys[i] - view.cy) * view.scale];
+      if (model.zs) return projectCube(...cubePoint(i), width, height);
+      return [width / 2 + (model.xs[i] - view.cx) * view.scale, height / 2 - (model.ys[i] - view.cy) * view.scale, 0];
     }
 
     function draw() {
@@ -3307,7 +3412,8 @@
       ctx.strokeStyle = token("--gridline");
       ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
 
-      const place = (i) => toScreen(i, width, height);
+      const place = (i) => toScreen(i, width, height).slice(0, 2);
+      if (model.zs) drawCube(ctx, width, height);
 
       if (config.showLinks) {
         let drawn = 0;
@@ -3332,7 +3438,14 @@
 
       const radius = model.visibleCount > 2000 ? 3 : 4.5;
       const surface = token("--surface-1");
-      for (const i of model.drawOrder) {
+      // in 3-D the farthest genomes are drawn first, so nearer ones cover them
+      let order = model.drawOrder;
+      if (model.zs) {
+        const depth = new Float64Array(model.count);
+        for (let i = 0; i < model.count; i++) depth[i] = toScreen(i, width, height)[2];
+        order = [...order].sort((a, b) => depth[b] - depth[a]);
+      }
+      for (const i of order) {
         if (!model.visible[i]) continue;
         const [x, y] = place(i);
         ctx.beginPath();
@@ -3455,6 +3568,7 @@
       }
       if (config.showBestPath) items.push(legendItem(token("--text-primary"), "global best path", true), legendItem(token("--series-2"), "current best"));
       if (config.showLinks) items.push(legendItem(token("--text-muted"), "parent → child", true));
+      if (config.zAxis) items.push(h("span", { class: "muted", text: "drag to turn · shift-drag to pan · scroll to zoom · double-click to reset" }));
       setChildren(legend, ...items);
     }
 
@@ -3471,10 +3585,18 @@
       const rect = canvas.getBoundingClientRect();
       const [x, y] = [event.clientX - rect.left, event.clientY - rect.top];
       if (drag) {
-        view.cx = drag.cx - (x - drag.x) / view.scale;
-        view.cy = drag.cy + (y - drag.y) / view.scale;
         drag.moved = drag.moved || Math.hypot(x - drag.x, y - drag.y) > 4;
-        if (drag.moved) view.auto = false;
+        if (model.zs && drag.shift) {
+          orbit.panX = drag.orbit.panX + (x - drag.x);
+          orbit.panY = drag.orbit.panY + (y - drag.y);
+        } else if (model.zs) {
+          orbit.yaw = drag.orbit.yaw + (x - drag.x) * 0.01;
+          orbit.pitch = Math.max(-1.45, Math.min(1.45, drag.orbit.pitch + (y - drag.y) * 0.01));
+        } else {
+          view.cx = drag.cx - (x - drag.x) / view.scale;
+          view.cy = drag.cy + (y - drag.y) / view.scale;
+          if (drag.moved) view.auto = false;
+        }
         tooltip.hidden = true;
         draw();
         return;
@@ -3498,7 +3620,7 @@
     canvas.addEventListener("mousedown", (event) => {
       if (!view) return;
       const rect = canvas.getBoundingClientRect();
-      drag = { x: event.clientX - rect.left, y: event.clientY - rect.top, cx: view.cx, cy: view.cy, moved: false };
+      drag = { x: event.clientX - rect.left, y: event.clientY - rect.top, cx: view.cx, cy: view.cy, orbit: { ...orbit }, shift: event.shiftKey, moved: false };
     });
     canvas.addEventListener("mouseup", (event) => {
       const wasDrag = drag && drag.moved;
@@ -3513,6 +3635,11 @@
       (event) => {
         if (!view) return;
         event.preventDefault();
+        if (model && model.zs) {
+          orbit.zoom = Math.max(0.1, Math.min(40, orbit.zoom * Math.exp(-event.deltaY * 0.0015)));
+          draw();
+          return;
+        }
         const rect = canvas.getBoundingClientRect();
         const { width, height } = size();
         const [x, y] = [event.clientX - rect.left, event.clientY - rect.top];
@@ -3529,6 +3656,7 @@
     );
     canvas.addEventListener("dblclick", () => {
       view = null;
+      orbit = { ...SPACE_ORBIT_DEFAULT };
       draw();
     });
 
@@ -3564,6 +3692,8 @@
       projection: null,
       yKey: keys.includes("loss") ? "loss" : keys[0] || "loss",
       color: "fitness",
+      // "2d", or a 3-D view: "insertion" raises genomes by when they were inserted, "projection" uses a third projected axis
+      view: "2d",
       showLinks: true,
       showBestPath: true,
       until: null,
@@ -3585,6 +3715,7 @@
 
     const chart = createSearchSpaceChart(chartNode, {
       color: state.color,
+      zAxis: null,
       showLinks: state.showLinks,
       showBestPath: state.showBestPath,
       until: state.until,
@@ -3605,6 +3736,7 @@
       const options = payload ? payload.options : { metrics: [], projections: [] };
       const describe = (entries, value) => (entries.find((entry) => entry.name === value) || {}).description || "";
       const colorOptions = [["fitness", "fitness"], ["island", "island"], ["insert_type", "insert type"], ["family", "operator"]];
+      const viewOptions = [["2d", "2D"], ["insertion", "3D · Z = insertion"], ["projection", "3D · Z = 3rd axis"]];
       setChildren(controls,
         h("label", { title: describe(options.metrics, state.metric) }, "distance", select(options.metrics.map((entry) => [entry.name, entry.label]), state.metric, (value) => {
           state.metric = value;
@@ -3618,6 +3750,12 @@
           state.yKey = value;
           load(true);
         }, "Fitness key")),
+        h("label", { title: "3-D views turn by dragging" }, "view", select(viewOptions, state.view, (value) => {
+          const needsThird = value === "projection" && !(state.payload && state.payload.dimensions === 3);
+          state.view = value;
+          if (needsThird) load(false);
+          else chart.setOptions({ zAxis: value === "2d" ? null : value });
+        }, "View")),
         h("label", {}, "color by", select(colorOptions, state.color, (value) => {
           state.color = value;
           chart.setOptions({ color: value });
@@ -3741,7 +3879,7 @@
       const current = ++request;
       stopPlaying();
       renderStatus("Computing the projection… (the first one for a run computes every genome's features, which can take a while)");
-      const parameters = new URLSearchParams({ y: state.yKey, dimensions: "2" });
+      const parameters = new URLSearchParams({ y: state.yKey, dimensions: state.view === "projection" ? "3" : "2" });
       if (state.metric) parameters.set("metric", state.metric);
       if (state.projection) parameters.set("projection", state.projection);
       try {
@@ -3757,7 +3895,7 @@
         if (!payload.genome_number.length) {
           renderStatus(payload.skipped.length ? `No genome could be placed: ${payload.skipped[0].reason}.` : "This run has no genomes to place yet.", Boolean(payload.skipped.length));
         }
-        chart.setOptions({ until: state.until });
+        chart.setOptions({ until: state.until, zAxis: state.view === "2d" ? null : state.view });
         chart.setData(payload, keepView);
       } catch (error) {
         if (destroyed || current !== request) return;

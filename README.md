@@ -1107,7 +1107,10 @@ Then open `http://127.0.0.1:8000/` in a browser. The page has:
   best to the next, with the current best ringed. A slider (or **Replay**) shows
   only the genomes inserted up to an insertion, so the search can be watched
   moving through the space. Scroll to zoom, drag to pan, double-click to reset,
-  and click a genome to open it on the run's page. The first projection of a run
+  and click a genome to open it on the run's page. The *view* menu also draws it
+  in 3-D, with the projection across and either the insertion (so the global
+  best's path climbs through time, and each island's genomes rise as it evolves)
+  or the projection's third axis up; drag to turn it and Shift-drag to pan. The first projection of a run
   computes every genome's unitary in a worker process and keeps them, so later
   views, and a live run's new genomes (offered by an *Add new genomes* button),
   only compute what is new.
