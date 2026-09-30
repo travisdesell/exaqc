@@ -3207,7 +3207,8 @@
    *   "family"), `showLinks`, `showBestPath`, `until` (an insertion, or null
    *   for every genome), `zAxis` (null for 2-D, "insertion" to raise each
    *   genome by when it was inserted, or "projection" for the projection's
-   *   third axis) and `onSelect(genomeNumber)`.
+   *   third axis), `onSelect(genomeNumber)` and optionally `reserveBelow()`,
+   *   the height (CSS pixels) to leave free below the chart.
    * @returns {{setData: Function, setOptions: Function, destroy: Function}}
    */
   function createSearchSpaceChart(container, config) {
@@ -3383,7 +3384,9 @@
     function size() {
       const width = Math.max(280, host.clientWidth);
       const top = host.getBoundingClientRect().top;
-      const height = Math.max(420, Math.min(900, window.innerHeight - Math.max(top, 0) - 40));
+      // leave room for whatever the page shows below the chart (the island separation panel)
+      const below = config.reserveBelow ? config.reserveBelow() : 0;
+      const height = Math.max(420, Math.min(900, window.innerHeight - Math.max(top, 0) - 40 - below));
       return { width, height };
     }
 
@@ -3682,6 +3685,177 @@
     };
   }
 
+  /** The silhouette above which islands occupy visibly different regions, drawn as a reference line. */
+  const SEPARATION_VISIBLE = 0.25;
+
+  /**
+   * A small chart of how separate a run's islands were as the search went on:
+   * the islands' silhouette (see src/analysis/search_space) at each measured
+   * insertion, with 0 (overlapping) and SEPARATION_VISIBLE (visibly apart)
+   * marked, each island extinction as a tick on the time axis, and the replay
+   * slider's position as a vertical line. Hovering reads off the nearest point.
+   *
+   * @param {HTMLElement} container Where the chart goes.
+   * @returns {{setData: Function, setUntil: Function, destroy: Function}}
+   */
+  function createSeparationChart(container) {
+    const caption = h("div", { class: "chart-legend" });
+    const canvas = h("canvas", { class: "separation-canvas", role: "img", "aria-label": "Island separation over the run" });
+    const tooltip = h("div", { class: "chart-tooltip", hidden: true });
+    const host = h("div", { class: "chart-host" }, canvas, tooltip);
+    setChildren(container, caption, host);
+
+    const HEIGHT = 170;
+    const PAD = { left: 44, right: 14, top: 10, bottom: 26 };
+    let data = null;
+    let until = null;
+
+    function scales(width) {
+      const values = data.silhouette.filter(isNumber);
+      const low = Math.min(-0.1, ...values);
+      const high = Math.max(SEPARATION_VISIBLE + 0.1, ...values);
+      const x0 = data.insertion[0];
+      const x1 = data.insertion[data.insertion.length - 1];
+      const x = (value) => PAD.left + ((value - x0) / Math.max(x1 - x0, 1)) * (width - PAD.left - PAD.right);
+      const y = (value) => PAD.top + ((high - value) / Math.max(high - low, 1e-9)) * (HEIGHT - PAD.top - PAD.bottom);
+      return { x, y, low, high, x0, x1 };
+    }
+
+    function draw() {
+      if (!data) return;
+      const width = Math.max(280, host.clientWidth);
+      const ratio = window.devicePixelRatio || 1;
+      canvas.width = Math.round(width * ratio);
+      canvas.height = Math.round(HEIGHT * ratio);
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${HEIGHT}px`;
+      const ctx = canvas.getContext("2d");
+      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      ctx.fillStyle = token("--surface-1");
+      ctx.fillRect(0, 0, width, HEIGHT);
+      const { x, y, low, high, x0, x1 } = scales(width);
+      const font = token("--font") || "sans-serif";
+      ctx.font = `11px ${font}`;
+
+      // reference lines: 0 (islands overlap) and the level at which they look apart
+      for (const [value, dashed] of [[0, false], [SEPARATION_VISIBLE, true]]) {
+        ctx.strokeStyle = token(dashed ? "--baseline" : "--gridline");
+        ctx.setLineDash(dashed ? [4, 4] : []);
+        ctx.beginPath();
+        ctx.moveTo(PAD.left, y(value));
+        ctx.lineTo(width - PAD.right, y(value));
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      ctx.fillStyle = token("--text-secondary");
+      ctx.textAlign = "right";
+      ctx.textBaseline = "middle";
+      // the range's ends are labelled only where they would not crowd the reference lines' labels
+      const labelled = [0, SEPARATION_VISIBLE];
+      for (const end of [low, high]) if (labelled.every((value) => Math.abs(y(value) - y(end)) > 14)) labelled.push(end);
+      for (const value of labelled) ctx.fillText(value.toFixed(2), PAD.left - 6, Math.max(PAD.top + 4, Math.min(HEIGHT - PAD.bottom - 4, y(value))));
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      for (let k = 0; k <= 4; k++) {
+        const value = Math.round(x0 + ((x1 - x0) * k) / 4);
+        ctx.fillText(formatNumber(value), x(value), HEIGHT - PAD.bottom + 6);
+      }
+      ctx.textAlign = "start";
+      ctx.textBaseline = "alphabetic";
+
+      // extinctions, as ticks rising from the time axis
+      ctx.strokeStyle = token("--danger");
+      ctx.lineWidth = 1.5;
+      for (const event of data.extinctions) {
+        ctx.beginPath();
+        ctx.moveTo(x(event.insertion), HEIGHT - PAD.bottom);
+        ctx.lineTo(x(event.insertion), HEIGHT - PAD.bottom - 12);
+        ctx.stroke();
+      }
+
+      // the separation, broken wherever it is undefined
+      ctx.strokeStyle = token("--series-1");
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      let drawing = false;
+      data.insertion.forEach((insertion, i) => {
+        const value = data.silhouette[i];
+        if (!isNumber(value)) {
+          drawing = false;
+          return;
+        }
+        if (drawing) ctx.lineTo(x(insertion), y(value));
+        else ctx.moveTo(x(insertion), y(value));
+        drawing = true;
+      });
+      ctx.stroke();
+      ctx.fillStyle = token("--series-1");
+      data.insertion.forEach((insertion, i) => {
+        if (!isNumber(data.silhouette[i])) return;
+        ctx.beginPath();
+        ctx.arc(x(insertion), y(data.silhouette[i]), 2.5, 0, 2 * Math.PI);
+        ctx.fill();
+      });
+
+      if (until !== null) {
+        ctx.strokeStyle = token("--text-primary");
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x(until), PAD.top);
+        ctx.lineTo(x(until), HEIGHT - PAD.bottom);
+        ctx.stroke();
+      }
+    }
+
+    canvas.addEventListener("mousemove", (event) => {
+      if (!data) return;
+      const rect = canvas.getBoundingClientRect();
+      const { x } = scales(rect.width);
+      const left = event.clientX - rect.left;
+      let nearest = 0;
+      data.insertion.forEach((insertion, i) => {
+        if (Math.abs(x(insertion) - left) < Math.abs(x(data.insertion[nearest]) - left)) nearest = i;
+      });
+      const extinct = data.extinctions.filter((entry) => entry.insertion === data.insertion[nearest]);
+      setChildren(tooltip,
+        h("div", {}, h("b", { text: `insertion ${formatNumber(data.insertion[nearest])}` })),
+        h("div", {}, h("span", { class: "muted", text: "silhouette: " }), formatNumber(data.silhouette[nearest])),
+        h("div", { class: "muted", text: `over ${formatNumber(data.genomes[nearest])} genomes` }),
+        extinct.length ? h("div", { class: "muted", text: `extinction of island ${extinct.map((entry) => entry.island).join(", ")}` }) : null
+      );
+      tooltip.hidden = false;
+      const flip = left + tooltip.offsetWidth + 20 > host.clientWidth;
+      tooltip.style.left = `${flip ? left - tooltip.offsetWidth - 14 : left + 14}px`;
+      tooltip.style.top = "8px";
+    });
+    canvas.addEventListener("mouseleave", () => (tooltip.hidden = true));
+
+    const resizeObserver = new ResizeObserver(() => draw());
+    resizeObserver.observe(host);
+
+    return {
+      /** Shows a run's island separation (as the search-space payload gives it) for the named metric. */
+      setData(separation, metricLabel) {
+        data = separation;
+        const overall = isNumber(separation.overall) ? formatNumber(separation.overall) : "—";
+        setChildren(caption,
+          h("b", { text: "Island separation" }),
+          h("span", { class: "muted", text: `silhouette by island under ${metricLabel}, over the ${separation.basis === "population" ? "population alive" : "genomes inserted so far"} at each insertion · whole run ${overall} · ≈0 overlapping, ≥${SEPARATION_VISIBLE} visibly apart` }),
+          separation.extinctions.length ? legendItem(token("--danger"), "extinction", true) : null
+        );
+        draw();
+      },
+      /** Marks the replay slider's position, or clears the mark with null. */
+      setUntil(value) {
+        until = value;
+        draw();
+      },
+      destroy() {
+        resizeObserver.disconnect();
+      },
+    };
+  }
+
   async function showSearchSpacePage(index) {
     const run = await api(`/api/runs/${index}`);
     setBreadcrumbs([{ label: "Runs", href: "#/" }, { label: run.name, href: `#/run/${index}` }, { label: "Search space" }]);
@@ -3711,7 +3885,11 @@
     const replay = h("div", { class: "toolbar" });
     const status = h("div", { class: "meta space-status" });
     const chartNode = h("div");
-    setChildren(app, headerNode, h("section", { class: "card", "aria-label": "Search space" }, controls, replay, status, chartNode));
+    // how separate the islands were over the run, for island searches only
+    const separationNode = h("div", { class: "separation-panel" });
+    separationNode.hidden = true;
+    setChildren(app, headerNode, h("section", { class: "card", "aria-label": "Search space" }, controls, replay, status, chartNode, separationNode));
+    const separation = createSeparationChart(separationNode);
 
     const chart = createSearchSpaceChart(chartNode, {
       color: state.color,
@@ -3720,6 +3898,7 @@
       showBestPath: state.showBestPath,
       until: state.until,
       onSelect: (genome) => (location.hash = genomeHref(index, genome)),
+      reserveBelow: () => (separationNode.hidden ? 0 : separationNode.offsetHeight + 12),
     });
 
     setChildren(headerNode,
@@ -3784,6 +3963,7 @@
     /** Shows the genomes inserted up to `until`, moving the slider and readout to match. */
     function showUntil(until, maxInsertion) {
       state.until = until >= maxInsertion ? null : until;
+      separation.setUntil(state.until);
       if (replayNodes) {
         replayNodes.slider.value = until;
         replayNodes.readout.textContent = `up to insertion ${formatNumber(until)} of ${formatNumber(maxInsertion)}`;
@@ -3899,6 +4079,14 @@
         }
         chart.setOptions({ until: state.until, zAxis: state.view === "2d" ? null : state.view });
         chart.setData(payload, keepView);
+        separationNode.hidden = !payload.island_separation;
+        if (payload.island_separation) {
+          const metric = payload.options.metrics.find((entry) => entry.name === payload.metric);
+          separation.setData(payload.island_separation, metric ? metric.label : payload.metric);
+          separation.setUntil(state.until);
+        }
+        // the chart's height depends on the panel below it, so it is drawn once the panel is in place
+        chart.setOptions({});
       } catch (error) {
         if (destroyed || current !== request) return;
         renderStatus(error.message, true);
@@ -3929,6 +4117,7 @@
         clearInterval(timer);
         stopPlaying();
         chart.destroy();
+        separation.destroy();
       },
     };
   }

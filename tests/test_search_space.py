@@ -27,8 +27,10 @@ from src.analysis.search_space import (
     best_path,
     get_distance,
     get_projection,
+    island_separation,
     options,
     register_distance,
+    silhouette,
 )
 from src.analysis.search_space.projections import align, classical_mds
 from src.analysis.search_space.unitary import circuit_unitary
@@ -424,6 +426,53 @@ def test_best_path_follows_insertion_order() -> None:
     assert best_path([], [], [], higher=False) == []
 
 
+def test_silhouette_scores_how_far_apart_groups_are() -> None:
+    """Separate groups score near 1, mixed ones near 0, and undefined cases None."""
+
+    points = np.array([0.0, 0.1, 0.2, 10.0, 10.1, 10.2])
+    distances = np.abs(points[:, None] - points[None, :])
+    assert silhouette(distances, [0, 0, 0, 1, 1, 1]) > 0.9
+    assert silhouette(distances, [0, 1, 0, 1, 0, 1]) < 0.1
+    assert silhouette(distances, [0] * 6) is None
+    assert silhouette(distances[:2, :2], [0, 1]) is None
+
+
+def test_island_separation_replays_the_population() -> None:
+    """Separation is measured over the living population, and extinctions are found."""
+
+    # islands 0 and 1 sit apart; genome 5 (island 1) later lands among island 0's
+    positions = {1: 0.0, 2: 0.1, 3: 10.0, 4: 10.1, 5: 0.05, 6: 10.2}
+    numbers = sorted(positions)
+    values = np.array([positions[number] for number in numbers])
+    distances = np.abs(values[:, None] - values[None, :])
+    islands = [0, 0, 1, 1, 1, 1]
+    insertions = [1, 2, 3, 4, 5, 6]
+    events = [
+        (1, [1], []),
+        (2, [2], []),
+        (3, [3], []),
+        (4, [4], []),
+        # island 1 goes extinct and is repopulated with 5 and 6
+        (5, [5], [3, 4]),
+        (6, [6], []),
+    ]
+    separation = island_separation(
+        distances, numbers, islands, insertions, events, checkpoints=6
+    )
+    assert separation["basis"] == "population"
+    assert separation["insertion"] == [1, 2, 3, 4, 5, 6]
+    assert separation["genomes"] == [1, 2, 3, 4, 3, 4]
+    # one genome, then one island only: undefined; a lone genome on island 1 scores 0
+    assert separation["silhouette"][:2] == [None, None]
+    assert 0 < separation["silhouette"][2] < separation["silhouette"][3]
+    assert separation["silhouette"][3] > 0.9
+    # after the extinction island 1's genome 5 sits among island 0's
+    assert separation["silhouette"][4] < 0
+    assert separation["extinctions"] == [{"insertion": 5, "island": 1}]
+
+    assert island_separation(distances, numbers, [None] * 6, insertions, events) is None
+
+
 def _build_archive(directory: Path, genomes: list[_StoredGenome]) -> str:
     """Writes an archive holding the genomes, in insertion order.
 
@@ -490,6 +539,14 @@ def test_building_a_search_space_from_an_archive(tmp_path: Path, monkeypatch) ->
     ]
     assert payload["skipped"] == []
     assert payload["context"] == {"qubits": [["input", 0], ["input", 1]]}
+    # no population changes were recorded, so separation is measured over every
+    # genome inserted so far, on islands 1, 0, 1 (the archive's insertion % 2)
+    separation = payload["island_separation"]
+    assert separation["basis"] == "inserted"
+    assert separation["insertion"] == [1, 2, 3]
+    assert separation["genomes"] == [1, 2, 3]
+    assert separation["silhouette"][:2] == [None, None]
+    assert separation["extinctions"] == []
     assert featurized == [1, 2, 3]
 
     with GenomeArchive.create(str(tmp_path / "run")) as archive:

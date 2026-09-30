@@ -891,6 +891,8 @@ def test_search_space(viewer_url: str) -> None:
     assert "classical_mds" in [
         entry["name"] for entry in payload["options"]["projections"]
     ]
+    # a run without islands has no island separation to show
+    assert payload["island_separation"] is None
 
     three = get_json(
         f"{viewer_url}/api/runs/0/search_space?metric=jaccard&dimensions=3&y=target_metric"

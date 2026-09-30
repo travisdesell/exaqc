@@ -42,7 +42,9 @@ from src.analysis.search_space.search_space import (
     best_path,
     build_search_space,
     default_metric,
+    island_separation,
     options,
+    silhouette,
 )
 
 __all__ = [
@@ -65,7 +67,9 @@ __all__ = [
     "default_metric",
     "get_distance",
     "get_projection",
+    "island_separation",
     "options",
     "register_distance",
     "register_projection",
+    "silhouette",
 ]

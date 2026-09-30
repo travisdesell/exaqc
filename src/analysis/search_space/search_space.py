@@ -15,6 +15,7 @@ as genomes arrive.
 
 from __future__ import annotations
 
+import json
 import math
 import threading
 from collections import OrderedDict
@@ -46,6 +47,9 @@ CLASSIFICATION_METRIC = "behaviour"
 
 #: The order metrics are offered in; metrics registered later follow.
 METRIC_ORDER = ("behaviour", "readout", "fubini_study", "jaccard")
+
+#: How many points of a run the island separation is measured at, at most.
+SEPARATION_CHECKPOINTS = 50
 
 #: The most runs a builder keeps computed features for; the least recently
 #: used is dropped first.
@@ -109,6 +113,139 @@ def best_path(
             best = value
             path.append(genome_number)
     return path
+
+
+def silhouette(distances: np.ndarray, labels: list[Any]) -> float | None:
+    """Scores how well groups of genomes separate (the mean silhouette).
+
+    Each genome's silhouette is ``(b - a) / max(a, b)``, where ``a`` is its mean
+    distance to the other genomes of its group and ``b`` its mean distance to the
+    genomes of the nearest other group; the score is their mean over every
+    genome. Around 0 the groups overlap, above about 0.25 they occupy visibly
+    different regions, and 1 means they are fully separate. A genome alone in its
+    group scores 0, as scikit-learn defines it.
+
+    Args:
+        distances: The symmetric distance matrix between the genomes.
+        labels: Each genome's group, row for row.
+
+    Returns:
+        The mean silhouette, or ``None`` when it is undefined: fewer than two
+        groups, or no group with more than one genome.
+    """
+
+    groups = sorted(set(labels), key=str)
+    count = len(labels)
+    if len(groups) < 2 or len(groups) >= count:
+        return None
+
+    from sklearn.metrics import silhouette_score
+
+    return float(silhouette_score(distances, labels, metric="precomputed"))
+
+
+def island_separation(
+    distances: np.ndarray,
+    genome_numbers: list[int],
+    islands: list[int | None],
+    insertions: list[int | None],
+    events: list[tuple[int, list[int], list[int]]],
+    checkpoints: int = SEPARATION_CHECKPOINTS,
+) -> dict[str, Any] | None:
+    """Measures how separate a run's islands are as the search goes on.
+
+    At evenly spaced insertions, the islands' silhouette (see :func:`silhouette`)
+    is computed over the genomes then in the population -- replayed from the
+    run's recorded population changes -- using the full distances, not a
+    projection. A run that recorded no population changes is measured over every
+    genome inserted so far instead. Island extinctions (an event removing every
+    genome an island held) are listed so they can be marked on the time axis.
+
+    Args:
+        distances: The distances between the placed genomes.
+        genome_numbers: The placed genomes, row for row.
+        islands: Each placed genome's island.
+        insertions: Each placed genome's insertion.
+        events: The run's population changes, as ``(step, added, removed)`` in
+            step order (a step is an insertion).
+        checkpoints: How many insertions to measure at, at most.
+
+    Returns:
+        ``None`` for a run without islands; otherwise ``basis`` (``"population"``
+        or ``"inserted"``: what each point was measured over), parallel lists
+        ``insertion``, ``silhouette`` (``None`` where undefined) and ``genomes``
+        (how many genomes each point measured), ``overall`` (the silhouette of
+        every placed genome together) and ``extinctions`` (each extinction's
+        ``insertion`` and ``island``).
+    """
+
+    if not any(island is not None for island in islands):
+        return None
+
+    row_of = {number: row for row, number in enumerate(genome_numbers)}
+    island_of = {
+        number: island
+        for number, island in zip(genome_numbers, islands)
+        if island is not None
+    }
+    known = [insertion for insertion in insertions if insertion is not None]
+    if not known:
+        return None
+    first, last = min(known), max(known)
+    steps = sorted(
+        {
+            int(round(first + (last - first) * k / max(checkpoints - 1, 1)))
+            for k in range(checkpoints)
+        }
+    )
+
+    def score(members: list[int]) -> float | None:
+        """Scores the islands among the given (placed, island-labelled) genomes."""
+        rows = [row_of[number] for number in members]
+        return silhouette(
+            distances[np.ix_(rows, rows)], [island_of[number] for number in members]
+        )
+
+    points: list[tuple[int, float | None, int]] = []
+    extinctions: list[dict[str, int]] = []
+    if events:
+        basis = "population"
+        members: set[int] = set()
+        cursor = 0
+        for step in steps:
+            while cursor < len(events) and events[cursor][0] <= step:
+                event_step, added, removed = events[cursor]
+                held: dict[int, set[int]] = {}
+                for number in members:
+                    if number in island_of:
+                        held.setdefault(island_of[number], set()).add(number)
+                gone = set(removed)
+                for island, numbers in sorted(held.items()):
+                    if numbers and numbers <= gone:
+                        extinctions.append({"insertion": event_step, "island": island})
+                members.difference_update(removed)
+                members.update(added)
+                cursor += 1
+            present = sorted(number for number in members if number in island_of)
+            points.append((step, score(present), len(present)))
+    else:
+        basis = "inserted"
+        for step in steps:
+            present = sorted(
+                number
+                for number, insertion in zip(genome_numbers, insertions)
+                if insertion is not None and insertion <= step and number in island_of
+            )
+            points.append((step, score(present), len(present)))
+
+    return {
+        "basis": basis,
+        "insertion": [step for step, _, _ in points],
+        "silhouette": [value for _, value, _ in points],
+        "genomes": [count for _, _, count in points],
+        "overall": score(sorted(island_of)),
+        "extinctions": extinctions,
+    }
 
 
 def default_metric(run_info: dict[str, Any] | None) -> str:
@@ -251,8 +388,10 @@ class SearchSpaceBuilder:
             (the successive global bests, see :func:`best_path`); ``skipped``
             (each genome left out, with the reason); ``quality`` (the
             projection's own measures); ``distance`` (the ``min``/``max``/``mean``
-            off-diagonal distance); and ``context`` (what the metric compared
-            the genomes over, e.g. the qubits).
+            off-diagonal distance); ``context`` (what the metric compared
+            the genomes over, e.g. the qubits); and ``island_separation`` (how
+            separate the islands were as the run went on, see
+            :func:`island_separation`; ``None`` for a run without islands).
 
         Raises:
             ValueError: If the metric, projection, dimensions or fitness key is
@@ -273,6 +412,12 @@ class SearchSpaceBuilder:
                 run_info = reader.run_info()
                 points = reader.points(fitness_key)
                 links = reader.parent_links()
+                events = [
+                    (int(step), json.loads(added or "[]"), json.loads(removed or "[]"))
+                    for step, added, removed in reader.connection.execute(
+                        "SELECT step, added, removed FROM population_events ORDER BY step"
+                    )
+                ]
                 for genome_number in points["genome_number"]:
                     if genome_number not in cache.genomes:
                         cache.genomes[genome_number] = reader.get_genome_dict(
@@ -353,6 +498,13 @@ class SearchSpaceBuilder:
                 "mean": float(off_diagonal.mean()) if off_diagonal.size else None,
             },
             "context": _describe_context(metric, context),
+            "island_separation": island_separation(
+                matrix,
+                placed_numbers,
+                [points["island"][i] for i in placed],
+                insertions,
+                events,
+            ),
         }
 
     @staticmethod

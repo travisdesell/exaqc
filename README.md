@@ -1121,7 +1121,13 @@ Then open `http://127.0.0.1:8000/` in a browser. The page has:
   and click a genome to open it on the run's page. The *view* menu also draws it
   in 3-D, with the projection across and either the insertion (so the global
   best's path climbs through time, and each island's genomes rise as it evolves)
-  or the projection's third axis up; drag to turn it and Shift-drag to pan. The first projection of a run
+  or the projection's third axis up; drag to turn it and Shift-drag to pan. For
+  an island search, an **Island separation** panel below charts how far apart
+  the islands were as the run went on: the islands' silhouette under the chosen
+  metric (around 0 when they overlap, above about 0.25 when they occupy visibly
+  different regions), measured on the full distances -- not the projection --
+  over the population alive at each insertion, with each island extinction
+  marked and the replay slider's position drawn across it. The first projection of a run
   computes every genome's unitary in a worker process and keeps them, so later
   views, and a live run's new genomes (offered by an *Add new genomes* button),
   only compute what is new.
