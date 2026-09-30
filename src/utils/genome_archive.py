@@ -42,6 +42,7 @@ from loguru import logger
 
 if TYPE_CHECKING:
     from src.circuits.circuit import CircuitGenome
+    from src.utils.phase_timer import PhaseTimer
 
 #: File name of the archive inside a run's output directory.
 ARCHIVE_FILENAME = "genomes.sqlar"
@@ -51,8 +52,34 @@ ARCHIVE_FILENAME = "genomes.sqlar"
 #: rather than listed.
 _METRIC_SERIES = re.compile(r"_(epoch|episode)_metrics$")
 
-#: Version of the archive layout, recorded in ``run_info``.
-ARCHIVE_FORMAT_VERSION = 5
+#: Version of the archive layout, recorded in ``run_info``. Version 6 added the
+#: per-genome timing columns (:data:`TIMING_COLUMNS`) and the ``master_timing``
+#: table.
+ARCHIVE_FORMAT_VERSION = 6
+
+#: Per-genome timing summary columns, added in archive format 6: how long the
+#: evaluating worker waited for the genome, how long the master took to generate
+#: it, and how long it took from being generated to being taken back for
+#: insertion (both on the master's clock). Archives written before them lack
+#: these columns, which reads treat as "no timing recorded".
+TIMING_COLUMNS: tuple[str, ...] = (
+    "request_wait_seconds",
+    "generation_seconds",
+    "turnaround_seconds",
+)
+
+#: Columns of the ``master_timing`` table: one row per interval of the MPI
+#: master's loop (see :mod:`src.evolution.master_worker`), keyed by the
+#: insertion count at its end, with its wall time, how many genomes it inserted,
+#: and the ``{"seconds", "count"}`` of each loop phase and insertion part as JSON.
+MASTER_TIMING_FIELDS: tuple[str, ...] = (
+    "step",
+    "recorded_at",
+    "wall_seconds",
+    "genomes",
+    "phases",
+    "insert_parts",
+)
 
 #: The kinds of current-best genome files kept in the output directory: the best
 #: genome by the search's own ranking and the best by ``fitness["target_metric"]``.
@@ -89,6 +116,7 @@ SORTABLE_COLUMNS = frozenset(
         "evaluated_host",
         "evaluated_rank",
         "discard_reason",
+        *TIMING_COLUMNS,
     }
 )
 
@@ -102,6 +130,7 @@ _NUMERIC_COLUMNS = (
     "n_cnot",
     "n_rot",
     "evaluation_seconds",
+    *TIMING_COLUMNS,
 )
 
 #: Filters :meth:`GenomeArchive.list_genomes` understands.
@@ -121,7 +150,8 @@ _SUMMARY_COLUMNS = (
     "crossover_type, island, n_gates, n_enabled_gates, n_parameters, "
     "n_cnot, n_rot, max_innovation_number, generated_at_insertion, "
     "evaluation_seconds, evaluated_host, evaluated_rank, discard_reason, "
-    "final_metrics, fitness"
+    "final_metrics, fitness, request_wait_seconds, generation_seconds, "
+    "turnaround_seconds"
 )
 
 _SCHEMA = """
@@ -153,6 +183,9 @@ CREATE TABLE IF NOT EXISTS genomes(
     discard_reason TEXT,
     final_metrics TEXT,
     fitness TEXT,
+    request_wait_seconds REAL,
+    generation_seconds REAL,
+    turnaround_seconds REAL,
     loss REAL GENERATED ALWAYS AS (json_extract(fitness, '$.loss')) VIRTUAL,
     target_metric REAL GENERATED ALWAYS AS
         (json_extract(fitness, '$.target_metric')) VIRTUAL
@@ -172,6 +205,14 @@ CREATE INDEX IF NOT EXISTS genome_parents_parent ON genome_parents(parent);
 CREATE TABLE IF NOT EXISTS run_info(
     key TEXT PRIMARY KEY,
     value TEXT
+);
+CREATE TABLE IF NOT EXISTS master_timing(
+    step INTEGER PRIMARY KEY,
+    recorded_at REAL,
+    wall_seconds REAL,
+    genomes INTEGER,
+    phases TEXT,
+    insert_parts TEXT
 );
 """
 
@@ -438,6 +479,42 @@ def _finite_or_none(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_finite_or_none(item) for item in value]
     return value
+
+
+def _seconds(value: Any) -> float | None:
+    """Reads a recorded duration, if it is a finite number.
+
+    Args:
+        value: A value from a genome's ``timing`` metadata.
+
+    Returns:
+        The value as a float, or ``None`` when it is missing or not finite.
+    """
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) else None
+
+
+def _turnaround_seconds(timing: dict[str, Any]) -> float | None:
+    """Computes how long a genome took from being generated to being inserted.
+
+    Both timestamps are taken on the search's own (master) clock, so their
+    difference is reliable even when the genome was evaluated on another host.
+
+    Args:
+        timing: The genome's ``timing`` metadata.
+
+    Returns:
+        ``inserted_at - generated_at`` in seconds, or ``None`` when either is
+        missing.
+    """
+
+    generated = _seconds(timing.get("generated_at"))
+    inserted = _seconds(timing.get("inserted_at"))
+    if generated is None or inserted is None:
+        return None
+    return inserted - generated
 
 
 def _flatten_numbers(record: dict[str, Any], prefix: str = "") -> dict[str, float]:
@@ -750,6 +827,9 @@ def _summary_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
         discard_reason,
         final_metrics,
         fitness,
+        request_wait_seconds,
+        generation_seconds,
+        turnaround_seconds,
     ) = row
 
     return {
@@ -773,6 +853,9 @@ def _summary_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
         "discard_reason": discard_reason,
         "final_metrics": json.loads(final_metrics) if final_metrics else {},
         "fitness": json.loads(fitness) if fitness else None,
+        "request_wait_seconds": request_wait_seconds,
+        "generation_seconds": generation_seconds,
+        "turnaround_seconds": turnaround_seconds,
     }
 
 
@@ -1027,6 +1110,12 @@ class GenomeArchive:
             connection: The open SQLite connection to it.
             writable: Whether the archive was opened for writing.
             shared_file_system: Whether shared-file-system settings are in use.
+
+        Returns:
+            None. Sets the archive's path, connection and mode, and
+            ``genome_columns`` -- the ``genomes`` columns this archive has, so
+            reads of an archive written before a column existed (such as the
+            :data:`TIMING_COLUMNS`) see it as unrecorded rather than failing.
         """
 
         self.path = path
@@ -1036,6 +1125,55 @@ class GenomeArchive:
         self.shared_file_system = shared_file_system
         self._population_members: set[int] = set()
         self._closed = False
+        self.genome_columns: frozenset[str] = frozenset(
+            row[1] for row in connection.execute("PRAGMA table_xinfo(genomes)")
+        )
+
+    def has_timing_columns(self) -> bool:
+        """Reports whether this archive records per-genome timing columns.
+
+        Returns:
+            True for archives of format 6 or later, which have every one of
+            :data:`TIMING_COLUMNS`.
+        """
+
+        return all(column in self.genome_columns for column in TIMING_COLUMNS)
+
+    def _summary_select(self) -> str:
+        """Returns the summary columns to select, allowing for older archives.
+
+        Returns:
+            :data:`_SUMMARY_COLUMNS` with any timing column this archive lacks
+            selected as ``NULL`` instead, so rows keep the same shape.
+        """
+
+        return ", ".join(
+            (
+                f"NULL AS {column}"
+                if column in TIMING_COLUMNS and column not in self.genome_columns
+                else column
+            )
+            for column in (name.strip() for name in _SUMMARY_COLUMNS.split(","))
+        )
+
+    def _value_expression(self, key: str) -> tuple[str, list[Any]]:
+        """Builds the SQL expression reading a column, fitness key or metric.
+
+        Args:
+            key: A summary column, fitness key or recorded training metric (see
+                :func:`_sort_expression`).
+
+        Returns:
+            The SQL expression and its parameters; ``NULL`` for a timing column
+            this archive predates.
+
+        Raises:
+            ValueError: If ``key`` is not a valid key.
+        """
+
+        if key in TIMING_COLUMNS and key not in self.genome_columns:
+            return "NULL", []
+        return _sort_expression(key)
 
     def __enter__(self) -> GenomeArchive:
         """Enters a ``with`` block.
@@ -1221,6 +1359,9 @@ class GenomeArchive:
             metadata.get("discard_reason"),
             json.dumps(_finite_or_none(_final_metrics(metadata))),
             json.dumps(_finite_or_none(serialized.get("fitness"))),
+            _seconds(timing.get("request_wait_seconds")),
+            _seconds(timing.get("generation_seconds")),
+            _turnaround_seconds(timing),
         )
         parents = sorted(
             {int(parent) for parent in metadata.get("parent_genomes") or []}
@@ -1356,6 +1497,62 @@ class GenomeArchive:
         if self._write(f"population step {step}", store):
             self._population_members = members
 
+    def record_master_timing(
+        self,
+        step: int,
+        wall_seconds: float,
+        genomes: int,
+        phases: PhaseTimer,
+        insert_parts: PhaseTimer,
+    ) -> None:
+        """Records where the MPI master's time went over one interval.
+
+        Args:
+            step: The search's insertion count at the end of the interval (so
+                rows continue, rather than restart, when a run is restarted).
+            wall_seconds: How long the interval took.
+            genomes: How many genomes the master inserted during it.
+            phases: The master loop's phases over the interval (``idle`` and the
+                busy phases).
+            insert_parts: The parts of insertion over the interval.
+
+        Returns:
+            None. Writes (or replaces) the ``master_timing`` row for ``step``.
+
+        Raises:
+            RuntimeError: If the archive is read-only.
+        """
+
+        self._require_writable()
+
+        def encode(timer: PhaseTimer) -> str:
+            """Serializes a timer's phases as ``{phase: {seconds, count}}``."""
+
+            return json.dumps(
+                {
+                    phase: {"seconds": seconds, "count": timer.counts.get(phase, 0)}
+                    for phase, seconds in timer.seconds.items()
+                }
+            )
+
+        def store(connection: sqlite3.Connection) -> None:
+            """Writes the interval's row."""
+
+            connection.execute(
+                f"INSERT OR REPLACE INTO master_timing({', '.join(MASTER_TIMING_FIELDS)}) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    int(step),
+                    time.time(),
+                    float(wall_seconds),
+                    int(genomes),
+                    encode(phases),
+                    encode(insert_parts),
+                ),
+            )
+
+        self._write(f"master timing at step {step}", store)
+
     def population_at(self, step: int | None = None) -> list[int]:
         """Reconstructs which genomes the population held at a step.
 
@@ -1402,7 +1599,25 @@ class GenomeArchive:
             recorded training metrics, in that order.
         """
 
-        return [*_NUMERIC_COLUMNS, *self.fitness_keys(), *self.final_metric_keys()]
+        return [
+            *self._numeric_columns(),
+            *self.fitness_keys(),
+            *self.final_metric_keys(),
+        ]
+
+    def _numeric_columns(self) -> list[str]:
+        """Lists the numeric summary columns this archive actually has.
+
+        Returns:
+            :data:`_NUMERIC_COLUMNS`, less any timing column the archive was
+            written before.
+        """
+
+        return [
+            column
+            for column in _NUMERIC_COLUMNS
+            if column not in TIMING_COLUMNS or column in self.genome_columns
+        ]
 
     def primary_series_metrics(self) -> list[str]:
         """Lists the metrics worth offering ahead of the long tail.
@@ -1419,7 +1634,7 @@ class GenomeArchive:
             The subset of :meth:`series_metrics` to offer before the rest.
         """
 
-        primary = [*_NUMERIC_COLUMNS, *self.fitness_keys()]
+        primary = [*self._numeric_columns(), *self.fitness_keys()]
         for key in self.final_metric_keys():
             _, _, leaf = key.partition(".")
             if "." not in leaf or (leaf.count(".") == 1 and leaf.endswith(".mean")):
@@ -1451,7 +1666,7 @@ class GenomeArchive:
         # empty series instead of saying so.
         if metric not in self.series_metrics():
             raise ValueError(f"{metric!r} was not recorded by this run's genomes.")
-        expression, parameters = _sort_expression(metric)
+        expression, parameters = self._value_expression(metric)
 
         return {
             int(number): float(value)
@@ -1521,6 +1736,103 @@ class GenomeArchive:
                 columns["worst"].append(None)
 
         return columns
+
+    def master_timing(self) -> list[dict[str, Any]]:
+        """Returns the MPI master's recorded timing intervals, in order.
+
+        Returns:
+            One dict per ``master_timing`` row, keyed by
+            :data:`MASTER_TIMING_FIELDS` with ``phases`` and ``insert_parts``
+            decoded to ``{phase: {"seconds", "count"}}``. Empty when the run
+            recorded none: a serial run, or an archive written before format 6.
+        """
+
+        exists = self.connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'master_timing'"
+        ).fetchone()
+        if exists is None:
+            return []
+
+        rows = self.connection.execute(
+            f"SELECT {', '.join(MASTER_TIMING_FIELDS)} FROM master_timing ORDER BY step"
+        ).fetchall()
+        return [
+            {
+                "step": step,
+                "recorded_at": recorded_at,
+                "wall_seconds": wall_seconds,
+                "genomes": genomes,
+                "phases": json.loads(phases or "{}"),
+                "insert_parts": json.loads(insert_parts or "{}"),
+            }
+            for step, recorded_at, wall_seconds, genomes, phases, insert_parts in rows
+        ]
+
+    def worker_timing(self, boundaries: list[int]) -> list[dict[str, Any]]:
+        """Summarizes per-genome timing over consecutive insertion intervals.
+
+        Interval ``i`` covers the genomes inserted after ``boundaries[i - 1]``
+        (after 0 for the first) up to and including ``boundaries[i]``, matching
+        the intervals of :meth:`master_timing`.
+
+        Args:
+            boundaries: Ascending insertion counts, each ending one interval.
+
+        Returns:
+            One dict per interval: ``genomes`` (how many fell in it), the mean
+            ``request_wait_seconds``, ``evaluation_seconds``,
+            ``generation_seconds`` and ``turnaround_seconds`` of those that
+            recorded each (``None`` when none did), and ``wait_fraction`` --
+            total request wait over total wait plus evaluation, for genomes that
+            recorded both -- the share of a worker's time spent waiting.
+        """
+
+        columns = (
+            "request_wait_seconds",
+            "evaluation_seconds",
+            "generation_seconds",
+            "turnaround_seconds",
+        )
+        expressions = [self._value_expression(column)[0] for column in columns]
+        rows = self.connection.execute(
+            f"SELECT insertion, {', '.join(expressions)} FROM genomes "
+            "WHERE insertion IS NOT NULL ORDER BY insertion"
+        ).fetchall()
+
+        intervals: list[dict[str, Any]] = []
+        position = 0
+        for boundary in boundaries:
+            totals = {column: 0.0 for column in columns}
+            counts = {column: 0 for column in columns}
+            waited = 0.0
+            evaluated = 0.0
+            genomes = 0
+            while position < len(rows) and rows[position][0] <= boundary:
+                values = dict(zip(columns, rows[position][1:]))
+                genomes += 1
+                for column, value in values.items():
+                    if isinstance(value, (int, float)):
+                        totals[column] += float(value)
+                        counts[column] += 1
+                wait = values["request_wait_seconds"]
+                evaluation = values["evaluation_seconds"]
+                if isinstance(wait, (int, float)) and isinstance(
+                    evaluation, (int, float)
+                ):
+                    waited += float(wait)
+                    evaluated += float(evaluation)
+                position += 1
+
+            interval: dict[str, Any] = {"step": boundary, "genomes": genomes}
+            for column in columns:
+                interval[column] = (
+                    totals[column] / counts[column] if counts[column] else None
+                )
+            interval["wait_fraction"] = (
+                waited / (waited + evaluated) if waited + evaluated > 0 else None
+            )
+            intervals.append(interval)
+        return intervals
 
     def set_run_info(self, **values: Any) -> None:
         """Records facts about the run, such as its task and command line.
@@ -1635,7 +1947,7 @@ class GenomeArchive:
             ValueError: If ``key`` is not a valid key.
         """
 
-        expression, parameters = _sort_expression(key)
+        expression, parameters = self._value_expression(key)
         row = self.connection.execute(
             f"SELECT genome_number, {expression} AS value FROM genomes WHERE {expression} IS NOT NULL "
             f"ORDER BY value {'DESC' if higher_is_better else 'ASC'}, genome_number ASC LIMIT 1",
@@ -1686,7 +1998,7 @@ class GenomeArchive:
             ValueError: If ``y_key`` is not a valid key.
         """
 
-        expression, parameters = _sort_expression(y_key)
+        expression, parameters = self._value_expression(y_key)
         rows = self.connection.execute(
             f"SELECT genome_number, insertion, {expression}, insert_type, generated_by, crossover_type, island "
             "FROM genomes ORDER BY genome_number",
@@ -1749,7 +2061,7 @@ class GenomeArchive:
         summaries: dict[int, dict[str, Any]] = {}
         for chunk in _chunks(sorted(generations)):
             for row in self.connection.execute(
-                f"SELECT {_SUMMARY_COLUMNS} FROM genomes WHERE genome_number IN ({', '.join('?' * len(chunk))})",
+                f"SELECT {self._summary_select()} FROM genomes WHERE genome_number IN ({', '.join('?' * len(chunk))})",
                 chunk,
             ):
                 summary = _summary_from_row(row)
@@ -1871,12 +2183,12 @@ class GenomeArchive:
             ValueError: If the sort key or a filter is not supported.
         """
 
-        order_expression, order_parameters = _sort_expression(sort_key)
+        order_expression, order_parameters = self._value_expression(sort_key)
         where, where_parameters = _filter_clause(filters)
         direction = "DESC" if descending else "ASC"
 
         rows = self.connection.execute(
-            f"SELECT {_SUMMARY_COLUMNS} FROM genomes {where} "
+            f"SELECT {self._summary_select()} FROM genomes {where} "
             f"ORDER BY ({order_expression}) IS NULL, {order_expression} {direction}, genome_number ASC "
             "LIMIT ? OFFSET ?",
             [
@@ -1910,7 +2222,7 @@ class GenomeArchive:
         """
 
         row = self.connection.execute(
-            f"SELECT {_SUMMARY_COLUMNS} FROM genomes WHERE genome_number = ?",
+            f"SELECT {self._summary_select()} FROM genomes WHERE genome_number = ?",
             (int(genome_number),),
         ).fetchone()
         if row is None:

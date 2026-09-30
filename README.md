@@ -183,9 +183,23 @@ and [`reinforcement_learning`](#reinforcement_learning), because all three call
 | `--n_ary_crossover_rate` | `0.2` | Fraction of children made by multi-parent crossover |
 | `--exponential_crossover_rate` | `0.1` | Fraction of children made by depth-spliced crossover |
 | `--number_genomes` | `1000` | Total genomes to evaluate before stopping |
+| `--timing_report_every` | `1000` | Insertions between the MPI master's timing reports; `0` keeps only the final report |
 
 The three crossover rates must sum to at most `1.0`; the remainder is the
 mutation rate. With the defaults, 70% of children come from mutation.
+
+**Checking that the master keeps up.** Under MPI, one master process generates
+and inserts every genome, so with many workers or fast evaluations (e.g.
+`--epochs 0` / `--episodes 0`) it can become the bottleneck. Every
+`--timing_report_every` insertions, and once for the whole run at the end, the
+master logs an INFO line with its throughput, how much of its time was *busy*
+(generating, sending, deserializing and inserting genomes) versus *idle*
+(waiting for workers), the mean time of each of those steps, and the parts of an
+insertion (`population`, `archive`, `best_files` -- rewriting the current-best
+files, which renders two images -- and `population_events`). A busy share near
+100% means workers are queueing on the master. Each worker logs its own split
+between waiting on the master and evaluating when the run ends, and every genome
+records how long its worker waited for it as `timing.request_wait_seconds`.
 
 ### Circuit and genome arguments
 
@@ -331,13 +345,20 @@ targets through untouched. Classification supplies integer class labels with
 [cross-entropy](https://docs.pytorch.org/docs/stable/generated/torch.nn.CrossEntropyLoss.html);
 while teacher imitation supplies float target vectors with a distribution measure.
 
-Training uses [Adam](https://docs.pytorch.org/docs/stable/generated/torch.optim.Adam.html),
-snapshots the best weights by validation loss, restores them at the end, and
-stops early after `improvement_cutoff` epochs without improvement.
+Before training, the genome's inherited weights are evaluated as **epoch 0**.
+Only the validation history (`validation_epoch_metrics`) has an epoch 0, since
+nothing has been trained yet; training epochs are numbered `1` to `epochs`
+inclusive, so `training_epoch_metrics` starts at epoch 1. Training uses
+[Adam](https://docs.pytorch.org/docs/stable/generated/torch.optim.Adam.html),
+keeps the epoch with the lowest mean of training and validation loss, restores
+its weights at the end, and stops early after `improvement_cutoff` epochs
+without improvement. Epoch 0 competes too: if training never improves on the
+inherited weights they are kept, and `best_epoch` is `0`. With `--epochs 0` no
+training happens at all and every genome is scored on the weights it inherited.
 
 | Hyperparameter | Argument | Description |
 |---|---|---|
-| `epochs` | `--epochs` | Maximum training epochs per genome |
+| `epochs` | `--epochs` | Maximum training epochs per genome, after epoch 0; 0 scores the inherited weights only |
 | `learning_rate` | `--learning_rate`, `-lr` | Adam learning rate |
 | `weight_decay` | `--weight_decay` | Adam L2 regularisation |
 | `improvement_cutoff` | `--improvement_cutoff` | Epochs without validation improvement before stopping, 0 to disable |
@@ -351,6 +372,15 @@ algorithm subclasses it. Choose one with `--algo`.
 
 Terminology used throughout: a **step** is one interaction with the environment,
 an **episode** is a full rollout, and an **epoch** is one weight update.
+
+Before training, the genome's inherited weights are evaluated as **episode 0**
+of `evaluation_episode_metrics`. Training episodes are numbered `1` to
+`episodes` inclusive (so `training_episode_metrics` starts at episode 1), with
+an evaluation every `--log_every` episodes and after the last. The
+best-evaluated weights are restored at the end, and episode 0 competes too: if
+training never improves on the inherited weights they are kept, and
+`best_episode` is `0`. With `--episodes 0` no training happens at all and every
+genome is scored on the weights it inherited.
 
 | `--algo` | Class | Continuous actions | Extra decoder outputs |
 |---|---|---|---|
@@ -572,7 +602,7 @@ the run recorded, so genome numbering, gate innovation numbers, the population,
 each island's members and connections, and the best genomes all continue rather
 than starting over. Only `--number_genomes` and the flags saying where and how
 this process runs (`--out_dir`, `--shared_file_system`, `--device`,
-`--logging_level`) may differ; any other changed argument is refused, naming
+`--logging_level`, `--timing_report_every`) may differ; any other changed argument is refused, naming
 what differs, unless `--force_restart` says to continue the run as it was
 configured. The random number generators' state is not recorded, so a restarted
 run continues the search rather than reproducing the run that would have
@@ -582,8 +612,9 @@ To start over instead of continuing, pass `--overwrite_archive`, which discards
 the run in `--out_dir` -- its archive and best-genome files -- and starts a new
 one in its place; it takes precedence over the default offer to continue. Pass
 `--restart never` to refuse to touch a directory that already holds a run at all.
-Runs written before archives recorded their arguments and gate innovation numbers
-cannot be restarted; they are still listed, browsed and charted as before.
+Runs written before archives recorded their arguments and gate innovation numbers,
+or before they recorded per-genome timing (archive format 6), cannot be
+restarted; they are still listed, browsed and charted as before.
 
 ### What a run directory holds
 
@@ -591,7 +622,7 @@ However many genomes a run evaluates, its directory holds the same files:
 
 | File | Contents |
 |---|---|
-| `genomes.sqlar` | Every evaluated genome's JSON, plus a summary and parent links for each (for sorting and tracing ancestry), how the population changed after every insertion, and what produced the run: its command line, the arguments it was started with (so it can be [restarted](#restarting-a-run)), each restart since, its git commit, host and library versions, and for an island search how its islands are connected |
+| `genomes.sqlar` | Every evaluated genome's JSON, plus a summary and parent links for each (for sorting and tracing ancestry), how the population changed after every insertion, for an MPI run where the master's time went (every 100 insertions), and what produced the run: its command line, the arguments it was started with (so it can be [restarted](#restarting-a-run)), each restart since, its git commit, host and library versions, and for an island search how its islands are connected |
 | `best_fitness.json`, `best_fitness.png`, `best_fitness_training.png` | The best genome by the population's ranking (lowest `fitness["loss"]`): its JSON, architecture diagram and training plot, overwritten whenever it improves |
 | `best_target_metric.json`, `best_target_metric.png`, `best_target_metric_training.png` | The same for the highest `fitness["target_metric"]` |
 | `run.log` | The run's log, written only when `--save_run_log` is passed, at `--logging_level` (a search logs a line per gate below its default level, so a debug-level log of a long run grows to many gigabytes) |
@@ -641,15 +672,34 @@ choose in advance, while it was still running. Each genome's summary row also ca
 per-epoch or per-episode metric it recorded), and when and where it was evaluated:
 `generated_at_insertion` (how many genomes had been inserted when it was created, so
 `insertion - generated_at_insertion` is how many insertions happened while it was
-being evaluated), `evaluation_seconds`, `evaluated_host` and `evaluated_rank`. A
+being evaluated), `evaluation_seconds`, `evaluated_host` and `evaluated_rank`, and
+how long it spent being processed: `request_wait_seconds` (how long its worker
+waited for it, under MPI), `generation_seconds` (how long the search took to
+generate it) and `turnaround_seconds` (from being generated to being inserted, on
+the search's own clock, so it includes evaluation, transfer and time queued for
+the master). Archives written before these three columns (format 6) lack them,
+and the dashboard shows their runs as having no timing recorded. A
 discarded genome's row gives its `discard_reason`: `worse_than_population`,
 `duplicate_of_better` or `generated_before_repopulation`. The genome's JSON holds
 the rest -- `timing` (when it was generated, when its evaluation started and
-finished, and when it was inserted), `evaluated_by` (rank, host and process id),
+finished, and when it was inserted, plus under MPI `request_wait_seconds`: how
+long its worker waited for it), `evaluated_by` (rank, host and process id),
 for island searches the `target_island_status` it was generated under (a
 `repopulating` island draws its parents from its best neighbor), and the genome a discarded
 genome `lost_to`. [`exaqc_mcp`](#exaqc_mcp) exposes the
 same queries to an agent.
+
+An MPI run's archive also has a `master_timing` table: one row per 100 insertions
+(and one for the final partial interval), keyed by the insertion count ending it,
+with its `wall_seconds`, how many `genomes` it inserted, and as JSON the seconds and
+count of each of the master's `phases` (`idle`, `generate`, `send`, `deserialize`,
+`insert`) and `insert_parts` (`population`, `archive`, `best_files`,
+`population_events`) -- the same breakdown the master logs every
+`--timing_report_every` insertions:
+
+```
+sqlite3 ./artifacts/iris/genomes.sqlar "select step, wall_seconds, genomes, json_extract(phases, '$.idle.seconds') from master_timing"
+```
 
 ---
 
@@ -692,7 +742,7 @@ mpiexec -n 12 python3 -m src.examples.classification \
 | Argument | Default | Description |
 |---|---|---|
 | `--dataset` | *required* | One of the datasets above |
-| `--epochs` | `30` | Training epochs per genome |
+| `--epochs` | `30` | Training epochs per genome, after the epoch-0 evaluation of its inherited weights; 0 scores them only |
 | `--learning_rate`, `-lr` | `5e-3` | Adam learning rate |
 | `--weight_decay` | `0.0` | Adam L2 regularisation |
 | `--improvement_cutoff` | `3` | Epochs without validation improvement before stopping, 0 to disable |
@@ -752,7 +802,7 @@ Input wires are the first `--input_qubits` wires and readout wires are the
 | `--n_training_samples` | `64` | Generated training samples |
 | `--n_validation_samples` | `64` | Generated validation samples |
 | `--batch_size` | `5` | Samples per gradient step |
-| `--epochs` | `30` | Training epochs per genome |
+| `--epochs` | `30` | Training epochs per genome, after the epoch-0 evaluation of its inherited weights; 0 scores them only |
 | `--learning_rate`, `-lr` | `5e-3` | Adam learning rate |
 | `--improvement_cutoff` | `3` | Epochs without validation improvement before stopping, 0 to disable |
 
@@ -818,7 +868,7 @@ environments work only with `reinforce`, `actor_critic`/`a2c` and `ppo`.
 | `--number_genomes` | `1000` | Genomes to evaluate |
 | `--input_qubits` | *required* | Input qubits |
 | `--output_qubits` | *required* | Readout qubits. Must be wide enough to carry the policy's outputs — at least `ceil(log2(n_policy_outputs))`, where a discrete policy needs one output per action and a continuous one two per action dimension |
-| `--episodes` | `60` | Training episodes per genome |
+| `--episodes` | `60` | Training episodes per genome, after the episode-0 evaluation of its inherited weights; 0 scores them only |
 | `--eval_episodes` | `10` | Episodes used to score a genome |
 | `--eval_policy` | `match` | Action-selection regime evaluation scores under: `match`, `greedy`, `stochastic` or `both` |
 | `--eval_seed` | random per genome | Base seed for evaluation episodes, kept disjoint from the training seeds; set it to score every genome on the same episodes |
@@ -992,7 +1042,10 @@ whether it is below the watched directory or one of the given run directories
 Then open `http://127.0.0.1:8000/` in a browser. The page has:
 
 - **Runs**: every run found, with its task, genome count, best `loss` and
-  `target_metric`, and whether it is still being written.
+  `target_metric`, how busy its MPI master was over the run (*Master busy*: the
+  share of its time spent generating, sending and inserting genomes rather than
+  waiting for workers; near 100% means workers queue on it), and whether it is
+  still being written.
 - **A run's page**: on the left, the run's search progress (the best, mean and
   worst of a chosen metric across the population at each insertion; untick
   *search progress* to hide it) above a chart of every genome, with genome number
@@ -1052,7 +1105,17 @@ Then open `http://127.0.0.1:8000/` in a browser. The page has:
   other. Rings mark the chart's focus island and its neighbors, and clicking an
   island colors the chart around it. While a genome is selected (and *highlight
   selected lineage* is on), arrows show where its ancestry crossed between
-  islands.
+  islands. A **Timing** section shows whether the MPI master kept up with its
+  workers: the whole run's genomes per second, the master's busy and idle shares
+  and the mean time of each of its steps and insertion parts, and the workers'
+  wait share and each genome's mean wait, evaluation, generation and turnaround
+  time, with charts of the same over the run (one point per 100 insertions). A
+  serial run shows only the per-genome times, and a run whose archive predates
+  timing shows "No timing recorded". Each genome's processing times are also
+  metrics like any other -- `request_wait_seconds`, `generation_seconds` and
+  `turnaround_seconds` sit beside `evaluation_seconds` in the chart pickers -- as
+  well as rows in its details and, with *timing columns* ticked, columns of the
+  genome table.
 - **Insertion rates**: for one run, one group (summed over its runs, then each
   run on its own) or every group side by side, the share of each operator's
   genomes that became a global best or a local best, were inserted or were
@@ -1126,18 +1189,21 @@ beside its archive (created on the first write), marked as written over MCP.
 
 The tools are `list_runs`, `describe_run`, `list_genomes`, `get_genome`,
 `genome_metrics`, `compare_genomes`, `genome_lineage`, `fitness_summary`,
-`operator_insertion_rates`, `progress_series`, `gate_statistics`, `compare_runs`,
-`list_annotations`, `describe_schema`, `query_sql` and `export_query`, plus
-`add_note`, `tag_genome` and `untag_genome` under `--allow_annotations`
-(`list_annotations` shows removed tags when `include_removed` is set). The first
-fourteen answer
-common questions with typed arguments (`genome_metrics` returns a genome's
+`operator_insertion_rates`, `progress_series`, `get_run_timing`, `gate_statistics`,
+`compare_runs`, `list_annotations`, `describe_schema`, `query_sql` and
+`export_query`, plus `add_note`, `tag_genome` and `untag_genome` under
+`--allow_annotations` (`list_annotations` shows removed tags when
+`include_removed` is set). The first fifteen answer
+common questions with typed arguments (`get_run_timing` reports whether a run's
+MPI master kept up with its workers, as a whole-run summary and series over the
+run, and says when a run's archive predates timing; `genome_metrics` returns a genome's
 recorded training history, each series keyed by its own epoch or episode column;
 `list_runs` leaves out each run's command line unless `include_command_line` is
 set, while `describe_run` always shows it); `query_sql` runs a single read-only
 `SELECT` against one run's archive, or against several runs rolled into one
 database, for questions the typed tools do not cover. A roll-up holds each run's
-`genomes`, `genome_parents`, `population_events` and `run_info`, every table with
+`genomes`, `genome_parents`, `population_events`, `run_info` and `master_timing`
+(with the timing columns read as null for runs whose archives predate them), every table with
 a `run` column, and both kinds of query can read a `genome_operators` view with
 one row per operator that generated a genome, and the run's annotations as
 `notes` and `genome_tags` tables (a tag still applied has a null `removed_at`),
@@ -1204,7 +1270,7 @@ python3 -m src.examples.reinforcement_learning_fixed --env cartpole --algo ppo -
 | `--env` | *required* | Environment, as for [`reinforcement_learning`](#reinforcement_learning) |
 | `--algo` | *required* | `reinforce`, `actor_critic`, `a2c`, `ppo`, `q_learning`, `sarsa` |
 | `--out_dir` | `artifacts` | Where `run.log` is written |
-| `--episodes` | `60` | Training episodes |
+| `--episodes` | `60` | Training episodes, after the episode-0 evaluation of the initial weights |
 | `--eval_episodes` | `10` | Episodes used to score the model |
 | `--eval_policy` | `match` | Action-selection regime evaluation scores under: `match`, `greedy`, `stochastic` or `both` |
 | `--eval_seed` | random | Base seed for evaluation episodes, kept disjoint from the training seeds |

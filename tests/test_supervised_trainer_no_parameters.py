@@ -11,10 +11,10 @@ gates, which is what every trainer records as ``n_trainable_parameters``. A
 genome whose parameterized gates are all disabled therefore also takes this
 branch, since their parameters are never connected to the loss.
 
-After computing and storing ``best_training_metrics`` /
-``best_validation_metrics`` the branch returns immediately, leaving the
-per-epoch histories empty, which is exactly what this test asserts for both
-targets.
+Every genome's inherited weights are evaluated as epoch 0 before training,
+so after that evaluation the branch returns immediately: the validation
+history holds only epoch 0 and the training history is empty (no training
+happened), which is exactly what this test asserts for both targets.
 """
 
 from __future__ import annotations
@@ -41,8 +41,8 @@ def test_train_with_no_trainable_parameters_only_evaluates(target: str) -> None:
     only non-parametric gates (``h``/``cx``), so
     ``genome.hybrid_model`` has zero trainable parameters and
     ``SupervisedTrainer.train`` should take its evaluation-only path --
-    recording ``best_training_metrics``/``best_validation_metrics`` but
-    leaving the per-epoch history empty.
+    recording ``best_training_metrics``/``best_validation_metrics`` from
+    the epoch-0 evaluation, with no training epochs in the history.
 
     Args:
         target: Either ``"pennylane"`` or ``"qiskit"``.
@@ -71,9 +71,11 @@ def test_train_with_no_trainable_parameters_only_evaluates(target: str) -> None:
     trainer.train(genome)
 
     assert genome.metadata["training_epoch_metrics"] == []
-    assert genome.metadata["validation_epoch_metrics"] == []
+    validation_history = genome.metadata["validation_epoch_metrics"]
+    assert [entry["epoch"] for entry in validation_history] == [0]
+    assert genome.metadata["best_validation_metrics"] is validation_history[0]
     assert "best_training_metrics" in genome.metadata
-    assert "best_validation_metrics" in genome.metadata
+    assert genome.metadata["best_epoch"] == 0
     assert genome.metadata["n_trainable_parameters"] == 0
 
 

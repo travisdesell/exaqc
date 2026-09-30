@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import math
 from collections.abc import Callable
 from typing import Any
 
@@ -52,7 +51,10 @@ class SupervisedTrainer:
             "--epochs",
             type=int,
             default=30,
-            help="Maximum number of training epochs per genome.",
+            help=(
+                "Maximum number of training epochs per genome, after the epoch-0 "
+                "evaluation of its inherited weights; 0 scores the inherited weights only."
+            ),
         )
 
         parser.add_argument(
@@ -281,15 +283,34 @@ class SupervisedTrainer:
         return metric_results
 
     def train(self, genome: CircuitGenome) -> None:
-        """
-        Given the data loaders and loss functions provided to this SupervisedTrainer,
-        this will train the provided circuit genome given its hyperparameter
-        specifications.
+        """Evaluates a genome's inherited weights, then trains it.
+
+        Epoch 0 is always a pre-training evaluation of the weights the genome
+        inherited, so the per-epoch history shows whether training improved on
+        them. Training epochs are then numbered ``1`` to ``epochs`` inclusive,
+        and whichever epoch -- including epoch 0 -- has the lowest mean of
+        training and validation loss is kept. A genome with no trainable
+        parameters, or an ``epochs`` hyperparameter of 0, is only evaluated, so
+        its fitness comes from its inherited weights.
+
+        Only the validation history has an epoch 0: no training has happened
+        before the first epoch, so ``training_epoch_metrics`` starts at epoch 1.
+        The training data is still evaluated at epoch 0 (so epoch 0 can be
+        compared against the training epochs), and that evaluation becomes
+        ``best_training_metrics`` if the inherited weights win.
 
         Args:
-            genome: is the CircuitGenome to train. This method will initialize
-                its ``hybrid_model`` (via ``genome.initialize_model()``) so it
-                can be trained with pytorch.
+            genome: The CircuitGenome to train. Its ``hybrid_model`` is built
+                here (via ``genome.initialize_model()``) from the genome's
+                inherited parameters.
+
+        Returns:
+            None. Sets ``genome.metadata`` entries ``training_epoch_metrics``
+            (epochs ``1..epochs``), ``validation_epoch_metrics`` (epochs
+            ``0..epochs``), ``n_trainable_parameters``,
+            ``best_training_metrics``, ``best_validation_metrics`` and
+            ``best_epoch`` (0 when the inherited weights were never improved
+            on), and leaves the genome holding the best epoch's weights.
         """
         genome.initialize_model()
         genome.hybrid_model.to(self.device)
@@ -309,30 +330,45 @@ class SupervisedTrainer:
 
         logger.debug(f"hybrid model n trainable parameters: {n_trainable_parameters}")
 
-        if n_trainable_parameters == 0:
-            # this model has no parameters connected to the loss so it can't be
-            # trained. instead just evaluate it on the validation data.
-            logger.info("Model has no trainable (enabled) parameters; evaluating only.")
+        # epoch 0: evaluate the inherited weights before any training. only the
+        # validation metrics are recorded in the per-epoch history, since there
+        # has been no training yet; the training data evaluation is kept so the
+        # inherited weights can be compared with (and win over) trained ones.
+        initial_training_metrics = self.get_metrics(
+            genome,
+            dataloader=self.training_dataloader,
+            loss_function=self.training_loss_function,
+            epoch=0,
+        )
+        initial_validation_metrics = self.get_metrics(
+            genome,
+            dataloader=self.validation_dataloader,
+            loss_function=self.validation_loss_function,
+            epoch=0,
+        )
+        logger.info(
+            "[epoch 0] pre-training validation metrics: {}",
+            initial_validation_metrics,
+        )
+        genome.metadata["validation_epoch_metrics"].append(initial_validation_metrics)
 
-            # calculate the metrics on the training data
-            training_metric_results = self.get_metrics(
-                genome,
-                dataloader=self.training_dataloader,
-                loss_function=self.training_loss_function,
-            )
+        best_loss = (
+            initial_training_metrics["loss"] + initial_validation_metrics["loss"]
+        ) / 2.0
+        best_epoch = 0
+        genome.metadata["best_training_metrics"] = initial_training_metrics
+        genome.metadata["best_validation_metrics"] = initial_validation_metrics
+        genome.metadata["best_epoch"] = best_epoch
 
-            # calculate the metrics on the validation data
-            validation_metric_results = self.get_metrics(
-                genome,
-                dataloader=self.validation_dataloader,
-                loss_function=self.validation_loss_function,
-            )
-            genome.metadata["best_training_metrics"] = training_metric_results
-            genome.metadata["best_validation_metrics"] = validation_metric_results
-
-            logger.info(f"training metrics were: {training_metric_results}")
-            logger.info(f"validation metrics were: {validation_metric_results}")
-
+        if n_trainable_parameters == 0 or epochs <= 0:
+            # nothing connected to the loss can be trained, or no training was
+            # asked for: the genome's fitness is that of its inherited weights
+            if n_trainable_parameters == 0:
+                logger.info(
+                    "Model has no trainable (enabled) parameters; evaluating only."
+                )
+            else:
+                logger.info("Training for 0 epochs; evaluating only.")
             return
 
         optimizer = torch.optim.Adam(
@@ -349,12 +385,11 @@ class SupervisedTrainer:
         #     min_lr=1e-6,
         # )
 
-        best_loss = math.inf
-        best_epoch = 0
         improvement_cutoff = int(hyperparameters.get("improvement_cutoff", 2))
         best_parameters = genome.clone_state_dict()
 
-        for epoch in range(epochs):
+        # epoch 0 was the pre-training evaluation, so training runs 1..epochs
+        for epoch in range(1, epochs + 1):
             training_metric_results = self.get_metrics(
                 genome,
                 dataloader=self.training_dataloader,
@@ -419,7 +454,8 @@ class SupervisedTrainer:
             epochs,
         )
 
-        # set the genome's parameters to the ones from the best validation loss
+        # set the genome's parameters to the ones from the best epoch (the
+        # inherited ones if training never improved on them)
         genome.set_state_dict(best_parameters)
 
         return

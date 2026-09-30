@@ -100,7 +100,6 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Callable, Optional
 
-import math
 import secrets
 import numpy as np
 import torch
@@ -794,7 +793,10 @@ class ReinforcementLearningTrainer(ABC):
             "--episodes",
             type=int,
             default=60,
-            help="Number of training episodes (outer-loop iterations) per genome.",
+            help=(
+                "Number of training episodes (outer-loop iterations) per genome, after the "
+                "episode-0 evaluation of its inherited weights; 0 scores the inherited weights only."
+            ),
         )
 
         parser.add_argument(
@@ -1246,20 +1248,34 @@ class ReinforcementLearningTrainer(ABC):
     # -- main entry point -----------------------------------------------------
 
     def train(self, genome: CircuitGenome, environment: RLEnvironment) -> None:
-        """Trains a genome on an environment and records metrics.
+        """Evaluates a genome's inherited weights, then trains it and records metrics.
 
-        Runs ``hp.episodes`` training episodes (each delegating to
-        :meth:`run_update`), evaluates periodically, and restores the
-        best-evaluated weights. On completion the genome's ``metadata``
-        contains ``training_episode_metrics`` (per-episode returns),
-        ``best_training_metrics``, ``best_validation_metrics``, the
-        ``training_seed`` its episodes were seeded from (drawn at random unless
-        the genome's hyperparameters fix a ``seed``) and the ``eval_policy``
-        the evaluation returns were measured under.
+        Episode 0 is always a pre-training evaluation of the weights the genome
+        inherited, so the evaluation history shows whether training improved on
+        them. Training episodes are then
+        numbered ``1`` to ``hp.episodes`` inclusive (each delegating to
+        :meth:`run_update`), evaluated every ``hp.log_every`` episodes and on
+        the last one, and the best-evaluated weights -- the inherited ones if
+        training never beat them -- are restored. A genome with no trainable
+        parameters, or ``hp.episodes`` of 0, is only evaluated, so its fitness
+        comes from its inherited weights.
 
         Args:
             genome: The genome to train (its model is initialized here).
             environment: The environment to train on.
+
+        Returns:
+            None. Sets ``genome.metadata`` entries
+            ``training_episode_metrics`` (per-episode returns for episodes
+            ``1..hp.episodes``; there is no episode 0, since nothing was trained
+            before it), ``evaluation_episode_metrics`` (starting with episode
+            0), ``best_episode`` (0 when the inherited weights were never
+            improved on), ``best_training_metrics``, ``best_validation_metrics``,
+            ``n_trainable_parameters``, the ``training_seed`` its episodes were
+            seeded from (drawn at random unless the genome's hyperparameters fix
+            a ``seed``), the ``evaluation_seed`` and the ``eval_policy`` the
+            evaluation returns were measured under. When nothing is trained,
+            ``best_training_metrics`` holds the episode-0 evaluation's returns.
 
         Raises:
             ValueError: If ``environment`` is continuous but this trainer does
@@ -1310,17 +1326,35 @@ class ReinforcementLearningTrainer(ABC):
         n_trainable = genome.count_trainable_parameters()
         genome.metadata["n_trainable_parameters"] = n_trainable
 
-        if n_trainable == 0:
-            # nothing connected to the loss to optimize -- just evaluate
-            logger.info(
-                "genome has no trainable (enabled) parameters; evaluating only."
-            )
-            evaluation = self.evaluate(genome, environment, hp)
+        # episode 0: evaluate the inherited weights before any training
+        initial_evaluation = self.evaluate(genome, environment, hp)
+        initial_evaluation["episode"] = 0
+        genome.metadata["evaluation_episode_metrics"].append(initial_evaluation)
+        logger.info(
+            f"[{type(self).__name__}] genome {genome.genome_number:4d} episode {0:4d} "
+            f"pre-training eval_return_mean={initial_evaluation['return_mean']:.1f} "
+            f"({genome.metadata['eval_policy']})"
+        )
+
+        best_return = initial_evaluation["return_mean"]
+        best_evaluation = initial_evaluation
+        best_episode = 0
+        genome.metadata["best_episode"] = best_episode
+
+        if n_trainable == 0 or hp.episodes <= 0:
+            # nothing connected to the loss to optimize, or no training asked
+            # for: the genome's fitness is that of its inherited weights
+            if n_trainable == 0:
+                logger.info(
+                    "genome has no trainable (enabled) parameters; evaluating only."
+                )
+            else:
+                logger.info("training for 0 episodes; evaluating only.")
             genome.metadata["best_training_metrics"] = {
-                "return_mean": evaluation["return_mean"],
-                "best_episode_return": evaluation["best_episode_return"],
+                "return_mean": initial_evaluation["return_mean"],
+                "best_episode_return": initial_evaluation["best_episode_return"],
             }
-            genome.metadata["best_validation_metrics"] = evaluation
+            genome.metadata["best_validation_metrics"] = initial_evaluation
             return
 
         optimizer = torch.optim.Adam(
@@ -1333,13 +1367,13 @@ class ReinforcementLearningTrainer(ABC):
         # cold-start-at-zero bias), then updated as
         # ``ema = alpha * return + (1 - alpha) * ema`` each episode.
         ema_return: Optional[float] = None
-        best_return = -math.inf
         best_state = genome.clone_state_dict()
-        best_evaluation = None
         eval_every = max(1, hp.log_every)
-        best_episode = 0
 
-        for episode in range(hp.episodes):
+        # episode 0 was the pre-training evaluation, so training runs
+        # 1..hp.episodes; run_update still takes the zero-based index, which
+        # seeds the episode's reset
+        for episode in range(1, hp.episodes + 1):
             # Sample fresh quantum dropout for this training episode (a no-op
             # when the toggle is off). Evaluation clears it so greedy rollouts
             # always use the complete circuit.
@@ -1347,7 +1381,7 @@ class ReinforcementLearningTrainer(ABC):
                 sample_quantum_dropout(genome)
 
             episode_return, info = self.run_update(
-                genome, environment, optimizer, episode, hp
+                genome, environment, optimizer, episode - 1, hp
             )
             recent_returns.append(episode_return)
             ema_return = (
@@ -1360,7 +1394,7 @@ class ReinforcementLearningTrainer(ABC):
             episode_metrics.update(info)
             genome.metadata["training_episode_metrics"].append(episode_metrics)
 
-            if (episode % eval_every == 0) or (episode == hp.episodes - 1):
+            if (episode % eval_every == 0) or (episode == hp.episodes):
                 evaluation = self.evaluate(genome, environment, hp)
                 evaluation["episode"] = episode
 
@@ -1393,7 +1427,8 @@ class ReinforcementLearningTrainer(ABC):
                     )
                     break
 
-        # restore the best-evaluated weights into the genome
+        # restore the best-evaluated weights (the inherited ones if training
+        # never improved on them) into the genome
         genome.set_state_dict(best_state)
 
         genome.metadata["best_episode"] = best_episode
@@ -1403,11 +1438,7 @@ class ReinforcementLearningTrainer(ABC):
                 float(np.max(recent_returns)) if recent_returns else 0.0
             ),
         }
-        genome.metadata["best_validation_metrics"] = (
-            best_evaluation
-            if best_evaluation is not None
-            else self.evaluate(genome, environment, hp)
-        )
+        genome.metadata["best_validation_metrics"] = best_evaluation
 
         # Leave the genome with no active dropout so the returned/serialized
         # policy runs the complete evolved circuit.

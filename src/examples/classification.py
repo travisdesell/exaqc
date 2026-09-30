@@ -386,6 +386,7 @@ def main() -> None:
         objective=objective,
         build_exaqc=build_exaqc,
         run_for=run_for,
+        timing_report_every=args.timing_report_every,
     )
 
 

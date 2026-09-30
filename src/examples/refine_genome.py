@@ -423,7 +423,7 @@ def main() -> None:
     os.makedirs(args.out_dir, exist_ok=True)
     logger.remove()
     logger.add(sys.stdout, level=args.logging_level)
-    logger.add(os.path.join(args.out_dir, "refine.log"))
+    logger.add(os.path.join(args.out_dir, "refine.log"), level=args.logging_level)
 
     try:
         genome = load_genome(args.genome_json, args.archive, args.genome_number)

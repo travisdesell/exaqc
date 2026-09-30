@@ -336,7 +336,8 @@ def test_train_with_no_trainable_parameters_only_evaluates(target: str) -> None:
     With an ``IdentityEncoder``, a ``ClippedDecoder``, and no parametric
     gates, the genome's hybrid model has zero trainable parameters, so the
     trainer should take its evaluation-only path: no per-episode training
-    metrics, but best-metric summaries still recorded.
+    metrics, only the episode-0 (pre-training) evaluation, but best-metric
+    summaries still recorded.
 
     Args:
         target: Either ``"pennylane"`` or ``"qiskit"``.
@@ -357,6 +358,9 @@ def test_train_with_no_trainable_parameters_only_evaluates(target: str) -> None:
     trainer.train(genome, environment)
 
     assert genome.metadata["training_episode_metrics"] == []
+    assert [
+        entry["episode"] for entry in genome.metadata["evaluation_episode_metrics"]
+    ] == [0]
     assert genome.metadata["n_trainable_parameters"] == 0
     _assert_return_metrics(genome.metadata["best_training_metrics"])
     _assert_return_metrics(genome.metadata["best_validation_metrics"])

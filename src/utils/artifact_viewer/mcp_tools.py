@@ -44,7 +44,7 @@ from src.utils.artifact_viewer.server import (
     RunRegistry,
     higher_is_better,
 )
-from src.utils.genome_archive import GenomeArchive
+from src.utils.genome_archive import MASTER_TIMING_FIELDS, TIMING_COLUMNS, GenomeArchive
 
 #: Rows a listing returns when the caller does not say, and the most it may ask
 #: for: 50 rows is roughly 4k tokens, 200 roughly 16k.
@@ -121,6 +121,9 @@ _ROLLUP_SELECT: tuple[tuple[str, str, str], ...] = (
     ("discard_reason", "TEXT", "discard_reason"),
     ("final_metrics", "TEXT", "final_metrics"),
     ("fitness", "TEXT", "fitness"),
+    ("request_wait_seconds", "REAL", "request_wait_seconds"),
+    ("generation_seconds", "REAL", "generation_seconds"),
+    ("turnaround_seconds", "REAL", "turnaround_seconds"),
     ("loss", "REAL", "json_extract(fitness, '$.loss')"),
     ("target_metric", "REAL", "json_extract(fitness, '$.target_metric')"),
 )
@@ -134,6 +137,7 @@ _ROLLUP_TABLES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("genome_parents", ("child", "parent")),
     ("population_events", ("step", "recorded_at", "added", "removed")),
     ("run_info", ("key", "value")),
+    ("master_timing", MASTER_TIMING_FIELDS),
 )
 
 
@@ -496,23 +500,28 @@ class DashboardTools:
             name.
 
         Raises:
-            ValueError: If the run's archive predates a column the roll-up holds,
-                which would otherwise fail as a bare SQL error naming neither the
-                run nor what to do about it.
+            ValueError: If the run's archive predates a column the roll-up holds
+                (other than the optional :data:`TIMING_COLUMNS`, read as NULL
+                for an archive without them), which would otherwise fail as a
+                bare SQL error naming neither the run nor what to do about it.
         """
 
-        expressions = ", ".join(expression for _, _, expression in _ROLLUP_SELECT)
         required = {
             expression
             for _, _, expression in _ROLLUP_SELECT
-            if expression.isidentifier()
+            if expression.isidentifier() and expression not in TIMING_COLUMNS
         }
 
         with GenomeArchive.open_readonly(run.archive_path) as reader:
-            present = {
-                row[1]
-                for row in reader.connection.execute("PRAGMA table_xinfo(genomes)")
-            }
+            present = reader.genome_columns
+            expressions = ", ".join(
+                (
+                    "NULL"
+                    if expression in TIMING_COLUMNS and expression not in present
+                    else expression
+                )
+                for _, _, expression in _ROLLUP_SELECT
+            )
             missing = sorted(required - present)
             if missing:
                 raise ValueError(
@@ -1290,6 +1299,83 @@ class DashboardTools:
             "dashboard_url": self._url(f"/run/{resolved.index}"),
         }
 
+    def get_run_timing(self, run: int | str, max_points: int = 200) -> dict[str, Any]:
+        """Reports whether a run's MPI master kept up with its workers.
+
+        The ``summary`` gives the whole run: the master's genomes per second and
+        busy/idle percentages, the mean milliseconds of each master phase and
+        insertion part (``best_files`` rewrites the current-best images, which
+        is the usual spike), and the workers' mean wait for a genome, their wait
+        share (wait over wait plus evaluation) and each genome's mean
+        evaluation, generation and turnaround time. The ``master`` and
+        ``workers`` series give the same over the run, one point per recorded
+        interval (100 insertions), downsampled.
+
+        Args:
+            run: A run index or name.
+            max_points: The most points each series returns, at most
+                :data:`MAX_SERIES_POINTS`.
+
+        Returns:
+            ``recorded`` (False, with a ``note``, for archives written before
+            runs recorded timing), the ``summary``, the ``master`` and
+            ``workers`` series, how many points each recorded and returned, and
+            a ``dashboard_url``.
+
+        Raises:
+            KeyError: If there is no such run.
+        """
+
+        resolved = self._resolve(run)
+        payload = self.viewer.timing_payload(resolved.index)
+        result: dict[str, Any] = {
+            "run": resolved.name,
+            "recorded": payload["recorded"],
+            "dashboard_url": self._url(f"/run/{resolved.index}"),
+        }
+        if not payload["recorded"]:
+            result["note"] = (
+                "This run's archive was written before runs recorded timing, so "
+                "no timing was recorded."
+            )
+            return result
+
+        limit = min(int(max_points), MAX_SERIES_POINTS)
+
+        def downsample(series: dict[str, Any]) -> dict[str, Any]:
+            """Downsamples every list in a (possibly nested) series dict alike."""
+
+            steps = series.get("step") or []
+            keep = _downsample(list(range(len(steps))), limit)
+            sampled: dict[str, Any] = {}
+            for key, values in series.items():
+                if isinstance(values, dict):
+                    sampled[key] = {
+                        name: [column[index] for index in keep]
+                        for name, column in values.items()
+                    }
+                else:
+                    sampled[key] = [values[index] for index in keep]
+            return sampled
+
+        result.update(
+            {
+                "summary": payload["summary"],
+                "master": downsample(payload["master"]) if payload["master"] else {},
+                "workers": (
+                    downsample(payload["workers"]) if payload["workers"] else {}
+                ),
+                "recorded_points": len(payload["workers"].get("step") or []),
+            }
+        )
+        if not payload["master"]:
+            result["note"] = (
+                "No master timing was recorded (a serial run, or an MPI run that has "
+                "not reached 100 insertions yet); the worker series are per-genome "
+                "timing over every 100 insertions."
+            )
+        return result
+
     def gate_statistics(
         self, run: int | str, sample: int = GATE_SAMPLE_SIZE
     ) -> dict[str, Any]:
@@ -1496,7 +1582,20 @@ class DashboardTools:
                     "evaluated_rank, discard_reason (worse_than_population, "
                     "duplicate_of_better or generated_before_repopulation), "
                     "final_metrics (JSON object), "
-                    "fitness (JSON object)"
+                    "fitness (JSON object), request_wait_seconds (how long the "
+                    "evaluating worker waited for the genome), generation_seconds "
+                    "(how long the master took to generate it), turnaround_seconds "
+                    "(generated to inserted, on the master's clock) -- the last "
+                    "three only in archives of format 6 or later"
+                ),
+                "master_timing": (
+                    "step (the insertion count ending the interval), recorded_at, "
+                    "wall_seconds, genomes (inserted in the interval), phases "
+                    "(JSON {phase: {seconds, count}} for the MPI master's idle, "
+                    "generate, send, deserialize and insert), insert_parts (JSON, "
+                    "the same for population, archive, best_files and "
+                    "population_events) -- one row per 100 insertions of an MPI "
+                    "run; absent in older archives and empty for serial runs"
                 ),
                 "genome_operators": (
                     "genome_number, position, operator, n_operators -- a view with one "

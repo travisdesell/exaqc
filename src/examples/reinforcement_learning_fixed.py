@@ -418,7 +418,7 @@ def main() -> None:
     logger.remove()
     os.makedirs(args.out_dir, exist_ok=True)
     logger.add(sys.stdout, level=args.logging_level)
-    logger.add(os.path.join(args.out_dir, "run.log"))
+    logger.add(os.path.join(args.out_dir, "run.log"), level=args.logging_level)
 
     # -----------------------------------------------------------------
     # Environment + trainer + objective
