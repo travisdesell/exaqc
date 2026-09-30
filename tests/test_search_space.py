@@ -23,6 +23,7 @@ from src.analysis.search_space import (
     PROJECTIONS,
     DistanceMetric,
     SearchSpaceBuilder,
+    UnsupportedGenome,
     best_path,
     get_distance,
     get_projection,
@@ -251,6 +252,106 @@ def test_jaccard_distance_counts_enabled_innovations() -> None:
     assert distances[2, 2] == 0
 
 
+def test_readout_distance_ignores_what_is_not_measured() -> None:
+    """Phases after the circuit and gates on unmeasured qubits do not count."""
+
+    metric = get_distance("readout")
+    genomes = [
+        _genome([_gate(1, "h", [0])]),
+        # a Z after the Hadamard only changes phases the probabilities never see
+        _genome([_gate(1, "h", [0]), _gate(2, "z", [0])]),
+        # qubit 1 is never measured
+        _genome([_gate(1, "h", [0]), _gate(3, "ry", [1], {"theta": 1.0})]),
+        # an X swaps which outcome every input lands on
+        _genome([_gate(1, "h", [0]), _gate(4, "x", [0])]),
+    ]
+    context = metric.context(genomes)
+    assert context == ((("input", 0), ("input", 1)), (("input", 0),), "probs")
+    distances = metric.pairwise(
+        [metric.featurize(genome, context) for genome in genomes]
+    )
+    np.testing.assert_allclose(distances[0, 1:3], 0, atol=1e-6)
+    assert distances[0, 3] == pytest.approx(1, abs=1e-6)
+    assert np.all(distances <= 1 + 1e-6)
+
+    # the full unitary sees all three differences
+    unitary = get_distance("fubini_study")
+    full = unitary.pairwise(
+        [unitary.featurize(genome, unitary.context(genomes)) for genome in genomes]
+    )
+    assert np.all(full[0, 1:] > 0.1)
+
+
+def _classifier(genome_number: int, gates: list[dict[str, Any]]) -> dict[str, Any]:
+    """Builds a serialized iris classifier: angle-encoded, with no classical weights.
+
+    Args:
+        genome_number: Its number.
+        gates: Its serialized gates, on ``input`` qubits 0-3.
+
+    Returns:
+        The serialized genome.
+    """
+
+    return {
+        **_genome(gates, n_qubits=4),
+        "output_qubits": [["input", 0], ["input", 1]],
+        "genome_number": genome_number,
+        "task": "classification",
+        "task_target": "iris",
+        "fitness": {"loss": 1.0},
+        "metadata": {},
+        "hyperparameters": {
+            "quantum_input_mode": "ry",
+            "quantum_output_mode": "probs",
+        },
+        "encoder": {
+            "class": "IdentityEncoder",
+            "args": {"n_inputs": 4, "n_outputs": 4},
+        },
+        "decoder": {"class": "ClippedDecoder", "args": {"n_inputs": 4, "n_outputs": 3}},
+    }
+
+
+def test_behaviour_distance_compares_classifications_on_the_run_data() -> None:
+    """Models that classify alike are at 0, and the distance is a bounded metric."""
+
+    metric = get_distance("behaviour")
+    run_info = {
+        "task": "classification",
+        "arguments": {"dataset": "iris", "normalization": "minmax", "seed": 0},
+    }
+    genomes = [
+        _classifier(1, []),
+        # a Z before measurement changes no probability, so it classifies alike
+        _classifier(2, [_gate(1, "z", [0])]),
+        _classifier(3, [_gate(2, "x", [0])]),
+        _classifier(4, [_gate(3, "cx", [2, 0]), _gate(4, "ry", [1], {"theta": 0.7})]),
+    ]
+    context = metric.context(genomes, run_info)
+    assert context == ("classification", "iris", "minmax", 0)
+    features = [metric.featurize(genome, context) for genome in genomes]
+    assert features[0].shape == (150, 3)
+    np.testing.assert_allclose(features[0].sum(axis=1), 1)
+
+    distances = metric.pairwise(features)
+    np.testing.assert_allclose(distances, distances.T)
+    np.testing.assert_allclose(np.diag(distances), 0)
+    assert distances[0, 1] == pytest.approx(0, abs=1e-9)
+    assert distances[0, 2] > 0.01 and distances[0, 3] > 0.01
+    assert np.all(distances <= 1)
+    # the square root of the Jensen-Shannon divergence obeys the triangle inequality
+    assert distances[0, 2] <= distances[0, 3] + distances[3, 2] + 1e-12
+
+    teacher = metric.context(genomes, {"task": "teacher"})
+    with pytest.raises(UnsupportedGenome, match="classification"):
+        metric.featurize(genomes[0], teacher)
+    with pytest.raises(UnsupportedGenome, match="could not be run"):
+        metric.featurize(
+            {**genomes[0], "encoder": {"class": "Nope", "args": {}}}, context
+        )
+
+
 def test_classical_mds_recovers_euclidean_placements() -> None:
     """Distances between points in the plane come back exactly, with no stress."""
 
@@ -471,7 +572,7 @@ def test_new_metrics_can_be_registered() -> None:
 
     try:
         names = [entry["name"] for entry in options()["metrics"]]
-        assert names[0] == "fubini_study"
+        assert names[:4] == ["behaviour", "readout", "fubini_study", "jaccard"]
         assert "test_gate_count" in names
         metric = get_distance("test_gate_count")
         assert metric.pairwise([1, 3])[0, 1] == 2

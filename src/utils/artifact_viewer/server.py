@@ -707,7 +707,7 @@ class SearchSpaceService:
     def build(
         self,
         archive_path: str,
-        metric: str,
+        metric: str | None,
         projection: str,
         dimensions: int,
         fitness_key: str,
@@ -716,7 +716,8 @@ class SearchSpaceService:
 
         Args:
             archive_path: The run's archive.
-            metric: The distance metric's name.
+            metric: The distance metric's name, or ``None`` for the run's
+                default.
             projection: The projection's name.
             dimensions: 2 or 3.
             fitness_key: The fitness key genomes are valued by.
@@ -1245,8 +1246,9 @@ class ArtifactViewer:
 
         Args:
             index: The run's index.
-            query: ``metric`` (a distance metric, default the unitary
-                Fubini–Study angle), ``projection`` (default classical MDS),
+            query: ``metric`` (a distance metric; by default the behaviour
+                distance for classification runs and the unitary Fubini–Study
+                angle otherwise), ``projection`` (default classical MDS),
                 ``dimensions`` (2 or 3, default 2) and ``y`` (the fitness key
                 genomes are valued and the global best is traced by, default
                 ``loss``).
@@ -1261,16 +1263,12 @@ class ArtifactViewer:
             ValueError: If an option is not valid.
         """
 
-        from src.analysis.search_space import (
-            DEFAULT_METRIC,
-            DEFAULT_PROJECTION,
-            options,
-        )
+        from src.analysis.search_space import DEFAULT_PROJECTION, options
 
         run = self.run(index)
         payload = self.search_spaces.build(
             run.archive_path,
-            query.get("metric") or DEFAULT_METRIC,
+            query.get("metric") or None,
             query.get("projection") or DEFAULT_PROJECTION,
             query_int(query, "dimensions", 2, minimum=2, maximum=3),
             query.get("y") or "loss",

@@ -8,9 +8,10 @@ are cached and only new genomes are featurized, while the pairwise step is a
 single vectorized pass.
 
 A metric may also depend on the run as a whole -- the unitary metric brings every
-genome to the same set of qubits -- which it declares through :meth:`DistanceMetric
-.context`: a hashable summary of the genomes, and cached features are reused only
-while it is unchanged.
+genome to the same set of qubits, and the behaviour metric feeds every genome the
+same data -- which it declares through :meth:`DistanceMetric.context`: a hashable
+summary of the genomes and the run's recorded information, and cached features
+are reused only while it is unchanged.
 
 New metrics are added by subclassing :class:`DistanceMetric` and decorating the
 class with :func:`register_distance`; the dashboard lists every registered metric.
@@ -20,9 +21,11 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Hashable
+from functools import lru_cache
 from typing import Any, ClassVar
 
 import numpy as np
+from loguru import logger
 
 from src.analysis.search_space.unitary import (
     MAX_UNITARY_QUBITS,
@@ -55,7 +58,9 @@ class DistanceMetric(ABC):
     label: ClassVar[str]
     description: ClassVar[str]
 
-    def context(self, genomes: list[dict[str, Any]]) -> Hashable:
+    def context(
+        self, genomes: list[dict[str, Any]], run_info: dict[str, Any] | None = None
+    ) -> Hashable:
         """Summarizes what the metric needs to know about the run as a whole.
 
         Features computed under one context are reused only while the context
@@ -64,6 +69,8 @@ class DistanceMetric(ABC):
 
         Args:
             genomes: Every serialized genome being placed.
+            run_info: What the run recorded in its archive (``run_info``), such
+                as its command-line ``arguments``; ``None`` when not known.
 
         Returns:
             A hashable summary; ``None`` (the default) when features depend on
@@ -173,11 +180,14 @@ class FubiniStudyDistance(DistanceMetric):
         "circuits implement the same operation, at most π/2."
     )
 
-    def context(self, genomes: list[dict[str, Any]]) -> Hashable:
+    def context(
+        self, genomes: list[dict[str, Any]], run_info: dict[str, Any] | None = None
+    ) -> Hashable:
         """Collects the qubits every genome is brought to.
 
         Args:
             genomes: Every serialized genome being placed.
+            run_info: Unused.
 
         Returns:
             The sorted union of the genomes' qubits, as a tuple.
@@ -301,3 +311,304 @@ class JaccardDistance(DistanceMetric):
             distances = np.where(union > 0, 1.0 - shared / union, 0.0)
         np.fill_diagonal(distances, 0.0)
         return distances
+
+
+@register_distance
+class ReadoutOperatorDistance(DistanceMetric):
+    """How differently two circuits act on what the model actually measures.
+
+    Compares the circuits in the Heisenberg picture: for each observable the
+    model reads out, ``O -> U^dagger O U``. With ``probs`` readout the
+    observables are the projectors onto each computational-basis outcome of the
+    output qubits; with ``expval`` readout they are Pauli-Z on each output qubit.
+    The distance is the Frobenius distance between the two circuits' stacks of
+    evolved observables, scaled into ``[0, 1]``.
+
+    Unlike the full-unitary distance it ignores everything the readout cannot
+    see -- phases applied after the circuit, and anything on qubits that are not
+    measured -- so it saturates much less, and it needs no data.
+    """
+
+    name = "readout"
+    label = "Readout operators"
+    description = (
+        "Distance between the circuits' measured observables (U†OU for each readout "
+        "outcome): ignores phases and unmeasured qubits; needs no data. 0 to 1."
+    )
+
+    def context(
+        self, genomes: list[dict[str, Any]], run_info: dict[str, Any] | None = None
+    ) -> Hashable:
+        """Collects the run's qubits, measured qubits and readout mode.
+
+        Args:
+            genomes: Every serialized genome being placed.
+            run_info: Unused.
+
+        Returns:
+            ``(qubits, output_qubits, output_mode)``: the sorted union of the
+            genomes' qubits and of their output qubits, and the most common
+            ``quantum_output_mode`` (``probs`` when none is recorded).
+        """
+
+        qubits: set[tuple[str, int]] = set()
+        outputs: set[tuple[str, int]] = set()
+        modes: dict[str, int] = {}
+        for genome in genomes:
+            qubits.update(genome_qubits(genome))
+            outputs.update(tuple(qubit) for qubit in genome.get("output_qubits") or [])
+            mode = (genome.get("hyperparameters") or {}).get("quantum_output_mode")
+            if mode:
+                modes[mode] = modes.get(mode, 0) + 1
+        mode = max(modes, key=modes.get) if modes else "probs"
+        return (tuple(sorted(qubits)), tuple(sorted(outputs)), mode)
+
+    def featurize(self, genome: dict[str, Any], context: Hashable) -> np.ndarray:
+        """Evolves each readout observable by the genome's circuit.
+
+        Args:
+            genome: A serialized genome.
+            context: ``(qubits, output_qubits, output_mode)`` from :meth:`context`.
+
+        Returns:
+            The evolved observables, flattened and scaled so that the distance
+            between any two genomes is at most 1.
+
+        Raises:
+            UnsupportedGenome: If the circuit is too large or cannot be simulated,
+                or the run measures no qubits.
+        """
+
+        qubits, outputs, mode = context
+        if not outputs:
+            raise UnsupportedGenome("the run records no output qubits")
+        if len(qubits) > MAX_UNITARY_QUBITS:
+            raise UnsupportedGenome(
+                f"the run's circuits span {len(qubits)} qubits; unitaries are only "
+                f"computed for up to {MAX_UNITARY_QUBITS}"
+            )
+        try:
+            unitary = circuit_unitary(genome, list(qubits))
+        except (KeyError, ValueError, TypeError) as error:
+            raise UnsupportedGenome(str(error)) from error
+
+        n_qubits = len(qubits)
+        dimension = 2**n_qubits
+        states = np.arange(dimension)
+        # the value of each measured qubit in every basis state (qubit 0 is the most significant bit)
+        bits = [
+            (states >> (n_qubits - 1 - qubits.index(qubit))) & 1 for qubit in outputs
+        ]
+
+        if mode == "expval":
+            observables = [
+                (unitary.conj().T * (1 - 2 * bit)[None, :]) @ unitary for bit in bits
+            ]
+            # two observables with eigenvalues +-1 are at most 2 sqrt(d) apart
+            scale = np.sqrt(4 * dimension * len(bits))
+        else:
+            outcome = np.zeros(dimension, dtype=int)
+            for bit in bits:
+                outcome = (outcome << 1) | bit
+            observables = []
+            for value in range(2 ** len(bits)):
+                rows = unitary[outcome == value]
+                observables.append(rows.conj().T @ rows)
+            # the projectors' squared distances add up to at most 2d
+            scale = np.sqrt(2 * dimension)
+        return (np.stack(observables).reshape(-1) / scale).astype(np.complex64)
+
+    def pairwise(self, features: list[np.ndarray]) -> np.ndarray:
+        """Measures the Frobenius distance between every pair of observable stacks.
+
+        Args:
+            features: Each genome's scaled, flattened observables.
+
+        Returns:
+            The distances, in ``[0, 1]``.
+        """
+
+        if not features:
+            return np.zeros((0, 0))
+        stacked = np.stack(features)
+        gram = np.real(stacked @ stacked.conj().T).astype(float)
+        norms = np.diag(gram)
+        squared = norms[:, None] + norms[None, :] - 2 * gram
+        distances = np.sqrt(np.clip(squared, 0.0, None))
+        distances = (distances + distances.T) / 2
+        np.fill_diagonal(distances, 0.0)
+        return distances
+
+
+@register_distance
+class BehaviourDistance(DistanceMetric):
+    """How differently two classifiers label the run's own data.
+
+    Every genome's whole model -- encoder, circuit and decoder, with its saved
+    (trained) weights -- is run on every sample of the run's dataset, and its
+    outputs are turned into class probabilities with the softmax the training
+    loss applies. The distance is the square root of the Jensen–Shannon
+    divergence (base 2) between the two models' class distributions, averaged
+    over the samples: 0 for models that classify every sample identically, at
+    most 1. It is a true metric.
+
+    It measures only what the task sees, so the many circuits that implement
+    the same classifier collapse together. The samples are the dataset the run
+    was evolved on, rebuilt from the run's recorded ``dataset``,
+    ``normalization`` and ``seed`` (its training and validation splits
+    together). Only classification runs on tabular datasets are supported.
+    """
+
+    name = "behaviour"
+    label = "Behaviour (Jensen–Shannon)"
+    description = (
+        "Square root of the Jensen–Shannon divergence between the two models' class "
+        "probabilities on the run's dataset, averaged over samples: 0 when they "
+        "classify alike, at most 1."
+    )
+
+    def context(
+        self, genomes: list[dict[str, Any]], run_info: dict[str, Any] | None = None
+    ) -> Hashable:
+        """Identifies the data every genome is run on.
+
+        Args:
+            genomes: Every serialized genome being placed.
+            run_info: What the run recorded; its ``task`` and ``arguments``
+                (``dataset``, ``normalization`` and ``seed``) choose the data.
+
+        Returns:
+            ``("classification", dataset, normalization, seed)``, or
+            ``("unsupported", reason)`` for a run whose data cannot be rebuilt.
+        """
+
+        run_info = run_info or {}
+        arguments = run_info.get("arguments") or {}
+        first = genomes[0] if genomes else {}
+        task = run_info.get("task") or first.get("task")
+        dataset = (
+            arguments.get("dataset")
+            or run_info.get("task_target")
+            or first.get("task_target")
+        )
+        if task != "classification":
+            return (
+                "unsupported",
+                f"behaviour is only measured for classification runs, not {task!r}",
+            )
+
+        from src.datasets.classification_loaders import UCI_DATASETS
+
+        if dataset not in UCI_DATASETS:
+            return (
+                "unsupported",
+                f"behaviour is only measured on tabular datasets, not {dataset!r}",
+            )
+        return (
+            "classification",
+            dataset,
+            arguments.get("normalization") or "minmax",
+            int(arguments.get("seed") or 0),
+        )
+
+    def featurize(self, genome: dict[str, Any], context: Hashable) -> np.ndarray:
+        """Runs a genome's model on the run's data.
+
+        Args:
+            genome: A serialized genome.
+            context: The data, from :meth:`context`.
+
+        Returns:
+            The class probabilities, one row per sample.
+
+        Raises:
+            UnsupportedGenome: If the run's data cannot be rebuilt, or the
+                genome's model cannot be built or run on it.
+        """
+
+        if context[0] != "classification":
+            raise UnsupportedGenome(context[1])
+        _, dataset, normalization, seed = context
+
+        import torch
+
+        from src.circuits.circuit import CircuitGenome
+
+        try:
+            inputs = _classification_samples(dataset, normalization, seed)
+        except (OSError, ValueError) as error:
+            raise UnsupportedGenome(f"could not load {dataset!r}: {error}") from error
+
+        # building a model logs its qubits and gates, once per genome of the run
+        logger.disable("src.circuits")
+        try:
+            model = CircuitGenome.from_dict(genome)
+            model.initialize_model()
+            model.hybrid_model.eval()
+            with torch.no_grad():
+                outputs = model.forward(inputs)
+        except (
+            Exception
+        ) as error:  # noqa: BLE001 -- any failure only leaves this genome out
+            raise UnsupportedGenome(f"its model could not be run: {error}") from error
+        finally:
+            logger.enable("src.circuits")
+        return torch.softmax(outputs.double(), dim=-1).numpy()
+
+    def pairwise(self, features: list[np.ndarray]) -> np.ndarray:
+        """Measures the mean Jensen–Shannon distance between every pair of models.
+
+        Args:
+            features: Each genome's class probabilities, all over the same samples.
+
+        Returns:
+            The distances, in ``[0, 1]``.
+        """
+
+        count = len(features)
+        distances = np.zeros((count, count))
+        if count < 2:
+            return distances
+        probabilities = np.stack(features)
+
+        def entropy_terms(p: np.ndarray, m: np.ndarray) -> np.ndarray:
+            """Sums ``p log2(p / m)`` over classes, taking ``0 log 0`` as 0."""
+            with np.errstate(divide="ignore", invalid="ignore"):
+                terms = np.where(p > 0, p * np.log2(np.where(p > 0, p, 1) / m), 0.0)
+            return terms.sum(axis=-1)
+
+        for i in range(count - 1):
+            others = probabilities[i + 1 :]
+            mixture = (probabilities[i][None] + others) / 2
+            divergence = (
+                entropy_terms(probabilities[i][None], mixture)
+                + entropy_terms(others, mixture)
+            ) / 2
+            row = np.sqrt(np.clip(divergence, 0.0, 1.0)).mean(axis=1)
+            distances[i, i + 1 :] = row
+            distances[i + 1 :, i] = row
+        return distances
+
+
+@lru_cache(maxsize=4)
+def _classification_samples(dataset: str, normalization: str, seed: int) -> Any:
+    """Rebuilds a classification run's samples, as its training loaded them.
+
+    Args:
+        dataset: The tabular dataset's name.
+        normalization: The run's ``--normalization``.
+        seed: The run's ``--seed``, which chose its training/validation split.
+
+    Returns:
+        A float tensor of every sample: the training split, then the validation
+        split, each in the order the run's loaders hold them.
+    """
+
+    import torch
+
+    from src.datasets.classification_loaders import get_uci_dataloaders
+
+    training, validation = get_uci_dataloaders(
+        dataset, normalize=normalization, seed=seed
+    )
+    return torch.cat([training.dataset.x, validation.dataset.x])

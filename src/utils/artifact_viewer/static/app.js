@@ -3871,6 +3871,8 @@
         isNumber(distance.mean) ? h("span", {}, `distance ${formatNumber(distance.min)}–${formatNumber(distance.max)}, mean ${formatNumber(distance.mean)}`) : null,
         qualityParts.length ? h("span", { text: qualityParts.join(" · ") }) : null,
         qubits ? h("span", { text: `over ${qubits.length} qubit${qubits.length === 1 ? "" : "s"}: ${formatQubits(qubits)}` }) : null,
+        payload.context && payload.context.output_qubits ? h("span", { text: `measuring ${formatQubits(payload.context.output_qubits)} (${payload.context.output_mode})` }) : null,
+        payload.context && payload.context.dataset ? h("span", { text: `on the ${payload.context.dataset} data (${payload.context.normalization}, split seed ${payload.context.seed})` }) : null,
         newGenomes > 0 ? h("button", { type: "button", text: `Add ${formatNumber(newGenomes)} new genome${newGenomes === 1 ? "" : "s"}`, onclick: () => load(true) }) : null
       );
     }

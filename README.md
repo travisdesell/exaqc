@@ -665,13 +665,15 @@ used directly:
 ```
 python3 -c "
 from src.analysis.search_space import build_search_space
-space = build_search_space('./artifacts/iris/genomes.sqlar', metric='fubini_study', projection='classical_mds')
+space = build_search_space('./artifacts/iris/genomes.sqlar', metric='behaviour', projection='classical_mds')
 print(space['best_path'])"
 ```
 
 | Distance metric | What it measures |
 |---|---|
-| `fubini_study` (default) | The angle between two circuits' unitaries, ignoring global phase: `arccos(\|Tr(U†V)\| / 2^n)`, 0 for circuits implementing the same operation and at most π/2. The unitary is the evolved ansatz alone -- each genome's enabled gates with their saved (for a trained genome, trained) parameters, without the input encoding or the measurement -- over the union of the run's qubits, so it is computed for circuits of up to 8 qubits. |
+| `behaviour` (default for classification runs) | How differently two models classify the run's own data: each genome's whole model (encoder, circuit and decoder, with its saved weights) is run on every sample of its dataset -- rebuilt from the run's recorded `--dataset`, `--normalization` and `--seed`, training and validation splits together -- and the square root of the Jensen–Shannon divergence between the two models' class probabilities (the softmax the training loss applies) is averaged over the samples: 0 for models that classify alike, at most 1. Tabular datasets only. |
+| `readout` | How differently two circuits act on what the model measures: the Frobenius distance between their evolved readout observables (`U†OU` for each computational-basis outcome of the output qubits with `probs` readout, or Pauli-Z on each with `expval`), scaled to `[0, 1]`. It ignores phases after the circuit and anything on unmeasured qubits, and needs no data. |
+| `fubini_study` (default otherwise) | The angle between two circuits' unitaries, ignoring global phase: `arccos(\|Tr(U†V)\| / 2^n)`, 0 for circuits implementing the same operation and at most π/2. The unitary is the evolved ansatz alone -- each genome's enabled gates with their saved (for a trained genome, trained) parameters, without the input encoding or the measurement -- over the union of the run's qubits, so it is computed for circuits of up to 8 qubits. |
 | `jaccard` | The share of two genomes' enabled gates, by innovation number, that only one of them has. Innovation numbers are shared within a run, so it compares genomes of one run. |
 
 | Projection | What it keeps |
@@ -681,11 +683,18 @@ print(space['best_path'])"
 | `tsne` | Neighborhoods, so clusters stand out; distances between clusters are not meaningful |
 
 Every projection also reports its Kruskal stress (0 when every distance is
-kept). The unitary view suits runs whose classical stages have no weights, such
-as classification with `--encoding identity --decoding clipped`: the circuit is
-then the whole model. It measures the whole operation, so with amplitude
-encoding (which reaches only part of the state space) two circuits can be far
-apart yet classify alike. A new metric or projection is a subclass of
+kept). The metrics answer different questions. `behaviour` measures what the
+task sees, so the many circuits implementing one classifier collapse together
+and a two-dimensional projection keeps most of the distances; `jaccard` follows
+genealogy, with children close to their parents. The unitary metrics saturate:
+most pairs of evolved circuits are close to as far apart as they can be, so a
+flat projection keeps only a small share of their distances. `fubini_study`
+measures the whole operation -- with amplitude encoding (which reaches only part
+of the state space) two circuits can be far apart yet classify alike -- and is
+best at showing different circuits converging on the same unitary; `readout`
+saturates less. The unitary metrics suit runs whose classical stages have no
+weights, such as classification with `--encoding identity --decoding clipped`,
+where the circuit is the whole model. A new metric or projection is a subclass of
 `DistanceMetric` or `Projection` registered with `register_distance` or
 `register_projection`; the dashboard offers every registered one.
 
@@ -1100,8 +1109,10 @@ Then open `http://127.0.0.1:8000/` in a browser. The page has:
   page and the run comparison.
 - **Search space**: a run's genomes placed in two dimensions by a
   [search-space projection](#projecting-a-runs-search-space), linked from each
-  run's page. By default genomes are placed by the angle between their circuits'
-  unitaries (or by their shared gates) with classical MDS, and colored by the
+  run's page. By default genomes are placed with classical MDS by how
+  differently they classify the run's data (for a classification run; by the
+  angle between their circuits' unitaries otherwise), or by any other metric --
+  their measured observables, unitaries or shared gates -- and colored by the
   rank of a fitness key (or by island, insert type or operator), with every
   parent-to-child link. The global best's path is drawn as a line from each global
   best to the next, with the current best ringed. A slider (or **Replay**) shows

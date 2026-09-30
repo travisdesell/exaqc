@@ -860,8 +860,9 @@ def test_points_and_genealogy(viewer_url: str) -> None:
 def test_search_space(viewer_url: str) -> None:
     """The search space places a run's genomes and traces its global best.
 
-    The fake genomes name no qubits, so the unitary metric (the default) cannot
-    simulate them and reports each as left out, while the structural metric
+    The fake genomes name no qubits, so neither the behaviour metric (the
+    default for a classification run) nor the unitary one can build their
+    circuits, and each reports them as left out, while the structural metric
     places them all.
 
     Args:
@@ -881,7 +882,9 @@ def test_search_space(viewer_url: str) -> None:
         (3, 2),
         (4, 3),
     ]
-    assert [entry["name"] for entry in payload["options"]["metrics"]][:2] == [
+    assert [entry["name"] for entry in payload["options"]["metrics"]][:4] == [
+        "behaviour",
+        "readout",
         "fubini_study",
         "jaccard",
     ]
@@ -895,10 +898,19 @@ def test_search_space(viewer_url: str) -> None:
     assert len(three["coordinates"]) == 3
     assert three["higher_is_better"] is True
 
-    default = get_json(f"{viewer_url}/api/runs/0/search_space")
-    assert default["metric"] == "fubini_study"
-    assert default["genome_number"] == []
-    assert [entry["genome_number"] for entry in default["skipped"]] == [1, 2, 3, 4]
+    for metric, url in [
+        ("behaviour", f"{viewer_url}/api/runs/0/search_space"),
+        ("fubini_study", f"{viewer_url}/api/runs/0/search_space?metric=fubini_study"),
+    ]:
+        unplaced = get_json(url)
+        assert unplaced["metric"] == metric
+        assert unplaced["genome_number"] == []
+        assert [entry["genome_number"] for entry in unplaced["skipped"]] == [
+            1,
+            2,
+            3,
+            4,
+        ]
 
     status, _, body = get(f"{viewer_url}/api/runs/0/search_space?metric=nope")
     assert status == 400

@@ -36,9 +36,16 @@ from src.analysis.search_space.projections import (
 )
 from src.utils.genome_archive import GenomeArchive
 
-#: The metric and projection used when none is asked for.
+#: The metric used when none is asked for, for runs other than classification
+#: (see :func:`default_metric`), and the projection used when none is asked for.
 DEFAULT_METRIC = "fubini_study"
 DEFAULT_PROJECTION = "classical_mds"
+
+#: The metric used when none is asked for on a classification run.
+CLASSIFICATION_METRIC = "behaviour"
+
+#: The order metrics are offered in; metrics registered later follow.
+METRIC_ORDER = ("behaviour", "readout", "fubini_study", "jaccard")
 
 #: The most runs a builder keeps computed features for; the least recently
 #: used is dropped first.
@@ -104,23 +111,40 @@ def best_path(
     return path
 
 
+def default_metric(run_info: dict[str, Any] | None) -> str:
+    """Chooses the metric a run is projected with when none is asked for.
+
+    Args:
+        run_info: What the run recorded in its archive.
+
+    Returns:
+        :data:`CLASSIFICATION_METRIC` (the behaviour distance, which measures
+        what the task sees) for classification runs, and :data:`DEFAULT_METRIC`
+        (the unitary distance) otherwise.
+    """
+
+    if (run_info or {}).get("task") == "classification":
+        return CLASSIFICATION_METRIC
+    return DEFAULT_METRIC
+
+
 def options() -> dict[str, list[dict[str, str]]]:
     """Lists the metrics and projections a search space can be built with.
 
     Returns:
         ``metrics`` and ``projections``, each entry's ``name``, ``label`` and
-        ``description``, defaults first.
+        ``description``: metrics in :data:`METRIC_ORDER` (then any registered
+        later), projections with the default first.
     """
 
     def first(names: list[str], default: str) -> list[str]:
         """Moves the default to the front of a list of names."""
         return [default] + [name for name in names if name != default]
 
+    ordered = [name for name in METRIC_ORDER if name in DISTANCE_METRICS]
+    ordered += [name for name in DISTANCE_METRICS if name not in ordered]
     return {
-        "metrics": [
-            DISTANCE_METRICS[name].describe()
-            for name in first(list(DISTANCE_METRICS), DEFAULT_METRIC)
-        ],
+        "metrics": [DISTANCE_METRICS[name].describe() for name in ordered],
         "projections": [
             PROJECTIONS[name].describe()
             for name in first(list(PROJECTIONS), DEFAULT_PROJECTION)
@@ -199,7 +223,7 @@ class SearchSpaceBuilder:
     def build(
         self,
         archive_path: str,
-        metric: str = DEFAULT_METRIC,
+        metric: str | None = None,
         projection: str = DEFAULT_PROJECTION,
         dimensions: int = 2,
         fitness_key: str = "loss",
@@ -209,7 +233,8 @@ class SearchSpaceBuilder:
 
         Args:
             archive_path: The run's ``genomes.sqlar``.
-            metric: The distance metric's name (see :func:`options`).
+            metric: The distance metric's name (see :func:`options`); when not
+                given, the run's :func:`default_metric`.
             projection: The projection's name (see :func:`options`).
             dimensions: 2 or 3.
             fitness_key: The fitness key (or summary column) each genome's
@@ -234,7 +259,8 @@ class SearchSpaceBuilder:
                 not valid.
         """
 
-        distance = get_distance(metric)
+        if metric is not None:
+            get_distance(metric)
         method = get_projection(projection)
         if dimensions not in (2, 3):
             raise ValueError(
@@ -244,6 +270,7 @@ class SearchSpaceBuilder:
         with self._lock:
             cache = self._run_cache(archive_path)
             with GenomeArchive.open_readonly(archive_path) as reader:
+                run_info = reader.run_info()
                 points = reader.points(fitness_key)
                 links = reader.parent_links()
                 for genome_number in points["genome_number"]:
@@ -252,9 +279,11 @@ class SearchSpaceBuilder:
                             genome_number
                         )
 
+            metric = metric or default_metric(run_info)
+            distance = get_distance(metric)
             genome_numbers = points["genome_number"]
             genomes = [cache.genomes[number] for number in genome_numbers]
-            context = distance.context(genomes)
+            context = distance.context(genomes, run_info)
             features = cache.features.get(metric)
             if features is None or features.context != context:
                 features = cache.features[metric] = _FeatureCache(context=context)
@@ -372,12 +401,24 @@ def _describe_context(metric: str, context: Hashable) -> dict[str, Any]:
         context: The metric's context.
 
     Returns:
-        ``qubits`` (as ``[name, index]`` pairs) for the unitary metric, and an
-        empty dict for metrics without a context.
+        ``qubits`` (as ``[name, index]`` pairs) for the unitary metrics, with the
+        measured ``output_qubits`` and ``output_mode`` for the readout metric;
+        the ``dataset``, ``normalization`` and ``seed`` for the behaviour metric;
+        and an empty dict otherwise.
     """
 
     if metric == "fubini_study" and context:
         return {"qubits": [list(qubit) for qubit in context]}
+    if metric == "readout" and context:
+        qubits, outputs, mode = context
+        return {
+            "qubits": [list(qubit) for qubit in qubits],
+            "output_qubits": [list(qubit) for qubit in outputs],
+            "output_mode": mode,
+        }
+    if metric == "behaviour" and context and context[0] == "classification":
+        _, dataset, normalization, seed = context
+        return {"dataset": dataset, "normalization": normalization, "seed": seed}
     return {}
 
 
@@ -387,7 +428,7 @@ _BUILDER = SearchSpaceBuilder()
 
 def build_search_space(
     archive_path: str,
-    metric: str = DEFAULT_METRIC,
+    metric: str | None = None,
     projection: str = DEFAULT_PROJECTION,
     dimensions: int = 2,
     fitness_key: str = "loss",
@@ -400,7 +441,8 @@ def build_search_space(
 
     Args:
         archive_path: The run's ``genomes.sqlar``.
-        metric: The distance metric's name.
+        metric: The distance metric's name; when not given, the run's
+            :func:`default_metric`.
         projection: The projection's name.
         dimensions: 2 or 3.
         fitness_key: The fitness key genomes are valued by.
