@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Callable
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -260,6 +262,85 @@ def test_main_routes_on_the_genomes_recorded_task(monkeypatch, tmp_path) -> None
     assert refined["task"] == "teacher"
     assert refined["task_target"] == "bell_out"
     assert refined["fitness"]["loss"] == pytest.approx(0.1)
+
+
+def test_main_refines_a_genome_whose_fitness_records_text(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A fitness with text fields is logged and written rather than crashing.
+
+    Reinforcement-learning fitness also records ``env_id`` and ``eval_policy``
+    as strings, which the starting-versus-refined log line once tried to format
+    as numbers -- failing after training, before the refined genome was saved.
+
+    Args:
+        monkeypatch: Used to replace the objective builder and ``sys.argv``.
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    genome = build_genome("reinforcement_learning", "walker2d")
+    genome.fitness = {
+        "loss": -600.0,
+        "target_metric": 650.0,
+        "env_id": "Walker2d-v5",
+        "eval_policy": "stochastic",
+    }
+    path = write_genome(genome, tmp_path)
+
+    def fake_builder(
+        genome: CircuitGenome, device: str | None
+    ) -> Callable[[CircuitGenome], None]:
+        """Returns an objective that writes an RL-shaped fitness.
+
+        Args:
+            genome: The genome being refined (unused).
+            device: The requested device (unused).
+
+        Returns:
+            The fake objective.
+        """
+
+        def objective(target_genome: CircuitGenome) -> None:
+            """Pretends to train, writing a fitness with text fields.
+
+            Args:
+                target_genome: The genome whose fitness is set.
+
+            Returns:
+                None. Sets ``target_genome.fitness``.
+            """
+            target_genome.fitness = {
+                "loss": -700.0,
+                "target_metric": 720.0,
+                "env_id": "Walker2d-v5",
+                "eval_policy": "stochastic",
+            }
+
+        return objective
+
+    monkeypatch.setitem(
+        refine_genome.OBJECTIVE_BUILDERS, "reinforcement_learning", fake_builder
+    )
+    monkeypatch.setattr(refine_genome.logger, "remove", MagicMock())
+    monkeypatch.setattr(refine_genome.logger, "add", MagicMock())
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "refine_genome.py",
+            "--genome_json",
+            path,
+            "--out_dir",
+            str(tmp_path / "out"),
+            "--no-save_circuit",
+        ],
+    )
+
+    refine_genome.main()
+
+    refined = json.loads((tmp_path / "out" / "refined_genome_1.json").read_text())
+    assert refined["fitness"]["target_metric"] == pytest.approx(720.0)
+    assert refined["fitness"]["env_id"] == "Walker2d-v5"
 
 
 def test_main_rejects_an_unknown_task(monkeypatch, tmp_path) -> None:

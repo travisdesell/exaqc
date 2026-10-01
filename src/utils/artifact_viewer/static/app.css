@@ -337,8 +337,13 @@ main {
 }
 
 .run-notes,
-.island-topology {
+.island-topology,
+.run-timing {
   margin-top: 8px;
+}
+
+.run-timing h3 {
+  margin: 12px 0 4px;
 }
 
 .topology-frame {

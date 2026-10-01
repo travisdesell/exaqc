@@ -37,6 +37,21 @@
 #                      HEALTHY_REWARD=0.2 sh scripts/submit_exaqc_rl_jobs.sh ...
 #                    Giving it for an environment with no alive bonus is an
 #                    error rather than ignored, so tag such runs accordingly
+#   EPISODES         training episodes per genome (default 100); 0 evaluates
+#                    each genome's inherited weights without training it
+#   NUMBER_GENOMES   genomes each run evaluates (default 10000)
+#   EVAL_SEED        base seed for every genome's evaluation episodes and their
+#                    action sampling; unset (the default) draws one per genome.
+#                    Setting it scores every genome on the same episodes with
+#                    the same sampling noise; training seeds stay random per
+#                    genome either way
+#
+#                    Like HEALTHY_REWARD, these are read by the job script and
+#                    reach it through sbatch's default environment export, so
+#                    set them on this command line. They do not change the run
+#                    name, so give each combination its own tag:
+#                      EPISODES=0 NUMBER_GENOMES=200000 EVAL_SEED=1000 \
+#                          sh scripts/submit_exaqc_rl_jobs.sh 1 5 inherit_fixedeval walker2d 6 6 fully_connected
 #   DRY_RUN          when set, print the sbatch commands instead of submitting
 
 set -eu
@@ -52,8 +67,8 @@ N_ISLANDS=${N_ISLANDS:-20}
 #: Genomes per island.
 MAX_ISLAND_SIZE=${MAX_ISLAND_SIZE:-5}
 
-#: The environments src.examples.reinforcement_learning accepts, from its
-#: ENV_IDS mapping. Kept space-delimited for an exact-token match below, so
+#: The environments src.examples.reinforcement_learning accepts, from the
+#: ENV_IDS mapping in src.objectives.reinforcement_learning_objective. Kept space-delimited for an exact-token match below, so
 #: `mountaincar` does not match `mountaincar_continuous`.
 ENVIRONMENTS="cartpole acrobot mountaincar mountaincar_continuous frozenlake pendulum hopper walker2d halfcheetah ant humanoid"
 
@@ -89,6 +104,12 @@ examples:
   sh scripts/submit_exaqc_rl_jobs.sh 1 5 baseline walker2d 6 6 ring
   sh scripts/submit_exaqc_rl_jobs.sh 6 10 baseline walker2d 6 6 ring
   N_ISLANDS=30 sh scripts/submit_exaqc_rl_jobs.sh 1 3 stochastic hopper 6 3 tree 2
+  EPISODES=0 NUMBER_GENOMES=200000 EVAL_SEED=1000 \
+      sh scripts/submit_exaqc_rl_jobs.sh 1 5 inherit_fixedeval walker2d 6 6 2d_mesh 4 5
+
+environment variables (all optional; see the comments at the top of this script):
+  N_ISLANDS, MAX_ISLAND_SIZE, HEALTHY_REWARD, EPISODES, NUMBER_GENOMES,
+  EVAL_SEED, DRY_RUN
 USAGE
     exit 2
 }
@@ -160,6 +181,24 @@ is_whole_number "$OUTPUT_QUBITS" && [ "$OUTPUT_QUBITS" -gt 0 ] ||
 
 contains_word "$TOPOLOGIES" "$TOPOLOGY" ||
     die "unknown topology: $TOPOLOGY (choose one of: $TOPOLOGIES)"
+
+# The search settings the job script reads from the environment are checked
+# here too, so a typo costs an error message rather than a queue of jobs that
+# each die on startup.
+if [ -n "${EPISODES:-}" ]; then
+    is_whole_number "$EPISODES" ||
+        die "EPISODES must be a non-negative integer, but found: $EPISODES"
+fi
+
+if [ -n "${NUMBER_GENOMES:-}" ]; then
+    is_whole_number "$NUMBER_GENOMES" && [ "$NUMBER_GENOMES" -gt 0 ] ||
+        die "NUMBER_GENOMES must be a positive integer, but found: $NUMBER_GENOMES"
+fi
+
+if [ -n "${EVAL_SEED:-}" ]; then
+    is_whole_number "$EVAL_SEED" ||
+        die "EVAL_SEED must be a non-negative integer, but found: $EVAL_SEED"
+fi
 
 # Each topology takes its own arguments, and a wrong count is the mistake this
 # script exists to catch before a job is queued. The rules, and their wording,

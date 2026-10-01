@@ -10,6 +10,7 @@ import torch
 from torch.utils.data import DataLoader, TensorDataset
 
 import src.examples.classification as classification  # noqa
+import src.objectives.classification_objective as classification_objective
 
 
 def make_image_loader(
@@ -71,12 +72,12 @@ def test_load_data_uses_image_dataloader(
     )
 
     monkeypatch.setattr(
-        classification,
+        classification_objective,
         "IMAGE_DATASETS",
         ["mnist"],
     )
     monkeypatch.setattr(
-        classification,
+        classification_objective,
         "get_image_dataloaders",
         mocked_get_image_dataloaders,
     )
@@ -96,7 +97,7 @@ def test_load_data_uses_image_dataloader(
         normalization="minmax",
     )
 
-    returned_training, returned_validation = classification.load_data(args)
+    returned_training, returned_validation = classification_objective.load_data(args)
 
     assert returned_training is training_loader
     assert returned_validation is validation_loader

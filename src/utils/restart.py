@@ -52,6 +52,7 @@ OVERRIDABLE_ARGUMENTS = frozenset(
         "shared_file_system",
         "device",
         "logging_level",
+        "timing_report_every",
         "restart",
         "overwrite_archive",
         "force_restart",
@@ -153,6 +154,15 @@ def load(out_dir: str) -> RestartState:
                 f"were started with (archive format {version}, restarting needs "
                 f"{ARCHIVE_FORMAT_VERSION}), so it cannot be restarted. Start a new run "
                 "instead, or point --out_dir at a directory of its own."
+            )
+
+        if not reader.has_timing_columns():
+            raise ValueError(
+                f"{archive_path} was written before archives recorded per-genome "
+                f"timing (archive format {version}, restarting needs "
+                f"{ARCHIVE_FORMAT_VERSION}), so this version cannot add genomes to "
+                "it. Start a new run instead, or point --out_dir at a directory of "
+                "its own."
             )
 
         stored, max_genome, max_insertion, max_innovation = reader.connection.execute(

@@ -18,13 +18,14 @@ import subprocess
 import sys
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from src.examples.reinforcement_learning import (
+from src.examples.reinforcement_learning import build_parser
+from src.objectives.reinforcement_learning_objective import (
     ENV_CHOICES,
     ENV_IDS,
-    build_parser,
     environment_knob_kwargs,
     supported_env_knobs,
 )
@@ -49,7 +50,42 @@ _SAMPLE_ENVIRONMENTS: tuple[str, ...] = (
 )
 
 
-def _job_command(environment: str, healthy_reward: str | None = None) -> list[str]:
+#: Environment variables the job and submit scripts read as settings; removed
+#: from the inherited environment so a test only sees the ones it sets.
+_SETTING_VARIABLES: tuple[str, ...] = (
+    "HEALTHY_REWARD",
+    "EPISODES",
+    "NUMBER_GENOMES",
+    "EVAL_SEED",
+    "N_ISLANDS",
+    "MAX_ISLAND_SIZE",
+)
+
+
+def _script_environment(**settings: str) -> dict[str, str]:
+    """Builds a dry-run environment holding only the given script settings.
+
+    Args:
+        **settings: Setting variables to set, e.g. ``EPISODES="0"``.
+
+    Returns:
+        The current environment without any inherited setting variables, plus
+        ``DRY_RUN`` and ``settings``.
+    """
+
+    inherited = {
+        name: value
+        for name, value in os.environ.items()
+        if name not in _SETTING_VARIABLES
+    }
+    return {**inherited, "DRY_RUN": "1", **settings}
+
+
+def _job_command(
+    environment: str,
+    healthy_reward: str | None = None,
+    settings: dict[str, str] | None = None,
+) -> list[str]:
     """Runs the job script in dry-run mode and returns the arguments it builds.
 
     Args:
@@ -57,6 +93,8 @@ def _job_command(environment: str, healthy_reward: str | None = None) -> list[st
         healthy_reward: Value for the ``HEALTHY_REWARD`` environment variable,
             or None to leave it unset (the default, which passes no
             ``--healthy_reward`` at all).
+        settings: Further setting variables for the script (``EPISODES``,
+            ``NUMBER_GENOMES``, ``EVAL_SEED``), or None to leave them unset.
 
     Returns:
         The arguments the script would pass to the reinforcement-learning entry
@@ -81,11 +119,10 @@ def _job_command(environment: str, healthy_reward: str | None = None) -> list[st
         ],
         capture_output=True,
         text=True,
-        env={
-            **os.environ,
-            "DRY_RUN": "1",
+        env=_script_environment(
             **({} if healthy_reward is None else {"HEALTHY_REWARD": healthy_reward}),
-        },
+            **(settings or {}),
+        ),
     )
     assert result.returncode == 0, result.stderr
 
@@ -274,3 +311,164 @@ def test_healthy_reward_is_rejected_when_it_cannot_apply(
 
     assert result.returncode != 0, "the job script accepted an impossible setting"
     assert expected in result.stderr
+
+
+def _parsed_job_command(settings: dict[str, str] | None = None) -> Any:
+    """Builds a walker2d job command and parses it with the entry point's parser.
+
+    Args:
+        settings: Setting variables for the job script, or None for none.
+
+    Returns:
+        The parsed arguments.
+    """
+
+    arguments = _job_command("walker2d", settings=settings)
+    with contextlib.redirect_stderr(io.StringIO()):
+        return build_parser().parse_args(arguments)
+
+
+def test_search_settings_keep_their_defaults_when_unset() -> None:
+    """Unset, the job runs the same search it always has, seeds drawn per genome."""
+
+    parsed = _parsed_job_command()
+
+    assert parsed.episodes == 100
+    assert parsed.number_genomes == 10000
+    assert parsed.eval_seed is None
+    assert parsed.training_seed is None
+
+
+def test_search_settings_reach_the_command_when_set() -> None:
+    """``EPISODES``, ``NUMBER_GENOMES`` and ``EVAL_SEED`` set their flags.
+
+    ``EVAL_SEED`` pins only evaluation: training seeds stay random per genome.
+    """
+
+    parsed = _parsed_job_command(
+        {"EPISODES": "0", "NUMBER_GENOMES": "200000", "EVAL_SEED": "1000"}
+    )
+
+    assert parsed.episodes == 0
+    assert parsed.number_genomes == 200000
+    assert parsed.eval_seed == 1000
+    assert parsed.training_seed is None
+
+
+@pytest.mark.parametrize(
+    "variable,value",
+    [
+        ("EPISODES", "-1"),
+        ("EPISODES", "ten"),
+        ("NUMBER_GENOMES", "0"),
+        ("NUMBER_GENOMES", "1e5"),
+        ("EVAL_SEED", "-5"),
+        ("EVAL_SEED", "seed"),
+    ],
+)
+def test_bad_search_settings_are_rejected_by_both_scripts(
+    variable: str, value: str
+) -> None:
+    """A malformed setting fails before submission, and again in the job.
+
+    Args:
+        variable: The setting variable to give a bad value.
+        value: The bad value.
+    """
+
+    submitted = subprocess.run(
+        [
+            "sh",
+            str(SUBMIT_SCRIPT),
+            "1",
+            "5",
+            "inherit",
+            "walker2d",
+            "6",
+            "6",
+            "fully_connected",
+        ],
+        capture_output=True,
+        text=True,
+        env=_script_environment(**{variable: value}),
+    )
+    assert submitted.returncode != 0, "the submit script accepted a bad setting"
+    assert variable in submitted.stderr
+    assert submitted.stdout == "", "nothing may be submitted after a bad setting"
+
+    built = subprocess.run(
+        [
+            "bash",
+            str(JOB_SCRIPT),
+            "walker2d",
+            "6",
+            "6",
+            "exaqc_inherit_fully_connected_walker2d_i20_1",
+            "20",
+            "5",
+            "fully_connected",
+        ],
+        capture_output=True,
+        text=True,
+        env=_script_environment(**{variable: value}),
+    )
+    assert built.returncode != 0, "the job script accepted a bad setting"
+    assert variable in built.stderr
+
+
+@pytest.mark.parametrize(
+    "topology",
+    [("2d_mesh", "4", "5"), ("fully_connected",)],
+)
+@pytest.mark.parametrize("eval_seed", [None, "1000"])
+def test_inherited_weight_experiments_submit_runnable_jobs(
+    topology: tuple[str, ...], eval_seed: str | None
+) -> None:
+    """The four 0-episode walker2d experiments each queue five runnable jobs.
+
+    Args:
+        topology: The island topology and its arguments.
+        eval_seed: The ``EVAL_SEED`` to pin, or None for random evaluation seeds.
+    """
+
+    settings = {"EPISODES": "0", "NUMBER_GENOMES": "200000"}
+    if eval_seed is not None:
+        settings["EVAL_SEED"] = eval_seed
+    tag = "inherit_randeval" if eval_seed is None else "inherit_fixedeval"
+
+    submitted = subprocess.run(
+        ["sh", str(SUBMIT_SCRIPT), "1", "5", tag, "walker2d", "6", "6", *topology],
+        capture_output=True,
+        text=True,
+        env=_script_environment(**settings),
+    )
+    assert submitted.returncode == 0, submitted.stderr
+    lines = submitted.stdout.strip().splitlines()
+    assert len(lines) == 5
+
+    for line in lines:
+        argv = shlex.split(line)
+        position = next(
+            index
+            for index, value in enumerate(argv)
+            if value.endswith("exaqc_rl_job.sh")
+        )
+        built = subprocess.run(
+            ["bash", str(JOB_SCRIPT), *argv[position + 1 :]],
+            capture_output=True,
+            text=True,
+            env=_script_environment(**settings),
+        )
+        assert built.returncode == 0, built.stderr
+        command = shlex.split(built.stdout)
+        with contextlib.redirect_stderr(io.StringIO()):
+            parsed = build_parser().parse_args(
+                command[command.index("src.examples.reinforcement_learning") + 1 :]
+            )
+        assert parsed.env == "walker2d"
+        assert parsed.episodes == 0
+        assert parsed.number_genomes == 200000
+        assert parsed.eval_seed == (None if eval_seed is None else int(eval_seed))
+        assert parsed.training_seed is None
+        assert parsed.topology == list(topology)
+        assert tag in parsed.out_dir

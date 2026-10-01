@@ -1,8 +1,8 @@
 """Visualize a trained RL circuit genome acting in its target environment.
 
 Loads a circuit genome produced by ``src.examples.reinforcement_learning`` --
-from a JSON file (i.e. one written by ``CircuitGenome.to_dict``, such as
-``best_fitness.json``), or from the run's ``genomes.sqlar`` archive by its genome
+from a JSON file (i.e. one written by ``CircuitGenome.to_dict``, such as one
+downloaded from the dashboard), or from the run's ``genomes.sqlar`` archive by its genome
 number -- rebuilds the quantum circuit, reconnects it to the Gymnasium
 environment it was trained on, and rolls its policy so you can *watch* the
 evolved circuit control the environment.
@@ -30,7 +30,7 @@ Two output modes:
 
 Example::
 
-    python -m src.examples.visualize_rl --genome_json best_fitness.json --episodes 3
+    python -m src.examples.visualize_rl --genome_json genome_368.json --episodes 3
     python -m src.examples.visualize_rl --archive ./artifacts/cartpole --genome_number 368 --output_file rollout.gif
 """
 
@@ -47,7 +47,10 @@ import gymnasium as gym
 from loguru import logger
 
 from src.circuits.circuit import CircuitGenome
-from src.examples.reinforcement_learning import ENV_CHOICES, make_environment
+from src.objectives.reinforcement_learning_objective import (
+    ENV_CHOICES,
+    make_environment,
+)
 from src.trainer.reinforcement_trainer import (
     EVAL_POLICY_CHOICES,
     RLEnvironment,

@@ -4,7 +4,7 @@ The search only ever trains and validates genomes, so this scores one genome --
 loaded from a JSON file, or from a run's ``genomes.sqlar`` archive by its genome
 number -- on the dataset's official test split::
 
-    python3 -m src.examples.evaluate --genome_json best_fitness.json --dataset mnist
+    python3 -m src.examples.evaluate --genome_json genome_42.json --dataset mnist
     python3 -m src.examples.evaluate --archive ./artifacts/mnist --genome_number 42 --dataset mnist
 """
 
