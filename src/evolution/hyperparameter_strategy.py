@@ -192,6 +192,16 @@ class HyperparameterStrategy(ABC):
 
     min_population: int = 0
 
+    def tuned_names(self) -> list[str]:
+        """Names the hyperparameters this strategy chooses per child.
+
+        Returns:
+            The tuned names; none by default, where every child gets the
+            configured values.
+        """
+
+        return []
+
     @staticmethod
     def initialize_parser(
         parser: argparse.ArgumentParser,
@@ -488,6 +498,15 @@ class SimplexHyperparameters(HyperparameterStrategy):
         self.l1 = l1
         self.l2 = l2
         self.rng: random.Random | Any = rng if rng is not None else random
+
+    def tuned_names(self) -> list[str]:
+        """Names the hyperparameters SHO co-evolves.
+
+        Returns:
+            The ``--sho_tune`` names, in the order given.
+        """
+
+        return [hyperparameter.name for hyperparameter in self.tuned]
 
     def run_info(self) -> dict[str, Any]:
         """Describes the strategy for the archive's ``run_info``.

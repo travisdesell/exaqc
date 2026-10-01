@@ -225,6 +225,20 @@ class PopulationStrategy(ABC):
 
         return self.get_population()
 
+    def next_child_metadata(self) -> dict[str, Any]:
+        """Describes where the next child will be generated, before its parents are drawn.
+
+        Lets a hyperparameter strategy choose values that decide *how* the
+        child is generated (such as its crossover rates) from the same
+        sub-population :meth:`get_population_for_child` would give it.
+
+        Returns:
+            Metadata for :meth:`get_population_for_child`; empty by default,
+            i.e. the whole population.
+        """
+
+        return {}
+
     @abstractmethod
     def get_parent(self, **kwargs: Any) -> tuple[CircuitGenome, dict[str, Any]]:
         """

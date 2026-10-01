@@ -34,8 +34,9 @@ from src.trainer.supervised_trainer import SupervisedTrainer
 from src.utils.genome_archive import GenomeArchive
 
 #: The hyperparameters ``--sho_tune`` may name: the training settings
-#: :class:`SupervisedTrainer` reads per genome. ``batch_size`` is left out
-#: because the dataloaders are built once per run.
+#: :class:`SupervisedTrainer` reads per genome, and the search's crossover rates
+#: and mutation count (each child is then generated with its own). ``batch_size`` is
+#: left out because the dataloaders are built once per run.
 TUNABLE_HYPERPARAMETERS: tuple[str, ...] = (
     "learning_rate",
     "weight_decay",
@@ -45,6 +46,12 @@ TUNABLE_HYPERPARAMETERS: tuple[str, ...] = (
     "quantum_dropout_rate",
     "epochs",
     "improvement_cutoff",
+    # the search's operator rates (see src.evolution.exaqc.OPERATOR_HYPERPARAMETERS),
+    # which decide how each child is generated rather than how it is trained
+    "binary_crossover_rate",
+    "n_ary_crossover_rate",
+    "exponential_crossover_rate",
+    "mutation_count",
 )
 
 #: What SHO tunes when ``--sho_tune`` is not given: the learning rate, on a log

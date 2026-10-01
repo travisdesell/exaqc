@@ -368,6 +368,16 @@ class SteadyStateIslands(PopulationStrategy):
         merged_population.sort(key=cmp_to_key(self.compare))
         return merged_population
 
+    def next_child_metadata(self) -> dict[str, Any]:
+        """Names the island the next child will be generated for.
+
+        Returns:
+            ``target_island_id``: the island the next :meth:`get_parent` or
+            :meth:`get_parents` call targets.
+        """
+
+        return {"target_island_id": self.islands[self.current_island].id}
+
     def get_population_for_child(self, metadata: dict[str, Any]) -> list[CircuitGenome]:
         """Returns the genomes on the island a child is generated for, best first.
 
