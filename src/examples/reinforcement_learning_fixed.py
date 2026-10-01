@@ -486,7 +486,7 @@ def main() -> None:
         "epsilon": args.epsilon,
         "epsilon_min": args.epsilon_min,
         "epsilon_decay": args.epsilon_decay,
-        "seed": args.seed,
+        "training_seed": args.training_seed,
         "eval_seed": args.eval_seed,
         "env_kwargs": env_kwargs,
         "log_every": args.log_every,

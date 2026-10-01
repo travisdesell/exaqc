@@ -207,20 +207,18 @@ def test_phase_timer_records_a_block_that_raises() -> None:
 
 
 def test_insert_genome_times_each_part_of_an_insertion() -> None:
-    """Every part is timed per insertion; the best files only when a best changes."""
+    """Every part of an insertion is timed once per insertion."""
 
     search = build_search(
         SteadyStatePopulation(max_population_size=4, compare=compare), MagicMock()
     )
 
     search.insert_genome(FakeGenome(1, loss=0.5, target_metric=0.5))
-    # worse on both measures, so neither best file is rewritten
     search.insert_genome(FakeGenome(2, loss=0.6, target_metric=0.4))
 
     assert search.insert_timer.counts == {
         "population": 2,
         "archive": 2,
-        "best_files": 1,
         "population_events": 2,
     }
 

@@ -40,7 +40,6 @@ MASTER_TIMING_RECORD_EVERY: int = 100
 INSERT_PHASES: tuple[str, ...] = (
     "population",
     "archive",
-    "best_files",
     "population_events",
 )
 

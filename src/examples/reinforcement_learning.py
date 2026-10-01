@@ -285,7 +285,7 @@ def main() -> None:
             "epsilon": args.epsilon,
             "epsilon_min": args.epsilon_min,
             "epsilon_decay": args.epsilon_decay,
-            "seed": args.seed,
+            "training_seed": args.training_seed,
             "eval_seed": args.eval_seed,
             # the environment a genome was evolved against is part of what its
             # fitness means, so the single-genome tools can rebuild it exactly

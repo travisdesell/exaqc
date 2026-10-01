@@ -136,11 +136,11 @@ def test_genomes_train_on_random_seeds_unless_one_is_fixed() -> None:
             decoder_name="linear",
             trainer=trainer,
         )
-        genome.hyperparameters["seed"] = seed
+        genome.hyperparameters["training_seed"] = seed
         trainer.train(genome, make_test_environment(observation_features))
         seeds.append(genome.metadata["training_seed"])
         # the drawn seed is recorded, not written back into the inherited hyperparameters
-        assert genome.hyperparameters["seed"] == seed
+        assert genome.hyperparameters["training_seed"] == seed
 
     assert all(isinstance(seed, int) for seed in seeds)
     assert seeds[0] != seeds[1]
@@ -152,7 +152,7 @@ def test_evaluation_seeds_never_overlap_training_seeds(trainer_name: str) -> Non
     """A genome is never scored on an episode it trained on.
 
     Training and evaluation seeds were once derived from the same base, and
-    PPO's ``seed + episode_index * SEED_BLOCK + episode`` put outer episode 1
+    PPO's ``training_seed + episode_index * SEED_BLOCK + episode`` put outer episode 1
     exactly on the evaluation seeds. The two ranges are now kept disjoint by
     construction, whatever the trainer.
 
@@ -164,7 +164,7 @@ def test_evaluation_seeds_never_overlap_training_seeds(trainer_name: str) -> Non
     for _ in range(25):
         genome = SimpleNamespace(
             hyperparameters={
-                "seed": None,
+                "training_seed": None,
                 "eval_seed": None,
                 "episodes": 100,
                 "rollout_steps": 2048,
@@ -202,7 +202,7 @@ def test_eval_seed_is_random_per_genome_unless_pinned() -> None:
         return trainer.resolve_hyperparameters(
             SimpleNamespace(
                 hyperparameters={
-                    "seed": None,
+                    "training_seed": None,
                     "eval_seed": eval_seed,
                     "episodes": 20,
                     "eval_episodes": 5,
@@ -216,7 +216,7 @@ def test_eval_seed_is_random_per_genome_unless_pinned() -> None:
     pinned = [resolve(4242) for _ in range(20)]
     assert {hp.eval_seed for hp in pinned} == {4242}
     # the per-genome training seeds are still independent of one another
-    assert len({hp.seed for hp in pinned}) == 20
+    assert len({hp.training_seed for hp in pinned}) == 20
 
 
 def test_pinned_seed_and_eval_seed_that_overlap_are_rejected() -> None:
@@ -229,7 +229,7 @@ def test_pinned_seed_and_eval_seed_that_overlap_are_rejected() -> None:
     trainer = build_trainer("ppo")
     genome = SimpleNamespace(
         hyperparameters={
-            "seed": 777,
+            "training_seed": 777,
             "eval_seed": 777,
             "episodes": 20,
             "eval_episodes": 5,
@@ -288,7 +288,10 @@ def test_parser_defaults_weight_evaluation_and_draw_random_seeds() -> None:
     defaults = {action.dest: action.default for action in build_parser()._actions}
 
     assert defaults["train_vs_validation_bias"] == 0.1
-    assert defaults["seed"] is None
+    assert defaults["training_seed"] is None
+    assert defaults["eval_seed"] is None
+    # the RL search has no ambiguous --seed: training and evaluation are seeded separately
+    assert "seed" not in defaults
     assert ReinforcementLearningObjective.__init__.__defaults__ == (0.1,)
 
 

@@ -289,8 +289,6 @@ def test_the_master_records_timing_rows_in_the_archive(
 
     monkeypatch.setattr(master_worker, "MASTER_TIMING_RECORD_EVERY", 2)
     archive = GenomeArchive.create(str(tmp_path / "run"))
-    # rendering the best genome's images is not what is under test
-    monkeypatch.setattr(archive, "write_current_best", lambda genome, kind: None)
     search = build_search(
         SteadyStatePopulation(max_population_size=3, compare=compare), archive
     )

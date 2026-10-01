@@ -61,7 +61,7 @@ def test_trainer_flags_match_the_quantum_entry_point() -> None:
         assert fixed[dest] == quantum[dest]
 
     # the seeds are drawn per run unless given, as in the quantum search
-    assert fixed["seed"] is None
+    assert fixed["training_seed"] is None
     assert fixed["eval_seed"] is None
 
 

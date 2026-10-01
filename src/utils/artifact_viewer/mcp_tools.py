@@ -1304,8 +1304,9 @@ class DashboardTools:
 
         The ``summary`` gives the whole run: the master's genomes per second and
         busy/idle percentages, the mean milliseconds of each master phase and
-        insertion part (``best_files`` rewrites the current-best images, which
-        is the usual spike), and the workers' mean wait for a genome, their wait
+        insertion part (archives from before the search stopped writing
+        best-genome files also show ``best_files``, their rewrites), and the
+        workers' mean wait for a genome, their wait
         share (wait over wait plus evaluation) and each genome's mean
         evaluation, generation and turnaround time. The ``master`` and
         ``workers`` series give the same over the run, one point per recorded
@@ -1593,8 +1594,8 @@ class DashboardTools:
                     "wall_seconds, genomes (inserted in the interval), phases "
                     "(JSON {phase: {seconds, count}} for the MPI master's idle, "
                     "generate, send, deserialize and insert), insert_parts (JSON, "
-                    "the same for population, archive, best_files and "
-                    "population_events) -- one row per 100 insertions of an MPI "
+                    "the same for population, archive and population_events) -- "
+                    "one row per 100 insertions of an MPI "
                     "run; absent in older archives and empty for serial runs"
                 ),
                 "genome_operators": (

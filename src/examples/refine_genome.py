@@ -1,10 +1,10 @@
 """Continue training a single evolved genome loaded from its JSON.
 
 The evolutionary search records every genome it evaluates as JSON (see
-``CircuitGenome.to_dict``) in its run's ``genomes.sqlar`` archive, and also
-writes the current best genomes as ``best_fitness.json`` and
-``best_target_metric.json``. This entry point loads one genome back -- from a
-JSON file, or from an archive by its genome number -- and trains it further,
+``CircuitGenome.to_dict``) in its run's ``genomes.sqlar`` archive; the best ones
+are found there, with the dashboard or a query. This entry point loads one
+genome back -- from a JSON file (such as one downloaded from the dashboard), or
+from an archive by its genome number -- and trains it further,
 which is useful for taking the best genome of a search and giving it a longer,
 more careful training run than the search itself could afford.
 

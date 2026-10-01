@@ -114,7 +114,7 @@ command-line arguments group the same way:
 | **Population strategy** | Decides which genomes survive and become parents | [`steady_state`](#steady_state) / [`islands`](#islands) sub-command |
 | **Trainer** | Trains each genome once it is generated | [Trainers](#trainers) |
 | **Objective** | Calls the trainer for a genome and sets its `fitness` | The entry point itself |
-| **Genome archive** | Records every evaluated genome, the current best genomes and the search history | [Run outputs](#run-outputs-genomearchive) |
+| **Genome archive** | Records every evaluated genome and the search history, the run's only output | [Run outputs](#run-outputs-genomearchive) |
 
 Runs are parallelised with **MPI**: rank 0 is the master that generates genomes
 and owns the population, and every other rank is a worker that trains them.
@@ -195,8 +195,7 @@ and inserts every genome, so with many workers or fast evaluations (e.g.
 master logs an INFO line with its throughput, how much of its time was *busy*
 (generating, sending, deserializing and inserting genomes) versus *idle*
 (waiting for workers), the mean time of each of those steps, and the parts of an
-insertion (`population`, `archive`, `best_files` -- rewriting the current-best
-files, which renders two images -- and `population_events`). A busy share near
+insertion (`population`, `archive` and `population_events`). A busy share near
 100% means workers are queueing on the master. Each worker logs its own split
 between waiting on the master and evaluating when the run ends, and every genome
 records how long its worker waited for it as `timing.request_wait_seconds`.
@@ -410,9 +409,9 @@ see [`--eval_policy`](#evaluation-regime---eval_policy).
 
 Shared arguments: `--episodes`, `--eval_episodes`, `--eval_policy`,
 `--max_steps`, `--gamma`, `--learning_rate`, `--entropy_coef`, `--log_every`,
-`--improvement_cutoff`, `--ema_alpha`, `--seed`, `--eval_seed`.
+`--improvement_cutoff`, `--ema_alpha`, `--training_seed`, `--eval_seed`.
 
-##### Evaluation seeds (`--seed` and `--eval_seed`)
+##### Training and evaluation seeds (`--training_seed` and `--eval_seed`)
 
 Training and evaluation episodes are seeded from **separate** bases, held in
 ranges that cannot overlap — otherwise a genome could be scored on an episode
@@ -420,10 +419,18 @@ it had just trained on, which flatters it. Each trainer declares the seed range
 its training consumes (`training_seed_span`), and the evaluation range is kept
 clear of it.
 
-| | `--seed` (training) | `--eval_seed` (evaluation) |
+| | `--training_seed` (training) | `--eval_seed` (evaluation) |
 |---|---|---|
 | unset (default) | each genome draws its own, so genomes do not all train on the same episodes | each genome draws its own, so each is scored on its own episodes |
-| set | every genome trains on the same episodes | every genome is scored on the **same** episodes |
+| set | every genome trains on the same episodes | every genome is scored on the **same** episodes, with the same sampling noise |
+
+The evaluation seed determines an evaluation completely: evaluation episode `i`
+resets from `eval_seed + i`, and under a stochastic policy (see
+[`--eval_policy`](#evaluation-regime---eval_policy)) samples its actions from a
+generator seeded with the same value rather than from the training generator.
+So a genome re-evaluated with the `evaluation_seed` its metadata records scores
+the same again, genomes sharing a pinned `--eval_seed` differ only in their
+policies, and evaluating never changes the random numbers training draws.
 
 Setting `--eval_seed` is worth considering when you care about *ranking*
 genomes against each other. With it unset, each genome is scored on its own
@@ -431,7 +438,7 @@ draw of episodes, so a search that keeps the best of many thousands partly
 selects for a lucky draw; pinning it gives every genome the same episodes
 (common random numbers) at the cost of tuning the population to that one set.
 
-If `--eval_seed` is set and `--seed` is not, the training seed is moved out of
+If `--eval_seed` is set and `--training_seed` is not, the training seed is moved out of
 the way rather than the evaluation seed, so every genome keeps facing the same
 evaluation episodes. Pinning **both** into overlapping ranges is a
 configuration error and is rejected.
@@ -552,9 +559,11 @@ environment's reward scale and episode length.
 search writes to disk. A search can evaluate tens of thousands of genomes, and
 writing several files for each one overwhelms the metadata servers of shared
 cluster file systems, so every evaluated genome is stored in a **single SQLite
-database**, `genomes.sqlar`, instead. Architecture diagrams and training plots are
-only drawn for the current best genomes; any other genome's images are drawn on
-demand by the [`exaqc_dashboard`](#exaqc_dashboard) web page.
+database**, `genomes.sqlar`, instead. The search draws no images at all:
+architecture diagrams and training plots are drawn on demand by the
+[`exaqc_dashboard`](#exaqc_dashboard) web page, and the best genomes are found
+there (or by querying the archive) rather than rewritten as files whenever the
+search improves.
 
 ### Run output arguments
 
@@ -623,8 +632,6 @@ However many genomes a run evaluates, its directory holds the same files:
 | File | Contents |
 |---|---|
 | `genomes.sqlar` | Every evaluated genome's JSON, plus a summary and parent links for each (for sorting and tracing ancestry), how the population changed after every insertion, for an MPI run where the master's time went (every 100 insertions), and what produced the run: its command line, the arguments it was started with (so it can be [restarted](#restarting-a-run)), each restart since, its git commit, host and library versions, and for an island search how its islands are connected |
-| `best_fitness.json`, `best_fitness.png`, `best_fitness_training.png` | The best genome by the population's ranking (lowest `fitness["loss"]`): its JSON, architecture diagram and training plot, overwritten whenever it improves |
-| `best_target_metric.json`, `best_target_metric.png`, `best_target_metric_training.png` | The same for the highest `fitness["target_metric"]` |
 | `run.log` | The run's log, written only when `--save_run_log` is passed, at `--logging_level` (a search logs a line per gate below its default level, so a debug-level log of a long run grows to many gigabytes) |
 | `annotations.sqlite` | Notes and tags on the run and its genomes, written only by the [dashboard](#exaqc_dashboard) or the [MCP interface](#exaqc_mcp) when started with `--allow_annotations` (a search never creates it, and nothing writes annotations into `genomes.sqlar`) |
 
@@ -633,6 +640,15 @@ better genome. Genome 1, the empty seed circuit every initial genome is mutated
 from, is not: it is never evaluated, so it has no fitness and does not
 count towards `--number_genomes` (the viewer labels it as the seed wherever it
 appears as a parent).
+
+Runs no longer write `best_fitness.*` / `best_target_metric.*` files beside the
+archive. The best genomes are shown in the dashboard (which can download any
+genome's JSON), or found with a query and loaded by number:
+
+```
+sqlite3 ./artifacts/iris/genomes.sqlar "select genome_number, loss from genomes order by loss limit 1"
+sqlite3 ./artifacts/iris/genomes.sqlar "select genome_number, target_metric from genomes order by target_metric desc limit 1"
+```
 
 ### Working with a run's archive
 
@@ -693,8 +709,9 @@ An MPI run's archive also has a `master_timing` table: one row per 100 insertion
 (and one for the final partial interval), keyed by the insertion count ending it,
 with its `wall_seconds`, how many `genomes` it inserted, and as JSON the seconds and
 count of each of the master's `phases` (`idle`, `generate`, `send`, `deserialize`,
-`insert`) and `insert_parts` (`population`, `archive`, `best_files`,
-`population_events`) -- the same breakdown the master logs every
+`insert`) and `insert_parts` (`population`, `archive`, `population_events`, and
+in runs from before the search stopped writing best-genome files, `best_files`)
+-- the same breakdown the master logs every
 `--timing_report_every` insertions:
 
 ```
@@ -715,7 +732,7 @@ Common to the evolutionary entry points:
 | Argument | Default | Description |
 |---|---|---|
 | `--device` | `cpu` | PyTorch device |
-| `--seed` | `0` (`reinforcement_learning`: random) | Random seed; see [`reinforcement_learning`](#reinforcement_learning) for how it seeds training there |
+| `--seed` | `0` | Random seed (`classification` and `teacher`); `reinforcement_learning` seeds training and evaluation separately with `--training_seed` and `--eval_seed` instead |
 | `--logging_level` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
 
 ### [`classification`](./src/examples/classification.py)
@@ -871,7 +888,7 @@ environments work only with `reinforce`, `actor_critic`/`a2c` and `ppo`.
 | `--episodes` | `60` | Training episodes per genome, after the episode-0 evaluation of its inherited weights; 0 scores them only |
 | `--eval_episodes` | `10` | Episodes used to score a genome |
 | `--eval_policy` | `match` | Action-selection regime evaluation scores under: `match`, `greedy`, `stochastic` or `both` |
-| `--eval_seed` | random per genome | Base seed for evaluation episodes, kept disjoint from the training seeds; set it to score every genome on the same episodes |
+| `--eval_seed` | random per genome | Base seed for evaluation episodes and their action sampling, kept disjoint from the training seeds; set it to score every genome on the same episodes with the same sampling noise |
 | `--forward_reward_weight` | the environment's own | MuJoCo: weight on forward progress (`reward += weight * dx/dt`) |
 | `--ctrl_cost_weight` | the environment's own | MuJoCo: weight on the control cost (`reward -= weight * sum(a^2)`) |
 | `--healthy_reward` | the environment's own | MuJoCo: per-step bonus for staying upright — the bonus itself, not a coefficient (not accepted by `halfcheetah`) |
@@ -883,7 +900,7 @@ environments work only with `reinforce`, `actor_critic`/`a2c` and `ppo`.
 | `--improvement_cutoff` | `30` | Episodes without an improved evaluation before stopping, 0 to disable |
 | `--ema_alpha` | `0.05` | Smoothing for the reported training return |
 | `--train_vs_validation_bias`, `-tvb` | `0.1` | Weight of the training return in fitness: `loss = -(tvb × training return + (1 − tvb) × evaluation return)` |
-| `--seed` | random | Base seed for a genome's training and evaluation episodes. By default each genome draws its own (recorded as `training_seed` in its metadata), so genomes are not all selected on the same episodes; give a seed to train every genome on the same ones |
+| `--training_seed` | random | Base seed for a genome's training episodes, PyTorch and NumPy. By default each genome draws its own (recorded as `training_seed` in its metadata), so genomes are not all trained on the same episodes; give a seed to train every genome on the same ones |
 | `--map_name` / `--is_slippery` | `4x4` / off | FrozenLake only |
 
 Plus the per-algorithm arguments in [Trainers](#trainers).
@@ -953,7 +970,7 @@ The stored hyperparameters are reused unchanged unless overridden.
 
 | Argument | Default | Description |
 |---|---|---|
-| `--genome_json` | *one of `--genome_json` / `--archive` is required* | Genome JSON written by the search (e.g. `best_fitness.json`) |
+| `--genome_json` | *one of `--genome_json` / `--archive` is required* | A genome's JSON, e.g. downloaded from the dashboard |
 | `--archive` | *one of `--genome_json` / `--archive` is required* | A run's `genomes.sqlar`, or the run directory holding it |
 | `--genome_number` | — | Genome to load from `--archive` (required with it) |
 | `--set KEY=VALUE` | — | Override a stored hyperparameter; repeatable |
@@ -963,7 +980,7 @@ The stored hyperparameters are reused unchanged unless overridden.
 | `--device` | `cpu` | PyTorch device |
 
 ```
-python3 -m src.examples.refine_genome --genome_json ./artifacts/iris/best_fitness.json \
+python3 -m src.examples.refine_genome --archive ./artifacts/iris --genome_number 11 \
     --out_dir ./refined --set epochs=200 --set learning_rate=0.01
 ```
 
@@ -1006,7 +1023,7 @@ python3 -m src.examples.visualize_rl --archive ./artifacts/cartpole --genome_num
 
 | Argument | Default | Description |
 |---|---|---|
-| `--genome_json` | *one of `--genome_json` / `--archive` is required* | Genome JSON from the RL entry point (e.g. `best_fitness.json`) |
+| `--genome_json` | *one of `--genome_json` / `--archive` is required* | A genome's JSON from the RL entry point, e.g. downloaded from the dashboard |
 | `--archive` | *one of `--genome_json` / `--archive` is required* | A run's `genomes.sqlar`, or the run directory holding it |
 | `--genome_number` | — | Genome to load from `--archive` (required with it) |
 | `--env` | from the genome | Override the environment |
@@ -1278,7 +1295,7 @@ python3 -m src.examples.reinforcement_learning_fixed --env cartpole --algo ppo -
 | `--log_every` | `10` | Evaluate and log every N episodes |
 | `--improvement_cutoff` | `30` | Episodes without an improved evaluation before stopping, 0 to disable |
 | `--ema_alpha` | `0.05` | Smoothing for the reported training return |
-| `--seed` | random | Base seed for training episodes, PyTorch and NumPy |
+| `--training_seed` | random | Base seed for training episodes, PyTorch and NumPy |
 | MuJoCo knobs | the environment's own | `--forward_reward_weight`, `--ctrl_cost_weight`, `--healthy_reward`, `--contact_cost_weight`, `--terminate_when_unhealthy`, `--reset_noise_scale`, as for [`reinforcement_learning`](#reinforcement_learning) |
 | `--map_name` / `--is_slippery` | `4x4` / off | FrozenLake only |
 | `--logging_level` | `INFO` | Terminal log level |

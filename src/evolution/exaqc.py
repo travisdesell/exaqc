@@ -220,9 +220,8 @@ class EXAQC:
                 every generated genome. Named 'task_target' because 'target'
                 already names the quantum framework.
             archive: the run's output archive (see :class:`GenomeArchive`), which
-                every inserted genome, the current-best genome files and the
-                search history are written to. When None nothing is written,
-                e.g. in tests.
+                every inserted genome and the search history are written to.
+                When None nothing is written, e.g. in tests.
             restarting: whether this search continues a run the archive already
                 holds (see :mod:`src.utils.restart`). A restart leaves what
                 that run recorded about itself -- its command line, start time
@@ -250,8 +249,8 @@ class EXAQC:
         # timing reports
         self.insert_timer = PhaseTimer()
 
-        # Everything written to disk (evaluated genomes, current-best genome files
-        # and the search history) goes through the archive.
+        # Everything written to disk (evaluated genomes and the search history)
+        # goes through the archive.
         self.archive = archive
 
         # The best genome by fitness["target_metric"]; the population itself
@@ -848,11 +847,12 @@ class EXAQC:
 
         This is the single insertion path for both serial and MPI runs. Once the
         population strategy accepts the genome, it is written to the run's
-        archive, the current-best genome files are rewritten if it improved the
-        best genome by fitness or by ``target_metric``, and the change to the
-        population is recorded. A genome a population strategy declines to record
-        (by returning False) is counted but not archived; the built-in strategies
-        record every genome, discarded ones included.
+        archive and the change to the population is recorded. A genome a
+        population strategy declines to record (by returning False) is counted
+        but not archived; the built-in strategies record every genome, discarded
+        ones included. No other files are written: the best genomes are read from
+        the archive (by the dashboard, or a query) rather than rewritten as they
+        improve, which would cost the search an image render per new best.
 
         Args:
             genome: The evaluated genome to insert.
@@ -861,14 +861,13 @@ class EXAQC:
             None. Stamps the genome's ``timing["inserted_at"]``, updates the
             population, ``inserted_genomes`` and ``target_metric_best_genome``,
             writes to ``archive`` when one was given, and adds how long each
-            part took (``population``, ``archive``, ``best_files``,
-            ``population_events``) to ``insert_timer``.
+            part took (``population``, ``archive``, ``population_events``) to
+            ``insert_timer``.
         """
 
         # when the master took the genome back, on the master's clock
         genome.metadata.setdefault("timing", {})["inserted_at"] = time.time()
         with self.insert_timer.time("population"):
-            previous_best = self.population.get_best_genome()
             recorded = self.population.insert_genome(
                 genome, current_genome_number=self.genome_number
             )
@@ -877,7 +876,8 @@ class EXAQC:
         if recorded is False:
             return
 
-        new_target_metric_best = self.update_target_metric_best(genome)
+        # tracked for the search's own "new best" log lines
+        self.update_target_metric_best(genome)
 
         if self.archive is None:
             return
@@ -888,19 +888,6 @@ class EXAQC:
                 insertion=self.inserted_genomes,
                 island=genome.metadata.get("island_id"),
             )
-
-        best = self.population.get_best_genome()
-        new_fitness_best = best is not None and (
-            previous_best is None or best.genome_number != previous_best.genome_number
-        )
-
-        # rewriting the best files renders two images, so it is timed on its own
-        if new_fitness_best or new_target_metric_best:
-            with self.insert_timer.time("best_files"):
-                if new_fitness_best:
-                    self.archive.write_current_best(best, "fitness")
-                if new_target_metric_best:
-                    self.archive.write_current_best(genome, "target_metric")
 
         with self.insert_timer.time("population_events"):
             self.archive.record_population(

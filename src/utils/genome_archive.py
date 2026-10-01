@@ -14,9 +14,10 @@ and traced through their ancestry without decompressing them.
 
 :class:`GenomeArchive` also owns the rest of a run's output directory: the
 command-line arguments that locate and configure it (``--out_dir`` and
-``--shared_file_system``), the current-best genome files that are overwritten
-whenever the search improves, and the record of how the population changed after
-every insertion.
+``--shared_file_system``), the record of how the population changed after every
+insertion, and, for an MPI run, where the master's time went. The archive is the
+run's only output: the best genomes are found by querying it (the dashboard does
+this) rather than rewritten as files whenever the search improves.
 """
 
 from __future__ import annotations
@@ -30,7 +31,6 @@ import re
 import sqlite3
 import subprocess
 import sys
-import tempfile
 import time
 import zlib
 from collections.abc import Callable, Iterator
@@ -81,9 +81,11 @@ MASTER_TIMING_FIELDS: tuple[str, ...] = (
     "insert_parts",
 )
 
-#: The kinds of current-best genome files kept in the output directory: the best
-#: genome by the search's own ranking and the best by ``fitness["target_metric"]``.
-BEST_KINDS = ("fitness", "target_metric")
+#: The current-best genome files runs written before archive format 6 kept
+#: beside the archive (``best_<kind>.json``, ``.png`` and ``_training.png``).
+#: Searches no longer write them -- the best genomes are read from the archive --
+#: but discarding such a run with ``--overwrite_archive`` still removes them.
+_LEGACY_BEST_KINDS = ("fitness", "target_metric")
 
 #: How long (in seconds) a connection waits on a lock before SQLite reports
 #: ``database is locked``.
@@ -605,48 +607,6 @@ def _decode_member(size: int, data: bytes) -> bytes:
     return data if len(data) == size else zlib.decompress(data)
 
 
-def _default_file_mode() -> int:
-    """Returns the permissions a newly created file gets under the process umask.
-
-    Returns:
-        ``0o666`` with the current umask's bits cleared.
-    """
-
-    umask = os.umask(0)
-    os.umask(umask)
-    return 0o666 & ~umask
-
-
-def _atomic_write(path: str, data: bytes) -> None:
-    """Writes a file so readers never observe it partially written.
-
-    The bytes go to a temporary file in the same directory, which then replaces
-    ``path`` in one rename. The file gets the permissions a normally created file
-    would, so a run's outputs stay readable by collaborators on a shared system.
-
-    Args:
-        path: Destination file path.
-        data: Bytes to write.
-
-    Returns:
-        None. Creates or replaces ``path``.
-    """
-
-    descriptor, temporary_path = tempfile.mkstemp(
-        dir=os.path.dirname(path) or ".", prefix=".", suffix=".tmp"
-    )
-    try:
-        # mkstemp creates the file readable by its owner only
-        os.chmod(temporary_path, _default_file_mode())
-        with os.fdopen(descriptor, "wb") as temporary_file:
-            temporary_file.write(data)
-        os.replace(temporary_path, path)
-    except BaseException:
-        if os.path.exists(temporary_path):
-            os.remove(temporary_path)
-        raise
-
-
 def _chunks(values: list[int], size: int = 500) -> Iterator[list[int]]:
     """Splits a list into consecutive chunks, to keep SQL ``IN`` lists short.
 
@@ -757,10 +717,11 @@ def _filter_clause(filters: dict[str, Any] | None) -> tuple[str, list[Any]]:
 
 
 def _discard_run(out_dir: str, archive_path: str) -> None:
-    """Removes a previous run's archive and best-genome files, to start over.
+    """Removes a previous run's archive, to start over.
 
     Only what a search wrote is removed: the archive (with any journal beside
-    it) and the current-best genome files. The run's log is left to be appended
+    it) and, for a run from before archive format 6, the current-best genome
+    files it kept beside it. The run's log is left to be appended
     to, and annotations someone recorded are left alone -- they are not the
     search's to delete -- but they name genomes the new run will not have, so
     finding them is worth reporting.
@@ -780,7 +741,7 @@ def _discard_run(out_dir: str, archive_path: str) -> None:
     for suffix in ("", "-wal", "-shm", "-journal"):
         _remove_if_exists(f"{archive_path}{suffix}")
 
-    for kind in BEST_KINDS:
+    for kind in _LEGACY_BEST_KINDS:
         prefix = os.path.join(out_dir, f"best_{kind}")
         for name in (f"{prefix}.json", f"{prefix}.png", f"{prefix}_training.png"):
             _remove_if_exists(name)
@@ -860,7 +821,7 @@ def _summary_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
 
 
 class GenomeArchive:
-    """A run's output directory: every evaluated genome, current bests and history.
+    """A run's output directory: every evaluated genome and the search's history.
 
     Open one for writing with :meth:`from_args` or :meth:`create` -- only on the
     serial run or the MPI master, so there is a single writer -- or for reading
@@ -896,8 +857,7 @@ class GenomeArchive:
             default="artifacts",
             help=(
                 "Directory the run's outputs are written into: the genomes.sqlar archive of "
-                "every evaluated genome, the current best genome files, the search history "
-                "and the run log."
+                "every evaluated genome and the search history, and the run log."
             ),
         )
 
@@ -1393,60 +1353,6 @@ class GenomeArchive:
             )
 
         return self._write(f"genome {genome_number}", store)
-
-    def write_current_best(self, genome: CircuitGenome, kind: str) -> None:
-        """Overwrites one set of current-best genome files in the output directory.
-
-        Writes ``best_<kind>.json`` (the serialized genome),
-        ``best_<kind>.png`` (its architecture diagram) and
-        ``best_<kind>_training.png`` (its training history). Each file is
-        replaced atomically, so it can be opened at any time during a run. An
-        image that cannot be drawn is removed rather than left showing an
-        earlier best.
-
-        Args:
-            genome: The new best genome.
-            kind: Which best it is, one of :data:`BEST_KINDS`.
-
-        Returns:
-            None. Replaces the files in ``out_dir``.
-
-        Raises:
-            RuntimeError: If the archive is read-only.
-            ValueError: If ``kind`` is not one of :data:`BEST_KINDS`.
-        """
-
-        self._require_writable()
-        if kind not in BEST_KINDS:
-            raise ValueError(
-                f"Unknown best genome kind {kind!r}; expected one of {BEST_KINDS}."
-            )
-
-        # Imported here so that reading an archive does not load the plotting and
-        # quantum-framework stacks.
-        from src.utils.genome_rendering import render_diagram_png, render_training_png
-
-        prefix = os.path.join(self.out_dir, f"best_{kind}")
-        serialized = json.dumps(genome.to_dict(), ensure_ascii=False, indent=4).encode(
-            "utf-8"
-        )
-        _atomic_write(f"{prefix}.json", serialized)
-
-        for path, image in (
-            (f"{prefix}.png", render_diagram_png(genome)),
-            (f"{prefix}_training.png", render_training_png(genome)),
-        ):
-            if image is None:
-                _remove_if_exists(path)
-            else:
-                _atomic_write(path, image)
-
-        logger.info(
-            "wrote current best ({}) genome {} to {}.*",
-            kind,
-            genome.genome_number,
-            prefix,
-        )
 
     def record_population(self, step: int, population: list[CircuitGenome]) -> None:
         """Records how the population changed at one insertion.
