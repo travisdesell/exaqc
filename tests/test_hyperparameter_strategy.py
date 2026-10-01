@@ -339,8 +339,12 @@ def test_operator_rates_are_tuned_per_child() -> None:
     assert base["binary_crossover_rate"] == search.binary_crossover_rate
     assert "binary_crossover_rate" not in search.hyperparameters
 
-    # burn-in children draw rates; fill the population with evaluated ones
-    for number in range(3):
+    # burn-in children draw rates; fill the population with evaluated ones (a
+    # child with the same gates as a held genome is discarded, so keep going
+    # until it is full)
+    number = 0
+    while population.is_initializing():
+        number += 1
         child = search.generate_genome()
         assert 0.0 <= child.hyperparameters["n_ary_crossover_rate"] <= 0.3
         child.fitness = {"loss": float(number), "target_metric": -float(number)}
@@ -445,8 +449,11 @@ def test_mutation_count_is_tuned_per_child() -> None:
     # ``uniform 1 2`` typically draws (1 + 2) / 2, rounded
     assert search.hyperparameter_base()["mutation_count"] == 2
 
-    # burn-in children are mutated as many times as their drawn count
-    for number in range(3):
+    # burn-in children are mutated as many times as their drawn count (filled
+    # until full, since a child duplicating a held genome's gates is discarded)
+    number = 0
+    while population.is_initializing():
+        number += 1
         child = search.generate_genome()
         assert child.hyperparameters["mutation_count"] == 2
         assert len(child.metadata["generated_by"]) == 2
@@ -475,3 +482,83 @@ def test_untuned_mutation_count_follows_the_mutation_strategy() -> None:
     assert search.tuned_mutation_count(None) in (1, 2)
     child = search.generate_genome()
     assert "mutation_count" not in child.hyperparameters
+
+
+#: The arguments ``reinforcement_learning`` requires.
+RL_REQUIRED_ARGUMENTS = [
+    "--env",
+    "cartpole",
+    "--algo",
+    "reinforce",
+    "--input_qubits",
+    "4",
+    "--output_qubits",
+    "2",
+    "-ms",
+    "uniform",
+    "1",
+    "3",
+    "-ps",
+    "uniform",
+    "2",
+    "3",
+    "--out_dir",
+    "out",
+]
+
+
+def test_reinforcement_learning_parser_builds_sho() -> None:
+    """The RL entry point defaults to fixed values and can co-evolve its own settings."""
+
+    from src.examples import reinforcement_learning
+
+    parser = reinforcement_learning.build_parser()
+    args = parser.parse_args([*RL_REQUIRED_ARGUMENTS, "steady_state"])
+    assert args.hyperparameter_strategy == "fixed"
+    assert (args.adam_beta1, args.adam_beta2, args.adam_epsilon) == (0.9, 0.999, 1e-8)
+    assert isinstance(HyperparameterStrategy.from_args(args), FixedHyperparameters)
+
+    args = parser.parse_args(
+        [
+            "--hyperparameter_strategy",
+            "simplex",
+            "--sho_tune",
+            "learning_rate=log:1e-3:5e-2",
+            "gamma=linear:0.9:0.999",
+            "entropy_coef=linear:0:0.05",
+            "mutation_count=int:1:3",
+            *RL_REQUIRED_ARGUMENTS,
+            "steady_state",
+        ]
+    )
+    strategy = HyperparameterStrategy.from_args(args)
+    assert strategy.tuned_names() == [
+        "learning_rate",
+        "gamma",
+        "entropy_coef",
+        "mutation_count",
+    ]
+
+    # settings that change what fitness measures cannot be tuned
+    for untunable in ("max_steps", "eval_episodes", "ema_alpha"):
+        with pytest.raises(SystemExit):
+            parser.parse_args(
+                [
+                    *RL_REQUIRED_ARGUMENTS,
+                    "--sho_tune",
+                    f"{untunable}=int:1:5",
+                    "steady_state",
+                ]
+            )
+
+
+def test_rl_trainer_reads_tuned_adam_settings() -> None:
+    """The RL trainer resolves a genome's Adam settings, defaulting to PyTorch's."""
+
+    from types import SimpleNamespace
+
+    from src.trainer.reinforcement_trainer import ReinforcementLearningTrainer
+
+    genome = SimpleNamespace(hyperparameters={"adam_beta1": 0.95, "adam_epsilon": 3e-9})
+    hp = ReinforcementLearningTrainer.resolve_hyperparameters(MagicMock(), genome)
+    assert (hp.adam_beta1, hp.adam_beta2, hp.adam_epsilon) == (0.95, 0.999, 3e-9)

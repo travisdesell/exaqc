@@ -547,6 +547,9 @@ def stochastic_action(
 #: Keys:
 #:     episodes: Number of training episodes (outer-loop iterations).
 #:     learning_rate: Adam learning rate.
+#:     adam_beta1: Adam first-moment decay rate (PyTorch's default).
+#:     adam_beta2: Adam second-moment decay rate (PyTorch's default).
+#:     adam_epsilon: Adam numerical-stability term (PyTorch's default).
 #:     gamma: Reward discount factor.
 #:     max_steps: Maximum number of steps per episode.
 #:     eval_episodes: Number of episodes used to evaluate a genome's return.
@@ -591,6 +594,9 @@ def stochastic_action(
 RL_HYPERPARAMETER_DEFAULTS: dict[str, Any] = {
     "episodes": 60,
     "learning_rate": 1e-2,
+    "adam_beta1": 0.9,
+    "adam_beta2": 0.999,
+    "adam_epsilon": 1e-8,
     "gamma": 0.99,
     "max_steps": 500,
     "eval_episodes": 10,
@@ -785,7 +791,8 @@ class ReinforcementLearningTrainer(ABC):
         Returns:
             None. Mutates ``parser`` by adding ``--episodes``,
             ``--eval_episodes``, ``--eval_policy``, ``--max_steps``,
-            ``--gamma``, ``--learning_rate``/``-lr``, ``--entropy_coef``,
+            ``--gamma``, ``--learning_rate``/``-lr``, ``--adam_beta1``,
+            ``--adam_beta2``, ``--adam_epsilon``, ``--entropy_coef``,
             ``--value_coef``, ``--eval_seed``, ``--seed``, ``--log_every``,
             ``--ema_alpha`` and ``--improvement_cutoff``.
         """
@@ -838,6 +845,27 @@ class ReinforcementLearningTrainer(ABC):
             type=float,
             default=1e-2,
             help="Adam learning rate used when training each genome.",
+        )
+
+        parser.add_argument(
+            "--adam_beta1",
+            type=float,
+            default=RL_HYPERPARAMETER_DEFAULTS["adam_beta1"],
+            help="Adam first-moment decay rate (beta1) used when training each genome.",
+        )
+
+        parser.add_argument(
+            "--adam_beta2",
+            type=float,
+            default=RL_HYPERPARAMETER_DEFAULTS["adam_beta2"],
+            help="Adam second-moment decay rate (beta2) used when training each genome.",
+        )
+
+        parser.add_argument(
+            "--adam_epsilon",
+            type=float,
+            default=RL_HYPERPARAMETER_DEFAULTS["adam_epsilon"],
+            help="Adam epsilon (numerical-stability term) used when training each genome.",
         )
 
         parser.add_argument(
@@ -1324,7 +1352,11 @@ class ReinforcementLearningTrainer(ABC):
             return
 
         optimizer = torch.optim.Adam(
-            trainable_parameters, lr=hp.learning_rate, weight_decay=0.0
+            trainable_parameters,
+            lr=hp.learning_rate,
+            betas=(float(hp.adam_beta1), float(hp.adam_beta2)),
+            eps=float(hp.adam_epsilon),
+            weight_decay=0.0,
         )
 
         recent_returns: list[float] = []

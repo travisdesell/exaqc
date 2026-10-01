@@ -382,7 +382,8 @@ second half of this, because it reads only the mean and discards `log_std` —
 see [`--eval_policy`](#evaluation-regime---eval_policy).
 
 Shared arguments: `--episodes`, `--eval_episodes`, `--eval_policy`,
-`--max_steps`, `--gamma`, `--learning_rate`, `--entropy_coef`, `--log_every`,
+`--max_steps`, `--gamma`, `--learning_rate`, `--adam_beta1`, `--adam_beta2`,
+`--adam_epsilon`, `--entropy_coef`, `--log_every`,
 `--improvement_cutoff`, `--ema_alpha`, `--seed`, `--eval_seed`.
 
 ##### Evaluation seeds (`--seed` and `--eval_seed`)
@@ -906,6 +907,10 @@ environments work only with `reinforce`, `actor_critic`/`a2c` and `ppo`.
 | `--improvement_cutoff` | `30` | Episodes without an improved evaluation before stopping, 0 to disable |
 | `--ema_alpha` | `0.05` | Smoothing for the reported training return |
 | `--train_vs_validation_bias`, `-tvb` | `0.1` | Weight of the training return in fitness: `loss = -(tvb × training return + (1 − tvb) × evaluation return)` |
+| `--adam_beta1` / `--adam_beta2` / `--adam_epsilon` | `0.9` / `0.999` / `1e-8` | Adam's moment decay rates and stability term (PyTorch's defaults) |
+| `--hyperparameter_strategy` | `fixed` | `fixed` trains every genome with the values given; `simplex` co-evolves the `--sho_tune` ones, as in [Co-evolving training hyperparameters](#co-evolving-training-hyperparameters) |
+| `--sho_tune` | `learning_rate=log:1e-3:5e-2:1e-5:0.3` | As for `classification`, except `NAME` is one of `learning_rate`, `adam_beta1`, `adam_beta2`, `adam_epsilon`, `gamma`, `entropy_coef`, `value_coef`, `gae_lambda`, `rollout_steps`, `ppo_passes`, `ppo_minibatch`, `ppo_clip`, `epsilon`, `epsilon_min`, `epsilon_decay`, `quantum_dropout_rate`, `episodes`, `improvement_cutoff`, `binary_crossover_rate`, `n_ary_crossover_rate`, `exponential_crossover_rate` or `mutation_count`. Settings that change what fitness measures (`--max_steps`, `--eval_episodes`, `--eval_policy`, the seeds, `--ema_alpha`) cannot be tuned |
+| `--sho_genomes` / `--sho_l1` / `--sho_l2` | `4` / `2.0` / `0.5` | As for `classification` |
 | `--seed` | random | Base seed for a genome's training and evaluation episodes. By default each genome draws its own (recorded as `training_seed` in its metadata), so genomes are not all selected on the same episodes; give a seed to train every genome on the same ones |
 | `--map_name` / `--is_slippery` | `4x4` / off | FrozenLake only |
 
@@ -945,6 +950,15 @@ on Walker2d, going from `0.025` to `0.05` roughly halves the achievable return.
 A genome records the knobs it was evolved under, so `refine_genome` and
 `visualize_rl` rebuild the same environment rather than reverting to the
 defaults. Runs with different knobs are not comparable with one another.
+
+**Co-evolving hyperparameters.** Tune only what the chosen `--algo` reads:
+`ppo_clip`, `gae_lambda`, `rollout_steps`, `ppo_passes` and `ppo_minibatch` matter
+only to `ppo`, `epsilon*` only to `q_learning` and `sarsa`, and `value_coef` only
+to the actor-critic algorithms; anything else drifts without effect. An RL fitness
+is a few noisy episodes, and SHO steps towards the best of its `--sho_genomes`
+donors, so a fixed `--eval_seed` (scoring every genome on the same episodes) or
+more donors keeps it from chasing noise. As with `epochs`, `episodes` tends to
+drift upward.
 
 **Guidance.** The decoder must produce one output per action (plus one more for
 `actor_critic`/`a2c`/`ppo`), which the entry point sizes automatically from the

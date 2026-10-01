@@ -49,6 +49,7 @@ from src.circuits.decoder import initialize_decoder
 from src.circuits.encoder import initialize_encoder
 from src.circuits.gate_specifications import GateSpecifications
 from src.evolution.exaqc import EXAQC
+from src.evolution.hyperparameter_strategy import HyperparameterStrategy
 from src.evolution.master_worker import run_evolution
 from src.evolution.objective import Objective
 from src.evolution.population_strategy import PopulationStrategy
@@ -445,6 +446,42 @@ def build_trainer(algo: str) -> ReinforcementLearningTrainer:
 # ---------------------------------------------------------------------
 
 
+#: The hyperparameters ``--sho_tune`` may name: the per-genome training settings
+#: the RL trainers read, and the search's crossover rates and mutation count (each
+#: child is then generated with its own). Left out are the settings that change
+#: what a genome's fitness measures (``max_steps``, ``eval_episodes``,
+#: ``eval_policy``, the seeds, ``ema_alpha``) and logging (``log_every``).
+TUNABLE_HYPERPARAMETERS: tuple[str, ...] = (
+    "learning_rate",
+    "adam_beta1",
+    "adam_beta2",
+    "adam_epsilon",
+    "gamma",
+    "entropy_coef",
+    "value_coef",
+    "gae_lambda",
+    "rollout_steps",
+    "ppo_passes",
+    "ppo_minibatch",
+    "ppo_clip",
+    "epsilon",
+    "epsilon_min",
+    "epsilon_decay",
+    "quantum_dropout_rate",
+    "episodes",
+    "improvement_cutoff",
+    # the search's operator settings (see src.evolution.exaqc.OPERATOR_HYPERPARAMETERS)
+    "binary_crossover_rate",
+    "n_ary_crossover_rate",
+    "exponential_crossover_rate",
+    "mutation_count",
+)
+
+#: What SHO tunes when ``--sho_tune`` is not given: the learning rate, on a log
+#: scale, with the burn-in and full ranges used by Kini et al. (GECCO '23).
+DEFAULT_SHO_TUNE: list[str] = ["learning_rate=log:1e-3:5e-2:1e-5:0.3"]
+
+
 def compare(genome1: CircuitGenome, genome2: CircuitGenome) -> int:
     """Sorts genomes by fitness ``loss`` (lower is better).
 
@@ -626,6 +663,13 @@ def build_parser() -> argparse.ArgumentParser:
     PPOTrainer.initialize_parser(parser)
     QLearningTrainer.initialize_parser(parser)
 
+    # Whether those training flags are used as given for every genome or some of
+    # them are co-evolved (--hyperparameter_strategy, --sho_*) is owned by
+    # HyperparameterStrategy.
+    HyperparameterStrategy.initialize_parser(
+        parser, tunable=TUNABLE_HYPERPARAMETERS, default_tune=DEFAULT_SHO_TUNE
+    )
+
     # MuJoCo reward / termination / reset knobs
     add_environment_knob_arguments(parser)
 
@@ -776,6 +820,9 @@ def main() -> None:
             "max_steps": args.max_steps,
             "gamma": args.gamma,
             "learning_rate": args.learning_rate,
+            "adam_beta1": args.adam_beta1,
+            "adam_beta2": args.adam_beta2,
+            "adam_epsilon": args.adam_epsilon,
             "entropy_coef": args.entropy_coef,
             "baseline": args.baseline,
             "value_coef": args.value_coef,
@@ -879,6 +926,7 @@ def main() -> None:
             task="reinforcement_learning",
             task_target=args.env,
             restarting=restart_state is not None,
+            hyperparameter_strategy=HyperparameterStrategy.from_args(args),
         )
 
         if restart_state is not None:
