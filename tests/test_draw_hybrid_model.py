@@ -18,6 +18,8 @@ All artifacts are written into pytest's per-test ``tmp_path`` (auto-removed).
 
 from __future__ import annotations
 
+from pathlib import Path
+
 # Force a non-interactive matplotlib backend before anything imports pyplot.
 import matplotlib
 
@@ -25,10 +27,16 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt  # noqa: E402
 import pytest  # noqa: E402
+from matplotlib.figure import Figure  # noqa: E402
 
+import src.utils.draw_hybrid_model as draw_hybrid_model_module  # noqa: E402
+from src.circuits.circuit import CircuitGenome  # noqa: E402
 from src.circuits.encoder import initialize_encoder  # noqa: E402
 from src.circuits.decoder import initialize_decoder  # noqa: E402
-from src.utils.draw_hybrid_model import draw_hybrid_model  # noqa: E402
+from src.utils.draw_hybrid_model import (  # noqa: E402
+    build_hybrid_model_figure,
+    draw_hybrid_model,
+)
 from tests.supervised_trainer_test_utils import (  # noqa: E402
     build_classification_genome,
     COMPLEXITY_LEVELS_WITH_MULTI_PARAM,
@@ -263,6 +271,112 @@ def test_draw_hybrid_model_with_cnn_encoder(tmp_path) -> None:
     )
 
     _assert_valid_png(tmp_path / "cnn_diagram.png")
+
+
+# ---------------------------------------------------------------------
+# build_hybrid_model_figure
+# ---------------------------------------------------------------------
+
+
+def _initialized_genome(genome_number: int) -> CircuitGenome:
+    """Builds a small, initialized pennylane classification genome to draw.
+
+    Args:
+        genome_number: The genome's number (it appears in the diagram's title).
+
+    Returns:
+        The genome, with its hybrid model initialized.
+    """
+
+    genome, _ = build_classification_genome(
+        genome_number=genome_number,
+        target="pennylane",
+        complexity="shallow",
+        encoder_name="linear",
+        decoder_name="linear",
+        include_parametric=True,
+    )
+    genome.initialize_model()
+    return genome
+
+
+def test_build_hybrid_model_figure_returns_an_open_titled_figure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The builder hands back an open figure titled with the genome, writing nothing.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed), used as
+            the working directory so any stray write would show up in it.
+        monkeypatch: Used to ``chdir`` into ``tmp_path``.
+    """
+
+    monkeypatch.chdir(tmp_path)
+
+    figure = build_hybrid_model_figure(_initialized_genome(8))
+    try:
+        assert isinstance(figure, Figure)
+        assert plt.fignum_exists(figure.number)
+        assert figure.get_suptitle() == "Genome 8 Architecture"
+        assert list(tmp_path.iterdir()) == []
+    finally:
+        plt.close(figure)
+
+
+def test_build_hybrid_model_figure_leaves_the_circuit_figure_to_its_caller() -> None:
+    """Embedding a circuit figure neither closes it nor returns it as the diagram."""
+
+    circuit_figure = plt.figure(figsize=(3, 2))
+    circuit_figure.add_subplot(111).plot([0, 1, 2], [0, 1, 0])
+    try:
+        figure = build_hybrid_model_figure(
+            _initialized_genome(9), quantum_circuit_fig=circuit_figure
+        )
+        try:
+            assert figure is not circuit_figure
+            assert plt.fignum_exists(circuit_figure.number)
+        finally:
+            plt.close(figure)
+    finally:
+        plt.close(circuit_figure)
+
+
+def test_a_failed_diagram_is_closed_and_not_saved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A drawing error closes the half-drawn figure and saves nothing.
+
+    The builder re-raises the error, while ``draw_hybrid_model`` (which is
+    best-effort) logs it and writes no file. Either way no figure is left open.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+        monkeypatch: Used to make drawing the diagram's arrows fail.
+    """
+
+    def fail(*args: object, **kwargs: object) -> None:
+        """Stands in for a drawing step that fails.
+
+        Args:
+            args: Ignored.
+            kwargs: Ignored.
+
+        Raises:
+            RuntimeError: Always.
+        """
+        raise RuntimeError("drawing failed")
+
+    monkeypatch.setattr(draw_hybrid_model_module, "_draw_arrows", fail)
+    genome = _initialized_genome(10)
+    open_before = set(plt.get_fignums())
+
+    with pytest.raises(RuntimeError, match="drawing failed"):
+        build_hybrid_model_figure(genome)
+    assert set(plt.get_fignums()) == open_before
+
+    draw_hybrid_model(str(tmp_path), genome, "diagram.png")
+    assert not (tmp_path / "diagram.png").exists()
+    assert set(plt.get_fignums()) == open_before
 
 
 @pytest.mark.parametrize("target", TARGETS)

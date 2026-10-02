@@ -11,6 +11,7 @@ for i in $(seq $MIN_COUNT $MAX_COUNT); do
         --learning_rate 3e-4 \
         --rollout_steps 2048 \
         --max_steps 1000 \
+        --healthy_reward 0.1 \
         --input_qubits 6 \
         --output_qubits 6 \
         --episodes 100 \

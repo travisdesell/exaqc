@@ -11,11 +11,20 @@ validation panels. ``CircuitGenome.save_circuit`` writes it too when its
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import matplotlib
 
 matplotlib.use("Agg")
 
-from src.utils.training_plots import save_training_plot  # noqa: E402
+import matplotlib.pyplot as plt  # noqa: E402
+import pytest  # noqa: E402
+from matplotlib.figure import Figure  # noqa: E402
+
+from src.utils.training_plots import (  # noqa: E402
+    build_training_figure,
+    save_training_plot,
+)
 from tests.supervised_trainer_test_utils import (  # noqa: E402
     build_classification_genome,
 )
@@ -127,6 +136,90 @@ def test_no_metrics_skips_without_error(tmp_path) -> None:
     """
     save_training_plot(str(tmp_path), _FakeGenome({}), "training.png")
     assert not (tmp_path / "training.png").is_file()
+
+
+#: The training histories :func:`build_training_figure` draws, one per task's plot.
+_PLOT_KINDS: tuple[str, ...] = ("classification", "reinforcement_learning", "teacher")
+
+
+def _genome_with_training_history(kind: str) -> _FakeGenome | _TeacherGenome:
+    """Builds a stand-in genome whose metadata holds one task's training history.
+
+    Args:
+        kind: Which history to record: ``"classification"`` (per-epoch loss and
+            mean class accuracy), ``"reinforcement_learning"`` (per-episode
+            return and loss) or ``"teacher"`` (every teacher-imitation measure).
+
+    Returns:
+        The genome stand-in.
+    """
+
+    if kind == "classification":
+        return _FakeGenome(
+            {
+                split: [
+                    {
+                        "epoch": e,
+                        "loss": 1.0 / (e + 1),
+                        "mean_class_accuracy": {"mean": 0.5},
+                    }
+                    for e in range(4)
+                ]
+                for split in ("training_epoch_metrics", "validation_epoch_metrics")
+            }
+        )
+    if kind == "reinforcement_learning":
+        return _FakeGenome(
+            {
+                "training_episode_metrics": [
+                    {"episode": e, "return": float(e), "loss": 2.0 / (e + 1)}
+                    for e in range(10)
+                ]
+            }
+        )
+    return _TeacherGenome(
+        {
+            "training_epoch_metrics": teacher_epoch_metrics(),
+            "validation_epoch_metrics": teacher_epoch_metrics(offset=0.05),
+        }
+    )
+
+
+@pytest.mark.parametrize("kind", _PLOT_KINDS)
+def test_build_training_figure_returns_an_open_figure_without_writing(
+    kind: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``build_training_figure`` hands back an open figure and writes nothing.
+
+    The viewer and the best-genome writer render the figure to bytes
+    themselves, so the builder must leave saving (and closing) to its caller.
+
+    Args:
+        kind: Which task's training history the genome records.
+        tmp_path: pytest per-test temporary directory (auto-removed), used as
+            the working directory so any stray write would show up in it.
+        monkeypatch: Used to ``chdir`` into ``tmp_path``.
+    """
+
+    monkeypatch.chdir(tmp_path)
+
+    figure = build_training_figure(_genome_with_training_history(kind))
+    try:
+        assert isinstance(figure, Figure)
+        assert plt.fignum_exists(figure.number)
+        assert figure.axes
+        assert list(tmp_path.iterdir()) == []
+    finally:
+        plt.close(figure)
+
+
+def test_build_training_figure_returns_none_without_metrics() -> None:
+    """With no recognized metrics there is no figure, and none is left open."""
+
+    open_before = set(plt.get_fignums())
+
+    assert build_training_figure(_FakeGenome({})) is None
+    assert set(plt.get_fignums()) == open_before
 
 
 def test_save_circuit_emits_training_plot_when_enabled(tmp_path, monkeypatch) -> None:

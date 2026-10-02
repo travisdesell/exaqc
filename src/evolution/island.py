@@ -16,6 +16,7 @@ from typing import Callable
 from loguru import logger
 
 from src.circuits.circuit import CircuitGenome
+from src.evolution.population_strategy import mark_discarded
 
 
 class Island:
@@ -49,6 +50,37 @@ class Island:
         # track which other islands this island can perform inter-island crossover
         # with
         self.neighbors: list[Island] = []
+
+    def restore(self, genomes: list[CircuitGenome], next_genome_number: int) -> None:
+        """Takes back the genomes this island held when a run stopped.
+
+        The island's status follows from what it holds: an island at its maximum
+        size is full, one holding fewer genomes is repopulating (it draws from
+        its best neighbor until it fills up), and an empty one is initializing.
+        A repopulating island discards genomes generated before it was
+        repopulated, so its repopulation number is set to the next genome the
+        restarted run will generate -- every genome already in the archive
+        predates the restart, and every new one will not.
+
+        Args:
+            genomes: The genomes this island held, in any order.
+            next_genome_number: The number the restarted run's next genome takes.
+
+        Returns:
+            None. Restores ``population``, ``status``, ``insertions`` and
+            ``repopulation_genome_number``.
+        """
+
+        self.population = sorted(genomes, key=cmp_to_key(self.compare))
+        self.insertions = len(self.population)
+
+        if not self.population:
+            self.status = "initializing"
+        elif len(self.population) >= self.max_size:
+            self.status = "full"
+        else:
+            self.status = "repopulating"
+            self.repopulation_genome_number = next_genome_number
 
     def is_initializing(self) -> bool:
         """
@@ -171,7 +203,9 @@ class Island:
         fit one, the population is kept sorted, and once it exceeds ``max_size``
         the least fit genome is dropped. The genome's ``insert_type`` metadata is
         set to one of ``"global_best"``, ``"local_best"``, ``"inserted"`` or
-        ``"discarded"`` to record what happened.
+        ``"discarded"`` to record what happened; a discarded genome also records
+        its ``discard_reason`` and, when it lost to another genome, ``lost_to``
+        (see :func:`~src.evolution.population_strategy.mark_discarded`).
 
         Args:
             genome: is the genome to insert into the population.
@@ -202,7 +236,7 @@ class Island:
                 f"the repopulation genome number: {self.repopulation_genome_number} and was "
                 f"not global best, metadata: {genome.metadata}"
             )
-            genome.metadata["insert_type"] = "discarded"
+            mark_discarded(genome, "generated_before_repopulation")
             return
 
         # don't add duplicate genomes to the population
@@ -231,7 +265,9 @@ class Island:
                 else:
                     # discard the new genome
                     self.insertions += 1
-                    genome.metadata["insert_type"] = "discarded"
+                    mark_discarded(
+                        genome, "duplicate_of_better", match_genome.genome_number
+                    )
                     return
 
         bisect.insort(
@@ -261,8 +297,12 @@ class Island:
         if len(self.population) > self.max_size:
             # remove the last genome from the population
             if genome == self.population[-1]:
-                # if the genome was inserted at the bottom of the population
-                # and we're going to remove it, set it to discarded
-                genome.metadata["insert_type"] = "discarded"
+                # the genome was inserted at the bottom of the population and is
+                # about to be removed: it failed to beat the worst genome kept
+                mark_discarded(
+                    genome,
+                    "worse_than_population",
+                    self.population[-2].genome_number,
+                )
 
             del self.population[-1]

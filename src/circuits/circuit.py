@@ -10,6 +10,8 @@ import matplotlib.pyplot as plt
 import pennylane as qml
 import torch
 
+from matplotlib.figure import Figure
+
 from loguru import logger
 
 from torch import Tensor
@@ -774,6 +776,30 @@ class CircuitGenome:
 
         return self.hybrid_model.parameters()
 
+    def count_trainable_parameters(self) -> int:
+        """Counts the parameters training actually updates.
+
+        The quantum weight vector holds one entry per gate parameter for *every*
+        gate, disabled ones included, but disabled gates are skipped in the
+        forward pass, so their parameters are never connected to the loss. They
+        are left out: what remains is the encoder's and decoder's trainable
+        weights plus the parameters of enabled gates. A genome whose count is
+        zero has nothing connected to the loss, so trainers evaluate it rather
+        than train it (``backward()`` would fail with "element 0 of tensors does
+        not require grad").
+
+        Requires :meth:`initialize_model` to have already been called.
+
+        Returns:
+            The number of parameters training updates.
+        """
+
+        n_parameters = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        disabled_gate_parameters = sum(
+            len(gate.parameters) for gate in self.gates if not gate.enabled
+        )
+        return n_parameters - disabled_gate_parameters
+
     def clone_state_dict(self) -> dict[str, Tensor]:
         """Returns a detached, cloned snapshot of the hybrid model's state.
 
@@ -1385,6 +1411,76 @@ class CircuitGenome:
 
         return "unevaluated"
 
+    def draw_circuit_figure(self) -> Figure:
+        """Draws this genome's quantum circuit using its target framework.
+
+        Both targets draw with the genome's trained gate parameters bound to
+        concrete values and the circuit inputs set to zero. The hybrid model is
+        generated first when the genome has none yet (e.g. a genome just loaded
+        with :meth:`from_dict`); an already-initialized genome is left untouched.
+
+        Returns:
+            The drawn circuit's matplotlib figure, which the caller owns and
+            should close with ``plt.close``.
+
+        Raises:
+            ValueError: If ``self.target`` is neither ``"pennylane"`` nor
+                ``"qiskit"``.
+        """
+
+        trained_weights = self.get_parameters_as_list()
+
+        # Generate the hybrid model (and its circuit) exactly once, up front, so
+        # the target-specific drawing below and draw_hybrid_model() both reuse
+        # the same generation. Re-generating a qiskit circuit corrupts its cached
+        # gate parameters ("Weight param ... not present in circuit"); an
+        # already-initialized genome is left untouched.
+        if getattr(self, "hybrid_model", None) is None:
+            self.initialize_model()
+
+        if self.target == "pennylane":
+            # Generate the PennyLane QNode if one is not already present (e.g.
+            # for a deserialized genome). self.torch_model is a
+            # qml.qnn.TorchLayer wrapping the QNode; draw the underlying QNode
+            # directly and pass the weights explicitly. Drawing the TorchLayer
+            # would make it ALSO inject its own `weights` argument, raising "got
+            # multiple values for argument 'weights'". The QNode's `inputs`
+            # argument is the quantum circuit input (post-encoder), so it is
+            # sized by n_quantum_inputs(), not the encoder's input size.
+            if self.torch_model is None:
+                self.generate_pennylane_circuit()
+
+            weights = Tensor(trained_weights)
+            x0 = torch.zeros(self.n_quantum_inputs())
+            fig, ax = qml.draw_mpl(self.torch_model.qnode)(x0, weights)
+            ax.set_title(f"Genome {self.genome_number}")
+            return fig
+
+        if self.target == "qiskit":
+            # Generate the qiskit circuit only if one is not already present.
+            # Regenerating an existing circuit is unsafe because each Gate
+            # caches its qiskit Parameters, so a second generation would build
+            # the circuit from the previous ParameterVector and no longer match
+            # self.weight_vector.
+            if getattr(self, "qiskit_circuit", None) is None:
+                self.generate_qiskit_circuit()
+
+            # Bind the trained gate weights (and zero inputs) so the drawing
+            # shows concrete numbers rather than the symbolic "weights[i]" /
+            # "x[i]" ParameterVector entries.
+            bindings = {
+                self.weight_vector[i]: float(value)
+                for i, value in enumerate(trained_weights)
+            }
+            bindings.update({parameter: 0.0 for parameter in self.qiskit_input_vector})
+
+            bound_circuit = self.qiskit_circuit.assign_parameters(bindings)
+            fig = bound_circuit.draw(output="mpl")
+            fig.suptitle(f"Genome {self.genome_number}")
+            return fig
+
+        raise ValueError(f"Cannot draw circuit for unknown target {self.target}")
+
     def save_circuit(
         self,
         insert_type: str,
@@ -1437,65 +1533,8 @@ class CircuitGenome:
         tag = self.metrics_tag()
 
         # --- draw the quantum circuit using this genome's target framework ---
-        # Both targets draw with the genome's trained gate parameters bound to
-        # concrete values and the circuit inputs set to zero.
         try:
-            trained_weights = self.get_parameters_as_list()
-
-            # Generate the hybrid model (and its circuit) exactly once, up front,
-            # so the target-specific circuit drawing below and draw_hybrid_model()
-            # both reuse the same generation. Re-generating a qiskit circuit
-            # corrupts its cached gate parameters ("Weight param ... not present
-            # in circuit"); an already-initialized genome is left untouched.
-            if getattr(self, "hybrid_model", None) is None:
-                self.initialize_model()
-
-            if self.target == "pennylane":
-                # Generate the PennyLane QNode if one is not already present
-                # (e.g. for a deserialized genome). self.torch_model is a
-                # qml.qnn.TorchLayer wrapping the QNode; draw the underlying
-                # QNode directly and pass the weights explicitly. Drawing the
-                # TorchLayer would make it ALSO inject its own `weights`
-                # argument, raising "got multiple values for argument
-                # 'weights'". The QNode's `inputs` argument is the quantum
-                # circuit input (post-encoder), so it is sized by
-                # n_quantum_inputs(), not the encoder's input size.
-                if self.torch_model is None:
-                    self.generate_pennylane_circuit()
-
-                weights = Tensor(trained_weights)
-                x0 = torch.zeros(self.n_quantum_inputs())
-                fig, ax = qml.draw_mpl(self.torch_model.qnode)(x0, weights)
-                ax.set_title(f"Genome {self.genome_number}")
-
-            elif self.target == "qiskit":
-                # Generate the qiskit circuit only if one is not already
-                # present. Regenerating an existing circuit is unsafe because
-                # each Gate caches its qiskit Parameters, so a second
-                # generation would build the circuit from the previous
-                # ParameterVector and no longer match self.weight_vector.
-                if getattr(self, "qiskit_circuit", None) is None:
-                    self.generate_qiskit_circuit()
-
-                # Bind the trained gate weights (and zero inputs) so the drawing
-                # shows concrete numbers rather than the symbolic "weights[i]" /
-                # "x[i]" ParameterVector entries.
-                bindings = {
-                    self.weight_vector[i]: float(value)
-                    for i, value in enumerate(trained_weights)
-                }
-                bindings.update(
-                    {parameter: 0.0 for parameter in self.qiskit_input_vector}
-                )
-
-                bound_circuit = self.qiskit_circuit.assign_parameters(bindings)
-                fig = bound_circuit.draw(output="mpl")
-                fig.suptitle(f"Genome {self.genome_number}")
-
-            else:
-                raise ValueError(
-                    f"Cannot draw circuit for unknown target {self.target}"
-                )
+            fig = self.draw_circuit_figure()
 
             # Compose the single architecture diagram: the encoder layers, the
             # quantum input encoding, the quantum circuit drawn above embedded in

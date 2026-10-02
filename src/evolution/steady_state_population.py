@@ -3,13 +3,15 @@ import bisect
 import random
 
 from functools import cmp_to_key
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
 from src.circuits.circuit import CircuitGenome
-from src.evolution.population_strategy import PopulationStrategy
-from src.utils.profiler import EXAQCProfiler
+from src.evolution.population_strategy import PopulationStrategy, mark_discarded
+
+if TYPE_CHECKING:
+    from src.utils.restart import RestartState
 
 
 class SteadyStatePopulation(PopulationStrategy):
@@ -41,10 +43,7 @@ class SteadyStatePopulation(PopulationStrategy):
         self,
         max_population_size: int,
         compare: Callable[[CircuitGenome, CircuitGenome], int],
-        out_dir: str = "artifacts",
-        profiler: Optional[EXAQCProfiler] = None,
-        save_training_plot: bool = False,
-    ):
+    ) -> None:
         """
         Creates a steady state population with the specified max population size.  The population
         will be sorted in order by genome fitness. The get parent methods can be called at any
@@ -58,29 +57,35 @@ class SteadyStatePopulation(PopulationStrategy):
             compare: a compare function used for sorting genomes. this should return 0 if both
                 genomes should be ranked the same, a negative value if the first genome should
                 come before the second genome, and a positive number otherwise
-            out_dir: is the directory to write out the logs and best found genomes
-            profiler: A profiler class for recording execution steps to plot later
-            save_training_plot: when True, each saved genome also gets a
-                training-history line plot written next to its diagram (see
-                :meth:`CircuitGenome.save_circuit`).
         """
 
         self.max_population_size = max_population_size
         self.compare = compare
-        self.out_dir = out_dir
-        self.save_training_plot = save_training_plot
 
         self.insertions = 0
 
         # used to store the population, should be kept in sorted order.
         self.population: list[CircuitGenome] = []
-        self.metric_best_genome = None
 
-        self.profiler = profiler
-        if self.profiler is None:
-            self.profiler = EXAQCProfiler(
-                out_dir=out_dir,
-            )
+    def restore(self, state: "RestartState") -> None:
+        """Takes back the population a stopped run held, so its search continues.
+
+        Args:
+            state: The stopped run's state (see :mod:`src.utils.restart`).
+
+        Returns:
+            None. Refills ``population`` with the run's genomes, sorted by
+            fitness, and restores the insertion count.
+        """
+
+        self.population = sorted(state.population, key=cmp_to_key(self.compare))
+        self.insertions = state.inserted_genomes
+
+        logger.info(
+            "restored a steady state population of {} genomes after {} insertions",
+            len(self.population),
+            self.insertions,
+        )
 
     def is_initializing(self) -> bool:
         """
@@ -90,7 +95,7 @@ class SteadyStatePopulation(PopulationStrategy):
 
         return len(self.population) < self.max_population_size
 
-    def get_best_genome(self) -> CircuitGenome:
+    def get_best_genome(self) -> CircuitGenome | None:
         """
         Returns:
             The best genome in the population if it exists, None otherwise.
@@ -103,7 +108,17 @@ class SteadyStatePopulation(PopulationStrategy):
         else:
             return None
 
-    def get_parent(self, **kwargs) -> tuple[CircuitGenome, dict[str, any]]:
+    def get_population(self) -> list[CircuitGenome]:
+        """Returns the genomes in the population, best first.
+
+        Returns:
+            A new list of the population's genomes, which are already kept
+            sorted by fitness.
+        """
+
+        return list(self.population)
+
+    def get_parent(self, **kwargs: Any) -> tuple[CircuitGenome, dict[str, Any]]:
         """
         Used to get two or more parents to be used in mutation or
         other operations to generate children.
@@ -127,8 +142,8 @@ class SteadyStatePopulation(PopulationStrategy):
             return None, None
 
     def get_parents(
-        self, n_parents: int = 2, **kwargs
-    ) -> tuple[list[CircuitGenome], dict[str, any]]:
+        self, n_parents: int = 2, **kwargs: Any
+    ) -> tuple[list[CircuitGenome], dict[str, Any]]:
         """
         Used to get two or more parents to be used in crossover or
         other operations to generate children.
@@ -154,9 +169,17 @@ class SteadyStatePopulation(PopulationStrategy):
         else:
             return None, None
 
-    def insert_genome(self, genome: CircuitGenome, **kwargs) -> bool:
+    def insert_genome(self, genome: CircuitGenome, **kwargs: Any) -> bool:
         """
         Inserts a genome back into the population.
+
+        A genome whose enabled gates match a genome already in the population
+        replaces it only if its fitness is better; otherwise it is discarded. An
+        inserted genome that falls past the maximum population size is discarded
+        straight away. The genome's ``insert_type`` metadata records the outcome
+        (``inserted``, ``global_best`` or ``discarded``), and a discarded genome
+        also records its ``discard_reason`` and the genome it ``lost_to`` (see
+        :func:`~src.evolution.population_strategy.mark_discarded`).
 
         Args:
             genome: is the genome to insert into the population.
@@ -164,7 +187,8 @@ class SteadyStatePopulation(PopulationStrategy):
                 inserting the genome, such as an island or species it came from.
 
         Returns:
-            True if it was inserted into the population, False otherwise.
+            True: every genome is recorded as evaluated, whether it was kept or
+            discarded.
         """
 
         # don't add duplicate genomes to the population
@@ -193,8 +217,10 @@ class SteadyStatePopulation(PopulationStrategy):
                 else:
                     # discard the new genome
                     self.insertions += 1
-                    genome.metadata["insert_type"] = "discarded_duplicate"
-                    return False
+                    mark_discarded(
+                        genome, "duplicate_of_better", match_genome.genome_number
+                    )
+                    return True
 
         bisect.insort(
             self.population,
@@ -205,28 +231,6 @@ class SteadyStatePopulation(PopulationStrategy):
 
         self.insertions += 1
 
-        if self.profiler is not None:
-            self.profiler.record(step=self.insertions, population=self.population)
-
-        if self.metric_best_genome is None or (
-            "target_metric" in genome.fitness
-            and self.metric_best_genome.fitness["target_metric"]
-            <= genome.fitness["target_metric"]
-        ):
-            self.metric_best_genome = genome
-
-            # this was a new genome with a best accuracy
-            logger.success(
-                f"[global insertion {self.insertions}] Population found new ACCURACY best genome "
-                f"with fitness: {genome.fitness}"
-            )
-            if self.out_dir is not None:
-                genome.save_circuit(
-                    insert_type="best_target",
-                    out_dir=self.out_dir,
-                    save_training_plot=self.save_training_plot,
-                )
-
         if genome.genome_number == self.population[0].genome_number:
             # this was a new global best genome
             logger.success(
@@ -234,26 +238,17 @@ class SteadyStatePopulation(PopulationStrategy):
                 f"[insertion {self.insertions}] Population found new GLOBAL best genome with fitness: {genome.fitness}"
             )
             genome.metadata["insert_type"] = "global_best"
-            if self.out_dir is not None:
-                genome.save_circuit(
-                    insert_type="best_fitness",
-                    out_dir=self.out_dir,
-                    save_training_plot=self.save_training_plot,
-                )
 
         if len(self.population) > self.max_population_size:
             # remove the last genome from the population
             if genome == self.population[-1]:
-                # the genome that was inserted is going to be discarded, so flag its metadata
-                genome.metadata["insert_type"] = "discarded"
+                # the genome that was inserted is about to be removed: it failed to
+                # beat the worst genome the population keeps
+                mark_discarded(
+                    genome,
+                    "worse_than_population",
+                    self.population[-2].genome_number,
+                )
             del self.population[-1]
 
-        if self.out_dir is not None:
-            genome.save_circuit(
-                insert_type="genome",
-                out_dir=self.out_dir + "/all_genomes/",
-                save_training_plot=self.save_training_plot,
-            )
-            self.profiler.plot_single_run()
-
-        return genome.metadata["insert_type"] != "discarded"
+        return True

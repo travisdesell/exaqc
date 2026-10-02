@@ -1,23 +1,24 @@
-"""Tests for per-gate complexity costs and the profiler that consumes them.
+"""Tests for per-gate complexity costs and the counts derived from them.
 
 Each :class:`~src.circuits.gate_specifications.GateSpecification` carries the
 ``cnot_count`` / ``rot_count`` its decomposition costs, so a gate's complexity
 is defined beside the rest of its definition rather than in a separate lookup
-table that could drift out of sync. ``src.utils.profiler._gate_counts`` reads
-those costs from the gate specifications matching the genome's ``target``.
+table that could drift out of sync.
+:func:`src.circuits.gate_complexity.gate_counts` reads those costs from the gate
+specifications matching the genome's ``target``.
 
 These tests pin that contract: every declared gate carries sane costs on both
-targets, the two targets agree wherever they share a gate, and the profiler
-sums the costs over a genome's *enabled* gates only.
+targets, the two targets agree wherever they share a gate, and the counts sum
+the costs over a genome's *enabled* gates only.
 """
 
 from __future__ import annotations
 
 import pytest
 
+from src.circuits.gate_complexity import gate_counts
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
 from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
-from src.utils.profiler import _gate_counts
 
 #: The gate specifications under test, keyed by their target framework.
 _SPECIFICATIONS = {
@@ -27,7 +28,7 @@ _SPECIFICATIONS = {
 
 
 class _FakeGate:
-    """Minimal gate stand-in exposing what ``_gate_counts`` reads."""
+    """Minimal gate stand-in exposing what ``gate_counts`` reads."""
 
     def __init__(self, method_name: str, enabled: bool = True) -> None:
         """Initializes the fake gate.
@@ -41,7 +42,7 @@ class _FakeGate:
 
 
 class _FakeGenome:
-    """Minimal genome stand-in exposing what ``_gate_counts`` reads."""
+    """Minimal genome stand-in exposing what ``gate_counts`` reads."""
 
     def __init__(self, target: str, gates: list[_FakeGate]) -> None:
         """Initializes the fake genome.
@@ -88,7 +89,7 @@ def test_targets_agree_on_shared_gate_complexity() -> None:
 
 
 @pytest.mark.parametrize("target", sorted(_SPECIFICATIONS))
-def test_gate_counts_sums_specification_costs(target: str) -> None:
+def testgate_counts_sums_specification_costs(target: str) -> None:
     """The profiler sums each enabled gate's declared costs.
 
     Args:
@@ -101,14 +102,14 @@ def test_gate_counts_sums_specification_costs(target: str) -> None:
     expected_cnot = sum(specifications[name].cnot_count for name in method_names)
     expected_rot = sum(specifications[name].rot_count for name in method_names)
 
-    counts = _gate_counts(genome)
+    counts = gate_counts(genome)
 
     assert counts["gates_total"] == float(len(method_names))
     assert counts["gates_cnot"] == float(expected_cnot)
     assert counts["gates_rot"] == float(expected_rot)
 
 
-def test_gate_counts_ignores_disabled_gates() -> None:
+def testgate_counts_ignores_disabled_gates() -> None:
     """Disabled gates contribute nothing to any of the counts."""
     enabled_only = _FakeGenome("pennylane", [_FakeGate("cx")])
     with_disabled = _FakeGenome(
@@ -116,10 +117,10 @@ def test_gate_counts_ignores_disabled_gates() -> None:
         [_FakeGate("cx"), _FakeGate("crx", enabled=False)],
     )
 
-    assert _gate_counts(with_disabled) == _gate_counts(enabled_only)
+    assert gate_counts(with_disabled) == gate_counts(enabled_only)
 
 
-def test_gate_counts_rejects_unknown_target() -> None:
+def testgate_counts_rejects_unknown_target() -> None:
     """An unrecognized target is reported rather than silently mis-scored."""
     with pytest.raises(ValueError, match="Unknown target"):
-        _gate_counts(_FakeGenome("cirq", [_FakeGate("cx")]))
+        gate_counts(_FakeGenome("cirq", [_FakeGate("cx")]))

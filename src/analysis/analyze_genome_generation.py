@@ -14,27 +14,29 @@ from __future__ import annotations
 
 import argparse
 import numpy as np
-import json
 import sys
 
 import matplotlib.pyplot as plt
 
 from loguru import logger
-from pathlib import Path
 
 from src.circuits.circuit import CircuitGenome
+from src.utils.genome_archive import iter_run_genome_dicts
 
 
 def get_group_metrics(
-    input_directories: list[str], metric: str, group: str = None
-) -> (dict[str, dict[str, int]], dict[str, list[float]], int, int):
+    input_directories: list[str], metric: str, group: str | None = None
+) -> tuple[dict[str, dict[str, int]], dict[str, list[float]], int, int]:
     """
     Parses through the given input directories for runs with the 'group' flag and then
     generates the count statistics for mutation insertion rates. If the group flag is not
     provided then use all input directories.
 
+    Every genome a run saved is read, from the run's ``genomes.sqlar`` archive or,
+    for runs written before the archive existed, its ``all_genomes/`` directory.
+
     Args:
-        input_directories: the directories to look through
+        input_directories: the run directories to look through
         metric: the metric to track (e.g., test_acc, valid_acc)
         group: the string to glob for run directories to use in the metrics calculation if
             provided.
@@ -58,108 +60,101 @@ def get_group_metrics(
 
     overall_best_json = ""
 
-    for directory in args.input_directories:
+    for directory in input_directories:
         if group is not None:
             # skip the directory if it doesnt contain the search string
             if group not in directory:
                 continue
 
-        genome_directory = Path(directory + "/all_genomes/")
-        logger.info(f"parsing directory: {genome_directory}")
+        logger.info(f"parsing run directory: {directory}")
 
         best_metric = 0
         best_n_gates = 10000
         best_n_parameters = 10000
 
-        for genome_json in genome_directory.glob("*.json"):
+        for genome_json, genome in iter_run_genome_dicts(directory):
+            metric_value = genome["fitness"][metric]
+            n_gates = len(genome["gates"])
+            n_parameters = sum([len(gate["parameters"]) for gate in genome["gates"]])
 
-            with open(genome_json, "r") as file:
-                genome = json.load(file)
+            # logger.info(f"\tgenome: {genome_json} had metric '{metric}': {metric_value}")
 
-                metric_value = genome["fitness"][metric]
-                n_gates = len(genome["gates"])
-                n_parameters = sum(
-                    [len(gate["parameters"]) for gate in genome["gates"]]
+            if metric_value > best_metric:
+                logger.info(
+                    f"genome {genome_json} had NEW best metric {metric_value} with n "
+                    f"gates {n_gates} and n parameters {n_parameters}"
                 )
 
-                # logger.info(f"\tgenome: {genome_json} had metric '{metric}': {metric_value}")
+                best_metric = metric_value
+                best_n_gates = n_gates
+                best_n_parameters = n_parameters
 
-                if metric_value > best_metric:
+            if metric_value == best_metric:
+                if n_gates + n_parameters < best_n_gates + best_n_parameters:
                     logger.info(
-                        f"genome {genome_json} had NEW best metric {metric_value} with n "
+                        f"genome {genome_json} had SMALLER best metric {metric_value} with n "
                         f"gates {n_gates} and n parameters {n_parameters}"
                     )
-
-                    best_metric = metric_value
                     best_n_gates = n_gates
                     best_n_parameters = n_parameters
 
-                if metric_value == best_metric:
-                    if n_gates + n_parameters < best_n_gates + best_n_parameters:
-                        logger.info(
-                            f"genome {genome_json} had SMALLER best metric {metric_value} with n "
-                            f"gates {n_gates} and n parameters {n_parameters}"
-                        )
-                        best_n_gates = n_gates
-                        best_n_parameters = n_parameters
+            if metric_value > overall_best_metric:
+                logger.info(
+                    f"genome {genome_json} had NEW overall best metric {metric_value} with n "
+                    f"gates {n_gates} and n parameters {n_parameters}"
+                )
+                overall_best_json = genome_json
+                overall_best_metric = metric_value
 
-                if metric_value > overall_best_metric:
+                overall_best_n_gates = n_gates
+                overall_best_n_parameters = n_parameters
+
+            if metric_value == overall_best_metric:
+                if (
+                    n_gates + n_parameters
+                    < overall_best_n_gates + overall_best_n_parameters
+                ):
                     logger.info(
-                        f"genome {genome_json} had NEW overall best metric {metric_value} with n "
-                        f"gates {n_gates} and n parameters {n_parameters}"
+                        f"genome {genome_json} had SMALLER overall best metric {metric_value} "
+                        f"with n gates {n_gates} and n parameters {n_parameters}"
                     )
                     overall_best_json = genome_json
-                    overall_best_metric = metric_value
-
                     overall_best_n_gates = n_gates
                     overall_best_n_parameters = n_parameters
 
-                if metric_value == overall_best_metric:
-                    if (
-                        n_gates + n_parameters
-                        < overall_best_n_gates + overall_best_n_parameters
-                    ):
-                        logger.info(
-                            f"genome {genome_json} had SMALLER overall best metric {metric_value} "
-                            f"with n gates {n_gates} and n parameters {n_parameters}"
-                        )
-                        overall_best_json = genome_json
-                        overall_best_n_gates = n_gates
-                        overall_best_n_parameters = n_parameters
+                    circuit_genome = CircuitGenome.from_dict(genome)
+                    circuit_genome.save_circuit("analysis_smallest", "./")
 
-                        circuit_genome = CircuitGenome.from_dict(genome)
-                        circuit_genome.save_circuit("analysis_smallest", "./")
+            metadata = genome["metadata"]
+            insert_type = metadata["insert_type"]
 
-                metadata = genome["metadata"]
-                insert_type = metadata["insert_type"]
+            for gen_type in metadata["generated_by"]:
+                """
+                if gen_type == "n_ary_crossover":
+                    n_parents = len(metadata["parent_genomes"])
 
-                for gen_type in metadata["generated_by"]:
-                    """
-                    if gen_type == "n_ary_crossover":
-                        n_parents = len(metadata["parent_genomes"])
+                    gen_type = f"{n_parents}-ary crossover"
 
-                        gen_type = f"{n_parents}-ary crossover"
+                if "crossover_type" in metadata.keys():
+                    gen_type = metadata["crossover_type"] + " " + gen_type
+                """
 
-                    if "crossover_type" in metadata.keys():
-                        gen_type = metadata["crossover_type"] + " " + gen_type
-                    """
+                if gen_type not in insert_counts:
+                    insert_counts[gen_type] = {}
+                    insert_counts[gen_type]["inserted"] = 0
+                    insert_counts[gen_type]["discarded"] = 0
+                    insert_counts[gen_type]["global_best"] = 0
+                    insert_counts[gen_type]["local_best"] = 0
 
-                    if gen_type not in insert_counts:
-                        insert_counts[gen_type] = {}
-                        insert_counts[gen_type]["inserted"] = 0
-                        insert_counts[gen_type]["discarded"] = 0
-                        insert_counts[gen_type]["global_best"] = 0
-                        insert_counts[gen_type]["local_best"] = 0
+                if "total" not in insert_counts[gen_type]:
+                    insert_counts[gen_type]["total"] = 1
+                else:
+                    insert_counts[gen_type]["total"] += 1
 
-                    if "total" not in insert_counts[gen_type]:
-                        insert_counts[gen_type]["total"] = 1
-                    else:
-                        insert_counts[gen_type]["total"] += 1
-
-                    if insert_type not in insert_counts[gen_type]:
-                        insert_counts[gen_type][insert_type] = 1
-                    else:
-                        insert_counts[gen_type][insert_type] += 1
+                if insert_type not in insert_counts[gen_type]:
+                    insert_counts[gen_type][insert_type] = 1
+                else:
+                    insert_counts[gen_type][insert_type] += 1
 
         best_metrics.append(best_metric)
         best_n_gates_list.append(best_n_gates)
@@ -213,8 +208,9 @@ def get_group_metrics(
 
 if __name__ == "__main__":
     """
-    This will parse all the provided input directories, reading all the genomes in the
-    `all_genomes` subdirectory to calculate statistics about which crossovers and
+    This will parse all the provided input directories, reading all the genomes each run
+    saved (its `genomes.sqlar` archive, or the `all_genomes` subdirectory of runs written
+    before the archive existed) to calculate statistics about which crossovers and
     mutations had the best results (i.e., global best, local best, inserted or discarded)
     during the evolution process.
 

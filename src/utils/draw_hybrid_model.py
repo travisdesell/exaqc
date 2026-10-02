@@ -761,13 +761,11 @@ def _tensor_scale_context(columns: list[Column]) -> tuple[float, float] | None:
     return float(max(spatials)), float(max(channels))
 
 
-def draw_hybrid_model(
-    out_dir: str,
+def build_hybrid_model_figure(
     genome: CircuitGenome,
-    output_filename: str,
     quantum_circuit_fig: Figure | None = None,
-) -> None:
-    """Draws a classical-style architecture diagram for a genome's hybrid model.
+) -> Figure:
+    """Builds a classical-style architecture diagram for a genome's hybrid model.
 
     The composed figure alternates data-tensor columns with the transforms that
     map between them, left to right: the input tensor, each encoder transform and
@@ -784,25 +782,24 @@ def draw_hybrid_model(
     Quantum Circuit / Decoder.
 
     Args:
-        out_dir: Directory to write the image into.
         genome: The genome to visualize; its ``encoder``, ``decoder`` and
             ``hyperparameters`` drive the diagram.
-        output_filename: File name (within ``out_dir``) for the saved PNG.
         quantum_circuit_fig: The pre-rendered quantum-circuit matplotlib figure
-            (from ``save_circuit``) to embed. If ``None``, a placeholder block is
-            drawn in its place.
+            (from :meth:`~src.circuits.circuit.CircuitGenome.draw_circuit_figure`)
+            to embed. If ``None``, a placeholder block is drawn in its place.
 
     Returns:
-        None. Writes the composed PNG on success, or logs a warning and returns
-        without writing on failure (the diagram is best-effort).
+        The composed figure, which the caller owns and should close with
+        ``plt.close``. Errors raised while laying out or drawing the diagram
+        propagate, after the partially drawn figure has been closed.
     """
+    columns = _build_columns(genome)
+
+    width_ratios = [_column_width_ratio(element) for _group, element in columns]
+    figure_width = sum(width_ratios) * 0.85 + 0.8
+
+    figure = plt.figure(figsize=(figure_width, 5.2))
     try:
-        columns = _build_columns(genome)
-
-        width_ratios = [_column_width_ratio(element) for _group, element in columns]
-        figure_width = sum(width_ratios) * 0.85 + 0.8
-
-        figure = plt.figure(figsize=(figure_width, 5.2))
         grid = figure.add_gridspec(
             1,
             len(columns),
@@ -846,9 +843,43 @@ def draw_hybrid_model(
             y=0.95,
             fontsize=13,
         )
-
-        figure.savefig(os.path.join(out_dir, output_filename), dpi=200)
+    except BaseException:
         plt.close(figure)
+        raise
+
+    return figure
+
+
+def draw_hybrid_model(
+    out_dir: str,
+    genome: CircuitGenome,
+    output_filename: str,
+    quantum_circuit_fig: Figure | None = None,
+) -> None:
+    """Draws a genome's architecture diagram and saves it as a PNG.
+
+    The diagram is built by :func:`build_hybrid_model_figure`, which describes
+    its layout, and written into ``out_dir``.
+
+    Args:
+        out_dir: Directory to write the image into.
+        genome: The genome to visualize; its ``encoder``, ``decoder`` and
+            ``hyperparameters`` drive the diagram.
+        output_filename: File name (within ``out_dir``) for the saved PNG.
+        quantum_circuit_fig: The pre-rendered quantum-circuit matplotlib figure
+            (from ``save_circuit``) to embed. If ``None``, a placeholder block is
+            drawn in its place.
+
+    Returns:
+        None. Writes the composed PNG on success, or logs a warning and returns
+        without writing on failure (the diagram is best-effort).
+    """
+    try:
+        figure = build_hybrid_model_figure(genome, quantum_circuit_fig)
+        try:
+            figure.savefig(os.path.join(out_dir, output_filename), dpi=200)
+        finally:
+            plt.close(figure)
     except Exception as error:
         # The architecture diagram is best-effort; degrade to a concise warning
         # instead of aborting save_circuit.

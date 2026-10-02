@@ -125,7 +125,6 @@ def make_strategy(
         intra_island_crossover_rate=intra_island_crossover_rate,
         primary_parent=primary_parent,
         topology=["fully_connected"],
-        out_dir=None,
     )
 
 
@@ -534,7 +533,7 @@ def test_repopulating_target_draws_parents_from_populated_neighbors(
 def test_insert_genome_routes_to_target_island() -> None:
     """A genome with a ``target_island_id`` is inserted into that island.
 
-    Genomes record the island they were bred for (via ``get_parents``), and
+    Genomes record the island they were generated for (via ``get_parents``), and
     insertion must honor that rather than falling back to the smallest island.
     Island 0 is made the largest here so the smallest-island fallback would send
     the genome elsewhere if the target id were ignored.

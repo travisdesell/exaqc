@@ -7,7 +7,7 @@ from mpi4py.MPI import Intracomm
 
 from src.circuits.circuit import CircuitGenome
 from src.evolution.exaqc import EXAQC
-from src.evolution.objective import Objective
+from src.evolution.objective import Objective, evaluate_genome
 
 tag_ids = {
     "genome": 1,
@@ -114,7 +114,8 @@ def worker(
 
         genome = CircuitGenome.from_dict(data)
 
-        objective(genome)
+        # records how long the evaluation took and which rank and host ran it
+        evaluate_genome(objective, genome, rank=rank)
 
         comm.send(genome.to_dict(), dest=0, tag=tag_ids["genome_response"])
 
@@ -151,7 +152,8 @@ def run_evolution(
         run_for: How many genomes to generate and evaluate before stopping.
 
     Returns:
-        None. Runs the search to completion on this rank.
+        None. Runs the search to completion on this rank; the serial run and the
+        master close the search's output archive when it ends, even on error.
     """
 
     comm = MPI.COMM_WORLD
@@ -166,8 +168,11 @@ def run_evolution(
     # serial run or MPI master: build the search machinery here (and only here)
     exaqc = build_exaqc()
 
-    if size == 1:
-        # no worker ranks to distribute to, so run the search in-process
-        exaqc.run_for(run_for)
-    else:
-        master(comm=comm, rank=rank, exaqc=exaqc, run_for=run_for)
+    try:
+        if size == 1:
+            # no worker ranks to distribute to, so run the search in-process
+            exaqc.run_for(run_for)
+        else:
+            master(comm=comm, rank=rank, exaqc=exaqc, run_for=run_for)
+    finally:
+        exaqc.close()

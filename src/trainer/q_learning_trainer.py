@@ -51,6 +51,15 @@ class QLearningTrainer(ReinforcementLearningTrainer):
     #: Value-based action selection is discrete-only (argmax / epsilon-greedy).
     supports_continuous: bool = False
 
+    #: Unlike the policy-gradient trainers, the policy this algorithm learns is
+    #: the greedy one: Q-learning's target is ``max_a' Q(s', a')``, and
+    #: epsilon-greedy is only the behaviour policy used to explore. SARSA's
+    #: target is on-policy, so strictly it learns the epsilon-greedy policy --
+    #: but epsilon decays toward ``epsilon_min``, so that policy converges to
+    #: the greedy one. Greedy evaluation is therefore the matching regime for
+    #: both variants.
+    natural_eval_policy: str = "greedy"
+
     @staticmethod
     def initialize_parser(parser: argparse.ArgumentParser) -> None:
         """Adds the value-based (Q-learning / SARSA) command-line arguments.
