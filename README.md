@@ -790,6 +790,16 @@ tuning on `breast_cancer`, with the rest of the settings from
 bash scripts/run_breast_cancer_sho.sh 1 10 ./artifacts/breast_sho
 ```
 
+Image datasets go through `classification` too, so the same options apply.
+[`scripts/run_mnist_sho.sh`](scripts/run_mnist_sho.sh) runs the
+`scripts/run_mnist.sh` search with the learning rate, weight decay, Adam's
+settings, crossover rates and mutation count co-evolved. It takes the dataset
+(`mnist`, `fashion_mnist` or `cifar10`) and an output directory:
+
+```
+bash scripts/run_mnist_sho.sh fashion_mnist ./artifacts/fashion_mnist_sho
+```
+
 ### [`teacher`](./src/examples/teacher.py)
 
 Evolves **purely quantum** circuits to reproduce the outputs of a known
