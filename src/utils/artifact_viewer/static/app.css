@@ -337,8 +337,25 @@ main {
 }
 
 .run-notes,
-.island-topology {
+.island-topology,
+.hyperparameter-optimization {
   margin-top: 8px;
+}
+
+.hyperparameter-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 12px;
+}
+
+.hyperparameter-card {
+  min-width: 0;
+  margin: 0;
+}
+
+.hyperparameter-name {
+  margin: 0 0 2px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .topology-frame {

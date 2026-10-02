@@ -44,8 +44,9 @@ class SupervisedTrainer:
 
         Returns:
             None. Mutates ``parser`` by adding ``--epochs``,
-            ``--learning_rate``/``-lr``, ``--weight_decay``,
-            ``--improvement_cutoff`` and ``--batch_size``.
+            ``--learning_rate``/``-lr``, ``--weight_decay``, ``--adam_beta1``,
+            ``--adam_beta2``, ``--adam_epsilon``, ``--improvement_cutoff`` and
+            ``--batch_size``.
         """
 
         parser.add_argument(
@@ -68,6 +69,27 @@ class SupervisedTrainer:
             type=float,
             default=0.0,
             help="Adam weight decay (L2 regularization) used when training each genome.",
+        )
+
+        parser.add_argument(
+            "--adam_beta1",
+            type=float,
+            default=0.9,
+            help="Adam first-moment decay rate (beta1) used when training each genome.",
+        )
+
+        parser.add_argument(
+            "--adam_beta2",
+            type=float,
+            default=0.999,
+            help="Adam second-moment decay rate (beta2) used when training each genome.",
+        )
+
+        parser.add_argument(
+            "--adam_epsilon",
+            type=float,
+            default=1e-8,
+            help="Adam epsilon (numerical-stability term) used when training each genome.",
         )
 
         parser.add_argument(
@@ -335,9 +357,16 @@ class SupervisedTrainer:
 
             return
 
+        # the Adam settings default to PyTorch's own, so genomes recorded before
+        # they were hyperparameters still train as they did
         optimizer = torch.optim.Adam(
             genome.parameters(),
             lr=learning_rate,
+            betas=(
+                float(hyperparameters.get("adam_beta1", 0.9)),
+                float(hyperparameters.get("adam_beta2", 0.999)),
+            ),
+            eps=float(hyperparameters.get("adam_epsilon", 1e-8)),
             weight_decay=float(hyperparameters.get("weight_decay", 0.0)),
         )
 

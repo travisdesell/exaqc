@@ -1488,13 +1488,40 @@ class GenomeArchive:
             ValueError: If ``metric`` was not recorded by this run's genomes.
         """
 
-        values = self._metric_values(metric)
+        statistics = self.population_value_series(self._metric_values(metric))
+        high, low = ("max", "min") if higher_is_better else ("min", "max")
+        return {
+            "step": statistics["step"],
+            "population_size": statistics["population_size"],
+            "best": statistics[high],
+            "mean": statistics["mean"],
+            "worst": statistics[low],
+        }
+
+    def population_value_series(self, values: dict[int, float]) -> dict[str, list[Any]]:
+        """Summarizes given per-genome values over the population at every recorded step.
+
+        The population's membership is replayed from the recorded deltas, as in
+        :meth:`population_series`, but the values come from the caller, so
+        anything a genome carries -- such as a training hyperparameter read from
+        its stored dict -- can be followed through the search.
+
+        Args:
+            values: Each genome's value, keyed by genome number. Genomes left
+                out are skipped.
+
+        Returns:
+            Parallel lists keyed ``step``, ``population_size``, ``min``,
+            ``mean`` and ``max``; a step whose population had no value
+            contributes ``None`` for the three statistics.
+        """
+
         columns: dict[str, list[Any]] = {
             "step": [],
             "population_size": [],
-            "best": [],
+            "min": [],
             "mean": [],
-            "worst": [],
+            "max": [],
         }
 
         members: set[int] = set()
@@ -1508,17 +1535,51 @@ class GenomeArchive:
             columns["step"].append(step)
             columns["population_size"].append(len(members))
             if present:
-                columns["best"].append(
-                    max(present) if higher_is_better else min(present)
-                )
+                columns["min"].append(min(present))
                 columns["mean"].append(sum(present) / len(present))
-                columns["worst"].append(
-                    min(present) if higher_is_better else max(present)
-                )
+                columns["max"].append(max(present))
             else:
-                columns["best"].append(None)
+                columns["min"].append(None)
                 columns["mean"].append(None)
-                columns["worst"].append(None)
+                columns["max"].append(None)
+
+        return columns
+
+    def population_best_genomes(
+        self, ranking: dict[int, float], higher_is_better: bool = False
+    ) -> dict[str, list[Any]]:
+        """Finds the population's best genome at every recorded step.
+
+        The population's membership is replayed as in :meth:`population_series`.
+
+        Args:
+            ranking: Each genome's value to rank by, keyed by genome number.
+                Genomes left out are never the best.
+            higher_is_better: Whether a larger value is better.
+
+        Returns:
+            Parallel lists keyed ``step`` and ``genome`` (the best member's
+            number, ties going to the lowest number, or ``None`` when no member
+            has a value).
+        """
+
+        columns: dict[str, list[Any]] = {"step": [], "genome": []}
+        sign = -1.0 if higher_is_better else 1.0
+
+        members: set[int] = set()
+        for step, added, removed in self.connection.execute(
+            "SELECT step, added, removed FROM population_events ORDER BY step"
+        ):
+            members.difference_update(json.loads(removed or "[]"))
+            members.update(json.loads(added or "[]"))
+
+            ranked = [number for number in members if number in ranking]
+            columns["step"].append(step)
+            columns["genome"].append(
+                min(ranked, key=lambda number: (sign * ranking[number], number))
+                if ranked
+                else None
+            )
 
         return columns
 
@@ -1940,17 +2001,23 @@ class GenomeArchive:
             raise KeyError(f"{self.path} holds no genome {genome_number}.")
         return json.loads(_decode_member(row[0], row[1]))
 
-    def iter_genome_dicts(self) -> Iterator[tuple[int, dict[str, Any]]]:
+    def iter_genome_dicts(
+        self, after: int = -1
+    ) -> Iterator[tuple[int, dict[str, Any]]]:
         """Iterates over every stored genome in genome-number order.
 
         Genomes are read in small batches, each in its own short read, so a scan
         of a large archive does not hold up a search still writing to it.
 
+        Args:
+            after: Only genomes numbered above this are read, so a caller that
+                already read a live run's genomes can read just the new ones.
+
         Yields:
             ``(genome_number, genome)`` pairs.
         """
 
-        last_genome_number = -1
+        last_genome_number = int(after)
         while True:
             rows = self.connection.execute(
                 "SELECT genomes.genome_number, sqlar.sz, sqlar.data FROM genomes "

@@ -252,6 +252,31 @@ def summary_statistics(values: list[float]) -> dict[str, float | int | None]:
 
 
 @dataclass
+class HyperparameterRecord:
+    """What the viewer keeps of each genome's training hyperparameters.
+
+    Hyperparameters live only in a genome's stored dict, not in the archive's
+    summary columns, so they are read once per genome and kept per archive.
+
+    Attributes:
+        read_through: The highest genome number read so far; a live run's later
+            genomes are read on the next request.
+        values: Each genome's numeric hyperparameters, keyed by genome number.
+        phases: How each genome's hyperparameters were chosen (its
+            ``hyperparameter_generation`` phase, e.g. ``burn_in`` or
+            ``simplex``), keyed by genome number; ``None`` when not recorded.
+        generated_at: How many genomes had been inserted when each genome was
+            generated (its ``generated_at_insertion``), keyed by genome
+            number; ``None`` when not recorded.
+    """
+
+    read_through: int = -1
+    values: dict[int, dict[str, float]] = field(default_factory=dict)
+    phases: dict[int, str | None] = field(default_factory=dict)
+    generated_at: dict[int, int | None] = field(default_factory=dict)
+
+
+@dataclass
 class Run:
     """One run the viewer serves.
 
@@ -906,6 +931,9 @@ class ArtifactViewer:
         self.registry = registry
         self.renderer = renderer
         self.allow_annotations = allow_annotations
+        # each archive's genomes' hyperparameters, read once (see hyperparameters_payload)
+        self._hyperparameters: dict[str, HyperparameterRecord] = {}
+        self._hyperparameters_lock = threading.Lock()
 
     def run(self, index: int) -> Run:
         """Looks up a served run.
@@ -992,7 +1020,9 @@ class ArtifactViewer:
             the values they can be filtered by, the ``unarchived_parents``
             (parents of stored genomes that are not stored themselves, i.e. the
             seed genome), the ``island_topology`` an island search recorded
-            (``None`` otherwise), and whether it recorded a search history. An archive
+            (``None`` otherwise), the ``hyperparameter_strategy`` a search that
+            co-evolved its training hyperparameters recorded (``None``
+            otherwise), and whether it recorded a search history. An archive
             that cannot be read fully is reported under ``error``, with those
             fields empty.
 
@@ -1010,6 +1040,7 @@ class ArtifactViewer:
                 "filter_options": {},
                 "unarchived_parents": [],
                 "island_topology": None,
+                "hyperparameter_strategy": None,
             }
         )
         try:
@@ -1019,7 +1050,9 @@ class ArtifactViewer:
                 payload["primary_metrics"] = reader.primary_series_metrics()
                 payload["filter_options"] = reader.filter_options()
                 payload["unarchived_parents"] = reader.unarchived_parents()
-                payload["island_topology"] = reader.run_info().get("island_topology")
+                info = reader.run_info()
+                payload["island_topology"] = info.get("island_topology")
+                payload["hyperparameter_strategy"] = info.get("hyperparameter_strategy")
         except sqlite3.DatabaseError as error:
             # An archive the viewer cannot read in full still lists and browses:
             # the run page falls back to what its summary holds rather than
@@ -1208,6 +1241,211 @@ class ArtifactViewer:
             "metrics": available,
             "primary_metrics": primary,
         }
+
+    def _hyperparameter_record(
+        self, run: Run, reader: GenomeArchive
+    ) -> HyperparameterRecord:
+        """Reads the hyperparameters of any genomes not read before.
+
+        Args:
+            run: The run being read.
+            reader: Its archive, open for reading.
+
+        Returns:
+            The run's record, brought up to date with its archive.
+        """
+
+        with self._hyperparameters_lock:
+            record = self._hyperparameters.setdefault(
+                run.archive_path, HyperparameterRecord()
+            )
+            for number, genome in reader.iter_genome_dicts(after=record.read_through):
+                record.values[number] = {
+                    str(key): float(value)
+                    for key, value in (genome.get("hyperparameters") or {}).items()
+                    if isinstance(value, (int, float)) and not isinstance(value, bool)
+                }
+                metadata = genome.get("metadata") or {}
+                generation = metadata.get("hyperparameter_generation") or {}
+                record.phases[number] = generation.get("phase")
+                generated_at = metadata.get("generated_at_insertion")
+                record.generated_at[number] = (
+                    int(generated_at) if isinstance(generated_at, int) else None
+                )
+                record.read_through = max(record.read_through, number)
+            return record
+
+    def hyperparameters_payload(self, index: int) -> dict[str, Any]:
+        """Describes how a run's training hyperparameters were optimized.
+
+        Only a run whose search recorded a ``hyperparameter_strategy`` in its
+        ``run_info`` (e.g. ``--hyperparameter_strategy simplex``) optimized
+        them; for any other run only ``strategy: None`` is returned.
+
+        Genomes are ranked by ``loss`` when the run recorded it (the key every
+        task's population is ranked by), otherwise by its first fitness key.
+
+        Args:
+            index: The run's index.
+
+        Returns:
+            ``strategy`` (as the run recorded it), ``population_strategy``,
+            ``tuned`` (the tuned hyperparameters' names), ``ranking`` (the
+            ``metric`` genomes are ranked by and whether ``higher_is_better``),
+            ``phases`` (how many genomes' values came from each phase),
+            ``burn_in_end`` (how many genomes had been inserted when the first
+            simplex step was taken, ``None`` before then), ``chart`` (see
+            below), ``final_population`` (per tuned name, summary statistics
+            over the last recorded population, with its ``size``) and ``best``
+            (per fitness key, the best genome, its value, how its values were
+            chosen and its tuned hyperparameters).
+
+            ``chart`` holds an ``x`` axis of insertions -- every recorded
+            population step and every genome's insertion -- and per tuned name
+            parallel lists over it: the population's ``min``, ``mean`` and
+            ``max`` and the value of its ``best`` genome (each carried forward
+            between recorded steps, since the population did not change there),
+            and the value of the genome inserted there, as ``burn_in`` or
+            ``simplex`` by how it was chosen (``None`` elsewhere).
+
+        Raises:
+            KeyError: If there is no such run.
+        """
+
+        run = self.run(index)
+        with GenomeArchive.open_readonly(run.archive_path) as reader:
+            info = reader.run_info()
+            strategy = info.get("hyperparameter_strategy")
+            if not strategy:
+                return {"strategy": None}
+
+            tuned = [str(entry["name"]) for entry in strategy.get("tuned") or []]
+            record = self._hyperparameter_record(run, reader)
+            fitness_keys = reader.fitness_keys()
+            ranking_metric = (
+                "loss"
+                if "loss" in fitness_keys
+                else (fitness_keys[0] if fitness_keys else None)
+            )
+            ranking_higher = (
+                higher_is_better(ranking_metric) if ranking_metric else False
+            )
+
+            points = reader.points(ranking_metric or "genome_number")
+            insertion_of = {
+                number: insertion
+                for number, insertion in zip(
+                    points["genome_number"], points["insertion"]
+                )
+                if insertion is not None
+            }
+            rank_of = {
+                number: float(value)
+                for number, value in zip(points["genome_number"], points["y"])
+                if isinstance(value, (int, float))
+            }
+
+            steps = reader.population_value_series({})["step"]
+            best_genomes = (
+                reader.population_best_genomes(rank_of, higher_is_better=ranking_higher)
+                if ranking_metric
+                else {"step": steps, "genome": [None] * len(steps)}
+            )
+
+            x = sorted(set(steps) | set(insertion_of.values()))
+            position = {value: i for i, value in enumerate(x)}
+            chart: dict[str, Any] = {"x": x}
+            for name in tuned:
+                values = {
+                    number: genome_values[name]
+                    for number, genome_values in record.values.items()
+                    if name in genome_values
+                }
+                columns = reader.population_value_series(values)
+                at_step = {
+                    step: (low, mean, high, values.get(best))
+                    for step, low, mean, high, best in zip(
+                        columns["step"],
+                        columns["min"],
+                        columns["mean"],
+                        columns["max"],
+                        best_genomes["genome"],
+                    )
+                }
+
+                lines: dict[str, list[Any]] = {
+                    key: [None] * len(x)
+                    for key in ("min", "mean", "max", "best", "burn_in", "simplex")
+                }
+                current: tuple[Any, Any, Any, Any] = (None, None, None, None)
+                for i, value in enumerate(x):
+                    current = at_step.get(value, current)
+                    for key, statistic in zip(("min", "mean", "max", "best"), current):
+                        lines[key][i] = statistic
+                for number, value in values.items():
+                    insertion = insertion_of.get(number)
+                    phase = record.phases.get(number)
+                    if insertion is not None and phase in ("burn_in", "simplex"):
+                        lines[phase][position[insertion]] = value
+                chart[name] = lines
+
+            simplex_starts = [
+                record.generated_at[number]
+                for number, phase in record.phases.items()
+                if phase == "simplex" and record.generated_at.get(number) is not None
+            ]
+
+            final_members = reader.population_at()
+            final_population = {
+                "size": len(final_members),
+                "statistics": {
+                    name: summary_statistics(
+                        [
+                            record.values.get(number, {}).get(name)
+                            for number in final_members
+                        ]
+                    )
+                    for name in tuned
+                },
+            }
+
+            best = []
+            for key in fitness_keys:
+                found = reader.best_value(key, higher_is_better=higher_is_better(key))
+                if found is None:
+                    continue
+                values = record.values.get(found["genome_number"], {})
+                best.append(
+                    {
+                        "metric": key,
+                        "higher_is_better": higher_is_better(key),
+                        "genome_number": found["genome_number"],
+                        "value": found["value"],
+                        "phase": record.phases.get(found["genome_number"]),
+                        "hyperparameters": {name: values.get(name) for name in tuned},
+                    }
+                )
+
+            phases: dict[str, int] = {}
+            for phase in record.phases.values():
+                phases[phase or "unrecorded"] = phases.get(phase or "unrecorded", 0) + 1
+
+        return json_safe(
+            {
+                "strategy": strategy,
+                "population_strategy": info.get("population_strategy"),
+                "tuned": tuned,
+                "ranking": {
+                    "metric": ranking_metric,
+                    "higher_is_better": ranking_higher,
+                },
+                "phases": phases,
+                "burn_in_end": min(simplex_starts) if simplex_starts else None,
+                "chart": chart,
+                "final_population": final_population,
+                "best": best,
+            }
+        )
 
     def operators_payload(self, index: int) -> dict[str, Any]:
         """Counts, per generating operator, how the genomes it made were inserted.

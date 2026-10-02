@@ -340,6 +340,9 @@ stops early after `improvement_cutoff` epochs without improvement.
 | `epochs` | `--epochs` | Maximum training epochs per genome |
 | `learning_rate` | `--learning_rate`, `-lr` | Adam learning rate |
 | `weight_decay` | `--weight_decay` | Adam L2 regularisation |
+| `adam_beta1` | `--adam_beta1` | Adam first-moment decay rate (`0.9`, PyTorch's default) |
+| `adam_beta2` | `--adam_beta2` | Adam second-moment decay rate (`0.999`, PyTorch's default) |
+| `adam_epsilon` | `--adam_epsilon` | Adam numerical-stability term (`1e-8`, PyTorch's default) |
 | `improvement_cutoff` | `--improvement_cutoff` | Epochs without validation improvement before stopping, 0 to disable |
 | `batch_size` | `--batch_size` | Samples per gradient step |
 
@@ -379,7 +382,8 @@ second half of this, because it reads only the mean and discards `log_std` —
 see [`--eval_policy`](#evaluation-regime---eval_policy).
 
 Shared arguments: `--episodes`, `--eval_episodes`, `--eval_policy`,
-`--max_steps`, `--gamma`, `--learning_rate`, `--entropy_coef`, `--log_every`,
+`--max_steps`, `--gamma`, `--learning_rate`, `--adam_beta1`, `--adam_beta2`,
+`--adam_epsilon`, `--entropy_coef`, `--log_every`,
 `--improvement_cutoff`, `--ema_alpha`, `--seed`, `--eval_seed`.
 
 ##### Evaluation seeds (`--seed` and `--eval_seed`)
@@ -695,6 +699,7 @@ mpiexec -n 12 python3 -m src.examples.classification \
 | `--epochs` | `30` | Training epochs per genome |
 | `--learning_rate`, `-lr` | `5e-3` | Adam learning rate |
 | `--weight_decay` | `0.0` | Adam L2 regularisation |
+| `--adam_beta1` / `--adam_beta2` / `--adam_epsilon` | `0.9` / `0.999` / `1e-8` | Adam's moment decay rates and stability term (PyTorch's defaults) |
 | `--improvement_cutoff` | `3` | Epochs without validation improvement before stopping, 0 to disable |
 | `--batch_size` | `5` | Samples per gradient step |
 | `--validation_batch_size` | = `--batch_size` | Validation batch size |
@@ -708,6 +713,10 @@ mpiexec -n 12 python3 -m src.examples.classification \
 | `--cnn_channels` | `[16, 32]` | Channels for the two CNN encoder conv layers |
 | `--cnn_pooled_size` | `4` | Spatial size the CNN pools down to |
 | `--cnn_dropout` | `0.0` | Dropout inside the CNN encoder |
+| `--hyperparameter_strategy` | `fixed` | `fixed` trains every genome with the values above; `simplex` co-evolves the `--sho_tune` ones (see [Co-evolving training hyperparameters](#co-evolving-training-hyperparameters)) |
+| `--sho_tune` | `learning_rate=log:1e-3:5e-2:1e-5:0.3` | One or more `NAME=SCALE:INITIAL_MIN:INITIAL_MAX[:MIN:MAX]`. `NAME` is `learning_rate`, `weight_decay`, `adam_beta1`, `adam_beta2`, `adam_epsilon`, `quantum_dropout_rate`, `epochs`, `improvement_cutoff`, `binary_crossover_rate`, `n_ary_crossover_rate`, `exponential_crossover_rate` or `mutation_count`; `SCALE` is `linear`, `log` (steps in log10) or `int` (rounded); `MIN:MAX` defaults to the initial range |
+| `--sho_genomes` | `4` | Genomes picked at random per SHO step: the best of them against the average of the rest (at least 2) |
+| `--sho_l1` / `--sho_l2` | `2.0` / `0.5` | SHO step `r = U(0, 1) * l1 - l2` |
 
 **Guidance.** Image datasets need `--encoding cnn`, which convolves and pools
 before the circuit; tabular data must *not* use it. `--encoding identity` passes
@@ -715,6 +724,81 @@ features straight through, so the feature count must equal the circuit's input
 width — pair it with `-qim amplitude`, which absorbs many features into few
 qubits. `--decoding clipped` normalises circuit outputs into class scores and
 suits `probs`. Fitness records `loss` and `target_metric` (mean class accuracy).
+
+#### Co-evolving training hyperparameters
+
+With `--hyperparameter_strategy simplex`, the `--sho_tune` hyperparameters are
+co-evolved with simplex hyperparameter optimization (SHO;
+[Kini et al., GECCO '23](https://doi.org/10.1145/3583133.3596407)) instead of
+being fixed:
+
+```
+mpiexec -n 12 python3 -m src.examples.classification \
+    --dataset iris --input_qubits 4 --output_qubits 2 --batch_size 3 \
+    --number_genomes 1000 \
+    -ms uniform 1 3 -ps uniform 5 5 \
+    --binary_crossover_rate 0.1 --n_ary_crossover_rate 0.1 --exponential_crossover_rate 0.1 \
+    -qim amplitude -qom probs --encoding identity --decoding clipped \
+    --hyperparameter_strategy simplex --sho_tune learning_rate=log:1e-3:5e-2:1e-5:0.3 \
+    --out_dir ./artifacts/iris_sho \
+    steady_state --max_population_size 30
+```
+
+While the population is still filling up, each tuned value is drawn uniformly
+from its initial range. After that, `--sho_genomes` genomes are picked at random
+from the child's population (its target island under `islands`, or the whole
+population if that island holds too few), independently of how the child's
+parents were picked. The child's value is `h_avg + r * (h_best - h_avg)`, where
+`h_best` is the best picked genome's value, `h_avg` is the average of the
+others, and one `r` is shared by all tuned values. The result is clamped to
+`[MIN, MAX]`. Untuned hyperparameters keep their command-line values, and a
+tuned one's command-line value (e.g. `-lr`) is used only by the unevaluated seed
+genome. Each genome records the values it trained with in its `hyperparameters`,
+and how they were chosen (burn-in or simplex step, the genomes used and `r`) in
+its `hyperparameter_generation` metadata.
+
+**Operator rates.** `binary_crossover_rate`, `n_ary_crossover_rate` and
+`exponential_crossover_rate` can be tuned too. Their command-line values then
+seed only the configuration: each child's three rates are chosen by SHO first
+(from the island it will be generated on), and its operator is drawn with them,
+mutation taking whatever probability is left. Rates adding up to more than 1 are
+scaled down to sum to 1, which leaves that child no chance of mutation, and the
+child records the rates it was generated with. For example,
+`binary_crossover_rate=linear:0:0.3:0:1 n_ary_crossover_rate=linear:0:0.3:0:1 exponential_crossover_rate=linear:0:0.3:0:1`
+starts every rate between 0 and 0.3 and lets SHO move each anywhere in [0, 1].
+`mutation_count` (use the `int` scale, e.g. `mutation_count=int:1:3:1:10`) is
+chosen the same way and replaces the draw from `--mutation_strategy`: every child
+generated by mutation, including the initial population's, gets exactly that
+many mutations.
+
+Tune the learning rate on a `log` scale. Avoid tuning `epochs` or
+`improvement_cutoff` unless you want that: more training nearly always improves
+fitness, so they tend to drift to their maximum. Put `--sho_tune` before another
+flag rather than directly before the population sub-command, since it takes
+several values.
+
+To also co-evolve Adam's settings with the paper's ranges, tune
+`--sho_tune learning_rate=log:1e-3:5e-2:1e-5:0.3 adam_beta1=linear:0.9:0.99 adam_beta2=linear:0.9:0.99 adam_epsilon=log:1e-9:1e-8`.
+PyTorch adds `adam_epsilon` outside the square root of the second moment, while
+the paper's update adds it inside, so equal values are not exactly equivalent.
+
+[`scripts/run_breast_cancer_sho.sh`](scripts/run_breast_cancer_sho.sh) runs that
+tuning on `breast_cancer`, with the rest of the settings from
+`scripts/run_breast_cancer.sh`:
+
+```
+bash scripts/run_breast_cancer_sho.sh 1 10 ./artifacts/breast_sho
+```
+
+Image datasets go through `classification` too, so the same options apply.
+[`scripts/run_mnist_sho.sh`](scripts/run_mnist_sho.sh) runs the
+`scripts/run_mnist.sh` search with the learning rate, weight decay, Adam's
+settings, crossover rates and mutation count co-evolved. It takes the dataset
+(`mnist`, `fashion_mnist` or `cifar10`) and an output directory:
+
+```
+bash scripts/run_mnist_sho.sh fashion_mnist ./artifacts/fashion_mnist_sho
+```
 
 ### [`teacher`](./src/examples/teacher.py)
 
@@ -833,6 +917,10 @@ environments work only with `reinforce`, `actor_critic`/`a2c` and `ppo`.
 | `--improvement_cutoff` | `30` | Episodes without an improved evaluation before stopping, 0 to disable |
 | `--ema_alpha` | `0.05` | Smoothing for the reported training return |
 | `--train_vs_validation_bias`, `-tvb` | `0.1` | Weight of the training return in fitness: `loss = -(tvb × training return + (1 − tvb) × evaluation return)` |
+| `--adam_beta1` / `--adam_beta2` / `--adam_epsilon` | `0.9` / `0.999` / `1e-8` | Adam's moment decay rates and stability term (PyTorch's defaults) |
+| `--hyperparameter_strategy` | `fixed` | `fixed` trains every genome with the values given; `simplex` co-evolves the `--sho_tune` ones, as in [Co-evolving training hyperparameters](#co-evolving-training-hyperparameters) |
+| `--sho_tune` | `learning_rate=log:1e-3:5e-2:1e-5:0.3` | As for `classification`, except `NAME` is one of `learning_rate`, `adam_beta1`, `adam_beta2`, `adam_epsilon`, `gamma`, `entropy_coef`, `value_coef`, `gae_lambda`, `rollout_steps`, `ppo_passes`, `ppo_minibatch`, `ppo_clip`, `epsilon`, `epsilon_min`, `epsilon_decay`, `quantum_dropout_rate`, `episodes`, `improvement_cutoff`, `binary_crossover_rate`, `n_ary_crossover_rate`, `exponential_crossover_rate` or `mutation_count`. Settings that change what fitness measures (`--max_steps`, `--eval_episodes`, `--eval_policy`, the seeds, `--ema_alpha`) cannot be tuned |
+| `--sho_genomes` / `--sho_l1` / `--sho_l2` | `4` / `2.0` / `0.5` | As for `classification` |
 | `--seed` | random | Base seed for a genome's training and evaluation episodes. By default each genome draws its own (recorded as `training_seed` in its metadata), so genomes are not all selected on the same episodes; give a seed to train every genome on the same ones |
 | `--map_name` / `--is_slippery` | `4x4` / off | FrozenLake only |
 
@@ -872,6 +960,15 @@ on Walker2d, going from `0.025` to `0.05` roughly halves the achievable return.
 A genome records the knobs it was evolved under, so `refine_genome` and
 `visualize_rl` rebuild the same environment rather than reverting to the
 defaults. Runs with different knobs are not comparable with one another.
+
+**Co-evolving hyperparameters.** Tune only what the chosen `--algo` reads:
+`ppo_clip`, `gae_lambda`, `rollout_steps`, `ppo_passes` and `ppo_minibatch` matter
+only to `ppo`, `epsilon*` only to `q_learning` and `sarsa`, and `value_coef` only
+to the actor-critic algorithms; anything else drifts without effect. An RL fitness
+is a few noisy episodes, and SHO steps towards the best of its `--sho_genomes`
+donors, so a fixed `--eval_seed` (scoring every genome on the same episodes) or
+more donors keeps it from chasing noise. As with `epochs`, `episodes` tends to
+drift upward.
 
 **Guidance.** The decoder must produce one output per action (plus one more for
 `actor_critic`/`a2c`/`ppo`), which the entry point sizes automatically from the
@@ -1052,7 +1149,18 @@ Then open `http://127.0.0.1:8000/` in a browser. The page has:
   other. Rings mark the chart's focus island and its neighbors, and clicking an
   island colors the chart around it. While a genome is selected (and *highlight
   selected lineage* is on), arrows show where its ancestry crossed between
-  islands.
+  islands. A run that co-evolved its training hyperparameters
+  (`--hyperparameter_strategy simplex`, see
+  [Co-evolving training hyperparameters](#co-evolving-training-hyperparameters))
+  also has a **Hyperparameter optimization** section. It shows the strategy's
+  settings and how many genomes' values came from the burn-in or a simplex step.
+  A **Best hyperparameters** table gives the tuned values of the best genome by
+  each fitness key, the final population's mean, standard deviation and range,
+  and each value's burn-in and allowed ranges. One chart per tuned
+  hyperparameter follows it across the population at every insertion (mean, with
+  a min–max band, on a log axis for `log`-scale values). A genome's **Fitness**
+  tab says how its values were chosen: a burn-in draw, or a simplex step with the
+  genomes it stepped from and its `r`.
 - **Insertion rates**: for one run, one group (summed over its runs, then each
   run on its own) or every group side by side, the share of each operator's
   genomes that became a global best or a local best, were inserted or were
