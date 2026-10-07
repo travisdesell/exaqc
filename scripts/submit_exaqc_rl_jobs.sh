@@ -59,6 +59,10 @@
 #                    name, so give each combination its own tag:
 #                      EPISODES=0 NUMBER_GENOMES=200000 EVAL_SEED=1000 \
 #                          sh scripts/submit_exaqc_rl_jobs.sh 1 5 inherit_fixedeval walker2d 6 6 fully_connected
+#   TIME_LIMIT       Slurm wall-time limit for each job, passed to sbatch as
+#                    -t (e.g. 2-00:00:00 for two days, or 12:00:00); unset keeps
+#                    the job script's own #SBATCH -t default of 1 day, which is
+#                    kept short so jobs get through the queue faster
 #   DRY_RUN          when set, print the sbatch commands instead of submitting
 
 set -eu
@@ -118,7 +122,7 @@ examples:
 
 environment variables (all optional; see the comments at the top of this script):
   N_ISLANDS, MAX_ISLAND_SIZE, HEALTHY_REWARD, EPISODES, IMPROVEMENT_CUTOFF,
-  LOG_EVERY, NUMBER_GENOMES, EVAL_SEED, DRY_RUN
+  LOG_EVERY, NUMBER_GENOMES, EVAL_SEED, TIME_LIMIT, DRY_RUN
 USAGE
     exit 2
 }
@@ -219,6 +223,21 @@ if [ -n "${EVAL_SEED:-}" ]; then
         die "EVAL_SEED must be a non-negative integer, but found: $EVAL_SEED"
 fi
 
+# Only the forms this script documents are accepted: days-hours:minutes:seconds
+# or hours:minutes:seconds. Slurm takes others too, but a typo here would
+# otherwise surface as a rejected submission partway through the run range.
+if [ -n "${TIME_LIMIT:-}" ]; then
+    case "$TIME_LIMIT" in
+        *[!0-9:-]* | *-*-* | -* | *- | *::* | :* | *:)
+            die "TIME_LIMIT must look like D-HH:MM:SS or HH:MM:SS, but found: $TIME_LIMIT"
+            ;;
+        *-*:*:* | *:*:*) ;;
+        *)
+            die "TIME_LIMIT must look like D-HH:MM:SS or HH:MM:SS, but found: $TIME_LIMIT"
+            ;;
+    esac
+fi
+
 # Each topology takes its own arguments, and a wrong count is the mistake this
 # script exists to catch before a job is queued. The rules, and their wording,
 # follow src/evolution/topology.py.
@@ -309,7 +328,10 @@ while [ "$run" -le "$MAX_RUN" ]; do
     # search: --topology takes any number of values, so anything after it would
     # be swallowed as one of them. TOPOLOGY_ARGUMENTS is deliberately unquoted,
     # so its whole numbers become separate arguments.
+    # TIME_LIMIT, when set, overrides the job script's own #SBATCH -t; both
+    # expansions vanish when it is unset.
     set -- sbatch \
+        ${TIME_LIMIT:+-t} ${TIME_LIMIT:+"$TIME_LIMIT"} \
         -J "$name" \
         -o "${LOG_DIR}/${name}_%j.o" \
         -e "${LOG_DIR}/${name}_%j.e" \

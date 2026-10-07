@@ -21,7 +21,7 @@
 # IMPROVEMENT_CUTOFF, LOG_EVERY, NUMBER_GENOMES, EVAL_SEED and DRY_RUN.
 #
 #SBATCH -J exaqc_rl
-#SBATCH -t 5-00:00:00
+#SBATCH -t 1-00:00:00
 #SBATCH -A neuroevolution -p tigris
 #SBATCH -o /home/tjdvse/logs/exaqc_test/output_%j.o
 #SBATCH -e /home/tjdvse/logs/exaqc_test/error_%j.e

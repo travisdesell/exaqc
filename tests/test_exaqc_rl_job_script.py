@@ -61,6 +61,7 @@ _SETTING_VARIABLES: tuple[str, ...] = (
     "EVAL_SEED",
     "N_ISLANDS",
     "MAX_ISLAND_SIZE",
+    "TIME_LIMIT",
 )
 
 
@@ -522,3 +523,86 @@ def test_walker2d_experiments_submit_runnable_jobs(
         assert parsed.training_seed is None
         assert parsed.topology == list(topology)
         assert tag in parsed.out_dir
+
+
+def _submitted_commands(**settings: str) -> subprocess.CompletedProcess[str]:
+    """Dry-runs the submit script for two fully connected walker2d runs.
+
+    Args:
+        **settings: Setting variables for the submit script.
+
+    Returns:
+        The finished process, whose stdout holds one ``sbatch`` line per run.
+    """
+
+    return subprocess.run(
+        [
+            "sh",
+            str(SUBMIT_SCRIPT),
+            "1",
+            "2",
+            "limits",
+            "walker2d",
+            "6",
+            "6",
+            "fully_connected",
+        ],
+        capture_output=True,
+        text=True,
+        env=_script_environment(**settings),
+    )
+
+
+def test_jobs_default_to_a_one_day_time_limit() -> None:
+    """Unless ``TIME_LIMIT`` says otherwise, a job asks Slurm for one day.
+
+    A short default helps jobs get through the queue faster.
+    """
+
+    limits = re.findall(r"^#SBATCH -t (\S+)$", JOB_SCRIPT.read_text(), re.MULTILINE)
+    assert limits == ["1-00:00:00"]
+
+
+@pytest.mark.parametrize("limit", ["2-00:00:00", "12:00:00"])
+def test_time_limit_is_passed_to_sbatch_when_set(limit: str) -> None:
+    """``TIME_LIMIT`` overrides each job's wall time; unset, the job's own stands.
+
+    Args:
+        limit: The wall-time limit to request.
+    """
+
+    default = _submitted_commands()
+    assert default.returncode == 0, default.stderr
+    for line in default.stdout.strip().splitlines():
+        assert "-t" not in shlex.split(line)
+
+    limited = _submitted_commands(TIME_LIMIT=limit)
+    assert limited.returncode == 0, limited.stderr
+    lines = limited.stdout.strip().splitlines()
+    assert len(lines) == 2
+    for line in lines:
+        argv = shlex.split(line)
+        # sbatch reads options only before the script, so -t must precede it
+        assert argv[argv.index("-t") + 1] == limit
+        assert argv.index("-t") < next(
+            index
+            for index, value in enumerate(argv)
+            if value.endswith("exaqc_rl_job.sh")
+        )
+
+
+@pytest.mark.parametrize(
+    "limit", ["2 days", "48", "-1:00:00", "2-", "1::00", "2-00:00:00-1"]
+)
+def test_malformed_time_limits_are_rejected(limit: str) -> None:
+    """A ``TIME_LIMIT`` not in a documented form fails before anything is submitted.
+
+    Args:
+        limit: The malformed limit.
+    """
+
+    result = _submitted_commands(TIME_LIMIT=limit)
+
+    assert result.returncode != 0
+    assert "TIME_LIMIT" in result.stderr
+    assert result.stdout == ""
