@@ -55,6 +55,8 @@ _SAMPLE_ENVIRONMENTS: tuple[str, ...] = (
 _SETTING_VARIABLES: tuple[str, ...] = (
     "HEALTHY_REWARD",
     "EPISODES",
+    "IMPROVEMENT_CUTOFF",
+    "LOG_EVERY",
     "NUMBER_GENOMES",
     "EVAL_SEED",
     "N_ISLANDS",
@@ -334,22 +336,33 @@ def test_search_settings_keep_their_defaults_when_unset() -> None:
     parsed = _parsed_job_command()
 
     assert parsed.episodes == 100
+    assert parsed.improvement_cutoff == 30
+    assert parsed.log_every == 5
     assert parsed.number_genomes == 10000
     assert parsed.eval_seed is None
     assert parsed.training_seed is None
 
 
 def test_search_settings_reach_the_command_when_set() -> None:
-    """``EPISODES``, ``NUMBER_GENOMES`` and ``EVAL_SEED`` set their flags.
+    """``EPISODES``, ``IMPROVEMENT_CUTOFF``, ``LOG_EVERY``, ``NUMBER_GENOMES``
+    and ``EVAL_SEED`` set their flags.
 
     ``EVAL_SEED`` pins only evaluation: training seeds stay random per genome.
     """
 
     parsed = _parsed_job_command(
-        {"EPISODES": "0", "NUMBER_GENOMES": "200000", "EVAL_SEED": "1000"}
+        {
+            "EPISODES": "0",
+            "IMPROVEMENT_CUTOFF": "0",
+            "LOG_EVERY": "1",
+            "NUMBER_GENOMES": "200000",
+            "EVAL_SEED": "1000",
+        }
     )
 
     assert parsed.episodes == 0
+    assert parsed.improvement_cutoff == 0
+    assert parsed.log_every == 1
     assert parsed.number_genomes == 200000
     assert parsed.eval_seed == 1000
     assert parsed.training_seed is None
@@ -360,6 +373,10 @@ def test_search_settings_reach_the_command_when_set() -> None:
     [
         ("EPISODES", "-1"),
         ("EPISODES", "ten"),
+        ("IMPROVEMENT_CUTOFF", "-5"),
+        ("IMPROVEMENT_CUTOFF", "five"),
+        ("LOG_EVERY", "0"),
+        ("LOG_EVERY", "2.5"),
         ("NUMBER_GENOMES", "0"),
         ("NUMBER_GENOMES", "1e5"),
         ("EVAL_SEED", "-5"),
@@ -416,25 +433,59 @@ def test_bad_search_settings_are_rejected_by_both_scripts(
     assert variable in built.stderr
 
 
+#: The walker2d experiments submitted with the scripts: a run tag, the
+#: environment settings it is submitted with, and what each job must then run.
+_EXPERIMENTS: tuple[tuple[str, dict[str, str], dict[str, Any]], ...] = (
+    (
+        "inherit_randeval",
+        {"EPISODES": "0", "NUMBER_GENOMES": "200000"},
+        {"episodes": 0, "number_genomes": 200000, "eval_seed": None},
+    ),
+    (
+        "inherit_fixedeval",
+        {"EPISODES": "0", "NUMBER_GENOMES": "200000", "EVAL_SEED": "1000"},
+        {"episodes": 0, "number_genomes": 200000, "eval_seed": 1000},
+    ),
+    (
+        "ep20_cut5_fixedeval",
+        {
+            "EPISODES": "20",
+            "IMPROVEMENT_CUTOFF": "5",
+            "LOG_EVERY": "1",
+            "EVAL_SEED": "1000",
+        },
+        {
+            "episodes": 20,
+            "improvement_cutoff": 5,
+            "log_every": 1,
+            "number_genomes": 10000,
+            "eval_seed": 1000,
+        },
+    ),
+)
+
+
 @pytest.mark.parametrize(
     "topology",
     [("2d_mesh", "4", "5"), ("fully_connected",)],
 )
-@pytest.mark.parametrize("eval_seed", [None, "1000"])
-def test_inherited_weight_experiments_submit_runnable_jobs(
-    topology: tuple[str, ...], eval_seed: str | None
+@pytest.mark.parametrize(
+    "tag,settings,expected", _EXPERIMENTS, ids=[tag for tag, _, _ in _EXPERIMENTS]
+)
+def test_walker2d_experiments_submit_runnable_jobs(
+    topology: tuple[str, ...],
+    tag: str,
+    settings: dict[str, str],
+    expected: dict[str, Any],
 ) -> None:
-    """The four 0-episode walker2d experiments each queue five runnable jobs.
+    """Each walker2d experiment queues five jobs that run what was asked for.
 
     Args:
         topology: The island topology and its arguments.
-        eval_seed: The ``EVAL_SEED`` to pin, or None for random evaluation seeds.
+        tag: The experiment's run tag.
+        settings: The environment settings it is submitted with.
+        expected: Parsed argument values every job's command must have.
     """
-
-    settings = {"EPISODES": "0", "NUMBER_GENOMES": "200000"}
-    if eval_seed is not None:
-        settings["EVAL_SEED"] = eval_seed
-    tag = "inherit_randeval" if eval_seed is None else "inherit_fixedeval"
 
     submitted = subprocess.run(
         ["sh", str(SUBMIT_SCRIPT), "1", "5", tag, "walker2d", "6", "6", *topology],
@@ -466,9 +517,8 @@ def test_inherited_weight_experiments_submit_runnable_jobs(
                 command[command.index("src.examples.reinforcement_learning") + 1 :]
             )
         assert parsed.env == "walker2d"
-        assert parsed.episodes == 0
-        assert parsed.number_genomes == 200000
-        assert parsed.eval_seed == (None if eval_seed is None else int(eval_seed))
+        for name, value in expected.items():
+            assert getattr(parsed, name) == value, name
         assert parsed.training_seed is None
         assert parsed.topology == list(topology)
         assert tag in parsed.out_dir

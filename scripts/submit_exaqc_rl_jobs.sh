@@ -39,6 +39,13 @@
 #                    error rather than ignored, so tag such runs accordingly
 #   EPISODES         training episodes per genome (default 100); 0 evaluates
 #                    each genome's inherited weights without training it
+#   IMPROVEMENT_CUTOFF
+#                    episodes without an improved evaluation before a genome's
+#                    training stops early (default 30); 0 disables early stopping
+#   LOG_EVERY        evaluate (and log) every this many training episodes
+#                    (default 5); 1 evaluates after every episode. The cutoff is
+#                    counted in episodes, so it allows
+#                    IMPROVEMENT_CUTOFF / LOG_EVERY evaluations without improvement
 #   NUMBER_GENOMES   genomes each run evaluates (default 10000)
 #   EVAL_SEED        base seed for every genome's evaluation episodes and their
 #                    action sampling; unset (the default) draws one per genome.
@@ -106,10 +113,12 @@ examples:
   N_ISLANDS=30 sh scripts/submit_exaqc_rl_jobs.sh 1 3 stochastic hopper 6 3 tree 2
   EPISODES=0 NUMBER_GENOMES=200000 EVAL_SEED=1000 \
       sh scripts/submit_exaqc_rl_jobs.sh 1 5 inherit_fixedeval walker2d 6 6 2d_mesh 4 5
+  EPISODES=20 IMPROVEMENT_CUTOFF=5 LOG_EVERY=1 EVAL_SEED=1000 \
+      sh scripts/submit_exaqc_rl_jobs.sh 1 5 ep20_cut5_fixedeval walker2d 6 6 fully_connected
 
 environment variables (all optional; see the comments at the top of this script):
-  N_ISLANDS, MAX_ISLAND_SIZE, HEALTHY_REWARD, EPISODES, NUMBER_GENOMES,
-  EVAL_SEED, DRY_RUN
+  N_ISLANDS, MAX_ISLAND_SIZE, HEALTHY_REWARD, EPISODES, IMPROVEMENT_CUTOFF,
+  LOG_EVERY, NUMBER_GENOMES, EVAL_SEED, DRY_RUN
 USAGE
     exit 2
 }
@@ -188,6 +197,16 @@ contains_word "$TOPOLOGIES" "$TOPOLOGY" ||
 if [ -n "${EPISODES:-}" ]; then
     is_whole_number "$EPISODES" ||
         die "EPISODES must be a non-negative integer, but found: $EPISODES"
+fi
+
+if [ -n "${IMPROVEMENT_CUTOFF:-}" ]; then
+    is_whole_number "$IMPROVEMENT_CUTOFF" ||
+        die "IMPROVEMENT_CUTOFF must be a non-negative integer, but found: $IMPROVEMENT_CUTOFF"
+fi
+
+if [ -n "${LOG_EVERY:-}" ]; then
+    is_whole_number "$LOG_EVERY" && [ "$LOG_EVERY" -gt 0 ] ||
+        die "LOG_EVERY must be a positive integer, but found: $LOG_EVERY"
 fi
 
 if [ -n "${NUMBER_GENOMES:-}" ]; then

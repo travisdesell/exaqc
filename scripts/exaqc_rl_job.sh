@@ -18,7 +18,7 @@
 #
 # Optional environment variables, normally set on the submitting command line
 # (described where they are read below): HEALTHY_REWARD, EPISODES,
-# NUMBER_GENOMES, EVAL_SEED and DRY_RUN.
+# IMPROVEMENT_CUTOFF, LOG_EVERY, NUMBER_GENOMES, EVAL_SEED and DRY_RUN.
 #
 #SBATCH -J exaqc_rl
 #SBATCH -t 5-00:00:00
@@ -61,6 +61,15 @@ HEALTHY_REWARD=${HEALTHY_REWARD:-}
 #: Training episodes per genome. 0 evaluates each genome's inherited weights
 #: without training it.
 EPISODES=${EPISODES:-100}
+
+#: Episodes without an improved evaluation before a genome's training stops
+#: early; 0 disables early stopping.
+IMPROVEMENT_CUTOFF=${IMPROVEMENT_CUTOFF:-30}
+
+#: Evaluate (and log) every this many training episodes; 1 evaluates after every
+#: episode. The cutoff is counted in episodes, so it allows
+#: IMPROVEMENT_CUTOFF / LOG_EVERY evaluations without improvement.
+LOG_EVERY=${LOG_EVERY:-5}
 
 #: Genomes the run evaluates.
 NUMBER_GENOMES=${NUMBER_GENOMES:-10000}
@@ -132,6 +141,20 @@ case "$EPISODES" in
         ;;
 esac
 
+case "$IMPROVEMENT_CUTOFF" in
+    '' | *[!0-9]*)
+        echo "error: IMPROVEMENT_CUTOFF must be a non-negative integer, but found: $IMPROVEMENT_CUTOFF" >&2
+        exit 2
+        ;;
+esac
+
+case "$LOG_EVERY" in
+    '' | *[!0-9]* | 0)
+        echo "error: LOG_EVERY must be a positive integer, but found: $LOG_EVERY" >&2
+        exit 2
+        ;;
+esac
+
 case "$NUMBER_GENOMES" in
     '' | *[!0-9]* | 0)
         echo "error: NUMBER_GENOMES must be a positive integer, but found: $NUMBER_GENOMES" >&2
@@ -179,7 +202,7 @@ COMMAND=(
     # expands to nothing unless EVAL_SEED asked for it (written as above)
     ${EVAL_SEED_ARGUMENTS[@]+"${EVAL_SEED_ARGUMENTS[@]}"}
     --ema_alpha 0.1
-    --log_every 5
+    --log_every "$LOG_EVERY"
     --mutation_strategy uniform 1 3
     --parent_strategy uniform 2 5
     -qim u3
@@ -187,7 +210,7 @@ COMMAND=(
     --encoding linear
     --decoding linear
     --out_dir "$OUT_DIR"
-    --improvement_cutoff 30
+    --improvement_cutoff "$IMPROVEMENT_CUTOFF"
     --shared_file_system
     islands
     --n_islands "$N_ISLANDS"
