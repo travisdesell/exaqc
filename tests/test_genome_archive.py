@@ -434,77 +434,33 @@ def test_read_only_archives_refuse_writes(tmp_path) -> None:
         with pytest.raises(RuntimeError):
             reader.add_genome(FakeGenome(1), insertion=1)
         with pytest.raises(RuntimeError):
-            reader.write_current_best(FakeGenome(1), "fitness")
+            reader.record_population(step=1, population=[FakeGenome(1)])
 
 
-def test_current_best_files_are_overwritten_in_place(tmp_path, monkeypatch) -> None:
-    """Each new best replaces a fixed set of files instead of adding more.
+def test_overwriting_a_run_removes_best_files_older_runs_wrote(tmp_path) -> None:
+    """Discarding a run also removes the best-genome files runs used to write.
 
-    Args:
-        tmp_path: pytest per-test temporary directory (auto-removed).
-        monkeypatch: Used to replace the (slow) image rendering.
-    """
-
-    import src.utils.genome_rendering as genome_rendering
-
-    training_images: dict[int, bytes | None] = {1: b"training-1", 2: None}
-    monkeypatch.setattr(
-        genome_rendering,
-        "render_diagram_png",
-        lambda genome: f"diagram-{genome.genome_number}".encode(),
-    )
-    monkeypatch.setattr(
-        genome_rendering,
-        "render_training_png",
-        lambda genome: training_images[genome.genome_number],
-    )
-
-    run_dir = tmp_path / "run"
-    with create_archive(tmp_path) as archive:
-        archive.write_current_best(FakeGenome(1), "fitness")
-        first = set(os.listdir(run_dir))
-        assert {
-            "best_fitness.json",
-            "best_fitness.png",
-            "best_fitness_training.png",
-        } <= first
-
-        archive.write_current_best(FakeGenome(2), "fitness")
-
-        with pytest.raises(ValueError):
-            archive.write_current_best(FakeGenome(3), "accuracy")
-
-    assert json.loads((run_dir / "best_fitness.json").read_text())["genome_number"] == 2
-    assert (run_dir / "best_fitness.png").read_bytes() == b"diagram-2"
-    # a training plot that could not be drawn does not leave the old best's plot
-    assert not (run_dir / "best_fitness_training.png").exists()
-    assert not [name for name in os.listdir(run_dir) if name.endswith(".tmp")]
-
-
-def test_current_best_files_get_normal_file_permissions(tmp_path, monkeypatch) -> None:
-    """Best-genome files are as readable as any other file the run writes.
+    Searches no longer write ``best_*`` files, but a run from before they
+    stopped still has them, and starting over in its directory must not leave
+    them describing genomes the new run does not have.
 
     Args:
         tmp_path: pytest per-test temporary directory (auto-removed).
-        monkeypatch: Used to replace the (slow) image rendering.
     """
 
-    import src.utils.genome_rendering as genome_rendering
-
-    monkeypatch.setattr(genome_rendering, "render_diagram_png", lambda genome: b"png")
-    monkeypatch.setattr(genome_rendering, "render_training_png", lambda genome: None)
-
     run_dir = tmp_path / "run"
-    with create_archive(tmp_path) as archive:
-        archive.write_current_best(FakeGenome(1), "target_metric")
+    create_archive(tmp_path).close()
+    legacy = [
+        f"best_{kind}{suffix}"
+        for kind in ("fitness", "target_metric")
+        for suffix in (".json", ".png", "_training.png")
+    ]
+    for name in legacy:
+        (run_dir / name).write_text("from an older run")
 
-    reference = run_dir / "reference.txt"
-    reference.write_text("written normally")
+    GenomeArchive.create(str(run_dir), overwrite=True).close()
 
-    for name in ("best_target_metric.json", "best_target_metric.png"):
-        assert (
-            run_dir / name
-        ).stat().st_mode & 0o777 == reference.stat().st_mode & 0o777
+    assert not set(legacy) & set(os.listdir(run_dir))
 
 
 def test_genome_source_arguments(tmp_path) -> None:

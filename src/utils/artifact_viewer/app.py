@@ -221,6 +221,10 @@ def create_app(viewer: ArtifactViewer, mcp_server: Any | None = None) -> Starlet
             )
         )
 
+    def api_timing(request: Request) -> Response:
+        """Returns a run's master and worker timing."""
+        return _json(viewer.timing_payload(request.path_params["run"]))
+
     def api_operators(request: Request) -> Response:
         """Returns a run's operator insert-type counts."""
         return _json(viewer.operators_payload(request.path_params["run"]))
@@ -482,6 +486,7 @@ def create_app(viewer: ArtifactViewer, mcp_server: Any | None = None) -> Starlet
         Route("/api/runs/{run:int}/points", api_points),
         Route("/api/runs/{run:int}/genealogy", api_genealogy),
         Route("/api/runs/{run:int}/history", api_history),
+        Route("/api/runs/{run:int}/timing", api_timing),
         Route("/api/runs/{run:int}/operators", api_operators),
         Route("/api/runs/{run:int}/compare", api_compare),
         Route("/api/runs/{run:int}/genomes/{genome:int}.json", api_genome_json),

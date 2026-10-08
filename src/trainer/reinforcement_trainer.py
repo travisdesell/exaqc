@@ -100,7 +100,6 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Callable, Optional
 
-import math
 import secrets
 import numpy as np
 import torch
@@ -433,12 +432,49 @@ def split_policy_value(
 
 
 @torch.no_grad()
+def sample_from(
+    distribution: Distribution, generator: torch.Generator | None = None
+) -> Tensor:
+    """Draws an action from an action distribution, optionally reproducibly.
+
+    ``torch.distributions`` sampling always draws from PyTorch's global
+    generator. Evaluation instead passes a generator of its own, seeded from the
+    evaluation seed, so an evaluation's sampling noise is determined by that
+    seed alone -- the same for every genome evaluated on it, and independent of
+    (and invisible to) the training randomness. The draw has the same
+    distribution either way.
+
+    Args:
+        distribution: A ``Normal`` or ``Categorical`` from
+            :func:`action_distribution`.
+        generator: A CPU generator to draw from, or ``None`` to use the global
+            one.
+
+    Returns:
+        The sampled action tensor, shaped as ``distribution.sample()`` would
+        return it.
+    """
+
+    if generator is None:
+        return distribution.sample()
+
+    if isinstance(distribution, Normal):
+        noise = torch.randn(distribution.loc.shape, generator=generator)
+        noise = noise.to(device=distribution.loc.device, dtype=distribution.loc.dtype)
+        return distribution.loc + distribution.scale * noise
+
+    probabilities = distribution.probs.detach().cpu()
+    index = torch.multinomial(probabilities, 1, generator=generator).squeeze(-1)
+    return index.to(distribution.probs.device)
+
+
 def select_action(
     genome: CircuitGenome,
     environment: RLEnvironment,
     observation: Any,
     *,
     stochastic: bool,
+    generator: torch.Generator | None = None,
 ) -> Any:
     """Selects an action for an observation under one action-selection regime.
 
@@ -460,6 +496,9 @@ def select_action(
             When False, take the deterministic action: the argmax over the
             policy logits for a discrete environment, or the distribution
             mean for a continuous one.
+        generator: For a stochastic action, the generator to sample from (see
+            :func:`sample_from`); ``None`` uses PyTorch's global generator.
+            Ignored for a deterministic action.
 
     Returns:
         The action in the environment's native ``env.step`` format (an ``int``
@@ -470,7 +509,7 @@ def select_action(
     part = policy_output(genome, environment, observation)
 
     if stochastic:
-        action = action_distribution(part, environment).sample()
+        action = sample_from(action_distribution(part, environment), generator)
         return to_env_action(action, environment)
 
     if environment.continuous:
@@ -553,18 +592,21 @@ def stochastic_action(
 #:     eval_policy: Action-selection regime evaluation scores a genome under,
 #:         one of :data:`EVAL_POLICY_CHOICES`. ``"match"`` (the default) uses
 #:         the regime the trainer's objective optimizes.
-#:     seed: Base random seed for *training* episodes, or ``None`` (the
-#:         default) to draw a fresh random seed each time a genome's
-#:         hyperparameters are resolved, so genomes do not all train on the
-#:         same episodes. :meth:`ReinforcementLearningTrainer.train` records the
-#:         seed a genome used in its ``training_seed`` metadata.
+#:     training_seed: Base random seed for *training* episodes, PyTorch and
+#:         NumPy, or ``None`` (the default) to draw a fresh random seed each
+#:         time a genome's hyperparameters are resolved, so genomes do not all
+#:         train on the same episodes. :meth:`ReinforcementLearningTrainer.train`
+#:         records the seed a genome used in its ``training_seed`` metadata.
 #:     eval_seed: Base random seed for *evaluation* episodes, kept in a range
 #:         disjoint from the training seeds so a genome is never scored on an
 #:         episode it trained on (see
 #:         :meth:`ReinforcementLearningTrainer._separate_evaluation_seed`).
-#:         ``None`` (the default) draws a fresh one per genome; setting it
-#:         evaluates every genome on the same episodes, which makes their
-#:         fitnesses directly comparable.
+#:         Evaluation episode ``i`` resets from ``eval_seed + i`` and, under a
+#:         stochastic policy, samples its actions from a generator seeded with
+#:         the same value, so an evaluation is fully determined by the genome
+#:         and this seed. ``None`` (the default) draws a fresh one per genome;
+#:         setting it evaluates every genome on the same episodes with the same
+#:         sampling noise, which makes their fitnesses directly comparable.
 #:     log_every: Logging / evaluation frequency, in episodes.
 #:     ema_alpha: Smoothing factor for the exponential moving average (EMA) of
 #:         episode returns reported as the training return mean. Each episode
@@ -595,7 +637,7 @@ RL_HYPERPARAMETER_DEFAULTS: dict[str, Any] = {
     "max_steps": 500,
     "eval_episodes": 10,
     "eval_policy": "match",
-    "seed": None,
+    "training_seed": None,
     "eval_seed": None,
     "log_every": 10,
     "ema_alpha": 0.01,
@@ -786,7 +828,7 @@ class ReinforcementLearningTrainer(ABC):
             None. Mutates ``parser`` by adding ``--episodes``,
             ``--eval_episodes``, ``--eval_policy``, ``--max_steps``,
             ``--gamma``, ``--learning_rate``/``-lr``, ``--entropy_coef``,
-            ``--value_coef``, ``--eval_seed``, ``--seed``, ``--log_every``,
+            ``--value_coef``, ``--eval_seed``, ``--training_seed``, ``--log_every``,
             ``--ema_alpha`` and ``--improvement_cutoff``.
         """
 
@@ -794,7 +836,10 @@ class ReinforcementLearningTrainer(ABC):
             "--episodes",
             type=int,
             default=60,
-            help="Number of training episodes (outer-loop iterations) per genome.",
+            help=(
+                "Number of training episodes (outer-loop iterations) per genome, after the "
+                "episode-0 evaluation of its inherited weights; 0 scores the inherited weights only."
+            ),
         )
 
         parser.add_argument(
@@ -861,14 +906,17 @@ class ReinforcementLearningTrainer(ABC):
             help=(
                 "Base seed for the evaluation episodes, kept in a range "
                 "disjoint from the training seeds so a genome is never scored "
-                "on an episode it trained on. By default each genome draws its "
-                "own; give one to evaluate every genome on the same episodes, "
-                "which makes their fitnesses directly comparable."
+                "on an episode it trained on. It also seeds a stochastic "
+                "evaluation's action sampling, so an evaluation is determined by "
+                "the genome and this seed. By default each genome draws its "
+                "own; give one to evaluate every genome on the same episodes "
+                "with the same sampling noise, which makes their fitnesses "
+                "directly comparable."
             ),
         )
 
         parser.add_argument(
-            "--seed",
+            "--training_seed",
             type=int,
             default=None,
             help=(
@@ -966,12 +1014,12 @@ class ReinforcementLearningTrainer(ABC):
                 for name, default in RL_HYPERPARAMETER_DEFAULTS.items()
             }
         )
-        seed_was_given = hp.seed is not None
+        seed_was_given = hp.training_seed is not None
         if not seed_was_given:
             # Drawn from the operating system rather than Python's, NumPy's or
             # PyTorch's generators, which training reseeds: a seed derived from
             # those could repeat from one genome to the next.
-            hp.seed = secrets.randbits(31)
+            hp.training_seed = secrets.randbits(31)
 
         self._separate_evaluation_seed(hp, seed_was_given=seed_was_given)
         return hp
@@ -982,18 +1030,19 @@ class ReinforcementLearningTrainer(ABC):
         Evaluation must not reuse an episode training has already learned from,
         so it needs to know which seeds training consumes. The base scaffold
         rolls one environment episode per outer episode, seeded
-        ``hp.seed + episode_index``; a trainer whose outer episode spans several
-        environment episodes (PPO) overrides this with its own, wider range.
+        ``hp.training_seed + episode_index``; a trainer whose outer episode
+        spans several environment episodes (PPO) overrides this with its own,
+        wider range.
 
         Args:
-            hp: Resolved hyperparameters, with ``seed`` already drawn.
+            hp: Resolved hyperparameters, with ``training_seed`` already drawn.
 
         Returns:
             ``(first, last_exclusive)`` -- an upper bound is fine and expected,
             since a genome that stops early simply uses fewer of these seeds.
         """
 
-        return hp.seed, hp.seed + hp.episodes
+        return hp.training_seed, hp.training_seed + hp.episodes
 
     def _separate_evaluation_seed(
         self, hp: SimpleNamespace, *, seed_was_given: bool
@@ -1001,8 +1050,8 @@ class ReinforcementLearningTrainer(ABC):
         """Ensures evaluation episodes never reuse a training episode's seed.
 
         Training and evaluation seeds used to be derived from the same base, so
-        they could coincide -- with PPO's ``hp.seed + episode_index * 10_000 +
-        episode``, outer episode 1 landed exactly on the evaluation seeds, and
+        they could coincide -- with PPO's ``hp.training_seed + episode_index *
+        10_000 + episode``, outer episode 1 landed exactly on the evaluation seeds, and
         a genome was scored on episodes it had just trained on.
 
         How the overlap is resolved depends on which seeds are pinned:
@@ -1015,16 +1064,17 @@ class ReinforcementLearningTrainer(ABC):
           the same evaluation episodes (common random numbers). It is left
           alone and the genome's *training* seed is redrawn instead, which is
           free because it was random anyway.
-        * both ``eval_seed`` and ``seed`` set and overlapping -- neither can
-          move without breaking what was asked for, so this raises.
+        * both ``eval_seed`` and ``training_seed`` set and overlapping --
+          neither can move without breaking what was asked for, so this raises.
 
         Args:
             hp: Resolved hyperparameters, mutated in place.
-            seed_was_given: Whether ``seed`` was pinned rather than drawn.
+            seed_was_given: Whether ``training_seed`` was pinned rather than
+                drawn.
 
         Returns:
             None. Sets ``hp.eval_seed`` (when it was unset) or redraws
-            ``hp.seed``, so that the two seed ranges are disjoint.
+            ``hp.training_seed``, so that the two seed ranges are disjoint.
 
         Raises:
             ValueError: If both seeds are pinned and their ranges overlap.
@@ -1057,16 +1107,17 @@ class ReinforcementLearningTrainer(ABC):
             raise ValueError(
                 f"eval_seed={hp.eval_seed} evaluates on seeds "
                 f"[{hp.eval_seed}, {hp.eval_seed + hp.eval_episodes}), which "
-                f"overlaps the training seeds [{first}, {last}) that seed="
-                f"{hp.seed} produces, so genomes would be scored on episodes "
-                "they trained on. Move --eval_seed clear of that range, or "
-                "leave --seed unset so it can be drawn around it."
+                f"overlaps the training seeds [{first}, {last}) that "
+                f"training_seed={hp.training_seed} produces, so genomes would be "
+                "scored on episodes they trained on. Move --eval_seed clear of "
+                "that range, or leave --training_seed unset so it can be drawn "
+                "around it."
             )
 
         # the training seed was drawn, not asked for, so move it instead and
         # keep every genome evaluating on the same episodes
         while overlaps(hp.eval_seed):
-            hp.seed = secrets.randbits(31)
+            hp.training_seed = secrets.randbits(31)
 
     def policy_logits(
         self, genome: CircuitGenome, environment: RLEnvironment, observation: Any
@@ -1150,6 +1201,13 @@ class ReinforcementLearningTrainer(ABC):
         a stochastic policy, whose own sampling makes every episode differ even
         in a deterministic environment.
 
+        Episode ``i`` is reset from ``hp.eval_seed + i`` and, under a stochastic
+        policy, samples its actions from a generator seeded with the same value.
+        An evaluation is therefore fully determined by the genome and
+        ``eval_seed``: genomes sharing an ``eval_seed`` face the same starting
+        states *and* the same sampling noise, and evaluating never draws from
+        the global generators training uses.
+
         Args:
             genome: The genome policy to evaluate.
             environment: The environment to evaluate on.
@@ -1170,11 +1228,19 @@ class ReinforcementLearningTrainer(ABC):
             env = environment.make()
             # a seed range kept disjoint from training's; see
             # :meth:`_separate_evaluation_seed`
-            observation, _ = env.reset(seed=hp.eval_seed + episode)
+            episode_seed = hp.eval_seed + episode
+            observation, _ = env.reset(seed=episode_seed)
+            generator = (
+                torch.Generator().manual_seed(episode_seed) if stochastic else None
+            )
             episode_return = 0.0
             for _ in range(hp.max_steps):
                 action = select_action(
-                    genome, environment, observation, stochastic=stochastic
+                    genome,
+                    environment,
+                    observation,
+                    stochastic=stochastic,
+                    generator=generator,
                 )
                 observation, reward, terminated, truncated, _ = env.step(action)
                 episode_return += float(reward)
@@ -1246,20 +1312,34 @@ class ReinforcementLearningTrainer(ABC):
     # -- main entry point -----------------------------------------------------
 
     def train(self, genome: CircuitGenome, environment: RLEnvironment) -> None:
-        """Trains a genome on an environment and records metrics.
+        """Evaluates a genome's inherited weights, then trains it and records metrics.
 
-        Runs ``hp.episodes`` training episodes (each delegating to
-        :meth:`run_update`), evaluates periodically, and restores the
-        best-evaluated weights. On completion the genome's ``metadata``
-        contains ``training_episode_metrics`` (per-episode returns),
-        ``best_training_metrics``, ``best_validation_metrics``, the
-        ``training_seed`` its episodes were seeded from (drawn at random unless
-        the genome's hyperparameters fix a ``seed``) and the ``eval_policy``
-        the evaluation returns were measured under.
+        Episode 0 is always a pre-training evaluation of the weights the genome
+        inherited, so the evaluation history shows whether training improved on
+        them. Training episodes are then
+        numbered ``1`` to ``hp.episodes`` inclusive (each delegating to
+        :meth:`run_update`), evaluated every ``hp.log_every`` episodes and on
+        the last one, and the best-evaluated weights -- the inherited ones if
+        training never beat them -- are restored. A genome with no trainable
+        parameters, or ``hp.episodes`` of 0, is only evaluated, so its fitness
+        comes from its inherited weights.
 
         Args:
             genome: The genome to train (its model is initialized here).
             environment: The environment to train on.
+
+        Returns:
+            None. Sets ``genome.metadata`` entries
+            ``training_episode_metrics`` (per-episode returns for episodes
+            ``1..hp.episodes``; there is no episode 0, since nothing was trained
+            before it), ``evaluation_episode_metrics`` (starting with episode
+            0), ``best_episode`` (0 when the inherited weights were never
+            improved on), ``best_training_metrics``, ``best_validation_metrics``,
+            ``n_trainable_parameters``, the ``training_seed`` its episodes were
+            seeded from (drawn at random unless the genome's hyperparameters fix
+            a ``seed``), the ``evaluation_seed`` and the ``eval_policy`` the
+            evaluation returns were measured under. When nothing is trained,
+            ``best_training_metrics`` holds the episode-0 evaluation's returns.
 
         Raises:
             ValueError: If ``environment`` is continuous but this trainer does
@@ -1279,7 +1359,7 @@ class ReinforcementLearningTrainer(ABC):
         genome.initialize_model()
 
         # recorded so a genome's training episodes can be reproduced later
-        genome.metadata["training_seed"] = hp.seed
+        genome.metadata["training_seed"] = hp.training_seed
 
         # recorded separately because it is drawn separately: evaluation runs
         # on a seed range disjoint from training's, so a genome is never scored
@@ -1292,8 +1372,8 @@ class ReinforcementLearningTrainer(ABC):
         # eval_policy="both" it is the selected one, not "both"; the genome's
         # own hyperparameters still record what was requested.
         genome.metadata["eval_policy"] = self.selected_eval_policy(hp)
-        torch.manual_seed(hp.seed)
-        np.random.seed(hp.seed)
+        torch.manual_seed(hp.training_seed)
+        np.random.seed(hp.training_seed)
 
         # All trainable parameters live in the genome's hybrid model (encoder,
         # quantum layer, decoder) -- including the value output for advantage
@@ -1310,17 +1390,35 @@ class ReinforcementLearningTrainer(ABC):
         n_trainable = genome.count_trainable_parameters()
         genome.metadata["n_trainable_parameters"] = n_trainable
 
-        if n_trainable == 0:
-            # nothing connected to the loss to optimize -- just evaluate
-            logger.info(
-                "genome has no trainable (enabled) parameters; evaluating only."
-            )
-            evaluation = self.evaluate(genome, environment, hp)
+        # episode 0: evaluate the inherited weights before any training
+        initial_evaluation = self.evaluate(genome, environment, hp)
+        initial_evaluation["episode"] = 0
+        genome.metadata["evaluation_episode_metrics"].append(initial_evaluation)
+        logger.info(
+            f"[{type(self).__name__}] genome {genome.genome_number:4d} episode {0:4d} "
+            f"pre-training eval_return_mean={initial_evaluation['return_mean']:.1f} "
+            f"({genome.metadata['eval_policy']})"
+        )
+
+        best_return = initial_evaluation["return_mean"]
+        best_evaluation = initial_evaluation
+        best_episode = 0
+        genome.metadata["best_episode"] = best_episode
+
+        if n_trainable == 0 or hp.episodes <= 0:
+            # nothing connected to the loss to optimize, or no training asked
+            # for: the genome's fitness is that of its inherited weights
+            if n_trainable == 0:
+                logger.info(
+                    "genome has no trainable (enabled) parameters; evaluating only."
+                )
+            else:
+                logger.info("training for 0 episodes; evaluating only.")
             genome.metadata["best_training_metrics"] = {
-                "return_mean": evaluation["return_mean"],
-                "best_episode_return": evaluation["best_episode_return"],
+                "return_mean": initial_evaluation["return_mean"],
+                "best_episode_return": initial_evaluation["best_episode_return"],
             }
-            genome.metadata["best_validation_metrics"] = evaluation
+            genome.metadata["best_validation_metrics"] = initial_evaluation
             return
 
         optimizer = torch.optim.Adam(
@@ -1333,13 +1431,13 @@ class ReinforcementLearningTrainer(ABC):
         # cold-start-at-zero bias), then updated as
         # ``ema = alpha * return + (1 - alpha) * ema`` each episode.
         ema_return: Optional[float] = None
-        best_return = -math.inf
         best_state = genome.clone_state_dict()
-        best_evaluation = None
         eval_every = max(1, hp.log_every)
-        best_episode = 0
 
-        for episode in range(hp.episodes):
+        # episode 0 was the pre-training evaluation, so training runs
+        # 1..hp.episodes; run_update still takes the zero-based index, which
+        # seeds the episode's reset
+        for episode in range(1, hp.episodes + 1):
             # Sample fresh quantum dropout for this training episode (a no-op
             # when the toggle is off). Evaluation clears it so greedy rollouts
             # always use the complete circuit.
@@ -1347,7 +1445,7 @@ class ReinforcementLearningTrainer(ABC):
                 sample_quantum_dropout(genome)
 
             episode_return, info = self.run_update(
-                genome, environment, optimizer, episode, hp
+                genome, environment, optimizer, episode - 1, hp
             )
             recent_returns.append(episode_return)
             ema_return = (
@@ -1360,7 +1458,7 @@ class ReinforcementLearningTrainer(ABC):
             episode_metrics.update(info)
             genome.metadata["training_episode_metrics"].append(episode_metrics)
 
-            if (episode % eval_every == 0) or (episode == hp.episodes - 1):
+            if (episode % eval_every == 0) or (episode == hp.episodes):
                 evaluation = self.evaluate(genome, environment, hp)
                 evaluation["episode"] = episode
 
@@ -1393,7 +1491,8 @@ class ReinforcementLearningTrainer(ABC):
                     )
                     break
 
-        # restore the best-evaluated weights into the genome
+        # restore the best-evaluated weights (the inherited ones if training
+        # never improved on them) into the genome
         genome.set_state_dict(best_state)
 
         genome.metadata["best_episode"] = best_episode
@@ -1403,11 +1502,7 @@ class ReinforcementLearningTrainer(ABC):
                 float(np.max(recent_returns)) if recent_returns else 0.0
             ),
         }
-        genome.metadata["best_validation_metrics"] = (
-            best_evaluation
-            if best_evaluation is not None
-            else self.evaluate(genome, environment, hp)
-        )
+        genome.metadata["best_validation_metrics"] = best_evaluation
 
         # Leave the genome with no active dropout so the returned/serialized
         # policy runs the complete evolved circuit.
