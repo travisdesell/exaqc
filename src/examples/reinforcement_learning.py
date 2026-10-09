@@ -48,7 +48,11 @@ from src.circuits.circuit import CircuitGenome
 from src.circuits.decoder import initialize_decoder
 from src.circuits.encoder import initialize_encoder
 from src.circuits.gate_specifications import GateSpecifications
-from src.evolution.exaqc import EXAQC, check_operator_tuning
+from src.evolution.exaqc import (
+    EXAQC,
+    MUTATION_WEIGHT_HYPERPARAMETERS,
+    check_operator_tuning,
+)
 from src.evolution.hyperparameter_strategy import HyperparameterStrategy
 from src.evolution.master_worker import run_evolution
 from src.evolution.objective import Objective
@@ -475,6 +479,8 @@ TUNABLE_HYPERPARAMETERS: tuple[str, ...] = (
     "n_ary_crossover_rate",
     "exponential_crossover_rate",
     "mutation_count",
+    # each mutation's weight (add_gate_weight, disable_gate_weight, ...)
+    *MUTATION_WEIGHT_HYPERPARAMETERS,
 )
 
 #: What SHO tunes when ``--sho_tune`` is not given: the learning rate, on a log

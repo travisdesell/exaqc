@@ -12,7 +12,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.evolution.exaqc import EXAQC, check_operator_tuning
+from src.evolution.exaqc import (
+    EXAQC,
+    MUTATION_WEIGHT_HYPERPARAMETERS,
+    check_operator_tuning,
+)
 from src.evolution.hyperparameter_strategy import (
     FixedHyperparameters,
     HyperparameterStrategy,
@@ -621,3 +625,71 @@ def test_operator_settings_are_rejected_without_islands() -> None:
         fail,
     )
     assert errors == []
+
+
+def test_mutation_weights_are_tuned_per_child() -> None:
+    """A child's mutations are drawn with its own tuned weights."""
+
+    tuned = [
+        TunedHyperparameter.parse(f"{name}=linear:0:0:0:30")
+        for name in MUTATION_WEIGHT_HYPERPARAMETERS
+        if name != "add_gate_weight"
+    ]
+    tuned.append(TunedHyperparameter.parse("add_gate_weight=linear:5:15:0:30"))
+    strategy = SimplexHyperparameters(tuned, n_genomes=2)
+    population = SteadyStateIslands(n_islands=1, max_island_size=3, compare=compare)
+    with patch(
+        "tests.test_exaqc_insert_archive.EXAQC",
+        partial(EXAQC, hyperparameter_strategy=strategy),
+    ):
+        search = build_search(population, None)
+
+    # the configured weights seed the tuned ones
+    base = search.hyperparameter_base()
+    assert base["add_gate_weight"] == 11.0 and base["enable_gate_weight"] == 1.0
+
+    # with every other weight drawn as 0, burn-in children only add gates
+    number = 0
+    while population.is_initializing():
+        number += 1
+        child = search.generate_genome()
+        assert set(child.metadata["generated_by"]) == {"add_gate"}
+        assert 5.0 <= child.hyperparameters["add_gate_weight"] <= 15.0
+        child.fitness = {"loss": float(number), "target_metric": -float(number)}
+        population.insert_genome(child, current_genome_number=search.genome_number)
+
+
+def test_mutation_weights_fall_back_to_the_configured_ones() -> None:
+    """Missing, negative or all-zero tuned weights fall back sensibly."""
+
+    search = build_search(
+        SteadyStatePopulation(max_population_size=3, compare=compare), None
+    )
+    assert search.tuned_mutation_weights(None) is None
+    assert search.tuned_mutation_weights({"learning_rate": 0.1}) is None
+    assert (
+        search.tuned_mutation_weights(
+            {name: 0.0 for name in MUTATION_WEIGHT_HYPERPARAMETERS}
+        )
+        is None
+    )
+    weights = search.tuned_mutation_weights({"clone_weight": -3.0})
+    assert weights["clone"] == 0.0 and weights["add_gate"] == 11.0
+
+
+def test_mutation_weights_are_islands_only() -> None:
+    """Mutation weights are operator settings, so steady_state rejects them."""
+
+    errors: list[str] = []
+    args = classification.build_parser().parse_args(
+        [
+            "--hyperparameter_strategy",
+            "simplex",
+            "--sho_tune",
+            "disable_gate_weight=linear:1:3:0:10",
+            *REQUIRED_ARGUMENTS,
+            "steady_state",
+        ]
+    )
+    check_operator_tuning(args, errors.append)
+    assert len(errors) == 1 and "disable_gate_weight" in errors[0]
