@@ -54,6 +54,8 @@ dependencies = [
     "qiskit_algorithms>=0.3,<0.4; sys_platform == 'darwin' and platform_machine == 'x86_64'",
     # qiskit-aer resolves to a compatible version on both stacks (unpinned).
     "qiskit-aer",
+    # MQT QCEC: circuit-level equivalence checking
+    "mqt.qcec",
     "torch",
     "torchvision",
     "matplotlib",
