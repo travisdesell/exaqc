@@ -50,10 +50,11 @@ class ActorCriticTrainer(ReinforcementLearningTrainer):
     ) -> tuple[float, dict[str, float]]:
         """Runs one episode and performs one weight update (epoch).
 
-        Rolls a single episode while recording per-step log-probabilities,
-        entropies, and state values (from the decoder's extra output), then
-        applies one combined policy + value + entropy gradient step using the
-        Monte-Carlo return minus the value baseline as the advantage.
+        Rolls a single episode, then evaluates the episode's log-probabilities,
+        entropies, and state values (from the decoder's extra output) in one
+        batched forward pass and applies one combined policy + value + entropy
+        gradient step using the Monte-Carlo return minus the value baseline as
+        the advantage.
 
         Args:
             genome: The genome policy/value network being trained.
@@ -71,21 +72,24 @@ class ActorCriticTrainer(ReinforcementLearningTrainer):
         env = environment.make()
         observation, _ = env.reset(seed=hp.seed + episode_index)
 
-        log_probs: list[Tensor] = []
-        entropies: list[Tensor] = []
-        values: list[Tensor] = []
+        observations: list[Tensor] = []
+        actions: list[Tensor] = []
         rewards: list[float] = []
         episode_return = 0.0
 
+        # The rollout only samples actions, so it runs without gradients; the
+        # log-probabilities, entropies and values are recomputed below in one
+        # batched forward pass over the whole episode. The weights do not
+        # change during the episode, so this gives the same loss as tracking
+        # gradients step by step, without holding a graph per step.
         for _ in range(hp.max_steps):
-            output = genome.forward(environment.encode(observation))
-            part, value = split_policy_value(output, environment)
-            distribution = action_distribution(part, environment)
-            action = distribution.sample()
+            encoded = environment.encode(observation)
+            with torch.no_grad():
+                part, _ = split_policy_value(genome.forward(encoded), environment)
+                action = action_distribution(part, environment).sample()
 
-            log_probs.append(distribution_log_prob(distribution, action))
-            entropies.append(distribution_entropy(distribution))
-            values.append(value)
+            observations.append(encoded)
+            actions.append(action)
 
             observation, reward, terminated, truncated, _ = env.step(
                 to_env_action(action, environment)
@@ -100,12 +104,14 @@ class ActorCriticTrainer(ReinforcementLearningTrainer):
         if not rewards:
             return episode_return, {"loss": 0.0}
 
-        returns = discounted_returns(rewards, hp.gamma)
-        value_tensor = torch.stack(values)
-        advantages = returns - value_tensor.detach()
+        output = genome.forward(torch.stack(observations))
+        part, value_tensor = split_policy_value(output, environment)
+        distribution = action_distribution(part, environment)
+        log_prob_tensor = distribution_log_prob(distribution, torch.stack(actions))
+        entropy_tensor = distribution_entropy(distribution)
 
-        log_prob_tensor = torch.stack(log_probs)
-        entropy_tensor = torch.stack(entropies)
+        returns = discounted_returns(rewards, hp.gamma)
+        advantages = returns - value_tensor.detach()
 
         policy_loss = -(log_prob_tensor * advantages.detach()).mean()
         value_loss = 0.5 * (returns.detach() - value_tensor).pow(2).mean()

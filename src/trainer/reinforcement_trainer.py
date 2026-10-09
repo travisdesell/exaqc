@@ -309,10 +309,13 @@ def action_distribution(
     are split into a per-dimension mean and (clamped) log-standard-deviation,
     yielding a diagonal ``Normal``.
 
+    The outputs are read along the last dimension, so a batch of shape
+    ``(batch_size, n_policy_outputs)`` yields a batch of distributions.
+
     Args:
         policy_part: The leading ``environment.n_policy_outputs`` entries of a
             genome output (the policy, with any value output already sliced
-            off).
+            off), for a single sample or a batch.
         environment: The environment whose action space determines the
             distribution family.
 
@@ -322,8 +325,8 @@ def action_distribution(
 
     if environment.continuous:
         n = environment.n_actions
-        mean = policy_part[:n]
-        log_std = torch.clamp(policy_part[n : 2 * n], LOG_STD_MIN, LOG_STD_MAX)
+        mean = policy_part[..., :n]
+        log_std = torch.clamp(policy_part[..., n : 2 * n], LOG_STD_MIN, LOG_STD_MAX)
         return Normal(mean, log_std.exp())
     return Categorical(logits=policy_part)
 
@@ -331,19 +334,21 @@ def action_distribution(
 def distribution_log_prob(distribution: Distribution, action: Tensor) -> Tensor:
     """Returns a scalar log-probability for an action under a distribution.
 
-    A ``Categorical`` already yields a scalar; a diagonal ``Normal`` yields a
-    per-dimension vector, which is summed into the joint log-probability.
+    A ``Categorical`` already yields one log-probability per sample; a diagonal
+    ``Normal`` yields one per action dimension, which are summed into the joint
+    log-probability. Only the ``Normal``'s action dimension is summed, so a
+    batch of ``Categorical`` log-probabilities keeps its batch dimension.
 
     Args:
-        distribution: The action distribution.
-        action: The sampled action tensor.
+        distribution: The action distribution (single or batched).
+        action: The sampled action tensor (single or batched).
 
     Returns:
-        A scalar log-probability tensor.
+        A scalar log-probability tensor, or one of shape ``(batch_size,)``.
     """
 
     log_prob = distribution.log_prob(action)
-    return log_prob.sum(-1) if log_prob.dim() > 0 else log_prob
+    return log_prob.sum(-1) if isinstance(distribution, Normal) else log_prob
 
 
 def distribution_entropy(distribution: Distribution) -> Tensor:
@@ -353,14 +358,14 @@ def distribution_entropy(distribution: Distribution) -> Tensor:
     per-dimension entropy is summed into a single scalar.
 
     Args:
-        distribution: The action distribution.
+        distribution: The action distribution (single or batched).
 
     Returns:
-        A scalar entropy tensor.
+        A scalar entropy tensor, or one of shape ``(batch_size,)``.
     """
 
     entropy = distribution.entropy()
-    return entropy.sum(-1) if entropy.dim() > 0 else entropy
+    return entropy.sum(-1) if isinstance(distribution, Normal) else entropy
 
 
 def to_env_action(action: Tensor, environment: RLEnvironment) -> Any:
@@ -406,7 +411,7 @@ def policy_output(
     """
 
     output = genome.forward(environment.encode(observation))
-    return output[: environment.n_policy_outputs]
+    return output[..., : environment.n_policy_outputs]
 
 
 def split_policy_value(
@@ -420,16 +425,18 @@ def split_policy_value(
 
     Args:
         output: The genome's raw output vector of shape
-            ``(environment.n_policy_outputs + 1,)``.
+            ``(environment.n_policy_outputs + 1,)``, or a batch of them of shape
+            ``(batch_size, environment.n_policy_outputs + 1)``.
         environment: The environment whose action space sizes the policy part.
 
     Returns:
         A tuple ``(policy_part, value)`` where ``policy_part`` has shape
-        ``(environment.n_policy_outputs,)`` and ``value`` is a scalar tensor.
+        ``(environment.n_policy_outputs,)`` and ``value`` is a scalar tensor
+        (with a leading ``batch_size`` dimension on both for a batch).
     """
 
     n = environment.n_policy_outputs
-    return output[:n], output[n]
+    return output[..., :n], output[..., n]
 
 
 @torch.no_grad()

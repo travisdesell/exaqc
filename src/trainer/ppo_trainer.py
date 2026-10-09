@@ -235,7 +235,8 @@ class PPOTrainer(ReinforcementLearningTrainer):
         Collects a behavior-policy rollout (several environment episodes),
         computes normalized GAE advantages, then runs ``ppo_passes`` passes
         over the rollout, each performing several minibatch epochs (weight
-        updates) of the clipped surrogate plus value and entropy losses.
+        updates) of the clipped surrogate plus value and entropy losses. Each
+        minibatch is evaluated in one batched forward pass through the genome.
 
         Args:
             genome: The genome policy/value network being trained.
@@ -261,8 +262,11 @@ class PPOTrainer(ReinforcementLearningTrainer):
         )
         advantages = _normalize(advantages)
 
-        observations = rollout["observations"]
-        actions = rollout["actions"]
+        # Stacked once so each minibatch is a single indexed slice, and the
+        # genome runs the whole minibatch in one batched forward pass rather
+        # than one sample at a time.
+        observations = torch.stack(rollout["observations"])
+        actions = torch.stack(rollout["actions"])
         old_log_probs = rollout["old_log_probs"]
 
         n_transitions = len(observations)
@@ -274,23 +278,13 @@ class PPOTrainer(ReinforcementLearningTrainer):
             for start in range(0, n_transitions, minibatch):
                 index = order[start : start + minibatch]
 
-                new_log_probs: list[Tensor] = []
-                new_values: list[Tensor] = []
-                entropies: list[Tensor] = []
-
-                for i in index.tolist():
-                    output = genome.forward(observations[i])
-                    part, value = split_policy_value(output, environment)
-                    distribution = action_distribution(part, environment)
-                    new_log_probs.append(
-                        distribution_log_prob(distribution, actions[i])
-                    )
-                    entropies.append(distribution_entropy(distribution))
-                    new_values.append(value)
-
-                new_log_prob_tensor = torch.stack(new_log_probs)
-                new_value_tensor = torch.stack(new_values)
-                entropy_tensor = torch.stack(entropies)
+                output = genome.forward(observations[index])
+                part, new_value_tensor = split_policy_value(output, environment)
+                distribution = action_distribution(part, environment)
+                new_log_prob_tensor = distribution_log_prob(
+                    distribution, actions[index]
+                )
+                entropy_tensor = distribution_entropy(distribution)
 
                 ratio = torch.exp(new_log_prob_tensor - old_log_probs[index])
                 surrogate_1 = ratio * advantages[index]

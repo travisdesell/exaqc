@@ -22,7 +22,6 @@ from src.trainer.reinforcement_trainer import (
     discounted_returns,
     distribution_entropy,
     distribution_log_prob,
-    policy_output,
     to_env_action,
 )
 
@@ -67,7 +66,8 @@ class ReinforceTrainer(ReinforcementLearningTrainer):
 
         Rolls a single episode (sampling actions from the policy), computes
         discounted returns and the baseline-adjusted advantage, and applies
-        one REINFORCE gradient step.
+        one REINFORCE gradient step, evaluating the episode's log-probabilities
+        in one batched forward pass.
 
         Args:
             genome: The genome policy being trained.
@@ -84,18 +84,24 @@ class ReinforceTrainer(ReinforcementLearningTrainer):
         env = environment.make()
         observation, _ = env.reset(seed=hp.seed + episode_index)
 
-        log_probs: list[Tensor] = []
-        entropies: list[Tensor] = []
+        observations: list[Tensor] = []
+        actions: list[Tensor] = []
         rewards: list[float] = []
         episode_return = 0.0
 
+        # The rollout only samples actions, so it runs without gradients; the
+        # log-probabilities and entropies are recomputed below in one batched
+        # forward pass over the whole episode. The weights do not change during
+        # the episode, so this gives the same loss as tracking gradients step
+        # by step, without holding a graph per step.
         for _ in range(hp.max_steps):
-            part = policy_output(genome, environment, observation)
-            distribution = action_distribution(part, environment)
-            action = distribution.sample()
+            encoded = environment.encode(observation)
+            with torch.no_grad():
+                part = genome.forward(encoded)[..., : environment.n_policy_outputs]
+                action = action_distribution(part, environment).sample()
 
-            log_probs.append(distribution_log_prob(distribution, action))
-            entropies.append(distribution_entropy(distribution))
+            observations.append(encoded)
+            actions.append(action)
 
             observation, reward, terminated, truncated, _ = env.step(
                 to_env_action(action, environment)
@@ -113,8 +119,12 @@ class ReinforceTrainer(ReinforcementLearningTrainer):
         returns = discounted_returns(rewards, hp.gamma)
         advantages = returns - returns.mean() if hp.baseline == "mean" else returns
 
-        log_prob_tensor = torch.stack(log_probs)
-        entropy_tensor = torch.stack(entropies)
+        output = genome.forward(torch.stack(observations))
+        distribution = action_distribution(
+            output[..., : environment.n_policy_outputs], environment
+        )
+        log_prob_tensor = distribution_log_prob(distribution, torch.stack(actions))
+        entropy_tensor = distribution_entropy(distribution)
 
         policy_loss = -(log_prob_tensor * advantages.detach()).mean()
         entropy_loss = (
