@@ -2,8 +2,9 @@
 # MNIST runs with the training hyperparameters co-evolved by simplex
 # hyperparameter optimization (SHO), using the search settings of run_mnist.sh.
 # Tunes the learning rate and Adam's settings (ranges from Kini et al., GECCO '23,
-# with the learning rate's burn-in around run_mnist.sh's 0.001), the weight decay,
-# the search's crossover rates and the number of mutations per child.
+# with the learning rate's burn-in around run_mnist.sh's 0.001) and the weight
+# decay. (Operator settings such as the crossover rates can only be tuned with the
+# islands population strategy.)
 #
 # Usage: bash scripts/run_mnist_sho.sh [DATASET] [OUT_DIR]
 # DATASET is mnist (default), fashion_mnist or cifar10.
@@ -34,8 +35,6 @@ mpiexec -n 4 python -m src.examples.classification \
     --sho_tune learning_rate=log:1e-4:1e-2:1e-5:0.1 \
         weight_decay=linear:0:1e-4:0:1e-3 \
         adam_beta1=linear:0.9:0.99 adam_beta2=linear:0.9:0.999 adam_epsilon=log:1e-9:1e-8 \
-        binary_crossover_rate=linear:0:0.1:0:1 n_ary_crossover_rate=linear:0.1:0.3:0:1 \
-        exponential_crossover_rate=linear:0:0.2:0:1 mutation_count=int:1:3:1:10 \
     --sho_genomes 4 --sho_l1 2.0 --sho_l2 0.5 \
     --seed 42 \
     --out_dir $OUT_DIR \

@@ -50,6 +50,10 @@ def island_compare(island1: Island, island2: Island) -> int:
 
 class SteadyStateIslands(PopulationStrategy):
 
+    #: Operator settings may be tuned per child (see
+    #: :attr:`PopulationStrategy.supports_operator_tuning`).
+    supports_operator_tuning = True
+
     @staticmethod
     def initialize_parser(parser: argparse.ArgumentParser) -> None:
         """Adds this population strategy's command-line arguments to a parser.

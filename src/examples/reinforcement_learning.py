@@ -48,7 +48,7 @@ from src.circuits.circuit import CircuitGenome
 from src.circuits.decoder import initialize_decoder
 from src.circuits.encoder import initialize_encoder
 from src.circuits.gate_specifications import GateSpecifications
-from src.evolution.exaqc import EXAQC
+from src.evolution.exaqc import EXAQC, check_operator_tuning
 from src.evolution.hyperparameter_strategy import HyperparameterStrategy
 from src.evolution.master_worker import run_evolution
 from src.evolution.objective import Objective
@@ -720,6 +720,9 @@ def main() -> None:
     # its configuration from the run it continues, so the objective a worker
     # evaluates with matches the search the master restores.
     args, restart_state, run_for = restart.prepare(args, parser.error)
+    # Operator settings may only be tuned for an island search (checked after
+    # prepare, so a restarted run's recorded arguments are checked too).
+    check_operator_tuning(args, parser.error)
 
     # The output directory is created by GenomeArchive.from_args (on the serial
     # run or MPI master); loguru creates the run.log parent directory as needed

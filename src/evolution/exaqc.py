@@ -4,7 +4,7 @@ import sys
 import time
 import numpy as np
 
-from typing import Any
+from typing import Any, Callable
 
 from loguru import logger
 
@@ -72,6 +72,45 @@ OPERATOR_HYPERPARAMETERS: tuple[str, ...] = (
     *CROSSOVER_RATE_HYPERPARAMETERS,
     "mutation_count",
 )
+
+#: The population sub-commands whose children's operator settings may be tuned
+#: (their strategies set ``supports_operator_tuning``).
+OPERATOR_TUNING_POPULATIONS: tuple[str, ...] = ("islands",)
+
+
+def check_operator_tuning(args: argparse.Namespace, fail: Callable[[str], Any]) -> None:
+    """Checks that operator settings are only tuned for an island search.
+
+    Called by the entry points straight after parsing (and again for a
+    restarted run's recorded arguments), so a misconfigured run stops before
+    anything is built.
+
+    Args:
+        args: The parsed arguments; ``sho_tune`` and ``hyperparameter_strategy``
+            may be absent (entry points without SHO, or older recorded runs).
+        fail: Called with an explanation when the arguments are invalid, and
+            expected not to return (``parser.error``).
+
+    Returns:
+        None.
+    """
+
+    if getattr(args, "hyperparameter_strategy", "fixed") != "simplex":
+        return
+    population = getattr(args, "population_strategy", None)
+    if population in OPERATOR_TUNING_POPULATIONS:
+        return
+    tuned = [
+        spec.partition("=")[0].strip() for spec in getattr(args, "sho_tune", []) or []
+    ]
+    operators = [name for name in tuned if name in OPERATOR_HYPERPARAMETERS]
+    if operators:
+        fail(
+            f"--sho_tune {', '.join(operators)} can only be used with the "
+            f"{' or '.join(OPERATOR_TUNING_POPULATIONS)} population strategy, not "
+            f"{population}: a single population converges on one set of operator "
+            "settings that mostly follows its best circuits."
+        )
 
 
 class EXAQC:
@@ -242,6 +281,11 @@ class EXAQC:
                 :mod:`src.evolution.hyperparameter_strategy`). When None every
                 child gets a copy of ``hyperparameters``
                 (:class:`FixedHyperparameters`).
+
+        Raises:
+            ValueError: If the hyperparameter strategy tunes any of
+                :data:`OPERATOR_HYPERPARAMETERS` for a population strategy that
+                does not support it (anything but an island search).
         """
 
         self.gate_specifications = gate_specifications
@@ -253,6 +297,16 @@ class EXAQC:
             if hyperparameter_strategy is not None
             else FixedHyperparameters()
         )
+        tuned_operators = [
+            name
+            for name in self.hyperparameter_strategy.tuned_names()
+            if name in OPERATOR_HYPERPARAMETERS
+        ]
+        if tuned_operators and not population.supports_operator_tuning:
+            raise ValueError(
+                f"{', '.join(tuned_operators)} can only be tuned for an island search, "
+                f"not {type(population).__name__}."
+            )
         # The quantum backend (qiskit/pennylane) is a property of the gate set,
         # so it is taken from there rather than passed separately, and stamped
         # onto every genome this search creates.

@@ -53,6 +53,13 @@ def mark_discarded(
 
 class PopulationStrategy(ABC):
 
+    #: Whether a hyperparameter strategy may tune how this strategy's children
+    #: are generated (see :data:`src.evolution.exaqc.OPERATOR_HYPERPARAMETERS`).
+    #: Only island searches allow it: each island can settle on its own operator
+    #: settings, whereas a single population converges on one set that mostly
+    #: follows its best circuits.
+    supports_operator_tuning: bool = False
+
     @staticmethod
     def initialize_parser(parser: argparse.ArgumentParser) -> None:
         """Adds the population-strategy sub-commands to a parser.
