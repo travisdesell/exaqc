@@ -851,6 +851,12 @@ def main() -> None:
             "log_every": args.log_every,
             "ema_alpha": args.ema_alpha,
             "improvement_cutoff": args.improvement_cutoff,
+            "normalize_observations": args.normalize_observations,
+            "lr_anneal": args.lr_anneal,
+            "log_std_min": args.log_std_min,
+            "log_std_max": args.log_std_max,
+            "ppo_target_kl": args.ppo_target_kl,
+            "ppo_reward_scaling": args.ppo_reward_scaling,
         }
 
         # -----------------------------------------------------------------

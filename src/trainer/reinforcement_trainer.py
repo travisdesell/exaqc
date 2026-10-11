@@ -113,12 +113,28 @@ import gymnasium as gym
 
 from src.circuits.circuit import CircuitGenome
 from src.dropout.quantum_dropout import sample_quantum_dropout
+from src.trainer.running_normalizers import ObservationNormalizer
 
 #: Bounds applied to the per-dimension log-standard-deviation a continuous
 #: (Gaussian) policy reads from the decoder, keeping the sampled action scale
 #: numerically sane regardless of the unconstrained decoder outputs.
+#: These are the defaults of ``--log_std_min`` / ``--log_std_max``.
 LOG_STD_MIN: float = -5.0
 LOG_STD_MAX: float = 2.0
+
+#: Key under which a genome's observation-normalizer statistics are kept in
+#: ``genome.metadata`` (see :func:`encode_observation`), so evaluation, replay
+#: and refinement normalize exactly as training did.
+OBSERVATION_NORMALIZER_KEY: str = "observation_normalizer"
+
+#: Attribute a genome's live observation normalizer is cached under while it is
+#: in use; the serialized copy in ``genome.metadata`` is the source of truth.
+_OBSERVATION_NORMALIZER_CACHE: str = "_observation_normalizer"
+
+#: Learning-rate schedules ``--lr_anneal`` accepts: ``"none"`` keeps the rate
+#: fixed; ``"linear"`` decays it linearly from ``learning_rate`` towards 0 over
+#: the ``episodes`` outer-loop episodes.
+LR_ANNEAL_CHOICES: tuple[str, ...] = ("none", "linear")
 
 #: Action-selection regimes :meth:`ReinforcementLearningTrainer.evaluate` can
 #: score a genome under.
@@ -300,7 +316,10 @@ def onehot_observation_encoder(n_states: int) -> Callable[[Any], Tensor]:
 
 
 def action_distribution(
-    policy_part: Tensor, environment: RLEnvironment
+    policy_part: Tensor,
+    environment: RLEnvironment,
+    log_std_min: float = LOG_STD_MIN,
+    log_std_max: float = LOG_STD_MAX,
 ) -> Distribution:
     """Builds the action distribution from the policy portion of a genome output.
 
@@ -318,6 +337,9 @@ def action_distribution(
             off), for a single sample or a batch.
         environment: The environment whose action space determines the
             distribution family.
+        log_std_min: Lower clamp on a continuous policy's log-std.
+        log_std_max: Upper clamp on a continuous policy's log-std (see
+            :func:`log_std_bounds` for a genome's own bounds).
 
     Returns:
         A ``torch.distributions`` distribution to sample actions from.
@@ -326,7 +348,7 @@ def action_distribution(
     if environment.continuous:
         n = environment.n_actions
         mean = policy_part[..., :n]
-        log_std = torch.clamp(policy_part[..., n : 2 * n], LOG_STD_MIN, LOG_STD_MAX)
+        log_std = torch.clamp(policy_part[..., n : 2 * n], log_std_min, log_std_max)
         return Normal(mean, log_std.exp())
     return Categorical(logits=policy_part)
 
@@ -392,6 +414,160 @@ def to_env_action(action: Tensor, environment: RLEnvironment) -> Any:
     return int(action.item())
 
 
+def observation_normalizer(
+    genome: CircuitGenome, n_features: int
+) -> ObservationNormalizer | None:
+    """Returns the genome's observation normalizer, if it normalizes at all.
+
+    Normalization is switched on per genome by its ``normalize_observations``
+    hyperparameter (``--normalize_observations``), so a saved genome is
+    replayed the way it was trained. The live normalizer is cached on the
+    genome; on first use it is rebuilt from the statistics saved in
+    ``genome.metadata`` (inherited from a parent, or written at the end of the
+    genome's own training), or started fresh at mean 0 and variance 1.
+
+    Args:
+        genome: The genome whose policy is being run.
+        n_features: Length of the encoded observation, used to size a fresh
+            normalizer.
+
+    Returns:
+        The normalizer, or ``None`` when the genome does not normalize
+        observations.
+    """
+
+    hyperparameters = getattr(genome, "hyperparameters", {}) or {}
+    if not hyperparameters.get("normalize_observations", False):
+        return None
+
+    normalizer = getattr(genome, _OBSERVATION_NORMALIZER_CACHE, None)
+    if normalizer is None:
+        saved = (getattr(genome, "metadata", {}) or {}).get(OBSERVATION_NORMALIZER_KEY)
+        if saved is not None and len(saved["mean"]) == n_features:
+            normalizer = ObservationNormalizer.from_dict(saved)
+        else:
+            normalizer = ObservationNormalizer(n_features)
+        setattr(genome, _OBSERVATION_NORMALIZER_CACHE, normalizer)
+    return normalizer
+
+
+def reset_observation_normalizer(genome: CircuitGenome) -> None:
+    """Drops the genome's cached normalizer so it reloads from metadata.
+
+    Args:
+        genome: The genome whose cache is cleared.
+
+    Returns:
+        None. Clears the cached normalizer attribute on ``genome``.
+    """
+
+    setattr(genome, _OBSERVATION_NORMALIZER_CACHE, None)
+
+
+def snapshot_observation_normalizer(genome: CircuitGenome) -> dict[str, Any] | None:
+    """Captures the genome's current observation-normalizer statistics.
+
+    Args:
+        genome: The genome whose statistics are captured.
+
+    Returns:
+        A serialized copy of the live normalizer when one is cached, otherwise
+        the statistics already saved in ``genome.metadata`` (``None`` if
+        there are none).
+    """
+
+    normalizer = getattr(genome, _OBSERVATION_NORMALIZER_CACHE, None)
+    if normalizer is not None:
+        return normalizer.to_dict()
+    saved = (getattr(genome, "metadata", {}) or {}).get(OBSERVATION_NORMALIZER_KEY)
+    return None if saved is None else dict(saved)
+
+
+def restore_observation_normalizer(
+    genome: CircuitGenome, snapshot: dict[str, Any] | None
+) -> None:
+    """Saves a statistics snapshot into the genome's metadata.
+
+    Args:
+        genome: The genome to update.
+        snapshot: Statistics from :func:`snapshot_observation_normalizer`, or
+            ``None`` to leave the genome without saved statistics.
+
+    Returns:
+        None. Sets (or removes) ``genome.metadata[OBSERVATION_NORMALIZER_KEY]``
+        and clears the cached normalizer so it is rebuilt from that.
+    """
+
+    if snapshot is None:
+        genome.metadata.pop(OBSERVATION_NORMALIZER_KEY, None)
+    else:
+        genome.metadata[OBSERVATION_NORMALIZER_KEY] = snapshot
+    reset_observation_normalizer(genome)
+
+
+def encode_observation(
+    genome: CircuitGenome,
+    environment: RLEnvironment,
+    observation: Any,
+    *,
+    update: bool = False,
+) -> Tensor:
+    """Encodes a raw observation into the genome's input, normalizing if asked.
+
+    The environment's observation encoder runs first; when the genome
+    normalizes observations (see :func:`observation_normalizer`) the result is
+    then standardized with the running statistics and clipped.
+
+    Args:
+        genome: The genome whose policy will consume the encoding.
+        environment: The environment (provides the observation encoder).
+        observation: A raw environment observation.
+        update: Whether to fold this observation into the running statistics
+            before normalizing it. Training rollouts update; evaluation and
+            replay do not.
+
+    Returns:
+        A float tensor of shape ``(n_observation_features,)``.
+    """
+
+    encoded = environment.encode(observation)
+    normalizer = observation_normalizer(genome, int(encoded.shape[-1]))
+    if normalizer is None:
+        return encoded
+
+    values = encoded.detach().cpu().numpy().astype(np.float64)
+    if update:
+        normalizer.update(values.reshape(1, -1))
+    return torch.as_tensor(normalizer.normalize(values), dtype=torch.float32)
+
+
+def log_std_bounds(genome: CircuitGenome) -> tuple[float, float]:
+    """Returns the log-standard-deviation clamp a genome's policy uses.
+
+    Read from the genome's ``log_std_min`` / ``log_std_max`` hyperparameters
+    (``--log_std_min`` / ``--log_std_max``), so a saved genome is replayed with
+    the bounds it was trained under.
+
+    Args:
+        genome: The genome whose policy is being run.
+
+    Returns:
+        ``(log_std_min, log_std_max)``.
+
+    Raises:
+        ValueError: If ``log_std_min`` is not below ``log_std_max``.
+    """
+
+    hyperparameters = getattr(genome, "hyperparameters", {}) or {}
+    low = float(hyperparameters.get("log_std_min", LOG_STD_MIN))
+    high = float(hyperparameters.get("log_std_max", LOG_STD_MAX))
+    if not low < high:
+        raise ValueError(
+            f"log_std_min ({low}) must be smaller than log_std_max ({high})."
+        )
+    return low, high
+
+
 def policy_output(
     genome: CircuitGenome, environment: RLEnvironment, observation: Any
 ) -> Tensor:
@@ -410,7 +586,7 @@ def policy_output(
         The policy outputs of shape ``(environment.n_policy_outputs,)``.
     """
 
-    output = genome.forward(environment.encode(observation))
+    output = genome.forward(encode_observation(genome, environment, observation))
     return output[..., : environment.n_policy_outputs]
 
 
@@ -477,7 +653,9 @@ def select_action(
     part = policy_output(genome, environment, observation)
 
     if stochastic:
-        action = action_distribution(part, environment).sample()
+        action = action_distribution(
+            part, environment, *log_std_bounds(genome)
+        ).sample()
         return to_env_action(action, environment)
 
     if environment.continuous:
@@ -594,6 +772,16 @@ def stochastic_action(
 #:     epsilon_decay: Per-episode multiplicative epsilon decay.
 #:     improvement_cutoff: Number of episodes without an improvement in the best
 #:         evaluation return after which training stops early.
+#:     normalize_observations: Whether to standardize observations with running
+#:         statistics before the genome's encoder (see
+#:         :func:`encode_observation`).
+#:     lr_anneal: Learning-rate schedule, one of :data:`LR_ANNEAL_CHOICES`.
+#:     log_std_min: Lower clamp on a continuous policy's log-std.
+#:     log_std_max: Upper clamp on a continuous policy's log-std.
+#:     ppo_target_kl: PPO stops a rollout's remaining epochs once the approximate
+#:         KL divergence from the behavior policy exceeds this; 0 disables it.
+#:     ppo_reward_scaling: Whether PPO divides rewards by the running standard
+#:         deviation of the discounted return.
 #:     quantum_dropout: Master switch for quantum dropout during training. When
 #:         false no quantum dropout is ever applied; when true it is sampled per
 #:         training episode from the genome's ``quantum_dropout_type`` /
@@ -624,6 +812,12 @@ RL_HYPERPARAMETER_DEFAULTS: dict[str, Any] = {
     "epsilon_min": 0.05,
     "epsilon_decay": 0.995,
     "improvement_cutoff": 30,
+    "normalize_observations": False,
+    "lr_anneal": "none",
+    "log_std_min": LOG_STD_MIN,
+    "log_std_max": LOG_STD_MAX,
+    "ppo_target_kl": 0.0,
+    "ppo_reward_scaling": False,
     "quantum_dropout": False,
 }
 
@@ -801,7 +995,9 @@ class ReinforcementLearningTrainer(ABC):
             ``--gamma``, ``--learning_rate``/``-lr``, ``--adam_beta1``,
             ``--adam_beta2``, ``--adam_epsilon``, ``--entropy_coef``,
             ``--value_coef``, ``--eval_seed``, ``--seed``, ``--log_every``,
-            ``--ema_alpha`` and ``--improvement_cutoff``.
+            ``--ema_alpha``, ``--improvement_cutoff``,
+            ``--normalize_observations``, ``--lr_anneal``, ``--log_std_min``
+            and ``--log_std_max``.
         """
 
         parser.add_argument(
@@ -936,6 +1132,45 @@ class ReinforcementLearningTrainer(ABC):
             help="Stop training a genome after this many episodes without an improved evaluation return.",
         )
 
+        parser.add_argument(
+            "--normalize_observations",
+            action=argparse.BooleanOptionalAction,
+            default=False,
+            help=(
+                "Standardize observations with running mean/std statistics "
+                "(clipped to [-10, 10]) before the genome's encoder. The "
+                "statistics are updated during training rollouts only and saved "
+                "in the genome's metadata, so evaluation and replay use them too."
+            ),
+        )
+
+        parser.add_argument(
+            "--lr_anneal",
+            choices=LR_ANNEAL_CHOICES,
+            default="none",
+            help=(
+                "Learning-rate schedule: 'none' keeps --learning_rate fixed; "
+                "'linear' decays it linearly towards 0 over --episodes."
+            ),
+        )
+
+        parser.add_argument(
+            "--log_std_min",
+            type=float,
+            default=LOG_STD_MIN,
+            help="Lower clamp on a continuous policy's log standard deviation.",
+        )
+
+        parser.add_argument(
+            "--log_std_max",
+            type=float,
+            default=LOG_STD_MAX,
+            help=(
+                "Upper clamp on a continuous policy's log standard deviation "
+                "(0.5 is a common, tighter choice for MuJoCo tasks)."
+            ),
+        )
+
     # -- hooks for subclasses -------------------------------------------------
 
     @abstractmethod
@@ -967,6 +1202,20 @@ class ReinforcementLearningTrainer(ABC):
             representative episode return for logging/tracking (the mean over
             collected episodes for PPO) and ``info`` is a dict of extra scalar
             metrics recorded per episode.
+        """
+
+    def begin_training(self, hp: SimpleNamespace) -> None:
+        """Resets any per-training-run state before the first update.
+
+        Called by :meth:`train` once per genome, before its first
+        :meth:`run_update`. The base trainer keeps no such state; PPO uses it
+        to start a fresh reward scaler.
+
+        Args:
+            hp: Resolved hyperparameters.
+
+        Returns:
+            None.
         """
 
     # -- shared helpers -------------------------------------------------------
@@ -1121,7 +1370,7 @@ class ReinforcementLearningTrainer(ABC):
             The genome's per-action output vector of shape ``(n_actions,)``.
         """
 
-        output = genome.forward(environment.encode(observation))
+        output = genome.forward(encode_observation(genome, environment, observation))
         return output[: environment.n_actions]
 
     @torch.no_grad()
@@ -1310,8 +1559,13 @@ class ReinforcementLearningTrainer(ABC):
             )
 
         hp = self.resolve_hyperparameters(genome)
+        log_std_bounds(genome)  # fail fast on an inverted clamp
 
         genome.initialize_model()
+
+        # reload any normalizer statistics from metadata (e.g. inherited from a
+        # parent) rather than reusing a stale cached copy
+        reset_observation_normalizer(genome)
 
         # recorded so a genome's training episodes can be reproduced later
         genome.metadata["training_seed"] = hp.seed
@@ -1374,11 +1628,24 @@ class ReinforcementLearningTrainer(ABC):
         ema_return: Optional[float] = None
         best_return = -math.inf
         best_state = genome.clone_state_dict()
+        # the normalizer statistics are part of the policy, so they are
+        # snapshotted and restored together with the weights
+        best_normalizer = snapshot_observation_normalizer(genome)
         best_evaluation = None
         eval_every = max(1, hp.log_every)
         best_episode = 0
+        self.begin_training(hp)
 
         for episode in range(hp.episodes):
+            if hp.lr_anneal == "linear":
+                for group in optimizer.param_groups:
+                    group["lr"] = hp.learning_rate * (1.0 - episode / hp.episodes)
+            elif hp.lr_anneal != "none":
+                raise ValueError(
+                    f"Unknown lr_anneal {hp.lr_anneal!r}; choices: "
+                    f"{', '.join(LR_ANNEAL_CHOICES)}."
+                )
+
             # Sample fresh quantum dropout for this training episode (a no-op
             # when the toggle is off). Evaluation clears it so greedy rollouts
             # always use the complete circuit.
@@ -1418,6 +1685,7 @@ class ReinforcementLearningTrainer(ABC):
                     best_return = evaluation["return_mean"]
                     best_evaluation = evaluation
                     best_state = genome.clone_state_dict()
+                    best_normalizer = snapshot_observation_normalizer(genome)
                     best_episode = episode
 
                 elif (
@@ -1434,6 +1702,7 @@ class ReinforcementLearningTrainer(ABC):
 
         # restore the best-evaluated weights into the genome
         genome.set_state_dict(best_state)
+        restore_observation_normalizer(genome, best_normalizer)
 
         genome.metadata["best_episode"] = best_episode
         genome.metadata["best_training_metrics"] = {

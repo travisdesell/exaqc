@@ -19,6 +19,8 @@ from src.trainer.reinforcement_trainer import (
     RLEnvironment,
     ReinforcementLearningTrainer,
     action_distribution,
+    encode_observation,
+    log_std_bounds,
     discounted_returns,
     distribution_entropy,
     distribution_log_prob,
@@ -88,6 +90,7 @@ class ReinforceTrainer(ReinforcementLearningTrainer):
         actions: list[Tensor] = []
         rewards: list[float] = []
         episode_return = 0.0
+        bounds = log_std_bounds(genome)
 
         # The rollout only samples actions, so it runs without gradients; the
         # log-probabilities and entropies are recomputed below in one batched
@@ -95,10 +98,10 @@ class ReinforceTrainer(ReinforcementLearningTrainer):
         # the episode, so this gives the same loss as tracking gradients step
         # by step, without holding a graph per step.
         for _ in range(hp.max_steps):
-            encoded = environment.encode(observation)
+            encoded = encode_observation(genome, environment, observation, update=True)
             with torch.no_grad():
                 part = genome.forward(encoded)[..., : environment.n_policy_outputs]
-                action = action_distribution(part, environment).sample()
+                action = action_distribution(part, environment, *bounds).sample()
 
             observations.append(encoded)
             actions.append(action)
@@ -121,7 +124,7 @@ class ReinforceTrainer(ReinforcementLearningTrainer):
 
         output = genome.forward(torch.stack(observations))
         distribution = action_distribution(
-            output[..., : environment.n_policy_outputs], environment
+            output[..., : environment.n_policy_outputs], environment, *bounds
         )
         log_prob_tensor = distribution_log_prob(distribution, torch.stack(actions))
         entropy_tensor = distribution_entropy(distribution)

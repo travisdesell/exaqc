@@ -17,6 +17,8 @@ from src.trainer.reinforcement_trainer import (
     RLEnvironment,
     ReinforcementLearningTrainer,
     action_distribution,
+    encode_observation,
+    log_std_bounds,
     discounted_returns,
     distribution_entropy,
     distribution_log_prob,
@@ -76,6 +78,7 @@ class ActorCriticTrainer(ReinforcementLearningTrainer):
         actions: list[Tensor] = []
         rewards: list[float] = []
         episode_return = 0.0
+        bounds = log_std_bounds(genome)
 
         # The rollout only samples actions, so it runs without gradients; the
         # log-probabilities, entropies and values are recomputed below in one
@@ -83,10 +86,10 @@ class ActorCriticTrainer(ReinforcementLearningTrainer):
         # change during the episode, so this gives the same loss as tracking
         # gradients step by step, without holding a graph per step.
         for _ in range(hp.max_steps):
-            encoded = environment.encode(observation)
+            encoded = encode_observation(genome, environment, observation, update=True)
             with torch.no_grad():
                 part, _ = split_policy_value(genome.forward(encoded), environment)
-                action = action_distribution(part, environment).sample()
+                action = action_distribution(part, environment, *bounds).sample()
 
             observations.append(encoded)
             actions.append(action)
@@ -106,7 +109,7 @@ class ActorCriticTrainer(ReinforcementLearningTrainer):
 
         output = genome.forward(torch.stack(observations))
         part, value_tensor = split_policy_value(output, environment)
-        distribution = action_distribution(part, environment)
+        distribution = action_distribution(part, environment, *bounds)
         log_prob_tensor = distribution_log_prob(distribution, torch.stack(actions))
         entropy_tensor = distribution_entropy(distribution)
 

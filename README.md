@@ -386,6 +386,21 @@ Shared arguments: `--episodes`, `--eval_episodes`, `--eval_policy`,
 `--adam_epsilon`, `--entropy_coef`, `--log_every`,
 `--improvement_cutoff`, `--ema_alpha`, `--seed`, `--eval_seed`.
 
+##### Training stabilizers (off by default)
+
+These target continuous control (MuJoCo), where PPO can settle into a safe
+behavior such as standing still, or collapse after a good phase. Each is
+recorded in the genome's hyperparameters, so evaluation, `visualize_rl` and
+`refine_genome` run the genome the way it was trained.
+
+| Argument | Default | Description |
+|---|---|---|
+| `--normalize_observations` | off | Standardize observations with running mean/std (clipped to ±10) before the encoder. Statistics update during training rollouts only, are restored with the best weights, and are saved in the genome's `metadata["observation_normalizer"]`; children inherit them. Policy-gradient trainers only (Q-learning does not update them) |
+| `--lr_anneal` | `none` | `linear` decays `--learning_rate` towards 0 over `--episodes` |
+| `--log_std_min` / `--log_std_max` | `-5` / `2` | Clamp on a continuous policy's log standard deviation; `0.5` is a tighter, common upper bound for MuJoCo |
+| `--ppo_target_kl` | `0` (off) | PPO: stop a rollout's remaining epochs once the approximate KL from the behavior policy exceeds this (try `0.01`–`0.02`, and pair it with a larger `--ppo_passes`) |
+| `--ppo_reward_scaling` | off | PPO: divide rewards by the running standard deviation of the discounted return, keeping value targets near unit scale. Logged and evaluation returns stay raw |
+
 ##### Evaluation seeds (`--seed` and `--eval_seed`)
 
 Training and evaluation episodes are seeded from **separate** bases, held in
@@ -478,6 +493,8 @@ minibatch updates under a clipped objective.
 | `--ppo_minibatch` | `128` | Transitions per weight update |
 | `--ppo_clip` | `0.2` | Probability-ratio clip range |
 | `--gae_lambda` | `0.95` | GAE bias/variance trade-off |
+| `--ppo_target_kl` | `0` (off) | KL early stopping; see [Training stabilizers](#training-stabilizers-off-by-default) |
+| `--ppo_reward_scaling` | off | Reward scaling; see [Training stabilizers](#training-stabilizers-off-by-default) |
 
 #### [Q-learning and SARSA](./src/trainer/q_learning_trainer.py)
 
@@ -507,6 +524,10 @@ are **discrete-only** and refuse continuous environments.
   for short episodes.
 - **`--entropy_coef`** above `0` (try `0.01`) if the policy collapses to one
   action early.
+- **MuJoCo locomotion** (Walker2d, Hopper, ...): keep `--entropy_coef` at or
+  near `0`, and consider `--normalize_observations --ppo_reward_scaling
+  --lr_anneal linear --ppo_target_kl 0.015 --log_std_max 0.5`, with
+  `--ppo_passes 10` once the KL stop is on.
 - **`--improvement_cutoff`** is the biggest time saver: it abandons genomes that
   have stopped improving so the search spends its budget elsewhere.
 - **Algorithm choice.** `reinforce` is the simplest baseline; `ppo` is usually

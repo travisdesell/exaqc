@@ -25,10 +25,13 @@ from src.trainer.reinforcement_trainer import (
     action_distribution,
     distribution_entropy,
     distribution_log_prob,
+    encode_observation,
     gae_advantages,
+    log_std_bounds,
     split_policy_value,
     to_env_action,
 )
+from src.trainer.running_normalizers import RewardScaler
 
 
 class PPOTrainer(ReinforcementLearningTrainer):
@@ -41,10 +44,53 @@ class PPOTrainer(ReinforcementLearningTrainer):
     epochs (weight updates) across ``ppo_passes`` passes of clipped-objective
     minibatch updates. The state value is read from the genome's extra decoder
     output, so it is evolved and serialized alongside the policy.
+
+    Two optional stabilizers are PPO-specific: ``ppo_reward_scaling`` divides
+    rewards by the running standard deviation of the discounted return (kept
+    for one genome's training run, see :meth:`begin_training`), and
+    ``ppo_target_kl`` stops a rollout's remaining epochs once the policy has
+    moved too far from the behavior policy.
     """
 
     #: Requires one extra decoder output for the scalar state value.
     n_value_outputs: int = 1
+
+    def __init__(self) -> None:
+        """Creates a PPO trainer with no reward scaler yet."""
+
+        self._reward_scaler: RewardScaler | None = None
+
+    def begin_training(self, hp: SimpleNamespace) -> None:
+        """Starts a fresh reward scaler for a new genome's training run.
+
+        Args:
+            hp: Resolved hyperparameters.
+
+        Returns:
+            None. Sets the trainer's reward scaler, or clears it when
+            ``hp.ppo_reward_scaling`` is off.
+        """
+
+        self._reward_scaler = RewardScaler(hp.gamma) if hp.ppo_reward_scaling else None
+
+    def _scaler_for(self, hp: SimpleNamespace) -> RewardScaler | None:
+        """Returns the reward scaler to use, creating one if needed.
+
+        :meth:`run_update` can be called without :meth:`train` (e.g. in tests),
+        so a missing scaler is created on first use when scaling is on.
+
+        Args:
+            hp: Resolved hyperparameters.
+
+        Returns:
+            The active scaler, or ``None`` when reward scaling is off.
+        """
+
+        if not hp.ppo_reward_scaling:
+            return None
+        if self._reward_scaler is None:
+            self._reward_scaler = RewardScaler(hp.gamma)
+        return self._reward_scaler
 
     @staticmethod
     def _seed_block(hp: SimpleNamespace) -> int:
@@ -95,8 +141,8 @@ class PPOTrainer(ReinforcementLearningTrainer):
 
         Returns:
             None. Mutates ``parser`` by adding ``--rollout_steps``,
-            ``--ppo_passes``, ``--ppo_minibatch``, ``--ppo_clip`` and
-            ``--gae_lambda``.
+            ``--ppo_passes``, ``--ppo_minibatch``, ``--ppo_clip``,
+            ``--gae_lambda``, ``--ppo_target_kl`` and ``--ppo_reward_scaling``.
         """
 
         parser.add_argument(
@@ -134,6 +180,28 @@ class PPOTrainer(ReinforcementLearningTrainer):
             help="Generalized Advantage Estimation (GAE) lambda for PPO.",
         )
 
+        parser.add_argument(
+            "--ppo_target_kl",
+            type=float,
+            default=0.0,
+            help=(
+                "Stop the remaining PPO epochs on a rollout once the approximate "
+                "KL divergence from the behavior policy exceeds this (0.01-0.02 "
+                "is typical). 0 (the default) disables early stopping."
+            ),
+        )
+
+        parser.add_argument(
+            "--ppo_reward_scaling",
+            action=argparse.BooleanOptionalAction,
+            default=False,
+            help=(
+                "Divide PPO rewards by the running standard deviation of the "
+                "discounted return, keeping value targets near unit scale. Only "
+                "the training targets change; logged and evaluation returns stay raw."
+            ),
+        )
+
     def _collect_rollout(
         self,
         genome: CircuitGenome,
@@ -159,7 +227,8 @@ class PPOTrainer(ReinforcementLearningTrainer):
             A dict of stacked transition tensors (``observations``,
             ``actions``, ``old_log_probs``, ``old_values``, ``rewards``,
             ``dones``) plus ``episode_returns``, the list of per-episode
-            returns collected during the rollout. ``actions`` is a list of
+            returns collected during the rollout. ``rewards`` are scaled when
+            ``ppo_reward_scaling`` is on; ``episode_returns`` are always raw. ``actions`` is a list of
             per-step action tensors (scalar for discrete spaces, vectors for
             continuous ones).
         """
@@ -172,6 +241,9 @@ class PPOTrainer(ReinforcementLearningTrainer):
         dones: list[float] = []
         episode_returns: list[float] = []
 
+        bounds = log_std_bounds(genome)
+        scaler = self._scaler_for(hp)
+
         collected = 0
         episode = 0
         while collected < hp.rollout_steps:
@@ -183,11 +255,13 @@ class PPOTrainer(ReinforcementLearningTrainer):
             episode_return = 0.0
 
             for _ in range(hp.max_steps):
-                encoded = environment.encode(observation)
+                encoded = encode_observation(
+                    genome, environment, observation, update=True
+                )
                 with torch.no_grad():
                     output = genome.forward(encoded)
                     part, value = split_policy_value(output, environment)
-                    distribution = action_distribution(part, environment)
+                    distribution = action_distribution(part, environment, *bounds)
                     action = distribution.sample()
 
                 observations.append(encoded.detach())
@@ -201,7 +275,9 @@ class PPOTrainer(ReinforcementLearningTrainer):
                     to_env_action(action, environment)
                 )
                 done = terminated or truncated
-                rewards.append(float(reward))
+                rewards.append(
+                    float(reward) if scaler is None else scaler.scale(reward, done)
+                )
                 dones.append(1.0 if done else 0.0)
                 episode_return += float(reward)
                 collected += 1
@@ -237,6 +313,9 @@ class PPOTrainer(ReinforcementLearningTrainer):
         over the rollout, each performing several minibatch epochs (weight
         updates) of the clipped surrogate plus value and entropy losses. Each
         minibatch is evaluated in one batched forward pass through the genome.
+        When ``ppo_target_kl`` is positive, the remaining epochs are skipped as
+        soon as a minibatch's approximate KL divergence from the behavior
+        policy exceeds it (that minibatch's update is skipped too).
 
         Args:
             genome: The genome policy/value network being trained.
@@ -247,8 +326,10 @@ class PPOTrainer(ReinforcementLearningTrainer):
 
         Returns:
             A tuple ``(mean_episode_return, info)`` with the mean return over
-            the rollout's episodes and a dict of the final ``"loss"`` and the
-            number of ``"rollout_transitions"``.
+            the rollout's episodes and a dict of the final ``"loss"``, the
+            number of ``"rollout_transitions"``, the ``"ppo_epochs"`` (weight
+            updates) actually performed and the last minibatch's
+            ``"approx_kl"``.
         """
 
         rollout = self._collect_rollout(genome, environment, episode_index, hp)
@@ -272,21 +353,36 @@ class PPOTrainer(ReinforcementLearningTrainer):
         n_transitions = len(observations)
         minibatch = min(hp.ppo_minibatch, n_transitions)
         last_loss = 0.0
+        bounds = log_std_bounds(genome)
+        approx_kl = 0.0
+        epochs = 0
+        stop = False
 
         for _ in range(hp.ppo_passes):
+            if stop:
+                break
             order = torch.randperm(n_transitions)
             for start in range(0, n_transitions, minibatch):
                 index = order[start : start + minibatch]
 
                 output = genome.forward(observations[index])
                 part, new_value_tensor = split_policy_value(output, environment)
-                distribution = action_distribution(part, environment)
+                distribution = action_distribution(part, environment, *bounds)
                 new_log_prob_tensor = distribution_log_prob(
                     distribution, actions[index]
                 )
                 entropy_tensor = distribution_entropy(distribution)
 
-                ratio = torch.exp(new_log_prob_tensor - old_log_probs[index])
+                log_ratio = new_log_prob_tensor - old_log_probs[index]
+                ratio = torch.exp(log_ratio)
+
+                # the low-variance estimator of KL(old || new) from Schulman's
+                # "Approximating KL Divergence", as used by Stable-Baselines3
+                with torch.no_grad():
+                    approx_kl = float(((ratio - 1.0) - log_ratio).mean().item())
+                if hp.ppo_target_kl > 0 and approx_kl > hp.ppo_target_kl:
+                    stop = True
+                    break
                 surrogate_1 = ratio * advantages[index]
                 surrogate_2 = (
                     torch.clamp(ratio, 1.0 - hp.ppo_clip, 1.0 + hp.ppo_clip)
@@ -317,6 +413,7 @@ class PPOTrainer(ReinforcementLearningTrainer):
                 if loss.requires_grad:
                     loss.backward()
                     optimizer.step()
+                    epochs += 1
                 last_loss = float(loss.item())
 
         mean_return = (
@@ -327,4 +424,6 @@ class PPOTrainer(ReinforcementLearningTrainer):
         return mean_return, {
             "loss": last_loss,
             "rollout_transitions": float(n_transitions),
+            "ppo_epochs": float(epochs),
+            "approx_kl": approx_kl,
         }
