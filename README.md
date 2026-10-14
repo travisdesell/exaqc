@@ -403,9 +403,10 @@ non-negative) both halves are forced non-negative: the action mean can never go
 below `0` on a `[-1, 1]` action space, and `log_std >= 0` pins the sampled
 action noise at `sigma >= 1`. Measured on Walker2d, `clipped` yields means in
 `[0.00, 1.00]` and `sigma` in `[1.00, 1.44]`, where `linear` yields means in
-`[-0.27, 0.22]` and `sigma` in `[0.85, 1.17]`. Greedy evaluation hides the
-second half of this, because it reads only the mean and discards `log_std` —
-see [`--eval_policy`](#evaluation-regime---eval_policy).
+`[-0.27, 0.22]` and `sigma` in `[0.85, 1.17]`. Greedy evaluation (the default)
+hides the second half of this from fitness, because it reads only the mean and
+discards `log_std`, but training still samples with that noise — see
+[`--eval_policy`](#evaluation-regime---eval_policy).
 
 Shared arguments: `--episodes`, `--eval_episodes`, `--eval_policy`,
 `--max_steps`, `--gamma`, `--learning_rate`, `--entropy_coef`, `--log_every`,
@@ -446,32 +447,33 @@ configuration error and is rejected.
 ##### Evaluation regime (`--eval_policy`)
 
 A genome's fitness is the return it achieves during evaluation, and
-`--eval_policy` decides **which policy** that measures. It matters because the
-two regimes are genuinely different policies: on a continuous environment the
-greedy action is the distribution mean, which discards the learned
-log-standard-deviation — half of the policy outputs — while the policy-gradient
-trainers collect every rollout by *sampling* using it.
+`--eval_policy` decides **which policy** that measures. Training always explores:
+the policy-gradient trainers sample their actions and the value-based ones act
+ε-greedily. Evaluation, by default, takes the deterministic action instead.
 
 | `--eval_policy` | Evaluation uses |
 |---|---|
-| `match` (default) | the regime the chosen `--algo` optimizes (see below) |
-| `greedy` | the deterministic action: argmax over logits, or the distribution mean |
-| `stochastic` | an action sampled from the policy |
-| `both` | both regimes; the `match` one drives fitness, the other is recorded beside it |
+| `greedy` (default) | the deterministic action: argmax over logits (or Q-values), or the distribution mean |
+| `stochastic` | an action sampled from the policy (`reinforce`, `actor_critic`, `a2c`, `ppo` only) |
+| `both` | both regimes; `greedy` drives fitness, and both means are recorded |
 
-`match` resolves per algorithm, because the correct regime is not the same for
-all of them:
+Greedy is the default for every algorithm. It follows the common convention for
+evaluating a trained policy: Stable-Baselines3's `evaluate_policy` and
+`EvalCallback` default to deterministic actions, and the RL Zoo evaluates
+deterministically everywhere except Atari and MiniGrid. It also suits an
+evolutionary search. A stochastic score adds the policy's own sampling noise to
+fitness. It also penalizes a genome for the exploration noise (`log_std`) that its
+training, and its offspring's, relies on.
 
-| `--algo` | `match` resolves to | Why |
-|---|---|---|
-| `reinforce`, `actor_critic`, `a2c`, `ppo` | `stochastic` | the objective is the expected return of the *sampled* policy |
-| `q_learning`, `sarsa` | `greedy` | Q-learning's target policy is the greedy one; ε-greedy is only its behaviour policy |
+`q_learning` and `sarsa` accept only `greedy`. Their outputs are Q-values, not a
+policy distribution, so sampling from them would score a policy they never learn.
+Asking for `stochastic` or `both` with them is rejected at startup.
 
 Two consequences worth knowing:
 
 - **Fitness under different regimes is not comparable.** The regime each genome
   was scored under is recorded in its `fitness` as `eval_policy`, and under
-  `--eval_policy both` the unselected regime is recorded as
+  `--eval_policy both` the two regimes' means are recorded as
   `eval_greedy_return_mean` / `eval_stochastic_return_mean`.
 - **A stochastic evaluation is noisier than a greedy one**, since the policy's
   own sampling adds variance on top of the environment's. `--eval_episodes`
@@ -887,7 +889,7 @@ environments work only with `reinforce`, `actor_critic`/`a2c` and `ppo`.
 | `--output_qubits` | *required* | Readout qubits. Must be wide enough to carry the policy's outputs — at least `ceil(log2(n_policy_outputs))`, where a discrete policy needs one output per action and a continuous one two per action dimension |
 | `--episodes` | `60` | Training episodes per genome, after the episode-0 evaluation of its inherited weights; 0 scores them only |
 | `--eval_episodes` | `10` | Episodes used to score a genome |
-| `--eval_policy` | `match` | Action-selection regime evaluation scores under: `match`, `greedy`, `stochastic` or `both` |
+| `--eval_policy` | `greedy` | Action-selection regime evaluation scores under: `greedy`, `stochastic` or `both` (`stochastic`/`both` need a policy-gradient `--algo`) |
 | `--eval_seed` | random per genome | Base seed for evaluation episodes and their action sampling, kept disjoint from the training seeds; set it to score every genome on the same episodes with the same sampling noise |
 | `--forward_reward_weight` | the environment's own | MuJoCo: weight on forward progress (`reward += weight * dx/dt`) |
 | `--ctrl_cost_weight` | the environment's own | MuJoCo: weight on the control cost (`reward -= weight * sum(a^2)`) |
@@ -1289,7 +1291,7 @@ python3 -m src.examples.reinforcement_learning_fixed --env cartpole --algo ppo -
 | `--out_dir` | `artifacts` | Where `run.log` is written |
 | `--episodes` | `60` | Training episodes, after the episode-0 evaluation of the initial weights |
 | `--eval_episodes` | `10` | Episodes used to score the model |
-| `--eval_policy` | `match` | Action-selection regime evaluation scores under: `match`, `greedy`, `stochastic` or `both` |
+| `--eval_policy` | `greedy` | Action-selection regime evaluation scores under: `greedy`, `stochastic` or `both` (`stochastic`/`both` need a policy-gradient `--algo`) |
 | `--eval_seed` | random | Base seed for evaluation episodes, kept disjoint from the training seeds |
 | `--max_steps` | `500` | Step cap per episode |
 | `--log_every` | `10` | Evaluate and log every N episodes |
@@ -1308,7 +1310,7 @@ python3 -m src.examples.reinforcement_learning_fixed --env cartpole --algo ppo -
 Plus the shared trainer arguments (`--gamma`, `--learning_rate`,
 `--entropy_coef`, ...) and the per-algorithm arguments in
 [Trainers](#trainers). The rollout uses the policy the model was scored under
-(the algorithm's own regime for `--eval_policy both`).
+(`greedy` for `--eval_policy both`).
 
 ---
 

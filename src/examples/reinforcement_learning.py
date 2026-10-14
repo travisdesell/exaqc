@@ -206,16 +206,20 @@ def main() -> None:
     # so the trainer itself is constructed with only the algorithm choice.
     trainer = build_trainer(args.algo)
 
-    resolved_eval_policy = (
-        trainer.natural_eval_policy if args.eval_policy == "match" else args.eval_policy
-    )
+    # Value-based trainers have no policy distribution to sample from; reject a
+    # stochastic regime now rather than inside the first genome's evaluation.
+    try:
+        trainer.validate_eval_policy(args.eval_policy)
+    except ValueError as error:
+        parser.error(str(error))
 
-    # Identical episodes are only a concern for a greedy rollout: a stochastic
-    # policy varies episode to episode even in a deterministic environment.
+    # Identical episodes are only a concern for a greedy rollout (including the
+    # greedy half of "both"): a stochastic policy varies episode to episode even
+    # in a deterministic environment.
     if (
         environment.deterministic
         and args.eval_episodes > 1
-        and resolved_eval_policy == "greedy"
+        and args.eval_policy != "stochastic"
     ):
         logger.warning(
             f"environment {environment.env_id} is deterministic, so greedy "
@@ -224,8 +228,8 @@ def main() -> None:
         )
 
     logger.info(
-        f"evaluating genomes under the {resolved_eval_policy!r} policy "
-        f"(--eval_policy {args.eval_policy}, --algo {args.algo})"
+        f"evaluating genomes under the {trainer.selected_eval_policy(args.eval_policy)!r} "
+        f"policy (--eval_policy {args.eval_policy}, --algo {args.algo})"
     )
 
     # Value-based trainers (q_learning / sarsa) enumerate discrete actions and
