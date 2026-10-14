@@ -216,7 +216,7 @@ def _per_sample_episode(
     """
 
     env = environment.make()
-    observation, _ = env.reset(seed=hp.seed)
+    observation, _ = env.reset(seed=hp.training_seed)
     rewards: list[float] = []
     log_probs: list[Tensor] = []
     entropies: list[Tensor] = []

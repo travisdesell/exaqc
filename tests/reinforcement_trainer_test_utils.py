@@ -106,7 +106,7 @@ _RL_CONFIG: dict[str, object] = {
     "learning_rate": 0.05,
     "gamma": 0.99,
     "log_every": 1,
-    "seed": 0,
+    "training_seed": 0,
     # baseline="none" keeps single-step advantages non-zero, and a small
     # entropy bonus guarantees a gradient path through the policy logits even
     # if the advantage happens to vanish.

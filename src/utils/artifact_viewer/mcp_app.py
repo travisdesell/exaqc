@@ -480,6 +480,27 @@ def build_mcp_server(
         return tools.progress_series(run, metric, statistic, max_points)
 
     @server.tool(
+        description=(
+            "Report whether a run's MPI master kept up with its workers: the master's "
+            "genomes per second and busy/idle percentages, the mean time of each "
+            "master phase and insertion part, and the workers' mean wait for a genome "
+            "and wait share, as a whole-run summary and as series over the run."
+        )
+    )
+    def get_run_timing(run: str, max_points: int = 200) -> dict[str, Any]:
+        """Returns a run's master and worker timing.
+
+        Args:
+            run: A run index or name.
+            max_points: The most points each series returns.
+
+        Returns:
+            The whole-run summary and the downsampled master and worker series.
+        """
+
+        return tools.get_run_timing(run, max_points)
+
+    @server.tool(
         description="Summarize genome sizes across a run and which gate methods its best genomes use."
     )
     def gate_statistics(run: str, sample: int = GATE_SAMPLE_SIZE) -> dict[str, Any]:

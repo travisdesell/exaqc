@@ -1,10 +1,10 @@
 """Continue training a single evolved genome loaded from its JSON.
 
 The evolutionary search records every genome it evaluates as JSON (see
-``CircuitGenome.to_dict``) in its run's ``genomes.sqlar`` archive, and also
-writes the current best genomes as ``best_fitness.json`` and
-``best_target_metric.json``. This entry point loads one genome back -- from a
-JSON file, or from an archive by its genome number -- and trains it further,
+``CircuitGenome.to_dict``) in its run's ``genomes.sqlar`` archive; the best ones
+are found there, with the dashboard or a query. This entry point loads one
+genome back -- from a JSON file (such as one downloaded from the dashboard), or
+from an archive by its genome number -- and trains it further,
 which is useful for taking the best genome of a search and giving it a longer,
 more careful training run than the search itself could afford.
 
@@ -38,14 +38,14 @@ import torch
 from src.circuits.circuit import CircuitGenome
 from src.datasets.teacher_loaders import get_teacher_dataloaders
 from src.evolution.objective import Objective
-from src.examples.classification import ClassificationObjective, load_data
-from src.examples.reinforcement_learning import (
+from src.metrics.mean_class_accuracy import MeanClassAccuracy
+from src.objectives.classification_objective import ClassificationObjective, load_data
+from src.objectives.reinforcement_learning_objective import (
     ReinforcementLearningObjective,
     build_trainer,
     make_environment,
 )
-from src.examples.teacher import TeacherObjective
-from src.metrics.mean_class_accuracy import MeanClassAccuracy
+from src.objectives.teacher_objective import TeacherObjective
 from src.utils.genome_archive import (
     add_genome_source_arguments,
     check_genome_source_arguments,
@@ -423,7 +423,7 @@ def main() -> None:
     os.makedirs(args.out_dir, exist_ok=True)
     logger.remove()
     logger.add(sys.stdout, level=args.logging_level)
-    logger.add(os.path.join(args.out_dir, "refine.log"))
+    logger.add(os.path.join(args.out_dir, "refine.log"), level=args.logging_level)
 
     try:
         genome = load_genome(args.genome_json, args.archive, args.genome_number)
@@ -461,10 +461,10 @@ def main() -> None:
     logger.info("refined fitness: {}", genome.fitness)
     if starting_fitness:
         for key, refined in genome.fitness.items():
-            if key in starting_fitness:
-                logger.info(
-                    "  {}: {:.6f} -> {:.6f}", key, starting_fitness[key], refined
-                )
+            starting = starting_fitness.get(key)
+            # RL fitness also records text fields (env_id, eval_policy)
+            if isinstance(starting, (int, float)) and isinstance(refined, (int, float)):
+                logger.info("  {}: {:.6f} -> {:.6f}", key, starting, refined)
 
     refined_path = os.path.join(
         args.out_dir, f"refined_genome_{genome.genome_number}.json"

@@ -150,7 +150,7 @@ class QLearningTrainer(ReinforcementLearningTrainer):
         epsilon = max(hp.epsilon_min, hp.epsilon * (hp.epsilon_decay**episode_index))
 
         env = environment.make()
-        observation, _ = env.reset(seed=hp.seed + episode_index)
+        observation, _ = env.reset(seed=hp.training_seed + episode_index)
         episode_return = 0.0
         losses: list[float] = []
 

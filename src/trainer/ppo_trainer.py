@@ -122,7 +122,7 @@ class PPOTrainer(ReinforcementLearningTrainer):
         episode within it.
 
         Args:
-            hp: Resolved hyperparameters, with ``seed`` already drawn.
+            hp: Resolved hyperparameters, with ``training_seed`` already drawn.
 
         Returns:
             ``(first, last_exclusive)``, covering every seed any rollout of
@@ -130,7 +130,10 @@ class PPOTrainer(ReinforcementLearningTrainer):
         """
 
         block = self._seed_block(hp)
-        return hp.seed, hp.seed + max(0, hp.episodes - 1) * block + block
+        return (
+            hp.training_seed,
+            hp.training_seed + max(0, hp.episodes - 1) * block + block,
+        )
 
     @staticmethod
     def initialize_parser(parser: argparse.ArgumentParser) -> None:
@@ -249,7 +252,7 @@ class PPOTrainer(ReinforcementLearningTrainer):
         while collected < hp.rollout_steps:
             env = environment.make()
             observation, _ = env.reset(
-                seed=hp.seed + episode_index * self._seed_block(hp) + episode
+                seed=hp.training_seed + episode_index * self._seed_block(hp) + episode
             )
             episode += 1
             episode_return = 0.0

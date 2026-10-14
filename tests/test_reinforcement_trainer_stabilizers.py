@@ -12,6 +12,8 @@ Covers the switches added for MuJoCo-style PPO training, all off by default:
 
 from __future__ import annotations
 
+from typing import Any
+
 import argparse
 import math
 
@@ -148,12 +150,42 @@ def test_encode_observation_updates_only_when_asked() -> None:
     assert genome._observation_normalizer.count == pytest.approx(frozen + 1)
 
 
+def _improving_evaluations(trainer: Any) -> None:
+    """Makes each of a trainer's evaluations score higher than the last.
+
+    The test environment pays the same return every episode, so without this
+    no evaluation would beat the pre-training one (episode 0) and training would
+    keep the inherited weights -- and with them the pre-training statistics.
+
+    Args:
+        trainer: The trainer whose ``evaluate`` is wrapped, in place.
+
+    Returns:
+        None. Replaces ``trainer.evaluate``.
+    """
+
+    evaluate = trainer.evaluate
+    calls = [0]
+
+    def improving(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        """Calls the real evaluation and raises its return by the call count."""
+        result = evaluate(*args, **kwargs)
+        calls[0] += 1
+        result["return_mean"] = float(result["return_mean"]) + calls[0]
+        return result
+
+    trainer.evaluate = improving
+
+
 def test_training_saves_normalizer_and_evaluation_reuses_it() -> None:
     """Training writes the statistics to metadata, and a clone inherits them."""
 
     trainer, genome, environment = _ppo_setup(normalize_observations=True)
+    _improving_evaluations(trainer)
     trainer.train(genome, environment)
 
+    # a trained checkpoint was kept, so its statistics were collected in training
+    assert genome.metadata["best_episode"] > 0
     saved = genome.metadata[OBSERVATION_NORMALIZER_KEY]
     assert len(saved["mean"]) == environment.n_observation_features
     assert saved["count"] > 1.0
@@ -164,6 +196,27 @@ def test_training_saves_normalizer_and_evaluation_reuses_it() -> None:
     child = genome.copy()
     reset_observation_normalizer(child)
     assert torch.allclose(encode_observation(child, environment, observation), expected)
+
+
+def test_normalizer_is_restored_with_untrained_weights() -> None:
+    """When training never beats the pre-training evaluation, its statistics go too.
+
+    The weights restored are the inherited ones, so the statistics restored with
+    them are the ones they were evaluated under, not those collected while
+    training.
+    """
+
+    trainer, genome, environment = _ppo_setup(normalize_observations=True)
+    # what the genome inherited (empty, or a parent's statistics)
+    inherited = dict(genome.metadata.get(OBSERVATION_NORMALIZER_KEY) or {})
+    trainer.train(genome, environment)
+
+    assert genome.metadata["best_episode"] == 0
+    restored = genome.metadata[OBSERVATION_NORMALIZER_KEY]
+    # nothing collected while training survives: the count is the inherited one
+    # (or a fresh normalizer's near-zero count when nothing was inherited)
+    assert restored["count"] == inherited.get("count", restored["count"])
+    assert restored["count"] < 1.0 or inherited
 
 
 # ---------------------------------------------------------------------------

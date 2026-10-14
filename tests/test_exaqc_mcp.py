@@ -54,6 +54,7 @@ EXPECTED_TOOLS = {
     "fitness_summary",
     "operator_insertion_rates",
     "progress_series",
+    "get_run_timing",
     "gate_statistics",
     "compare_runs",
     "describe_schema",

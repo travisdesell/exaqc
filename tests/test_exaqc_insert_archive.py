@@ -143,22 +143,6 @@ def build_search(population: PopulationStrategy, archive: Any) -> EXAQC:
     )
 
 
-def best_writes(archive: MagicMock) -> list[tuple[int, str]]:
-    """Lists the current-best files a mocked archive was asked to write.
-
-    Args:
-        archive: The mocked archive.
-
-    Returns:
-        ``(genome_number, kind)`` for each ``write_current_best`` call, in order.
-    """
-
-    return [
-        (recorded.args[0].genome_number, recorded.args[1])
-        for recorded in archive.write_current_best.call_args_list
-    ]
-
-
 def test_run_info_is_recorded_when_the_search_starts() -> None:
     """The archive learns the task, target and strategy of the run."""
 
@@ -267,34 +251,36 @@ def test_inserted_genomes_are_archived_in_insertion_order() -> None:
     assert [genome.genome_number for genome in snapshot] == [2, 1]
 
 
-def test_best_files_are_rewritten_only_when_a_best_changes() -> None:
-    """Fitness and target_metric bests are tracked independently."""
+def test_bests_are_tracked_without_writing_best_files() -> None:
+    """The target_metric best is tracked, and insertion only ever archives.
+
+    The search used to rewrite ``best_*`` files whenever a best changed, which
+    cost an image render per new best; now the bests are read from the archive.
+    """
 
     archive = MagicMock()
     search = build_search(
         SteadyStatePopulation(max_population_size=2, compare=compare), archive
     )
+    # leave out what the search recorded about itself when it started
+    archive.reset_mock()
 
     search.insert_genome(FakeGenome(1, loss=1.0, target_metric=0.5))
-    assert best_writes(archive) == [(1, "fitness"), (1, "target_metric")]
-
-    archive.reset_mock()
     search.insert_genome(FakeGenome(2, loss=2.0, target_metric=0.4))
-    assert best_writes(archive) == []
-
-    archive.reset_mock()
     search.insert_genome(FakeGenome(3, loss=0.5, target_metric=0.3))
-    assert best_writes(archive) == [(3, "fitness")]
-
-    archive.reset_mock()
     # worse than the whole (full) population, so it is discarded at once, yet it
     # is still the best genome by target_metric and is still archived
     genome = FakeGenome(4, loss=3.0, target_metric=0.9)
     search.insert_genome(genome)
+
     assert genome.metadata["insert_type"] == "discarded"
-    assert best_writes(archive) == [(4, "target_metric")]
-    archive.add_genome.assert_called_once()
     assert search.target_metric_best_genome is genome
+    assert archive.add_genome.call_count == 4
+    # each insertion archives the genome and records the population, and nothing else
+    assert {name for name, _, _ in archive.mock_calls} == {
+        "add_genome",
+        "record_population",
+    }
 
 
 def test_duplicates_of_better_genomes_are_archived_as_discarded() -> None:
@@ -524,8 +510,8 @@ def test_run_for_evaluates_exactly_the_requested_number_of_genomes() -> None:
     assert search.inserted_genomes == 5
 
 
-def test_a_real_search_writes_a_fixed_set_of_files(tmp_path) -> None:
-    """A small search leaves one archive plus fixed-name files, however long it runs.
+def test_a_real_search_writes_only_its_archive(tmp_path) -> None:
+    """A small search leaves just its archive, however long it runs.
 
     Args:
         tmp_path: pytest per-test temporary directory (auto-removed).
@@ -550,13 +536,7 @@ def test_a_real_search_writes_a_fixed_set_of_files(tmp_path) -> None:
     finally:
         search.close()
 
-    assert set(os.listdir(run_dir)) == {
-        ARCHIVE_FILENAME,
-        "best_fitness.json",
-        "best_fitness.png",
-        "best_target_metric.json",
-        "best_target_metric.png",
-    }
+    assert set(os.listdir(run_dir)) == {ARCHIVE_FILENAME}
 
     with GenomeArchive.open_readonly(str(run_dir)) as reader:
         stored = dict(reader.iter_genome_dicts())
@@ -580,6 +560,7 @@ def test_a_real_search_writes_a_fixed_set_of_files(tmp_path) -> None:
     best_number = min(stored)
     restored = CircuitGenome.from_dict(stored[best_number])
     assert restored.task == "classification"
-    assert (run_dir / "best_fitness.json").read_text().count(
-        f'"genome_number": {best_number}'
-    ) == 1
+    # the best genome is found in the archive rather than in a best_fitness.json
+    with GenomeArchive.open_readonly(str(run_dir)) as reader:
+        best = reader.best_value("loss", higher_is_better=False)
+    assert best["genome_number"] == best_number
