@@ -42,7 +42,7 @@
 set -eu
 
 #: Where the job script writes Slurm's stdout/stderr, one pair per job.
-LOG_DIR=/home/tjdvse/logs/exaqc_test
+LOG_DIR=/home/dk7405/logs/exaqc
 
 #: Islands per run. The 2d_mesh and random topologies are defined in terms of
 #: this, so it is owned here (rather than in the job script) and passed down:
