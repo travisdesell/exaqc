@@ -122,21 +122,21 @@ LOG_STD_MAX: float = 2.0
 #: Action-selection regimes :meth:`ReinforcementLearningTrainer.evaluate` can
 #: score a genome under.
 #:
-#: * ``"match"`` -- use the regime the trainer's own objective optimizes, which
-#:   each trainer declares as
-#:   :attr:`ReinforcementLearningTrainer.natural_eval_policy`. This is the
-#:   default, and is the only value that keeps evaluation consistent with
-#:   training across *all* algorithms: the policy-gradient trainers optimize the
-#:   sampled policy, while the value-based trainers learn a greedy target
-#:   policy and explore only epsilon-greedily.
-#: * ``"greedy"`` -- always take the deterministic action. For a continuous
-#:   environment this discards the learned log-standard-deviation, so it scores
-#:   a policy that the policy-gradient trainers never optimize.
-#: * ``"stochastic"`` -- always sample from the policy.
-#: * ``"both"`` -- score under both regimes; the trainer's natural regime drives
-#:   fitness and the other is recorded alongside it as a diagnostic. Costs one
+#: * ``"greedy"`` -- take the deterministic action: the argmax over the policy
+#:   logits (or Q-values), or the distribution mean for a continuous policy.
+#:   This is the default for every trainer, matching the common convention for
+#:   evaluating a learned policy (e.g. Stable-Baselines3's ``evaluate_policy``
+#:   and ``EvalCallback``, and the RL Zoo outside Atari). It also keeps
+#:   evaluation from adding sampling noise to fitness or penalizing a genome
+#:   for the exploration noise (``log_std``) its training relies on.
+#: * ``"stochastic"`` -- sample from the policy, the regime the policy-gradient
+#:   trainers collect their rollouts under. Only trainers with a policy
+#:   distribution support it (see
+#:   :attr:`ReinforcementLearningTrainer.supports_stochastic_eval`).
+#: * ``"both"`` -- score under both regimes; greedy drives fitness and the
+#:   stochastic return is recorded alongside it as a diagnostic. Costs one
 #:   extra set of evaluation episodes.
-EVAL_POLICY_CHOICES: tuple[str, ...] = ("match", "greedy", "stochastic", "both")
+EVAL_POLICY_CHOICES: tuple[str, ...] = ("greedy", "stochastic", "both")
 
 #: Width of the seed block a trainer whose outer episode spans several
 #: environment episodes (PPO) reserves per outer episode, so one outer
@@ -590,8 +590,7 @@ def stochastic_action(
 #:     max_steps: Maximum number of steps per episode.
 #:     eval_episodes: Number of episodes used to evaluate a genome's return.
 #:     eval_policy: Action-selection regime evaluation scores a genome under,
-#:         one of :data:`EVAL_POLICY_CHOICES`. ``"match"`` (the default) uses
-#:         the regime the trainer's objective optimizes.
+#:         one of :data:`EVAL_POLICY_CHOICES`; ``"greedy"`` by default.
 #:     training_seed: Base random seed for *training* episodes, PyTorch and
 #:         NumPy, or ``None`` (the default) to draw a fresh random seed each
 #:         time a genome's hyperparameters are resolved, so genomes do not all
@@ -636,7 +635,7 @@ RL_HYPERPARAMETER_DEFAULTS: dict[str, Any] = {
     "gamma": 0.99,
     "max_steps": 500,
     "eval_episodes": 10,
-    "eval_policy": "match",
+    "eval_policy": "greedy",
     "training_seed": None,
     "eval_seed": None,
     "log_every": 10,
@@ -785,15 +784,13 @@ class ReinforcementLearningTrainer(ABC):
             which enumerate discrete actions via argmax / epsilon-greedy, do
             not. :meth:`train` raises a clear error when a continuous
             environment is paired with a trainer that does not support it.
-        natural_eval_policy: The action-selection regime this algorithm's
-            objective actually optimizes, used to resolve an ``eval_policy``
-            of ``"match"``. Defaults to ``"stochastic"``, which is correct for
-            the policy-gradient trainers (REINFORCE, actor-critic, PPO): they
-            collect rollouts by sampling from the policy, so the sampled
-            policy is what their loss improves. The value-based trainers
-            override it to ``"greedy"``, because Q-learning's target policy
-            *is* the greedy one and epsilon-greedy is only its behaviour
-            policy.
+        supports_stochastic_eval: Whether a genome trained by this algorithm
+            can be evaluated under the ``"stochastic"`` regime (and so under
+            ``"both"``). The policy-gradient trainers can: their outputs
+            parameterize the action distribution they sample from. The
+            value-based trainers cannot, because their outputs are Q-values,
+            and a softmax over Q-values is not a policy they learn.
+            :meth:`validate_eval_policy` rejects the combination.
     """
 
     #: Extra decoder outputs required beyond the policy outputs (see above).
@@ -802,8 +799,8 @@ class ReinforcementLearningTrainer(ABC):
     #: Whether the algorithm supports continuous (``Box``) action spaces.
     supports_continuous: bool = True
 
-    #: Action-selection regime this algorithm's objective optimizes (see above).
-    natural_eval_policy: str = "stochastic"
+    #: Whether stochastic evaluation is meaningful for this algorithm (see above).
+    supports_stochastic_eval: bool = True
 
     @staticmethod
     def initialize_parser(parser: argparse.ArgumentParser) -> None:
@@ -852,14 +849,14 @@ class ReinforcementLearningTrainer(ABC):
         parser.add_argument(
             "--eval_policy",
             choices=EVAL_POLICY_CHOICES,
-            default="match",
+            default="greedy",
             help=(
-                "Action-selection regime a genome is evaluated under. 'match' "
-                "(the default) uses the regime the chosen --algo optimizes: "
-                "sampled for the policy-gradient algorithms (reinforce, "
-                "actor_critic, a2c, ppo), greedy for the value-based ones "
-                "(q_learning, sarsa). 'both' scores under both regimes and "
-                "records the non-selected one as a diagnostic."
+                "Action-selection regime a genome is evaluated under. 'greedy' "
+                "(the default) takes the deterministic action: the argmax, or "
+                "the distribution mean for a continuous policy. 'stochastic' "
+                "samples from the policy (policy-gradient algorithms only). "
+                "'both' scores under both, with greedy driving fitness and the "
+                "stochastic return recorded as a diagnostic."
             ),
         )
 
@@ -1140,49 +1137,57 @@ class ReinforcementLearningTrainer(ABC):
         output = genome.forward(environment.encode(observation))
         return output[: environment.n_actions]
 
-    @torch.no_grad()
-    def resolve_eval_policy(self, hp: SimpleNamespace) -> str:
-        """Resolves the configured evaluation regime to a concrete one.
+    def validate_eval_policy(self, eval_policy: str) -> None:
+        """Checks that an evaluation regime is known and usable by this trainer.
 
         Args:
-            hp: Resolved hyperparameters, whose ``eval_policy`` is one of
+            eval_policy: The requested regime, one of
                 :data:`EVAL_POLICY_CHOICES`.
 
         Returns:
-            ``"greedy"``, ``"stochastic"`` or ``"both"``; ``"match"`` resolves
-            to this trainer's :attr:`natural_eval_policy`.
+            None. Returns normally when the regime can be used.
 
         Raises:
-            ValueError: If ``hp.eval_policy`` is not a known regime.
+            ValueError: If ``eval_policy`` is not a known regime, or if it
+                samples actions (``"stochastic"`` or ``"both"``) and this
+                trainer does not support stochastic evaluation (see
+                :attr:`supports_stochastic_eval`).
         """
 
-        policy = getattr(hp, "eval_policy", "match")
-        if policy not in EVAL_POLICY_CHOICES:
+        if eval_policy not in EVAL_POLICY_CHOICES:
             raise ValueError(
-                f"Unknown eval_policy {policy!r}; choices: "
+                f"Unknown eval_policy {eval_policy!r}; choices: "
                 f"{', '.join(EVAL_POLICY_CHOICES)}."
             )
-        return self.natural_eval_policy if policy == "match" else policy
+        if eval_policy != "greedy" and not self.supports_stochastic_eval:
+            raise ValueError(
+                f"{type(self).__name__} does not support eval_policy "
+                f"{eval_policy!r}: its outputs are action values, not a policy "
+                "distribution to sample from, so it can only be evaluated "
+                "greedily."
+            )
 
-    def selected_eval_policy(self, hp: SimpleNamespace) -> str:
+    def selected_eval_policy(self, eval_policy: str) -> str:
         """Names the regime whose returns become the genome's fitness.
 
-        This differs from :meth:`resolve_eval_policy` only under
-        ``eval_policy="both"``, which scores under two regimes but can only
-        report one of them as *the* evaluation return.
+        This differs from ``eval_policy`` itself only for ``"both"``, which
+        scores under two regimes but reports the greedy one as *the*
+        evaluation return.
 
         Args:
-            hp: Resolved hyperparameters.
+            eval_policy: The requested regime, one of
+                :data:`EVAL_POLICY_CHOICES`.
 
         Returns:
             ``"greedy"`` or ``"stochastic"`` -- never ``"both"``.
 
         Raises:
-            ValueError: If ``hp.eval_policy`` is not a known regime.
+            ValueError: If ``eval_policy`` is rejected by
+                :meth:`validate_eval_policy`.
         """
 
-        policy = self.resolve_eval_policy(hp)
-        return self.natural_eval_policy if policy == "both" else policy
+        self.validate_eval_policy(eval_policy)
+        return "greedy" if eval_policy == "both" else eval_policy
 
     def _evaluate_regime(
         self,
@@ -1251,6 +1256,7 @@ class ReinforcementLearningTrainer(ABC):
 
         return returns
 
+    @torch.no_grad()
     def evaluate(
         self,
         genome: CircuitGenome,
@@ -1259,12 +1265,10 @@ class ReinforcementLearningTrainer(ABC):
     ) -> dict[str, float]:
         """Evaluates the genome over several episodes, under ``hp.eval_policy``.
 
-        The regime matters: a greedy rollout of a continuous policy ignores the
-        learned log-standard-deviation entirely, so it scores a policy the
-        policy-gradient trainers never optimize. ``"match"`` (the default)
-        therefore evaluates each algorithm under the regime its own objective
-        improves -- see :data:`EVAL_POLICY_CHOICES` and
-        :attr:`natural_eval_policy`.
+        The regime is one of :data:`EVAL_POLICY_CHOICES`; greedy (the default)
+        takes the deterministic action, so a continuous policy is scored by its
+        mean and its learned log-standard-deviation does not enter fitness.
+        Evaluation never updates weights, so it runs without autograd.
 
         Args:
             genome: The genome policy to evaluate.
@@ -1275,17 +1279,21 @@ class ReinforcementLearningTrainer(ABC):
             A dict with ``return_mean``, ``return_std`` and
             ``best_episode_return`` for the selected regime. Under
             ``eval_policy="both"`` it also carries ``greedy_return_mean`` and
-            ``stochastic_return_mean``, with the trainer's
-            :attr:`natural_eval_policy` providing the selected values.
+            ``stochastic_return_mean``, with the greedy regime providing the
+            selected values.
+
+        Raises:
+            ValueError: If ``hp.eval_policy`` is rejected by
+                :meth:`validate_eval_policy`.
         """
 
         # Evaluation always runs the complete evolved circuit; make sure any
         # dropout sampled during a training episode is cleared first.
         genome.clear_quantum_dropout()
 
-        policy = self.resolve_eval_policy(hp)
+        policy = hp.eval_policy
+        selected = self.selected_eval_policy(policy)
         regimes = ("greedy", "stochastic") if policy == "both" else (policy,)
-        selected = self.selected_eval_policy(hp)
 
         by_regime: dict[str, list[float]] = {
             regime: self._evaluate_regime(
@@ -1344,7 +1352,8 @@ class ReinforcementLearningTrainer(ABC):
         Raises:
             ValueError: If ``environment`` is continuous but this trainer does
                 not support continuous action spaces
-                (:attr:`supports_continuous` is False).
+                (:attr:`supports_continuous` is False), or if the genome's
+                ``eval_policy`` is rejected by :meth:`validate_eval_policy`.
         """
 
         if environment.continuous and not self.supports_continuous:
@@ -1371,7 +1380,7 @@ class ReinforcementLearningTrainer(ABC):
         # stochastically. This names the regime that *drove* fitness, so under
         # eval_policy="both" it is the selected one, not "both"; the genome's
         # own hyperparameters still record what was requested.
-        genome.metadata["eval_policy"] = self.selected_eval_policy(hp)
+        genome.metadata["eval_policy"] = self.selected_eval_policy(hp.eval_policy)
         torch.manual_seed(hp.training_seed)
         np.random.seed(hp.training_seed)
 
