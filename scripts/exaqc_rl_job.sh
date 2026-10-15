@@ -22,9 +22,9 @@
 #
 #SBATCH -J exaqc_rl
 #SBATCH -t 1-00:00:00
-#SBATCH -A neuroevolution -p tigris
-#SBATCH -o /home/tjdvse/logs/exaqc_test/output_%j.o
-#SBATCH -e /home/tjdvse/logs/exaqc_test/error_%j.e
+#SBATCH -A examm-rnn -p tigris
+#SBATCH -o /home/dk7405/logs/exaqc/output_%j.o
+#SBATCH -e /home/dk7405/logs/exaqc/error_%j.e
 #SBATCH --nodes=1
 #SBATCH --ntasks=144
 #SBATCH --ntasks-per-node=144
@@ -34,7 +34,7 @@
 set -eu
 
 #: Where each run's genome archive is written.
-ARCHIVE_DIR=/home/tjdvse/genome_archives
+ARCHIVE_DIR=/home/dk7405/genome_archives
 
 #: The environments whose reward carries an "alive" bonus, and so accept
 #: --healthy_reward. Mirrors what
@@ -60,11 +60,11 @@ HEALTHY_REWARD=${HEALTHY_REWARD:-}
 
 #: Training episodes per genome. 0 evaluates each genome's inherited weights
 #: without training it.
-EPISODES=${EPISODES:-100}
+EPISODES=${EPISODES:-200}
 
 #: Episodes without an improved evaluation before a genome's training stops
 #: early; 0 disables early stopping.
-IMPROVEMENT_CUTOFF=${IMPROVEMENT_CUTOFF:-30}
+IMPROVEMENT_CUTOFF=${IMPROVEMENT_CUTOFF:-60}
 
 #: Evaluate (and log) every this many training episodes; 1 evaluates after every
 #: episode. The cutoff is counted in episodes, so it allows
@@ -175,6 +175,16 @@ if [ -n "$EVAL_SEED" ]; then
     EVAL_SEED_ARGUMENTS=(--eval_seed "$EVAL_SEED")
 fi
 
+#: Whether to switch on the PPO training stabilizers: running observation
+#: normalization, reward scaling, linear learning-rate decay, KL early stopping
+#: and a tighter log-std clamp. On by default; STABILIZE=0 leaves the code's own
+#: defaults.
+STABILIZE=${STABILIZE:-1}
+STABILIZER_ARGUMENTS=()
+if [ "$STABILIZE" = "1" ]; then
+    STABILIZER_ARGUMENTS=(--normalize_observations --ppo_reward_scaling --lr_anneal linear --ppo_target_kl 0.015 --log_std_max 0.5 --ppo_passes 10)
+fi
+
 # --topology takes any number of values, so it comes last: a flag after it would
 # be read as another one of its arguments.
 #
@@ -186,13 +196,13 @@ COMMAND=(
     --algo ppo
     --logging_level INFO
     --env "$ENVIRONMENT"
-    --learning_rate 0.0005
+    --learning_rate 0.003
     --rollout_steps 2048
     --max_steps 1000
     --input_qubits "$INPUT_QUBITS"
     --output_qubits "$OUTPUT_QUBITS"
     --number_genomes "$NUMBER_GENOMES"
-    --entropy_coef 0.015
+    --entropy_coef 0.0
     --episodes "$EPISODES"
     # expands to nothing unless HEALTHY_REWARD asked for it; written this way
     # because `set -u` rejects a bare empty-array expansion on bash older than
@@ -203,14 +213,17 @@ COMMAND=(
     ${EVAL_SEED_ARGUMENTS[@]+"${EVAL_SEED_ARGUMENTS[@]}"}
     --ema_alpha 0.1
     --log_every "$LOG_EVERY"
-    --mutation_strategy uniform 1 3
-    --parent_strategy uniform 2 5
-    -qim u3
-    -qom probs
+    --mutation_strategy uniform 1 7
+    --parent_strategy uniform 2 7
+    # expands to nothing when STABILIZE=0 (written as above)
+    ${STABILIZER_ARGUMENTS[@]+"${STABILIZER_ARGUMENTS[@]}"}
+    -qim ry
+    -qom expval
     --encoding linear
     --decoding linear
     --out_dir "$OUT_DIR"
     --improvement_cutoff "$IMPROVEMENT_CUTOFF"
+    --use_only rx ry rz p u crx cry crz cp rxx ryy rzz cx cy cz
     --shared_file_system
     islands
     --n_islands "$N_ISLANDS"
@@ -231,6 +244,6 @@ export PMIX_MCA_psec="^munge"
 
 spack load openmpi /ttqroyz
 
-source /home/tjdvse/envs/exaqc/bin/activate
+source .exaqc/bin/activate
 
 srun "${COMMAND[@]}"
