@@ -60,11 +60,11 @@ HEALTHY_REWARD=${HEALTHY_REWARD:-}
 
 #: Training episodes per genome. 0 evaluates each genome's inherited weights
 #: without training it.
-EPISODES=${EPISODES:-100}
+EPISODES=${EPISODES:-200}
 
 #: Episodes without an improved evaluation before a genome's training stops
 #: early; 0 disables early stopping.
-IMPROVEMENT_CUTOFF=${IMPROVEMENT_CUTOFF:-30}
+IMPROVEMENT_CUTOFF=${IMPROVEMENT_CUTOFF:-60}
 
 #: Evaluate (and log) every this many training episodes; 1 evaluates after every
 #: episode. The cutoff is counted in episodes, so it allows
@@ -175,16 +175,15 @@ if [ -n "$EVAL_SEED" ]; then
     EVAL_SEED_ARGUMENTS=(--eval_seed "$EVAL_SEED")
 fi
 
-# Normalizing
-# near the top
+#: Whether to switch on the PPO training stabilizers: running observation
+#: normalization, reward scaling, linear learning-rate decay, KL early stopping
+#: and a tighter log-std clamp. On by default; STABILIZE=0 leaves the code's own
+#: defaults.
 STABILIZE=${STABILIZE:-1}
 STABILIZER_ARGUMENTS=()
 if [ "$STABILIZE" = "1" ]; then
     STABILIZER_ARGUMENTS=(--normalize_observations --ppo_reward_scaling --lr_anneal linear --ppo_target_kl 0.015 --log_std_max 0.5 --ppo_passes 10)
 fi
-
-# inside COMMAND, next to the HEALTHY_REWARD line
-# ${STABILIZER_ARGUMENTS[@]+"${STABILIZER_ARGUMENTS[@]}"}
 
 # --topology takes any number of values, so it comes last: a flag after it would
 # be read as another one of its arguments.
@@ -203,11 +202,8 @@ COMMAND=(
     --input_qubits "$INPUT_QUBITS"
     --output_qubits "$OUTPUT_QUBITS"
     --number_genomes "$NUMBER_GENOMES"
-    --entropy_coef 0.015
-    --episodes "$EPISODES"
-    --number_genomes 10000
     --entropy_coef 0.0
-    --episodes 200
+    --episodes "$EPISODES"
     # expands to nothing unless HEALTHY_REWARD asked for it; written this way
     # because `set -u` rejects a bare empty-array expansion on bash older than
     # 4.4, which the cluster may still be running
@@ -217,13 +213,9 @@ COMMAND=(
     ${EVAL_SEED_ARGUMENTS[@]+"${EVAL_SEED_ARGUMENTS[@]}"}
     --ema_alpha 0.1
     --log_every "$LOG_EVERY"
-    --mutation_strategy uniform 1 3
-    --parent_strategy uniform 2 5
-    -qim u3
-    -qom probs
-    --log_every 5
     --mutation_strategy uniform 1 7
     --parent_strategy uniform 2 7
+    # expands to nothing when STABILIZE=0 (written as above)
     ${STABILIZER_ARGUMENTS[@]+"${STABILIZER_ARGUMENTS[@]}"}
     -qim ry
     -qom expval
@@ -232,7 +224,6 @@ COMMAND=(
     --out_dir "$OUT_DIR"
     --improvement_cutoff "$IMPROVEMENT_CUTOFF"
     --use_only rx ry rz p u crx cry crz cp rxx ryy rzz cx cy cz
-    --improvement_cutoff 60
     --shared_file_system
     islands
     --n_islands "$N_ISLANDS"

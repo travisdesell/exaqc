@@ -62,6 +62,7 @@ _SETTING_VARIABLES: tuple[str, ...] = (
     "N_ISLANDS",
     "MAX_ISLAND_SIZE",
     "TIME_LIMIT",
+    "STABILIZE",
 )
 
 
