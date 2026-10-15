@@ -1,0 +1,239 @@
+{
+    "fitness": {
+        "train_return_mean": 10.0,
+        "best_episode_return": 20.0,
+        "eval_return_mean": 136.2,
+        "eval_return_std": 56.846811695995754,
+        "episodes": 80,
+        "env_id": "CartPole-v1",
+        "algo": "q_learning",
+        "n_actions": 2,
+        "input_mode": "angle",
+        "action_space": "discrete"
+    },
+    "genome_number": 163,
+    "metadata": {},
+    "target": "pennylane",
+    "input_qubits": [
+        [
+            "input",
+            0
+        ],
+        [
+            "input",
+            1
+        ],
+        [
+            "input",
+            2
+        ],
+        [
+            "input",
+            3
+        ]
+    ],
+    "output_qubits": [
+        [
+            "output",
+            0
+        ],
+        [
+            "output",
+            1
+        ]
+    ],
+    "hyperparameters": {
+        "episodes": 80,
+        "eval_episodes": 10,
+        "max_steps": 500,
+        "gamma": 0.99,
+        "learning_rate": 0.0005,
+        "entropy_coef": 0.0,
+        "baseline": "mean",
+        "seed": 0,
+        "log_every": 10,
+        "rollout_steps": 2048,
+        "ppo_epochs": 10,
+        "ppo_minibatch": 256,
+        "ppo_clip": 0.2,
+        "gae_lambda": 0.95,
+        "value_coef": 0.5,
+        "epsilon": 0.2,
+        "epsilon_min": 0.05,
+        "epsilon_decay": 0.995,
+        "env_kwargs": null,
+        "epochs": 5
+    },
+    "gates": [
+        {
+            "depth": 0.013997629521955934,
+            "method_name": "iswap",
+            "qubits": [
+                [
+                    "input",
+                    2
+                ],
+                [
+                    "output",
+                    0
+                ]
+            ],
+            "parameters": {},
+            "innovation_number": 115,
+            "target": "pennylane",
+            "enabled": true
+        },
+        {
+            "depth": 0.19163761540137136,
+            "method_name": "cx",
+            "qubits": [
+                [
+                    "input",
+                    0
+                ],
+                [
+                    "output",
+                    1
+                ]
+            ],
+            "parameters": {},
+            "innovation_number": 197,
+            "target": "pennylane",
+            "enabled": true
+        },
+        {
+            "depth": 0.3208784269989948,
+            "method_name": "cp",
+            "qubits": [
+                [
+                    "input",
+                    3
+                ],
+                [
+                    "output",
+                    1
+                ]
+            ],
+            "parameters": {
+                "phi": 0.49716255783747165
+            },
+            "innovation_number": 5,
+            "target": "pennylane",
+            "enabled": true
+        },
+        {
+            "depth": 0.44394127299508546,
+            "method_name": "cry",
+            "qubits": [
+                [
+                    "output",
+                    1
+                ],
+                [
+                    "input",
+                    0
+                ]
+            ],
+            "parameters": {
+                "phi": -2.733326672600617
+            },
+            "innovation_number": 239,
+            "target": "pennylane",
+            "enabled": true
+        },
+        {
+            "depth": 0.4447302406307232,
+            "method_name": "iswap",
+            "qubits": [
+                [
+                    "input",
+                    2
+                ],
+                [
+                    "output",
+                    0
+                ]
+            ],
+            "parameters": {},
+            "innovation_number": 238,
+            "target": "pennylane",
+            "enabled": true
+        },
+        {
+            "depth": 0.4920802707241465,
+            "method_name": "cp",
+            "qubits": [
+                [
+                    "input",
+                    3
+                ],
+                [
+                    "output",
+                    1
+                ]
+            ],
+            "parameters": {
+                "phi": 0.49716255783747165
+            },
+            "innovation_number": 198,
+            "target": "pennylane",
+            "enabled": true
+        },
+        {
+            "depth": 0.6385528297737748,
+            "method_name": "cx",
+            "qubits": [
+                [
+                    "output",
+                    0
+                ],
+                [
+                    "output",
+                    1
+                ]
+            ],
+            "parameters": {},
+            "innovation_number": 196,
+            "target": "pennylane",
+            "enabled": true
+        },
+        {
+            "depth": 0.6955863692085205,
+            "method_name": "iswap",
+            "qubits": [
+                [
+                    "output",
+                    0
+                ],
+                [
+                    "input",
+                    3
+                ]
+            ],
+            "parameters": {},
+            "innovation_number": 58,
+            "target": "pennylane",
+            "enabled": true
+        },
+        {
+            "depth": 0.7172422687831632,
+            "method_name": "cp",
+            "qubits": [
+                [
+                    "input",
+                    3
+                ],
+                [
+                    "output",
+                    1
+                ]
+            ],
+            "parameters": {
+                "phi": 0.49716255783747165
+            },
+            "innovation_number": 114,
+            "target": "pennylane",
+            "enabled": true
+        }
+    ]
+}
