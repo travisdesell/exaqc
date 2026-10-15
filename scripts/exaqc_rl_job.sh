@@ -25,6 +25,10 @@
 #SBATCH -A neuroevolution -p tigris
 #SBATCH -o /home/tjdvse/logs/exaqc_test/output_%j.o
 #SBATCH -e /home/tjdvse/logs/exaqc_test/error_%j.e
+#SBATCH -t 5-00:00:00
+#SBATCH -A examm-rnn -p tigris
+#SBATCH -o /home/dk7405/logs/exaqc/output_%j.o
+#SBATCH -e /home/dk7405/logs/exaqc/error_%j.e
 #SBATCH --nodes=1
 #SBATCH --ntasks=144
 #SBATCH --ntasks-per-node=144
@@ -34,7 +38,7 @@
 set -eu
 
 #: Where each run's genome archive is written.
-ARCHIVE_DIR=/home/tjdvse/genome_archives
+ARCHIVE_DIR=/home/dk7405/genome_archives
 
 #: The environments whose reward carries an "alive" bonus, and so accept
 #: --healthy_reward. Mirrors what
@@ -175,6 +179,17 @@ if [ -n "$EVAL_SEED" ]; then
     EVAL_SEED_ARGUMENTS=(--eval_seed "$EVAL_SEED")
 fi
 
+# Normalizing
+# near the top
+STABILIZE=${STABILIZE:-1}
+STABILIZER_ARGUMENTS=()
+if [ "$STABILIZE" = "1" ]; then
+    STABILIZER_ARGUMENTS=(--normalize_observations --ppo_reward_scaling --lr_anneal linear --ppo_target_kl 0.015 --log_std_max 0.5 --ppo_passes 10)
+fi
+
+# inside COMMAND, next to the HEALTHY_REWARD line
+# ${STABILIZER_ARGUMENTS[@]+"${STABILIZER_ARGUMENTS[@]}"}
+
 # --topology takes any number of values, so it comes last: a flag after it would
 # be read as another one of its arguments.
 #
@@ -186,7 +201,7 @@ COMMAND=(
     --algo ppo
     --logging_level INFO
     --env "$ENVIRONMENT"
-    --learning_rate 0.0005
+    --learning_rate 0.003
     --rollout_steps 2048
     --max_steps 1000
     --input_qubits "$INPUT_QUBITS"
@@ -194,6 +209,9 @@ COMMAND=(
     --number_genomes "$NUMBER_GENOMES"
     --entropy_coef 0.015
     --episodes "$EPISODES"
+    --number_genomes 10000
+    --entropy_coef 0.0
+    --episodes 200
     # expands to nothing unless HEALTHY_REWARD asked for it; written this way
     # because `set -u` rejects a bare empty-array expansion on bash older than
     # 4.4, which the cluster may still be running
@@ -207,10 +225,18 @@ COMMAND=(
     --parent_strategy uniform 2 5
     -qim u3
     -qom probs
+    --log_every 5
+    --mutation_strategy uniform 1 7
+    --parent_strategy uniform 2 7
+    ${STABILIZER_ARGUMENTS[@]+"${STABILIZER_ARGUMENTS[@]}"}
+    -qim ry
+    -qom expval
     --encoding linear
     --decoding linear
     --out_dir "$OUT_DIR"
     --improvement_cutoff "$IMPROVEMENT_CUTOFF"
+    --use_only rx ry rz p u crx cry crz cp rxx ryy rzz cx cy cz
+    --improvement_cutoff 60
     --shared_file_system
     islands
     --n_islands "$N_ISLANDS"
@@ -231,6 +257,6 @@ export PMIX_MCA_psec="^munge"
 
 spack load openmpi /ttqroyz
 
-source /home/tjdvse/envs/exaqc/bin/activate
+source .exaqc/bin/activate
 
 srun "${COMMAND[@]}"
