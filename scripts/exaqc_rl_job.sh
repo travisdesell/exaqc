@@ -22,10 +22,6 @@
 #
 #SBATCH -J exaqc_rl
 #SBATCH -t 1-00:00:00
-#SBATCH -A neuroevolution -p tigris
-#SBATCH -o /home/tjdvse/logs/exaqc_test/output_%j.o
-#SBATCH -e /home/tjdvse/logs/exaqc_test/error_%j.e
-#SBATCH -t 5-00:00:00
 #SBATCH -A examm-rnn -p tigris
 #SBATCH -o /home/dk7405/logs/exaqc/output_%j.o
 #SBATCH -e /home/dk7405/logs/exaqc/error_%j.e
