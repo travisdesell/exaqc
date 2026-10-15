@@ -337,8 +337,8 @@ def test_search_settings_keep_their_defaults_when_unset() -> None:
 
     parsed = _parsed_job_command()
 
-    assert parsed.episodes == 100
-    assert parsed.improvement_cutoff == 30
+    assert parsed.episodes == 200
+    assert parsed.improvement_cutoff == 60
     assert parsed.log_every == 5
     assert parsed.number_genomes == 10000
     assert parsed.eval_seed is None
