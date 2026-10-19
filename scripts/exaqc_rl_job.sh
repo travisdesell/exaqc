@@ -2,9 +2,12 @@
 #
 # Runs a single EXAQC reinforcement-learning search as a Slurm job.
 #
-#   sbatch scripts/exaqc_rl_job.sh <env> <input_qubits> <output_qubits> <run> \
-#                                  <n_islands> <max_island_size> <topology_tag> \
+#   sbatch scripts/exaqc_rl_job.sh <env> <input_qubits> <output_qubits> <run_name> \
+#                                  <n_islands> <max_island_size> \
 #                                  <topology> [topology arguments...]
+#
+# <run_name> names both the Slurm job and its archive directory, and is built by
+# the submitting script so the two cannot disagree.
 #
 # This is normally submitted by scripts/submit_exaqc_rl_jobs.sh, which validates
 # the arguments and sets the job name and log paths per run. One job is one run:
@@ -13,8 +16,12 @@
 # The resource requests below are defaults for a single run; the submitting
 # script overrides -J, -o and -e so each run is named and logged separately.
 #
+# Optional environment variables, normally set on the submitting command line
+# (described where they are read below): HEALTHY_REWARD, EPISODES,
+# IMPROVEMENT_CUTOFF, LOG_EVERY, NUMBER_GENOMES, EVAL_SEED and DRY_RUN.
+#
 #SBATCH -J exaqc_rl
-#SBATCH -t 5-00:00:00
+#SBATCH -t 1-00:00:00
 #SBATCH -A neuroevolution -p tigris
 #SBATCH -o /home/tjdvse/logs/exaqc_test/output_%j.o
 #SBATCH -e /home/tjdvse/logs/exaqc_test/error_%j.e
@@ -29,26 +36,144 @@ set -eu
 #: Where each run's genome archive is written.
 ARCHIVE_DIR=/home/tjdvse/genome_archives
 
-if [ $# -lt 8 ]; then
-    echo "usage: $0 <env> <input_qubits> <output_qubits> <run> <n_islands> <max_island_size> <topology_tag> <topology> [topology arguments...]" >&2
+#: The environments whose reward carries an "alive" bonus, and so accept
+#: --healthy_reward. Mirrors what
+#: src.objectives.reinforcement_learning_objective.supported_env_knobs() reads off each
+#: Gymnasium environment, and is checked against it by
+#: tests/test_exaqc_rl_job_script.py so the two cannot drift apart. Note that
+#: HalfCheetah is MuJoCo locomotion but cannot terminate, so it has no healthy
+#: bonus at all. Kept space-delimited for an exact-token match below.
+HEALTHY_REWARD_ENVIRONMENTS="hopper walker2d ant humanoid"
+
+#: Per-step bonus for staying upright, for the environments that have one.
+#: Unset by default, so --healthy_reward is not passed at all and each
+#: environment's own Gymnasium value applies -- which keeps a run comparable
+#: with the published baselines. Set HEALTHY_REWARD to override it:
+#:
+#:     HEALTHY_REWARD=0.2 sbatch scripts/exaqc_rl_job.sh ...
+#:
+#: Worth overriding because the Gymnasium default of 1.0 makes standing still
+#: for a full --max_steps 1000 episode worth ~1000, which can swamp the
+#: forward-progress reward and leave the search selecting policies that balance
+#: rather than walk.
+HEALTHY_REWARD=${HEALTHY_REWARD:-}
+
+#: Training episodes per genome. 0 evaluates each genome's inherited weights
+#: without training it.
+EPISODES=${EPISODES:-100}
+
+#: Episodes without an improved evaluation before a genome's training stops
+#: early; 0 disables early stopping.
+IMPROVEMENT_CUTOFF=${IMPROVEMENT_CUTOFF:-30}
+
+#: Evaluate (and log) every this many training episodes; 1 evaluates after every
+#: episode. The cutoff is counted in episodes, so it allows
+#: IMPROVEMENT_CUTOFF / LOG_EVERY evaluations without improvement.
+LOG_EVERY=${LOG_EVERY:-5}
+
+#: Genomes the run evaluates.
+NUMBER_GENOMES=${NUMBER_GENOMES:-10000}
+
+#: Base seed for every genome's evaluation episodes and their action sampling.
+#: Unset by default, so each genome draws its own; setting it scores every genome
+#: on the same episodes with the same sampling noise. Training seeds stay random
+#: per genome either way (--training_seed is never passed).
+EVAL_SEED=${EVAL_SEED:-}
+
+if [ $# -lt 7 ]; then
+    echo "usage: $0 <env> <input_qubits> <output_qubits> <run_name> <n_islands> <max_island_size> <topology> [topology arguments...]" >&2
     exit 2
 fi
 
 ENVIRONMENT=$1
 INPUT_QUBITS=$2
 OUTPUT_QUBITS=$3
-RUN=$4
+RUN_NAME=$4
 N_ISLANDS=$5
 MAX_ISLAND_SIZE=$6
-TOPOLOGY_TAG=$7
-shift 7
+shift 6
 # whatever is left is the topology and its own arguments
 
-# The tag carries the topology's arguments (2d_mesh_4x5, tree_2, random_2_4), so
-# two shapes of the same topology land in different archives rather than one
-# continuing the other -- --restart defaults to auto, so a shared directory would
-# silently resume the wrong experiment.
-OUT_DIR="${ARCHIVE_DIR}/${ENVIRONMENT}_i${N_ISLANDS}_${TOPOLOGY_TAG}_${RUN}"
+# The archive directory *is* the job name, so a job in the queue and the archive
+# it writes carry the same label. The submitting script builds that name from
+# everything that has to separate one experiment from another -- the run type,
+# the topology and its arguments, the environment, the island count and the run
+# index -- because --restart defaults to auto, and two experiments sharing a
+# directory would silently resume one another.
+OUT_DIR="${ARCHIVE_DIR}/${RUN_NAME}"
+
+# --healthy_reward is passed only when HEALTHY_REWARD asks for it, so by
+# default the environment's own value stands.
+#
+# Asking for it on an environment that has no alive bonus is an error rather
+# than something to quietly drop: the run would otherwise be tagged as one
+# reward setting while having been trained under another. This mirrors
+# src.objectives.reinforcement_learning_objective.environment_knob_kwargs(), which raises
+# instead of ignoring -- but catching it here costs an error message rather
+# than a scheduled job that dies on startup.
+HEALTHY_REWARD_ARGUMENTS=()
+if [ -n "$HEALTHY_REWARD" ]; then
+    case "$HEALTHY_REWARD" in
+        '' | *[!0-9.-]* | *.*.* | *-*-*)
+            echo "error: HEALTHY_REWARD must be a number, but found: $HEALTHY_REWARD" >&2
+            exit 2
+            ;;
+    esac
+
+    case " ${HEALTHY_REWARD_ENVIRONMENTS} " in
+        *" ${ENVIRONMENT} "*)
+            HEALTHY_REWARD_ARGUMENTS=(--healthy_reward "$HEALTHY_REWARD")
+            ;;
+        *)
+            echo "error: HEALTHY_REWARD=$HEALTHY_REWARD was given, but the $ENVIRONMENT environment has no healthy (alive) bonus; it applies to: $HEALTHY_REWARD_ENVIRONMENTS" >&2
+            exit 2
+            ;;
+    esac
+fi
+
+# The submitting script validates these too; they are checked again here so a
+# job submitted directly with sbatch fails with a message rather than an
+# argparse error from every rank.
+case "$EPISODES" in
+    '' | *[!0-9]*)
+        echo "error: EPISODES must be a non-negative integer, but found: $EPISODES" >&2
+        exit 2
+        ;;
+esac
+
+case "$IMPROVEMENT_CUTOFF" in
+    '' | *[!0-9]*)
+        echo "error: IMPROVEMENT_CUTOFF must be a non-negative integer, but found: $IMPROVEMENT_CUTOFF" >&2
+        exit 2
+        ;;
+esac
+
+case "$LOG_EVERY" in
+    '' | *[!0-9]* | 0)
+        echo "error: LOG_EVERY must be a positive integer, but found: $LOG_EVERY" >&2
+        exit 2
+        ;;
+esac
+
+case "$NUMBER_GENOMES" in
+    '' | *[!0-9]* | 0)
+        echo "error: NUMBER_GENOMES must be a positive integer, but found: $NUMBER_GENOMES" >&2
+        exit 2
+        ;;
+esac
+
+# --eval_seed is passed only when EVAL_SEED asks for it, so by default every
+# genome draws its own evaluation seed.
+EVAL_SEED_ARGUMENTS=()
+if [ -n "$EVAL_SEED" ]; then
+    case "$EVAL_SEED" in
+        *[!0-9]*)
+            echo "error: EVAL_SEED must be a non-negative integer, but found: $EVAL_SEED" >&2
+            exit 2
+            ;;
+    esac
+    EVAL_SEED_ARGUMENTS=(--eval_seed "$EVAL_SEED")
+fi
 
 # --topology takes any number of values, so it comes last: a flag after it would
 # be read as another one of its arguments.
@@ -66,11 +191,18 @@ COMMAND=(
     --max_steps 1000
     --input_qubits "$INPUT_QUBITS"
     --output_qubits "$OUTPUT_QUBITS"
-    --number_genomes 5000
+    --number_genomes "$NUMBER_GENOMES"
     --entropy_coef 0.015
-    --episodes 100
+    --episodes "$EPISODES"
+    # expands to nothing unless HEALTHY_REWARD asked for it; written this way
+    # because `set -u` rejects a bare empty-array expansion on bash older than
+    # 4.4, which the cluster may still be running
+    ${HEALTHY_REWARD_ARGUMENTS[@]+"${HEALTHY_REWARD_ARGUMENTS[@]}"}
+    --eval_episodes 20
+    # expands to nothing unless EVAL_SEED asked for it (written as above)
+    ${EVAL_SEED_ARGUMENTS[@]+"${EVAL_SEED_ARGUMENTS[@]}"}
     --ema_alpha 0.1
-    --log_every 5
+    --log_every "$LOG_EVERY"
     --mutation_strategy uniform 1 3
     --parent_strategy uniform 2 5
     -qim u3
@@ -78,7 +210,7 @@ COMMAND=(
     --encoding linear
     --decoding linear
     --out_dir "$OUT_DIR"
-    --improvement_cutoff 10
+    --improvement_cutoff "$IMPROVEMENT_CUTOFF"
     --shared_file_system
     islands
     --n_islands "$N_ISLANDS"

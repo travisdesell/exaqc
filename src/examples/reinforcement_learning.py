@@ -15,9 +15,10 @@ building blocks:
 The RL algorithms live in :mod:`src.trainer.reinforcement_trainer` as
 pluggable trainer classes (REINFORCE, actor-critic, PPO, Q-learning), exactly
 mirroring how ``SupervisedTrainer`` is a pluggable component of the
-classification objective. The environment is described by a pluggable
-:class:`~src.trainer.reinforcement_trainer.RLEnvironment`, which the
-:class:`ReinforcementLearningObjective` receives together with a trainer.
+classification objective. The environments, the trainer factory and the
+objective live in :mod:`src.objectives.reinforcement_learning_objective`, which
+the single-genome tools share; this module only adds the command line and the
+search around them.
 
 Example (single-process runs execute serially via ``EXAQC.run_for``; with more
 than one MPI rank :func:`main` runs a master/worker search -- both selected
@@ -34,9 +35,6 @@ import argparse
 import os
 import sys
 
-import numpy as np
-
-import gymnasium as gym
 from loguru import logger
 
 from src.circuits.circuit import CircuitGenome
@@ -45,337 +43,24 @@ from src.circuits.encoder import initialize_encoder
 from src.circuits.gate_specifications import GateSpecifications
 from src.evolution.exaqc import EXAQC
 from src.evolution.master_worker import run_evolution
-from src.evolution.objective import Objective
 from src.evolution.population_strategy import PopulationStrategy
+from src.objectives.reinforcement_learning_objective import (
+    ENV_CHOICES,
+    ReinforcementLearningObjective,
+    add_environment_knob_arguments,
+    build_trainer,
+    compare,
+    environment_knob_kwargs,
+    make_environment,
+)
 from src.utils import restart
 
-from src.trainer.reinforcement_trainer import (
-    RLEnvironment,
-    ReinforcementLearningTrainer,
-    box_observation_encoder,
-    onehot_observation_encoder,
-)
+from src.trainer.reinforcement_trainer import ReinforcementLearningTrainer
 from src.trainer.ppo_trainer import PPOTrainer
 from src.trainer.q_learning_trainer import QLearningTrainer
 from src.trainer.reinforce_trainer import ReinforceTrainer
 from src.utils.genome_archive import GenomeArchive
 from src.trainer.rl_trainer_registry import TRAINER_REGISTRY
-
-# ---------------------------------------------------------------------
-# Environments (pluggable, analogous to get_dataset/get_dataloaders)
-# ---------------------------------------------------------------------
-
-
-#: The single source of truth mapping every supported friendly ``--env`` name
-#: to its Gymnasium id, in the order the names are offered on the command line.
-#: Both the discrete and continuous tasks live here, so :data:`ENV_CHOICES`
-#: (the CLI choices) and ``src.examples.visualize_rl``'s reverse ``env_id ->
-#: name`` lookup are derived from this one mapping.
-ENV_IDS: dict[str, str] = {
-    "cartpole": "CartPole-v1",
-    "acrobot": "Acrobot-v1",
-    "mountaincar": "MountainCar-v0",
-    "mountaincar_continuous": "MountainCarContinuous-v0",
-    "frozenlake": "FrozenLake-v1",
-    "pendulum": "Pendulum-v1",
-    "hopper": "Hopper-v5",
-    "walker2d": "Walker2d-v5",
-    "halfcheetah": "HalfCheetah-v5",
-    "ant": "Ant-v5",
-    "humanoid": "Humanoid-v5",
-}
-
-#: The subset of :data:`ENV_IDS` that are continuous (``Box``-action) tasks.
-#: MountainCarContinuous and Pendulum are classic control; the rest are MuJoCo
-#: tasks (require
-#: ``gymnasium[mujoco]``). Their observation size, action dimensionality, and
-#: action bounds are read from the environment at build time by
-#: :func:`make_continuous_environment` rather than hardcoded, since these
-#: differ across Gymnasium versions (e.g. Ant/Humanoid observation sizes).
-CONTINUOUS_ENVS: frozenset[str] = frozenset(
-    {
-        "mountaincar_continuous",
-        "pendulum",
-        "hopper",
-        "walker2d",
-        "halfcheetah",
-        "ant",
-        "humanoid",
-    }
-)
-
-#: All environment names understood by :func:`make_environment`, in the order
-#: they are offered on the command line (derived from :data:`ENV_IDS`).
-ENV_CHOICES: tuple[str, ...] = tuple(ENV_IDS)
-
-
-def make_continuous_environment(env_id: str, **env_kwargs) -> RLEnvironment:
-    """Builds a continuous-action :class:`RLEnvironment` by probing the env.
-
-    The environment is instantiated once to read its observation size, action
-    dimensionality, and per-dimension action bounds directly from its Gym
-    spaces -- so the ``RLEnvironment`` is always consistent with the installed
-    Gymnasium/MuJoCo version rather than relying on hardcoded dimensions.
-
-    Args:
-        env_id: Gymnasium id of a continuous ``Box``-action environment.
-        **env_kwargs: Extra keyword arguments forwarded to ``gym.make`` (also
-            stored on the returned environment so trainers re-create it
-            identically).
-
-    Returns:
-        A configured continuous :class:`RLEnvironment`.
-    """
-
-    probe = gym.make(env_id, **env_kwargs)
-    try:
-        n_observation_features = int(np.prod(probe.observation_space.shape))
-        action_space = probe.action_space
-        action_dim = int(np.prod(action_space.shape))
-        action_low = np.asarray(action_space.low, dtype=np.float32).reshape(-1)
-        action_high = np.asarray(action_space.high, dtype=np.float32).reshape(-1)
-    finally:
-        probe.close()
-
-    return RLEnvironment(
-        env_id=env_id,
-        n_actions=action_dim,
-        n_observation_features=n_observation_features,
-        obs_encoder=box_observation_encoder(),
-        env_kwargs=env_kwargs or None,
-        continuous=True,
-        action_low=action_low,
-        action_high=action_high,
-    )
-
-
-def make_environment(name: str, **kwargs) -> RLEnvironment:
-    """Builds an :class:`RLEnvironment` for one of the supported tasks.
-
-    Adding a new environment is a matter of returning another
-    ``RLEnvironment`` here (or constructing one directly), so this function
-    is the single place that maps a human-friendly name to a fully-specified,
-    trainer-ready environment.
-
-    Args:
-        name: Environment name; one of :data:`ENV_CHOICES`. The discrete tasks
-            are ``"cartpole"``, ``"acrobot"``, ``"mountaincar"`` and
-            ``"frozenlake"``; the continuous (``Box``-action) tasks are the
-            members of :data:`CONTINUOUS_ENVS` (``"mountaincar_continuous"``,
-            ``"pendulum"``, ``"hopper"``, ``"walker2d"``, ``"halfcheetah"``,
-            ``"ant"``, ``"humanoid"``).
-        **kwargs: Environment-specific options (e.g. ``map_name`` and
-            ``is_slippery`` for FrozenLake).
-
-    Returns:
-        A configured :class:`RLEnvironment`.
-
-    Raises:
-        ValueError: If ``name`` is not a supported environment.
-    """
-
-    if name not in ENV_IDS:
-        raise ValueError(f"Unknown environment: {name!r}")
-
-    env_id = ENV_IDS[name]
-
-    if name in CONTINUOUS_ENVS:
-        # Continuous Box-action tasks (Pendulum + MuJoCo); only the policy-
-        # gradient trainers (reinforce, actor_critic, ppo) support these.
-        return make_continuous_environment(env_id)
-
-    if name == "cartpole":
-        # 4 continuous observation features, 2 discrete actions.
-        return RLEnvironment(
-            env_id=env_id,
-            n_actions=2,
-            n_observation_features=4,
-            obs_encoder=box_observation_encoder(scales=np.array([2.4, 3.0, 0.21, 3.0])),
-        )
-
-    if name == "acrobot":
-        # 6 continuous observation features, 3 discrete actions.
-        return RLEnvironment(
-            env_id=env_id,
-            n_actions=3,
-            n_observation_features=6,
-            obs_encoder=box_observation_encoder(),
-        )
-
-    if name == "mountaincar":
-        # 2 continuous observation features, 3 discrete actions.
-        return RLEnvironment(
-            env_id=env_id,
-            n_actions=3,
-            n_observation_features=2,
-            obs_encoder=box_observation_encoder(scales=np.array([1.2, 0.07])),
-        )
-
-    # frozenlake (the only remaining discrete task)
-    map_name = kwargs.get("map_name", "4x4")
-    is_slippery = kwargs.get("is_slippery", False)
-    n_states = 16 if map_name == "4x4" else 64
-    # Discrete integer observation -> one-hot; 4 discrete actions.
-    # A non-slippery FrozenLake (fixed map, fixed start, deterministic
-    # transitions) is fully deterministic, so greedy evaluation only needs
-    # a single episode.
-    return RLEnvironment(
-        env_id=env_id,
-        n_actions=4,
-        n_observation_features=n_states,
-        obs_encoder=onehot_observation_encoder(n_states),
-        env_kwargs={"map_name": map_name, "is_slippery": is_slippery},
-        deterministic=not is_slippery,
-    )
-
-
-def build_trainer(algo: str) -> ReinforcementLearningTrainer:
-    """Constructs a trainer for the requested algorithm.
-
-    Every training hyperparameter (including the quantum-dropout master switch)
-    is carried per genome in ``genome.hyperparameters`` and resolved by the
-    trainer at train time, so no hyperparameters are passed here -- the only
-    construction-time input is the algorithm choice itself, which also selects
-    the on-policy SARSA variant of the value-based trainer.
-
-    Args:
-        algo: Algorithm name; one of the keys of
-            ``src.trainer.rl_trainer_registry.TRAINER_REGISTRY``.
-
-    Returns:
-        An instantiated :class:`ReinforcementLearningTrainer` subclass.
-
-    Raises:
-        ValueError: If ``algo`` is not a known trainer.
-    """
-
-    if algo not in TRAINER_REGISTRY:
-        raise ValueError(
-            f"Unknown algorithm {algo!r}; choices: {sorted(TRAINER_REGISTRY)}"
-        )
-
-    trainer_class = TRAINER_REGISTRY[algo]
-
-    # SARSA is the on-policy variant of the value-based trainer, selected by a
-    # constructor flag rather than a per-genome hyperparameter.
-    if algo == "sarsa":
-        return trainer_class(sarsa=True)
-
-    return trainer_class()
-
-
-# ---------------------------------------------------------------------
-# Objective and single-objective comparison
-# ---------------------------------------------------------------------
-
-
-def compare(genome1: CircuitGenome, genome2: CircuitGenome) -> int:
-    """Sorts genomes by fitness ``loss`` (lower is better).
-
-    Fitness ``loss`` is set to the negative of a weighted mean of the training
-    and evaluation returns (see :class:`ReinforcementLearningObjective`), so
-    sorting ascending by loss is equivalent to sorting descending by return
-    -- matching the convention used by the classification example.
-
-    Args:
-        genome1: First genome.
-        genome2: Second genome.
-
-    Returns:
-        Negative if ``genome1`` should sort first, positive if ``genome2``
-        should sort first, and 0 if equivalent.
-    """
-
-    loss1 = float(genome1.fitness["loss"])
-    loss2 = float(genome2.fitness["loss"])
-    if loss1 < loss2:
-        return -1
-    if loss1 > loss2:
-        return 1
-    return 0
-
-
-class ReinforcementLearningObjective(Objective):
-    """Objective that trains a genome on an environment with a trainer.
-
-    This mirrors ``ClassificationObjective``: it holds a pluggable trainer
-    (the RL algorithm) and a pluggable environment (the RL task), trains the
-    genome, and writes its ``fitness``.
-
-    Args:
-        environment: The target reinforcement-learning environment.
-        trainer: The reinforcement-learning trainer (algorithm) to use.
-        train_vs_validation_bias: The weight of the training return in the
-            fitness ``loss``; the evaluation return gets the rest, so the loss
-            is ``-(bias * training return + (1 - bias) * evaluation return)``.
-    """
-
-    def __init__(
-        self,
-        environment: RLEnvironment,
-        trainer: ReinforcementLearningTrainer,
-        train_vs_validation_bias: float = 0.1,
-    ) -> None:
-        """Stores the environment, trainer and fitness weighting.
-
-        Args:
-            environment: The target reinforcement-learning environment.
-            trainer: The reinforcement-learning trainer (algorithm) to use.
-            train_vs_validation_bias: The weight of the training return in the
-                fitness ``loss``; the evaluation return gets ``1 - bias``.
-
-        Returns:
-            None. Sets ``environment``, ``trainer`` and
-            ``train_vs_validation_bias``.
-        """
-
-        self.environment = environment
-        self.trainer = trainer
-        self.train_vs_validation_bias = train_vs_validation_bias
-
-    def __call__(self, genome: CircuitGenome) -> None:
-        """Trains and evaluates a genome, setting its fitness.
-
-        Args:
-            genome: The genome to train and evaluate.
-
-        Returns:
-            None. Sets the genome's ``fitness``, whose ``loss`` is the negative
-            weighted mean return described on the class.
-        """
-
-        self.trainer.train(genome, self.environment)
-
-        training_metrics = genome.metadata["best_training_metrics"]
-        validation_metrics = genome.metadata["best_validation_metrics"]
-
-        # the bias weights the training return; the evaluation return gets the rest
-        mean_return = (
-            self.train_vs_validation_bias * training_metrics["return_mean"]
-        ) + ((1.0 - self.train_vs_validation_bias) * validation_metrics["return_mean"])
-
-        # "loss" (lower is better) drives population sorting via compare();
-        # the remaining keys mirror the RL fields used by save_circuit's tag
-        # fallback and by downstream analysis.
-        genome.fitness = {
-            "loss": -mean_return,
-            "target_metric": validation_metrics["return_mean"],
-            "eval_return_mean": validation_metrics["return_mean"],
-            "eval_return_std": validation_metrics["return_std"],
-            "train_return_mean": training_metrics["return_mean"],
-            "best_episode_return": training_metrics["best_episode_return"],
-            "env_id": self.environment.env_id,
-        }
-
-        logger.info(
-            f"[{genome.genome_number:04d}] "
-            f"train_return_mean={genome.fitness['train_return_mean']:.2f} "
-            f"best_episode_return={genome.fitness['best_episode_return']:.2f} "
-            f"eval_return_mean={genome.fitness['eval_return_mean']:.2f} "
-            f"eval_return_std={genome.fitness['eval_return_std']:.2f} "
-            f"env={self.environment.env_id}"
-        )
-
 
 # ---------------------------------------------------------------------
 # Command-line interface
@@ -439,6 +124,9 @@ def build_parser() -> argparse.ArgumentParser:
     PPOTrainer.initialize_parser(parser)
     QLearningTrainer.initialize_parser(parser)
 
+    # MuJoCo reward / termination / reset knobs
+    add_environment_knob_arguments(parser)
+
     # FrozenLake options
     parser.add_argument(
         "--map_name",
@@ -498,23 +186,51 @@ def main() -> None:
     # -----------------------------------------------------------------
     # Environment + trainer + objective
     # -----------------------------------------------------------------
+    try:
+        env_kwargs = environment_knob_kwargs(args, args.env)
+    except ValueError as error:
+        parser.error(str(error))
+
     environment = make_environment(
         args.env,
+        env_kwargs=env_kwargs,
         map_name=args.map_name,
         is_slippery=args.is_slippery,
     )
 
-    if environment.deterministic and args.eval_episodes > 1:
+    if env_kwargs:
+        logger.info(f"environment knobs overriding {args.env} defaults: {env_kwargs}")
+
+    # All training hyperparameters are carried per genome (see the
+    # ``hyperparameters`` dict below) and resolved by the trainer at train time,
+    # so the trainer itself is constructed with only the algorithm choice.
+    trainer = build_trainer(args.algo)
+
+    # Value-based trainers have no policy distribution to sample from; reject a
+    # stochastic regime now rather than inside the first genome's evaluation.
+    try:
+        trainer.validate_eval_policy(args.eval_policy)
+    except ValueError as error:
+        parser.error(str(error))
+
+    # Identical episodes are only a concern for a greedy rollout (including the
+    # greedy half of "both"): a stochastic policy varies episode to episode even
+    # in a deterministic environment.
+    if (
+        environment.deterministic
+        and args.eval_episodes > 1
+        and args.eval_policy != "stochastic"
+    ):
         logger.warning(
             f"environment {environment.env_id} is deterministic, so greedy "
             f"evaluation yields identical episodes; --eval_episodes="
             f"{args.eval_episodes} will be reduced to 1 during evaluation."
         )
 
-    # All training hyperparameters are carried per genome (see the
-    # ``hyperparameters`` dict below) and resolved by the trainer at train time,
-    # so the trainer itself is constructed with only the algorithm choice.
-    trainer = build_trainer(args.algo)
+    logger.info(
+        f"evaluating genomes under the {trainer.selected_eval_policy(args.eval_policy)!r} "
+        f"policy (--eval_policy {args.eval_policy}, --algo {args.algo})"
+    )
 
     # Value-based trainers (q_learning / sarsa) enumerate discrete actions and
     # cannot drive a continuous Box-action environment; fail fast with a clear
@@ -558,6 +274,7 @@ def main() -> None:
             "quantum_dropout_rate": args.quantum_dropout_rate,
             "episodes": args.episodes,
             "eval_episodes": args.eval_episodes,
+            "eval_policy": args.eval_policy,
             "max_steps": args.max_steps,
             "gamma": args.gamma,
             "learning_rate": args.learning_rate,
@@ -572,7 +289,11 @@ def main() -> None:
             "epsilon": args.epsilon,
             "epsilon_min": args.epsilon_min,
             "epsilon_decay": args.epsilon_decay,
-            "seed": args.seed,
+            "training_seed": args.training_seed,
+            "eval_seed": args.eval_seed,
+            # the environment a genome was evolved against is part of what its
+            # fitness means, so the single-genome tools can rebuild it exactly
+            "env_kwargs": env_kwargs,
             "log_every": args.log_every,
             "ema_alpha": args.ema_alpha,
             "improvement_cutoff": args.improvement_cutoff,
@@ -671,6 +392,7 @@ def main() -> None:
         objective=objective,
         build_exaqc=build_exaqc,
         run_for=run_for,
+        timing_report_every=args.timing_report_every,
     )
 
 

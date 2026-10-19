@@ -51,6 +51,14 @@ class QLearningTrainer(ReinforcementLearningTrainer):
     #: Value-based action selection is discrete-only (argmax / epsilon-greedy).
     supports_continuous: bool = False
 
+    #: The outputs are Q-values, not a policy distribution: sampling from a
+    #: softmax over them (what "stochastic" evaluation would do) scores a policy
+    #: this algorithm never learns. Q-learning's target policy is the greedy
+    #: one, and epsilon-greedy is only the behaviour policy used to explore;
+    #: SARSA's on-policy target converges to the greedy policy as epsilon
+    #: decays toward ``epsilon_min``. Only greedy evaluation is allowed.
+    supports_stochastic_eval: bool = False
+
     @staticmethod
     def initialize_parser(parser: argparse.ArgumentParser) -> None:
         """Adds the value-based (Q-learning / SARSA) command-line arguments.
@@ -141,7 +149,7 @@ class QLearningTrainer(ReinforcementLearningTrainer):
         epsilon = max(hp.epsilon_min, hp.epsilon * (hp.epsilon_decay**episode_index))
 
         env = environment.make()
-        observation, _ = env.reset(seed=hp.seed + episode_index)
+        observation, _ = env.reset(seed=hp.training_seed + episode_index)
         episode_return = 0.0
         losses: list[float] = []
 

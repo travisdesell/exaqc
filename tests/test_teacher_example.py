@@ -20,6 +20,7 @@ import pytest
 import torch
 
 import src.examples.teacher as teacher
+import src.objectives.teacher_objective as teacher_objective
 from src.circuits.teacher_circuits import DEFAULT_REGISTER_NAME, TEACHER_NAMES
 from src.metrics.teacher_losses import TEACHER_LOSS_NAMES
 
@@ -95,15 +96,15 @@ def test_compare_orders_by_loss() -> None:
     worse = MagicMock()
     worse.fitness = {"loss": 0.4}
 
-    assert teacher.compare(better, worse) < 0
-    assert teacher.compare(worse, better) > 0
-    assert teacher.compare(better, better) == 0
+    assert teacher_objective.compare(better, worse) < 0
+    assert teacher_objective.compare(worse, better) > 0
+    assert teacher_objective.compare(better, better) == 0
 
 
 def test_objective_records_loss_and_fidelity_fitness() -> None:
     """The objective writes the fitness keys the analysis tooling reads."""
 
-    objective = teacher.TeacherObjective(
+    objective = teacher_objective.TeacherObjective(
         training_dataloader=MagicMock(),
         validation_dataloader=MagicMock(),
         loss_name="fidelity",

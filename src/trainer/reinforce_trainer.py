@@ -82,7 +82,7 @@ class ReinforceTrainer(ReinforcementLearningTrainer):
         """
 
         env = environment.make()
-        observation, _ = env.reset(seed=hp.seed + episode_index)
+        observation, _ = env.reset(seed=hp.training_seed + episode_index)
 
         log_probs: list[Tensor] = []
         entropies: list[Tensor] = []

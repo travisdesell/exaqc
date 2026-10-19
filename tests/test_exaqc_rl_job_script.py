@@ -1,0 +1,608 @@
+"""Checks ``scripts/exaqc_rl_job.sh`` against the entry point it submits.
+
+The job script builds a command line for
+:mod:`src.examples.reinforcement_learning`, so it duplicates two things the
+Python side owns: which environments accept ``--healthy_reward``, and the flags
+themselves. These tests keep the two from drifting apart -- a mismatch would
+only surface as a Slurm job that dies on startup, hours after submission.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import io
+import os
+import re
+import shlex
+import subprocess
+import sys
+
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from src.examples.reinforcement_learning import build_parser
+from src.objectives.reinforcement_learning_objective import (
+    ENV_CHOICES,
+    ENV_IDS,
+    environment_knob_kwargs,
+    supported_env_knobs,
+)
+
+JOB_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "exaqc_rl_job.sh"
+SUBMIT_SCRIPT = (
+    Path(__file__).resolve().parents[1] / "scripts" / "submit_exaqc_rl_jobs.sh"
+)
+
+#: Environments to build the job command for. Covers both sides of the
+#: ``--healthy_reward`` split, including HalfCheetah -- MuJoCo locomotion that
+#: nonetheless has no alive bonus, and so the easiest one to get wrong.
+_SAMPLE_ENVIRONMENTS: tuple[str, ...] = (
+    "walker2d",
+    "hopper",
+    "ant",
+    "humanoid",
+    "halfcheetah",
+    "cartpole",
+    "frozenlake",
+    "mountaincar_continuous",
+)
+
+
+#: Environment variables the job and submit scripts read as settings; removed
+#: from the inherited environment so a test only sees the ones it sets.
+_SETTING_VARIABLES: tuple[str, ...] = (
+    "HEALTHY_REWARD",
+    "EPISODES",
+    "IMPROVEMENT_CUTOFF",
+    "LOG_EVERY",
+    "NUMBER_GENOMES",
+    "EVAL_SEED",
+    "N_ISLANDS",
+    "MAX_ISLAND_SIZE",
+    "TIME_LIMIT",
+)
+
+
+def _script_environment(**settings: str) -> dict[str, str]:
+    """Builds a dry-run environment holding only the given script settings.
+
+    Args:
+        **settings: Setting variables to set, e.g. ``EPISODES="0"``.
+
+    Returns:
+        The current environment without any inherited setting variables, plus
+        ``DRY_RUN`` and ``settings``.
+    """
+
+    inherited = {
+        name: value
+        for name, value in os.environ.items()
+        if name not in _SETTING_VARIABLES
+    }
+    return {**inherited, "DRY_RUN": "1", **settings}
+
+
+def _job_command(
+    environment: str,
+    healthy_reward: str | None = None,
+    settings: dict[str, str] | None = None,
+) -> list[str]:
+    """Runs the job script in dry-run mode and returns the arguments it builds.
+
+    Args:
+        environment: The ``--env`` value to build the command for.
+        healthy_reward: Value for the ``HEALTHY_REWARD`` environment variable,
+            or None to leave it unset (the default, which passes no
+            ``--healthy_reward`` at all).
+        settings: Further setting variables for the script (``EPISODES``,
+            ``NUMBER_GENOMES``, ``EVAL_SEED``), or None to leave them unset.
+
+    Returns:
+        The arguments the script would pass to the reinforcement-learning entry
+        point, with the interpreter and module name stripped.
+
+    Raises:
+        AssertionError: If the script exits non-zero.
+    """
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(JOB_SCRIPT),
+            environment,
+            "6",
+            "6",
+            "exaqc_testtag_tree_2_" + environment + "_i20_1",
+            "20",
+            "5",
+            "tree",
+            "2",
+        ],
+        capture_output=True,
+        text=True,
+        env=_script_environment(
+            **({} if healthy_reward is None else {"HEALTHY_REWARD": healthy_reward}),
+            **(settings or {}),
+        ),
+    )
+    assert result.returncode == 0, result.stderr
+
+    argv = shlex.split(result.stdout)
+    return argv[argv.index("src.examples.reinforcement_learning") + 1 :]
+
+
+def test_healthy_reward_environment_list_matches_the_entry_point() -> None:
+    """The script's environment list matches what Gymnasium actually accepts.
+
+    The script cannot import the package -- its dry-run check deliberately runs
+    before the venv is activated -- so it carries its own list. This asserts
+    that list is exactly the set of environments whose Gymnasium constructor
+    takes ``healthy_reward``.
+    """
+
+    text = JOB_SCRIPT.read_text()
+    match = re.search(r'^HEALTHY_REWARD_ENVIRONMENTS="([^"]*)"', text, re.M)
+    assert match, "the job script no longer defines HEALTHY_REWARD_ENVIRONMENTS"
+
+    listed = set(match.group(1).split())
+    accepted = {
+        name
+        for name in ENV_CHOICES
+        if "healthy_reward" in supported_env_knobs(ENV_IDS[name])
+    }
+
+    assert listed == accepted, (
+        f"the job script lists {sorted(listed)} as accepting --healthy_reward, "
+        f"but the environments that actually accept it are {sorted(accepted)}"
+    )
+
+
+@pytest.mark.parametrize("environment", _SAMPLE_ENVIRONMENTS)
+def test_job_command_parses_and_only_sets_supported_knobs(environment: str) -> None:
+    """The command the job builds parses, and its knobs suit the environment.
+
+    Args:
+        environment: The ``--env`` the command is built for.
+    """
+
+    argv = _job_command(environment)
+    assert "" not in argv, "an empty argument leaked into the command"
+
+    with contextlib.redirect_stderr(io.StringIO()):
+        args = build_parser().parse_args(argv)
+
+    assert args.env == environment
+
+    # HEALTHY_REWARD is unset here, so the environment's own value stands and
+    # no reward knob is forwarded at all
+    assert environment_knob_kwargs(args, environment) == {}
+    assert args.healthy_reward is None
+
+
+@pytest.mark.skipif(
+    sys.platform.startswith("win"), reason="the job script needs a POSIX shell"
+)
+def test_job_script_is_valid_shell() -> None:
+    """The job script parses as shell, so a syntax error cannot reach the queue."""
+
+    result = subprocess.run(
+        ["bash", "-n", str(JOB_SCRIPT)], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_job_name_and_archive_directory_are_the_same() -> None:
+    """A queued job and the archive it writes carry the same name.
+
+    The submitting script owns the name and passes it down, so this asserts the
+    two scripts agree rather than that they happen to build matching strings.
+    The island count is part of the name because two island counts of the same
+    experiment must not share an archive: ``--restart`` defaults to ``auto``, so
+    a shared directory would silently resume the wrong run.
+    """
+
+    environment = {**os.environ, "DRY_RUN": "1", "N_ISLANDS": "30"}
+    submitted = subprocess.run(
+        [
+            "sh",
+            str(SUBMIT_SCRIPT),
+            "3",
+            "5",
+            "phase1",
+            "walker2d",
+            "6",
+            "6",
+            "tree",
+            "2",
+        ],
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    assert submitted.returncode == 0, submitted.stderr
+
+    lines = submitted.stdout.strip().splitlines()
+    assert len(lines) == 3, f"expected runs 3..5 inclusive, got {len(lines)}"
+
+    seen: set[str] = set()
+    for line in lines:
+        argv = shlex.split(line)
+        name = argv[argv.index("-J") + 1]
+        assert "i30" in name, f"the island count is missing from {name!r}"
+
+        # the submitter spells the job script relative to its own location, so
+        # it is found by suffix rather than by an exact path
+        position = next(
+            index
+            for index, value in enumerate(argv)
+            if value.endswith("exaqc_rl_job.sh")
+        )
+        job_arguments = argv[position + 1 :]
+        built = subprocess.run(
+            ["bash", str(JOB_SCRIPT), *job_arguments],
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        assert built.returncode == 0, built.stderr
+
+        command = shlex.split(built.stdout)
+        out_dir = command[command.index("--out_dir") + 1]
+        assert out_dir.rsplit("/", 1)[-1] == name
+        seen.add(name)
+
+    assert len(seen) == 3, "each run must get its own archive directory"
+
+
+def test_healthy_reward_is_passed_only_when_the_variable_asks_for_it() -> None:
+    """``HEALTHY_REWARD`` opts a run into a non-default upright bonus.
+
+    Left unset, nothing is forwarded and Gymnasium's own value applies, which
+    keeps a run comparable with published baselines.
+    """
+
+    for environment in ("walker2d", "hopper", "ant", "humanoid"):
+        arguments = _job_command(environment, healthy_reward="0.2")
+        with contextlib.redirect_stderr(io.StringIO()):
+            parsed = build_parser().parse_args(arguments)
+        assert environment_knob_kwargs(parsed, environment) == {"healthy_reward": 0.2}
+
+
+@pytest.mark.parametrize(
+    "environment,value,expected",
+    [
+        ("halfcheetah", "0.2", "no healthy (alive) bonus"),
+        ("cartpole", "0.2", "no healthy (alive) bonus"),
+        ("walker2d", "abc", "must be a number"),
+        ("walker2d", "1.2.3", "must be a number"),
+    ],
+)
+def test_healthy_reward_is_rejected_when_it_cannot_apply(
+    environment: str, value: str, expected: str
+) -> None:
+    """A ``HEALTHY_REWARD`` that cannot be honoured fails before the job runs.
+
+    Dropping it silently would leave a run tagged as one reward setting while
+    having trained under another, so the script refuses -- mirroring
+    ``environment_knob_kwargs``, but without spending a scheduling slot first.
+
+    Args:
+        environment: The ``--env`` to build the command for.
+        value: The ``HEALTHY_REWARD`` value to offer.
+        expected: Text the refusal must mention.
+    """
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(JOB_SCRIPT),
+            environment,
+            "6",
+            "6",
+            f"exaqc_t_tree_2_{environment}_i20_1",
+            "20",
+            "5",
+            "tree",
+            "2",
+        ],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "DRY_RUN": "1", "HEALTHY_REWARD": value},
+    )
+
+    assert result.returncode != 0, "the job script accepted an impossible setting"
+    assert expected in result.stderr
+
+
+def _parsed_job_command(settings: dict[str, str] | None = None) -> Any:
+    """Builds a walker2d job command and parses it with the entry point's parser.
+
+    Args:
+        settings: Setting variables for the job script, or None for none.
+
+    Returns:
+        The parsed arguments.
+    """
+
+    arguments = _job_command("walker2d", settings=settings)
+    with contextlib.redirect_stderr(io.StringIO()):
+        return build_parser().parse_args(arguments)
+
+
+def test_search_settings_keep_their_defaults_when_unset() -> None:
+    """Unset, the job runs the same search it always has, seeds drawn per genome."""
+
+    parsed = _parsed_job_command()
+
+    assert parsed.episodes == 100
+    assert parsed.improvement_cutoff == 30
+    assert parsed.log_every == 5
+    assert parsed.number_genomes == 10000
+    assert parsed.eval_seed is None
+    assert parsed.training_seed is None
+
+
+def test_search_settings_reach_the_command_when_set() -> None:
+    """``EPISODES``, ``IMPROVEMENT_CUTOFF``, ``LOG_EVERY``, ``NUMBER_GENOMES``
+    and ``EVAL_SEED`` set their flags.
+
+    ``EVAL_SEED`` pins only evaluation: training seeds stay random per genome.
+    """
+
+    parsed = _parsed_job_command(
+        {
+            "EPISODES": "0",
+            "IMPROVEMENT_CUTOFF": "0",
+            "LOG_EVERY": "1",
+            "NUMBER_GENOMES": "200000",
+            "EVAL_SEED": "1000",
+        }
+    )
+
+    assert parsed.episodes == 0
+    assert parsed.improvement_cutoff == 0
+    assert parsed.log_every == 1
+    assert parsed.number_genomes == 200000
+    assert parsed.eval_seed == 1000
+    assert parsed.training_seed is None
+
+
+@pytest.mark.parametrize(
+    "variable,value",
+    [
+        ("EPISODES", "-1"),
+        ("EPISODES", "ten"),
+        ("IMPROVEMENT_CUTOFF", "-5"),
+        ("IMPROVEMENT_CUTOFF", "five"),
+        ("LOG_EVERY", "0"),
+        ("LOG_EVERY", "2.5"),
+        ("NUMBER_GENOMES", "0"),
+        ("NUMBER_GENOMES", "1e5"),
+        ("EVAL_SEED", "-5"),
+        ("EVAL_SEED", "seed"),
+    ],
+)
+def test_bad_search_settings_are_rejected_by_both_scripts(
+    variable: str, value: str
+) -> None:
+    """A malformed setting fails before submission, and again in the job.
+
+    Args:
+        variable: The setting variable to give a bad value.
+        value: The bad value.
+    """
+
+    submitted = subprocess.run(
+        [
+            "sh",
+            str(SUBMIT_SCRIPT),
+            "1",
+            "5",
+            "inherit",
+            "walker2d",
+            "6",
+            "6",
+            "fully_connected",
+        ],
+        capture_output=True,
+        text=True,
+        env=_script_environment(**{variable: value}),
+    )
+    assert submitted.returncode != 0, "the submit script accepted a bad setting"
+    assert variable in submitted.stderr
+    assert submitted.stdout == "", "nothing may be submitted after a bad setting"
+
+    built = subprocess.run(
+        [
+            "bash",
+            str(JOB_SCRIPT),
+            "walker2d",
+            "6",
+            "6",
+            "exaqc_inherit_fully_connected_walker2d_i20_1",
+            "20",
+            "5",
+            "fully_connected",
+        ],
+        capture_output=True,
+        text=True,
+        env=_script_environment(**{variable: value}),
+    )
+    assert built.returncode != 0, "the job script accepted a bad setting"
+    assert variable in built.stderr
+
+
+#: The walker2d experiments submitted with the scripts: a run tag, the
+#: environment settings it is submitted with, and what each job must then run.
+_EXPERIMENTS: tuple[tuple[str, dict[str, str], dict[str, Any]], ...] = (
+    (
+        "inherit_randeval",
+        {"EPISODES": "0", "NUMBER_GENOMES": "200000"},
+        {"episodes": 0, "number_genomes": 200000, "eval_seed": None},
+    ),
+    (
+        "inherit_fixedeval",
+        {"EPISODES": "0", "NUMBER_GENOMES": "200000", "EVAL_SEED": "1000"},
+        {"episodes": 0, "number_genomes": 200000, "eval_seed": 1000},
+    ),
+    (
+        "ep20_cut5_fixedeval",
+        {
+            "EPISODES": "20",
+            "IMPROVEMENT_CUTOFF": "5",
+            "LOG_EVERY": "1",
+            "EVAL_SEED": "1000",
+        },
+        {
+            "episodes": 20,
+            "improvement_cutoff": 5,
+            "log_every": 1,
+            "number_genomes": 10000,
+            "eval_seed": 1000,
+        },
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    "topology",
+    [("2d_mesh", "4", "5"), ("fully_connected",)],
+)
+@pytest.mark.parametrize(
+    "tag,settings,expected", _EXPERIMENTS, ids=[tag for tag, _, _ in _EXPERIMENTS]
+)
+def test_walker2d_experiments_submit_runnable_jobs(
+    topology: tuple[str, ...],
+    tag: str,
+    settings: dict[str, str],
+    expected: dict[str, Any],
+) -> None:
+    """Each walker2d experiment queues five jobs that run what was asked for.
+
+    Args:
+        topology: The island topology and its arguments.
+        tag: The experiment's run tag.
+        settings: The environment settings it is submitted with.
+        expected: Parsed argument values every job's command must have.
+    """
+
+    submitted = subprocess.run(
+        ["sh", str(SUBMIT_SCRIPT), "1", "5", tag, "walker2d", "6", "6", *topology],
+        capture_output=True,
+        text=True,
+        env=_script_environment(**settings),
+    )
+    assert submitted.returncode == 0, submitted.stderr
+    lines = submitted.stdout.strip().splitlines()
+    assert len(lines) == 5
+
+    for line in lines:
+        argv = shlex.split(line)
+        position = next(
+            index
+            for index, value in enumerate(argv)
+            if value.endswith("exaqc_rl_job.sh")
+        )
+        built = subprocess.run(
+            ["bash", str(JOB_SCRIPT), *argv[position + 1 :]],
+            capture_output=True,
+            text=True,
+            env=_script_environment(**settings),
+        )
+        assert built.returncode == 0, built.stderr
+        command = shlex.split(built.stdout)
+        with contextlib.redirect_stderr(io.StringIO()):
+            parsed = build_parser().parse_args(
+                command[command.index("src.examples.reinforcement_learning") + 1 :]
+            )
+        assert parsed.env == "walker2d"
+        for name, value in expected.items():
+            assert getattr(parsed, name) == value, name
+        assert parsed.training_seed is None
+        assert parsed.topology == list(topology)
+        assert tag in parsed.out_dir
+
+
+def _submitted_commands(**settings: str) -> subprocess.CompletedProcess[str]:
+    """Dry-runs the submit script for two fully connected walker2d runs.
+
+    Args:
+        **settings: Setting variables for the submit script.
+
+    Returns:
+        The finished process, whose stdout holds one ``sbatch`` line per run.
+    """
+
+    return subprocess.run(
+        [
+            "sh",
+            str(SUBMIT_SCRIPT),
+            "1",
+            "2",
+            "limits",
+            "walker2d",
+            "6",
+            "6",
+            "fully_connected",
+        ],
+        capture_output=True,
+        text=True,
+        env=_script_environment(**settings),
+    )
+
+
+def test_jobs_default_to_a_one_day_time_limit() -> None:
+    """Unless ``TIME_LIMIT`` says otherwise, a job asks Slurm for one day.
+
+    A short default helps jobs get through the queue faster.
+    """
+
+    limits = re.findall(r"^#SBATCH -t (\S+)$", JOB_SCRIPT.read_text(), re.MULTILINE)
+    assert limits == ["1-00:00:00"]
+
+
+@pytest.mark.parametrize("limit", ["2-00:00:00", "12:00:00"])
+def test_time_limit_is_passed_to_sbatch_when_set(limit: str) -> None:
+    """``TIME_LIMIT`` overrides each job's wall time; unset, the job's own stands.
+
+    Args:
+        limit: The wall-time limit to request.
+    """
+
+    default = _submitted_commands()
+    assert default.returncode == 0, default.stderr
+    for line in default.stdout.strip().splitlines():
+        assert "-t" not in shlex.split(line)
+
+    limited = _submitted_commands(TIME_LIMIT=limit)
+    assert limited.returncode == 0, limited.stderr
+    lines = limited.stdout.strip().splitlines()
+    assert len(lines) == 2
+    for line in lines:
+        argv = shlex.split(line)
+        # sbatch reads options only before the script, so -t must precede it
+        assert argv[argv.index("-t") + 1] == limit
+        assert argv.index("-t") < next(
+            index
+            for index, value in enumerate(argv)
+            if value.endswith("exaqc_rl_job.sh")
+        )
+
+
+@pytest.mark.parametrize(
+    "limit", ["2 days", "48", "-1:00:00", "2-", "1::00", "2-00:00:00-1"]
+)
+def test_malformed_time_limits_are_rejected(limit: str) -> None:
+    """A ``TIME_LIMIT`` not in a documented form fails before anything is submitted.
+
+    Args:
+        limit: The malformed limit.
+    """
+
+    result = _submitted_commands(TIME_LIMIT=limit)
+
+    assert result.returncode != 0
+    assert "TIME_LIMIT" in result.stderr
+    assert result.stdout == ""

@@ -635,7 +635,7 @@ class CNNEncoder(Encoder, torch.nn.Module):
             Feature extractor and final channel count.
         """
         if not self.conv_blocks_config:
-            return torch.nn.Identity(), None
+            return [torch.nn.Identity()], None
 
         layers: list[torch.nn.Module] = []
         in_channels = self.input_channels
