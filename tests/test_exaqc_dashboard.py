@@ -130,6 +130,7 @@ def build_run(
     genomes: list[FakeGenome],
     history: bool = True,
     islands: list[int | None] | None = None,
+    species: list[int | None] | None = None,
     run_info: dict[str, Any] | None = None,
 ) -> str:
     """Writes a run directory holding an archive, and its search progress.
@@ -141,23 +142,29 @@ def build_run(
             is what the progress charts are recomputed from.
         islands: The island each genome was inserted into, in the same order,
             for a run that used islands.
+        species: The species each genome was assigned to, in the same order,
+            for a run that used speciation.
         run_info: Further ``run_info`` values to record, such as an island
-            topology.
+            topology or speciation config.
 
     Returns:
         The run directory, as a string.
     """
 
     with GenomeArchive.create(str(directory)) as archive:
-        archive.set_run_info(
-            task="classification",
-            task_target="iris",
-            population_strategy="SteadyStatePopulation",
+        info = {
+            "task": "classification",
+            "task_target": "iris",
+            "population_strategy": "SteadyStatePopulation",
             **(run_info or {}),
-        )
+        }
+        archive.set_run_info(**info)
         for insertion, genome in enumerate(genomes, start=1):
             island = islands[insertion - 1] if islands else None
-            archive.add_genome(genome, insertion=insertion, island=island)
+            species_id = species[insertion - 1] if species else None
+            archive.add_genome(
+                genome, insertion=insertion, island=island, species=species_id
+            )
 
         if history:
             # Three steps, growing the population one genome at a time, so a
@@ -1000,6 +1007,67 @@ def test_island_runs_show_their_topology_and_each_parents_island(tmp_path) -> No
             3: 1,
             1: 0,
             2: 1,
+            0: None,
+        }
+
+
+def test_speciation_runs_show_species_and_each_parents_species(tmp_path) -> None:
+    """A speciation run's page exposes species filters and parent species.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    speciation = {
+        "max_population_size": 30,
+        "species_threshold": 0.6,
+        "neat_c1": 1.0,
+        "neat_c2": 1.0,
+        "inter_species_parent_rate": 0.1,
+    }
+    build_run(
+        tmp_path / "speciation",
+        standard_genomes(),
+        species=[0, 0, 1, 1],
+        run_info={
+            "population_strategy": "SteadyStateSpeciation",
+            "speciation": speciation,
+        },
+    )
+    build_run(tmp_path / "steady", standard_genomes())
+    registry = RunRegistry(
+        run_directories=[str(tmp_path / "speciation"), str(tmp_path / "steady")]
+    )
+
+    with serving(registry) as url:
+        indexes = {
+            run["name"]: run["index"] for run in get_json(f"{url}/api/runs")["runs"]
+        }
+        speciation_run, steady = indexes["speciation"], indexes["steady"]
+
+        payload = get_json(f"{url}/api/runs/{speciation_run}")
+        assert payload["speciation"] == speciation
+        assert payload["filter_options"]["species"] == [0, 1]
+        assert get_json(f"{url}/api/runs/{steady}")["speciation"] is None
+
+        crossover = get_json(f"{url}/api/runs/{speciation_run}/genomes/3")
+        assert crossover["summary"]["parents"] == [1, 2]
+        assert crossover["summary"]["species"] == 1
+        assert crossover["parent_species"] == [0, 0]
+
+        points = get_json(f"{url}/api/runs/{speciation_run}/points?y=loss")
+        assert points["species"] == [0, 0, 1, 1]
+
+        ancestry = get_json(
+            f"{url}/api/runs/{speciation_run}/genomes/4/ancestry?depth=5"
+        )
+        assert {
+            node["genome_number"]: node["species"] for node in ancestry["nodes"]
+        } == {
+            4: 1,
+            3: 1,
+            1: 0,
+            2: 0,
             0: None,
         }
 
