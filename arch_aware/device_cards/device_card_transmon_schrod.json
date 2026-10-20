@@ -1,0 +1,885 @@
+{
+  "architecture": "transmon",
+  "model": "schrod",
+  "model_label": "1 Schr\u00f6dinger",
+  "method": "grape",
+  "generated": "2026-09-23T00:03:29",
+  "conventions": {
+    "infidelity": "1 - average gate fidelity on the computational subspace (jax_solvers.average_gate_fidelity, P_comp-projected Nielsen)",
+    "pauli_error": "Pauli-twirled probabilities of E = V o U^dag; key 'I...I' is the no-error probability; entries can be slightly negative when the channel is non-Pauli-dominated (twirl of a non-CPTP-on-subspace map); trace_loss is the leaked population not captured by the twirl",
+    "leakage": "time average over the gate of Tr(P_leak V_t(P_comp))/d_c^2 with pseudomodes initialised in |0> (action_solver convention)",
+    "idle": "zero-control channel of the same model at each gate duration; use for spectator qubits"
+  },
+  "gates": {
+    "h": {
+      "T_ns": 50.0,
+      "infidelity": 2.396602000187542e-07,
+      "leakage": 0.0005143019572050963,
+      "process_infidelity": 3.5949030008364247e-07,
+      "trace_loss": 2.5828579808262475e-07,
+      "pauli_error": {
+        "I": 0.9999996405096999,
+        "X": 1.783866673821244e-08,
+        "Y": 7.576911686957288e-08,
+        "Z": 7.596718171187788e-09
+      },
+      "ptm_error_diag": {
+        "I": 0.9999997417142017,
+        "X": 0.9999995749825317,
+        "Y": 0.9999996908434319,
+        "Z": 0.9999995544986345
+      },
+      "wires": 1,
+      "seed_idx": 50,
+      "run_id": "sweep-N100-cluster-2026-07-07",
+      "levels": 5,
+      "n_seeds_in_cell": 100
+    },
+    "x": {
+      "T_ns": 50.0,
+      "infidelity": 1.499481440125905e-07,
+      "leakage": 0.0003198896158562819,
+      "process_infidelity": 2.2492221585235228e-07,
+      "trace_loss": 1.3468267567873227e-07,
+      "pauli_error": {
+        "I": 0.9999997750777843,
+        "X": 8.78898742118217e-08,
+        "Y": 7.181727434968366e-11,
+        "Z": 2.2778486319374736e-09
+      },
+      "ptm_error_diag": {
+        "I": 0.9999998653173243,
+        "X": 0.9999998606179925,
+        "Y": 0.9999996849818786,
+        "Z": 0.9999996893939413
+      },
+      "wires": 1,
+      "seed_idx": 7,
+      "run_id": "gateset-1q-2026-09-14",
+      "levels": 5,
+      "n_seeds_in_cell": 30
+    },
+    "z": {
+      "T_ns": 50.0,
+      "infidelity": 4.3512194303207963e-07,
+      "leakage": 0.0009240584871247642,
+      "process_infidelity": 6.526829147146529e-07,
+      "trace_loss": 2.994396050004511e-07,
+      "pauli_error": {
+        "I": 0.9999993473170854,
+        "X": 2.0893059504700773e-08,
+        "Y": 2.4138683207830525e-07,
+        "Z": 9.096341807568464e-08
+      },
+      "ptm_error_diag": {
+        "I": 0.999999700560395,
+        "X": 0.9999990358598947,
+        "Y": 0.9999994768474398,
+        "Z": 0.9999991760006118
+      },
+      "wires": 1,
+      "seed_idx": 29,
+      "run_id": "gateset-1q-2026-09-14",
+      "levels": 5,
+      "n_seeds_in_cell": 30
+    },
+    "s": {
+      "T_ns": 50.0,
+      "infidelity": 3.1938918176876996e-07,
+      "leakage": 0.0005322722924888659,
+      "process_infidelity": 4.790837727641772e-07,
+      "trace_loss": 2.605117682685787e-07,
+      "pauli_error": {
+        "I": 0.9999995209162273,
+        "X": 2.0607488809831764e-07,
+        "Y": 2.6960935706199507e-09,
+        "Z": 9.8010226601275e-09
+      },
+      "ptm_error_diag": {
+        "I": 0.9999997394882317,
+        "X": 0.9999997144939992,
+        "Y": 0.9999993077364102,
+        "Z": 0.9999993219462683
+      },
+      "wires": 1,
+      "seed_idx": 6,
+      "run_id": "gateset-1q-2026-09-14",
+      "levels": 5,
+      "n_seeds_in_cell": 30
+    },
+    "t": {
+      "T_ns": 50.0,
+      "infidelity": 2.711393015664143e-07,
+      "leakage": 0.0002821132803699356,
+      "process_infidelity": 4.067089522941103e-07,
+      "trace_loss": 9.995166516674203e-08,
+      "pauli_error": {
+        "I": 0.9999995932910477,
+        "X": 6.701578339485259e-08,
+        "Y": 2.373105267849951e-09,
+        "Z": 2.3736839846466573e-07
+      },
+      "ptm_error_diag": {
+        "I": 0.9999999000483348,
+        "X": 0.9999994205653274,
+        "Y": 0.9999992912799711,
+        "Z": 0.9999997612705576
+      },
+      "wires": 1,
+      "seed_idx": 3,
+      "run_id": "gateset-1q-2026-09-14",
+      "levels": 5,
+      "n_seeds_in_cell": 30
+    },
+    "cx": {
+      "T_ns": 200.0,
+      "infidelity": 0.0002826065007850431,
+      "leakage": 0.015761552648410126,
+      "process_infidelity": 0.0003532581259813039,
+      "trace_loss": 0.00034150508561192616,
+      "pauli_error": {
+        "II": 0.9996467418740187,
+        "IX": 1.9078886323575794e-07,
+        "IY": 4.964982451838296e-07,
+        "IZ": 2.3961913312164906e-06,
+        "XI": 1.7718113001080615e-07,
+        "XX": 3.4362533989848454e-06,
+        "XY": 2.45799594706525e-06,
+        "XZ": 3.4783737549309857e-07,
+        "YI": 3.144244340863578e-07,
+        "YX": 5.836058884212125e-07,
+        "YY": 2.2294959871327347e-07,
+        "YZ": 4.261945547034962e-07,
+        "ZI": 7.60062957017027e-09,
+        "ZX": 3.0063241050759526e-07,
+        "ZY": 9.51038522933878e-09,
+        "ZZ": 3.853761769562203e-07
+      },
+      "ptm_error_diag": {
+        "II": 0.9996584949143881,
+        "IX": 0.999645009807159,
+        "IY": 0.999642361154389,
+        "IZ": 0.9996430984449133,
+        "XI": 0.9996539943262317,
+        "XX": 0.999644685341865,
+        "XY": 0.999644643802355,
+        "XZ": 0.9996430646498884,
+        "YI": 0.9996442501394804,
+        "YX": 0.9996435679117903,
+        "YY": 0.9996459967769291,
+        "YZ": 0.9996536712385728,
+        "ZI": 0.9996425620297331,
+        "ZX": 0.9996428968324079,
+        "ZY": 0.9996456038346044,
+        "ZZ": 0.9996539687795911
+      },
+      "wires": 2,
+      "seed_idx": 1,
+      "run_id": "gateset-cnot-2026-09-14",
+      "levels": 4,
+      "n_seeds_in_cell": 30
+    },
+    "sdg": {
+      "T_ns": 50.0,
+      "infidelity": 3.1938918176876996e-07,
+      "leakage": 0.0005322722924888659,
+      "process_infidelity": 4.790837727641772e-07,
+      "trace_loss": 2.605117682685787e-07,
+      "pauli_error": {
+        "I": 0.9999995209162273,
+        "X": 2.0607488809831764e-07,
+        "Y": 2.6960935706199507e-09,
+        "Z": 9.8010226601275e-09
+      },
+      "ptm_error_diag": {
+        "I": 0.9999997394882317,
+        "X": 0.9999997144939992,
+        "Y": 0.9999993077364102,
+        "Z": 0.9999993219462683
+      },
+      "wires": 1,
+      "seed_idx": 6,
+      "run_id": "gateset-1q-2026-09-14",
+      "levels": 5,
+      "n_seeds_in_cell": 30,
+      "alias_of": "s"
+    },
+    "tdg": {
+      "T_ns": 50.0,
+      "infidelity": 2.711393015664143e-07,
+      "leakage": 0.0002821132803699356,
+      "process_infidelity": 4.067089522941103e-07,
+      "trace_loss": 9.995166516674203e-08,
+      "pauli_error": {
+        "I": 0.9999995932910477,
+        "X": 6.701578339485259e-08,
+        "Y": 2.373105267849951e-09,
+        "Z": 2.3736839846466573e-07
+      },
+      "ptm_error_diag": {
+        "I": 0.9999999000483348,
+        "X": 0.9999994205653274,
+        "Y": 0.9999992912799711,
+        "Z": 0.9999997612705576
+      },
+      "wires": 1,
+      "seed_idx": 3,
+      "run_id": "gateset-1q-2026-09-14",
+      "levels": 5,
+      "n_seeds_in_cell": 30,
+      "alias_of": "t"
+    }
+  },
+  "idle": {
+    "50": {
+      "T_ns": 50.0,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {
+        "I": 1.0,
+        "X": 1.0,
+        "Y": 1.0,
+        "Z": 1.0
+      }
+    },
+    "100": {
+      "T_ns": 100.0,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {
+        "I": 1.0,
+        "X": 1.0,
+        "Y": 1.0,
+        "Z": 1.0
+      }
+    },
+    "150": {
+      "T_ns": 150.0,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {
+        "I": 1.0,
+        "X": 1.0,
+        "Y": 1.0,
+        "Z": 1.0
+      }
+    },
+    "200": {
+      "T_ns": 200.0,
+      "infidelity": 0.6,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {
+        "I": 1.0,
+        "X": 1.0,
+        "Y": 1.0,
+        "Z": 1.0
+      }
+    },
+    "250": {
+      "T_ns": 250.0,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {
+        "I": 1.0,
+        "X": 1.0,
+        "Y": 1.0,
+        "Z": 1.0
+      }
+    },
+    "300": {
+      "T_ns": 300.0,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {
+        "I": 1.0,
+        "X": 1.0,
+        "Y": 1.0,
+        "Z": 1.0
+      }
+    },
+    "350": {
+      "T_ns": 350.0,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {
+        "I": 1.0,
+        "X": 1.0,
+        "Y": 1.0,
+        "Z": 1.0
+      }
+    },
+    "400": {
+      "T_ns": 400.0,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {
+        "I": 1.0,
+        "X": 1.0,
+        "Y": 1.0,
+        "Z": 1.0
+      }
+    },
+    "450": {
+      "T_ns": 450.0,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {
+        "I": 1.0,
+        "X": 1.0,
+        "Y": 1.0,
+        "Z": 1.0
+      }
+    },
+    "500": {
+      "T_ns": 500.0,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {
+        "I": 1.0,
+        "X": 1.0,
+        "Y": 1.0,
+        "Z": 1.0
+      }
+    },
+    "550": {
+      "T_ns": 550.0,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {
+        "I": 1.0,
+        "X": 1.0,
+        "Y": 1.0,
+        "Z": 1.0
+      }
+    },
+    "600": {
+      "T_ns": 600.0,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {
+        "I": 1.0,
+        "X": 1.0,
+        "Y": 1.0,
+        "Z": 1.0
+      }
+    },
+    "650": {
+      "T_ns": 650.0,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {
+        "I": 1.0,
+        "X": 1.0,
+        "Y": 1.0,
+        "Z": 1.0
+      }
+    },
+    "700": {
+      "T_ns": 700.0,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {
+        "I": 1.0,
+        "X": 1.0,
+        "Y": 1.0,
+        "Z": 1.0
+      }
+    },
+    "750": {
+      "T_ns": 750.0,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {
+        "I": 1.0,
+        "X": 1.0,
+        "Y": 1.0,
+        "Z": 1.0
+      }
+    },
+    "800": {
+      "T_ns": 800.0,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {
+        "I": 1.0,
+        "X": 1.0,
+        "Y": 1.0,
+        "Z": 1.0
+      }
+    },
+    "850": {
+      "T_ns": 850.0,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {
+        "I": 1.0,
+        "X": 1.0,
+        "Y": 1.0,
+        "Z": 1.0
+      }
+    },
+    "900": {
+      "T_ns": 900.0,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {
+        "I": 1.0,
+        "X": 1.0,
+        "Y": 1.0,
+        "Z": 1.0
+      }
+    },
+    "950": {
+      "T_ns": 950.0,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {
+        "I": 1.0,
+        "X": 1.0,
+        "Y": 1.0,
+        "Z": 1.0
+      }
+    },
+    "1000": {
+      "T_ns": 1000.0,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {
+        "I": 1.0,
+        "X": 1.0,
+        "Y": 1.0,
+        "Z": 1.0
+      }
+    },
+    "1050": {
+      "T_ns": 1050.0,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {
+        "I": 1.0,
+        "X": 1.0,
+        "Y": 1.0,
+        "Z": 1.0
+      }
+    },
+    "1100": {
+      "T_ns": 1100.0,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {
+        "I": 1.0,
+        "X": 1.0,
+        "Y": 1.0,
+        "Z": 1.0
+      }
+    },
+    "1150": {
+      "T_ns": 1150.0,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {
+        "I": 1.0,
+        "X": 1.0,
+        "Y": 1.0,
+        "Z": 1.0
+      }
+    },
+    "1200": {
+      "T_ns": 1200.0,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {
+        "I": 1.0,
+        "X": 1.0,
+        "Y": 1.0,
+        "Z": 1.0
+      }
+    }
+  },
+  "sources": {
+    "h": {
+      "run_id": "sweep-N100-cluster-2026-07-07",
+      "gate": "hadamard",
+      "params": {
+        "K_aux": 4,
+        "K_c": 5,
+        "K_p": 25,
+        "T": 50.0,
+        "beta": 0.001,
+        "d_c": 2,
+        "delta_pulse": 0.004,
+        "dt": 1.0,
+        "ftol": 1e-07,
+        "grape_ftol": 1e-08,
+        "grape_maxiter": 200,
+        "init_strategy": "sinusoid",
+        "k_leak": 1.0,
+        "levels": 5,
+        "maxiter": 50,
+        "optimizer": "slsqp",
+        "seed": 50,
+        "sfq_Delta0": 8,
+        "sfq_init": "bernoulli",
+        "sfq_init_density": 0.075,
+        "sfq_max_iter": 60,
+        "sfq_n_sub": 200,
+        "tau_p": 0.025,
+        "tip_angle": 0.010471975511965976,
+        "u_max": 1.0
+      }
+    },
+    "x": {
+      "run_id": "gateset-1q-2026-09-14",
+      "gate": "x",
+      "params": {
+        "K_aux": 4,
+        "K_c": 5,
+        "K_p": 25,
+        "T": 50.0,
+        "beta": 0.001,
+        "d_c": 2,
+        "delta_pulse": 0.004,
+        "dt": 1.0,
+        "ftol": 1e-07,
+        "grape_ftol": 1e-08,
+        "grape_maxiter": 200,
+        "init_strategy": "sinusoid",
+        "k_leak": 1.0,
+        "levels": 5,
+        "maxiter": 50,
+        "n_qubits": 1,
+        "optimizer": "slsqp",
+        "seed": 7,
+        "sfq_Delta0": 8,
+        "sfq_init": "bernoulli",
+        "sfq_init_density": 0.075,
+        "sfq_max_iter": 60,
+        "sfq_n_sub": 200,
+        "tau_p": 0.025,
+        "tip_angle": 0.010471975511965976,
+        "u_max": 1.0
+      }
+    },
+    "z": {
+      "run_id": "gateset-1q-2026-09-14",
+      "gate": "z",
+      "params": {
+        "K_aux": 4,
+        "K_c": 5,
+        "K_p": 25,
+        "T": 50.0,
+        "beta": 0.001,
+        "d_c": 2,
+        "delta_pulse": 0.004,
+        "dt": 1.0,
+        "ftol": 1e-07,
+        "grape_ftol": 1e-08,
+        "grape_maxiter": 200,
+        "init_strategy": "sinusoid",
+        "k_leak": 1.0,
+        "levels": 5,
+        "maxiter": 50,
+        "n_qubits": 1,
+        "optimizer": "slsqp",
+        "seed": 29,
+        "sfq_Delta0": 8,
+        "sfq_init": "bernoulli",
+        "sfq_init_density": 0.075,
+        "sfq_max_iter": 60,
+        "sfq_n_sub": 200,
+        "tau_p": 0.025,
+        "tip_angle": 0.010471975511965976,
+        "u_max": 1.0
+      }
+    },
+    "s": {
+      "run_id": "gateset-1q-2026-09-14",
+      "gate": "s",
+      "params": {
+        "K_aux": 4,
+        "K_c": 5,
+        "K_p": 25,
+        "T": 50.0,
+        "beta": 0.001,
+        "d_c": 2,
+        "delta_pulse": 0.004,
+        "dt": 1.0,
+        "ftol": 1e-07,
+        "grape_ftol": 1e-08,
+        "grape_maxiter": 200,
+        "init_strategy": "sinusoid",
+        "k_leak": 1.0,
+        "levels": 5,
+        "maxiter": 50,
+        "n_qubits": 1,
+        "optimizer": "slsqp",
+        "seed": 6,
+        "sfq_Delta0": 8,
+        "sfq_init": "bernoulli",
+        "sfq_init_density": 0.075,
+        "sfq_max_iter": 60,
+        "sfq_n_sub": 200,
+        "tau_p": 0.025,
+        "tip_angle": 0.010471975511965976,
+        "u_max": 1.0
+      }
+    },
+    "t": {
+      "run_id": "gateset-1q-2026-09-14",
+      "gate": "t",
+      "params": {
+        "K_aux": 4,
+        "K_c": 5,
+        "K_p": 25,
+        "T": 50.0,
+        "beta": 0.001,
+        "d_c": 2,
+        "delta_pulse": 0.004,
+        "dt": 1.0,
+        "ftol": 1e-07,
+        "grape_ftol": 1e-08,
+        "grape_maxiter": 200,
+        "init_strategy": "sinusoid",
+        "k_leak": 1.0,
+        "levels": 5,
+        "maxiter": 50,
+        "n_qubits": 1,
+        "optimizer": "slsqp",
+        "seed": 3,
+        "sfq_Delta0": 8,
+        "sfq_init": "bernoulli",
+        "sfq_init_density": 0.075,
+        "sfq_max_iter": 60,
+        "sfq_n_sub": 200,
+        "tau_p": 0.025,
+        "tip_angle": 0.010471975511965976,
+        "u_max": 1.0
+      }
+    },
+    "cx": {
+      "run_id": "gateset-cnot-2026-09-14",
+      "gate": "cnot",
+      "params": {
+        "K_aux": 2,
+        "K_c": 5,
+        "K_p": 25,
+        "T": 200.0,
+        "beta": 0.001,
+        "d_c": 4,
+        "delta_pulse": 0.004,
+        "dt": 2.0,
+        "ftol": 1e-07,
+        "g_two_qubit": 0.031415926535897934,
+        "grape_ftol": 1e-08,
+        "grape_maxiter": 200,
+        "init_strategy": "sinusoid",
+        "k_leak": 1.0,
+        "levels": 4,
+        "maxiter": 50,
+        "n_qubits": 2,
+        "optimizer": "slsqp",
+        "seed": 1,
+        "sfq_Delta0": 8,
+        "sfq_init": "bernoulli",
+        "sfq_init_density": 0.075,
+        "sfq_max_iter": 60,
+        "sfq_n_sub": 200,
+        "tau_p": 0.025,
+        "tip_angle": 0.010471975511965976,
+        "u_max": 1.0
+      }
+    }
+  }
+}

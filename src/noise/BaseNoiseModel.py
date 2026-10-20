@@ -4,7 +4,12 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Literal, Optional
 
-from qiskit_aer.noise import NoiseModel
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - annotation only
+    # Imported lazily: loading the Aer extension at module scope breaks
+    # the pure-PennyLane path on aarch64 (static TLS block, libgomp).
+    from qiskit_aer.noise import NoiseModel
 
 
 NoiseType = Literal[
@@ -17,6 +22,7 @@ NoiseType = Literal[
     "thermal_relaxation",
     "mixed",
     "ibm_backend",
+    "device_card",
 ]
 
 
@@ -124,7 +130,7 @@ class BaseNoiseModel(ABC):
         raise NotImplementedError
     
     @abstractmethod
-    def get_imported_noise_model(self) -> NoiseModel:
+    def get_imported_noise_model(self) -> "NoiseModel":
         raise NotImplementedError
 
     @abstractmethod

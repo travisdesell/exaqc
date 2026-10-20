@@ -213,7 +213,12 @@ class CircuitGenome:
         new_genome.hyperparameters = self.hyperparameters.copy()
 
         for gate in self.gates:
-            new_genome.add_existing_gate(gate)
+            # Copy the Gate (same innovation number): the in-place mutations
+            # (disable/enable/qubit_swap/reorder) must not reach back into
+            # the parent that still sits in the population with a cached
+            # fitness.  (Bug found 2026-09-19: archived Pareto genomes were
+            # ending up with every gate disabled.)
+            new_genome.add_existing_gate(gate.copy())
 
         return new_genome
 
@@ -574,18 +579,35 @@ class CircuitGenome:
 
             # 4️⃣  Apply all gates in depth order
             self.sort_gates()
+            if noise_model is not None and imported_noise is None:
+                # Lets gate-aware models (e.g. DeviceCardNoiseModel) see the
+                # whole genome before the first gate; a no-op for the others.
+                noise_model.begin_circuit(self)
             for gate in self.gates:
+                if noise_model is not None and imported_noise is None:
+                    # before_gate lets a model insert the noise a wire accrues
+                    # while it WAITS for this gate (idle decoherence), which has
+                    # to act at that point in the circuit and not at the end.
+                    noise_model.before_gate(
+                        gate.get_pennylane_wires(self.qubits), gate=gate)
+
                 gate.add_to_pennylane_circuit(self.qubits, params=params)
 
                 if noise_model is not None and imported_noise is None:
                     gate_wires = gate.get_pennylane_wires(self.qubits)
-                    noise_model.after_gate(gate_wires)
+                    noise_model.after_gate(gate_wires, gate=gate)
 
             # 5️⃣ Measurement
-            if return_probs:
-                if noise_model is not None and imported_noise is None:
-                    noise_model.before_measurement(self.output_indexes)
+            # Pre-measurement noise applies to EVERY measurement type. Before
+            # 2026-09-22 this call sat inside the return_probs branch only, so
+            # a model whose idle/readout channel is inserted here (e.g.
+            # DeviceCardNoiseModel, which charges each wire for the time it
+            # spends idling) was silently skipped whenever the caller asked
+            # for qml.state() or expvals instead of probabilities.
+            if noise_model is not None and imported_noise is None:
+                noise_model.before_measurement(self.output_indexes)
 
+            if return_probs:
                 return qml.probs(wires=self.output_indexes)
 
             elif measure_registers:

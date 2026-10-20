@@ -393,12 +393,27 @@ class PennyLaneNoiseModel(BaseNoiseModel):
         if self.apply_after_input_encoding:
             self.apply_to_wires(input_wires)
 
-    def after_gate(self, gate_wires: Sequence[int]) -> None:
+    def begin_circuit(self, genome) -> None:
+        """Called once per QNode build, before the first gate, with the
+        CircuitGenome.  Base models ignore it; gate-aware models (see
+        DeviceCardNoiseModel) use it to schedule idle periods."""
+        return None
+
+    def before_gate(self, gate_wires: Sequence[int], gate=None) -> None:
+        """Called immediately before each gate is appended. Base models do
+        nothing; gate-aware models use it to charge a wire for the time it
+        spent idling before this gate (see DeviceCardNoiseModel)."""
+        return None
+
+    def after_gate(self, gate_wires: Sequence[int], gate=None) -> None:
         """Apply noise after an evolved quantum gate.
 
         Args:
             gate_wires:
                 Wires associated with the evolved gate.
+            gate:
+                The Gate object itself (optional; lets a model pick a
+                gate-specific channel).  Ignored by the base handlers.
         """
         if self.apply_after_gates:
             self.apply_to_wires(gate_wires)
