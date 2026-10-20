@@ -20,8 +20,9 @@ dependencies, no shared code):
 | 2. Circuit search | this repo | NSGA-II over circuits, scored with the card |
 
 Project notes, plan and status: `RIT_research/Arch_Aware_Circuit_Evolution/`
-(`PLAN.md`, `WHERE_WE_ARE.md`, `RESUME_SPECTRAL.md`, and an overview PDF in
-`overview/`).
+(`PLAN.md`, `WHERE_WE_ARE.md`, `RESUME_SPECTRAL.md`). A 13-page technical overview of the
+whole program (spectral solver, optimal control, device cards, circuit search,
+results and compute plan) is in `arch_aware/overview/overview.pdf`.
 
 ## Open-system models
 
