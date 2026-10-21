@@ -205,7 +205,7 @@ records how long its worker waited for it as `timing.request_wait_seconds`.
 | Argument | Default | Description |
 |---|---|---|
 | `--target` | `pennylane` | Backend: [`pennylane`](https://docs.pennylane.ai/en/stable/) or [`qiskit`](https://quantum.cloud.ibm.com/docs/en/guides) |
-| `--use_only` | all gates | Restrict the search to only these gate method names (e.g. `cx ry rz`) |
+| `--use_only` | all gates | Restrict the search to only these gate method names (e.g. `cx ry rz`); a name the backend does not have is an error |
 | `--input_qubits` | *required* | Qubits the inputs are encoded onto |
 | `--output_qubits` | *required* | Qubits measured for the output |
 | `--quantum_input_mode`, `-qim` | `u3` | How classical values become circuit inputs: `u3`, `rx`, `ry`, `rz`, `basis`, `amplitude` |

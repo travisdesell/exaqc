@@ -22,6 +22,7 @@ from typing import Any
 
 import pytest
 
+from src.circuits.gate_specifications import GateSpecifications
 from src.examples.reinforcement_learning import build_parser
 from src.objectives.reinforcement_learning_objective import (
     ENV_CHOICES,
@@ -59,6 +60,7 @@ _SETTING_VARIABLES: tuple[str, ...] = (
     "LOG_EVERY",
     "NUMBER_GENOMES",
     "EVAL_SEED",
+    "USE_ONLY",
     "N_ISLANDS",
     "MAX_ISLAND_SIZE",
     "TIME_LIMIT",
@@ -342,11 +344,32 @@ def test_search_settings_keep_their_defaults_when_unset() -> None:
     assert parsed.number_genomes == 10000
     assert parsed.eval_seed is None
     assert parsed.training_seed is None
+    assert parsed.use_only == _DEFAULT_USE_ONLY
+
+
+#: The gate set a job searches when ``USE_ONLY`` is unset.
+_DEFAULT_USE_ONLY: list[str] = (
+    "rx ry rz p u crx cry crz cp rxx ryy rzz cx cy cz".split()
+)
+
+
+def test_default_gate_set_names_only_real_gates() -> None:
+    """Every default gate is one the backend has.
+
+    ``GateSpecifications.use_only`` rejects names it does not recognize, so a
+    misspelled default would fail every job at startup; this catches it before
+    anything is submitted.
+    """
+
+    parsed = _parsed_job_command()
+    specifications = GateSpecifications.from_args(parsed)
+
+    assert sorted(specifications.specifications) == sorted(_DEFAULT_USE_ONLY)
 
 
 def test_search_settings_reach_the_command_when_set() -> None:
-    """``EPISODES``, ``IMPROVEMENT_CUTOFF``, ``LOG_EVERY``, ``NUMBER_GENOMES``
-    and ``EVAL_SEED`` set their flags.
+    """``EPISODES``, ``IMPROVEMENT_CUTOFF``, ``LOG_EVERY``, ``NUMBER_GENOMES``,
+    ``EVAL_SEED`` and ``USE_ONLY`` set their flags.
 
     ``EVAL_SEED`` pins only evaluation: training seeds stay random per genome.
     """
@@ -358,6 +381,7 @@ def test_search_settings_reach_the_command_when_set() -> None:
             "LOG_EVERY": "1",
             "NUMBER_GENOMES": "200000",
             "EVAL_SEED": "1000",
+            "USE_ONLY": "rx ry rz cx",
         }
     )
 
@@ -367,6 +391,7 @@ def test_search_settings_reach_the_command_when_set() -> None:
     assert parsed.number_genomes == 200000
     assert parsed.eval_seed == 1000
     assert parsed.training_seed is None
+    assert parsed.use_only == ["rx", "ry", "rz", "cx"]
 
 
 @pytest.mark.parametrize(
@@ -382,6 +407,10 @@ def test_search_settings_reach_the_command_when_set() -> None:
         ("NUMBER_GENOMES", "1e5"),
         ("EVAL_SEED", "-5"),
         ("EVAL_SEED", "seed"),
+        ("USE_ONLY", "rx,ry,rz"),
+        ("USE_ONLY", "rx ry; rz"),
+        ("USE_ONLY", "RX RY"),
+        ("USE_ONLY", "   "),
     ],
 )
 def test_bad_search_settings_are_rejected_by_both_scripts(
