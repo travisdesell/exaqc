@@ -1237,6 +1237,9 @@ class ArtifactViewer:
         # run's never changes, and reading it can scan its genomes
         self._summaries: dict[str, tuple[tuple[int, ...], dict[str, Any]]] = {}
         self._summaries_lock = threading.Lock()
+        # each archive's genomes' hyperparameters, read once (see hyperparameters_payload)
+        self._hyperparameters: dict[str, HyperparameterRecord] = {}
+        self._hyperparameters_lock = threading.Lock()
 
     def run(self, index: int) -> Run:
         """Looks up a served run.
