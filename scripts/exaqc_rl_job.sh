@@ -18,7 +18,7 @@
 #
 # Optional environment variables, normally set on the submitting command line
 # (described where they are read below): HEALTHY_REWARD, EPISODES,
-# IMPROVEMENT_CUTOFF, LOG_EVERY, NUMBER_GENOMES, EVAL_SEED and DRY_RUN.
+# IMPROVEMENT_CUTOFF, LOG_EVERY, NUMBER_GENOMES, EVAL_SEED, USE_ONLY and DRY_RUN.
 #
 #SBATCH -J exaqc_rl
 #SBATCH -t 1-00:00:00
@@ -79,6 +79,13 @@ NUMBER_GENOMES=${NUMBER_GENOMES:-10000}
 #: on the same episodes with the same sampling noise. Training seeds stay random
 #: per genome either way (--training_seed is never passed).
 EVAL_SEED=${EVAL_SEED:-}
+
+#: The gates the search may use, as space-separated gate method names passed to
+#: --use_only. Set USE_ONLY to search a different gate set, quoting it so the
+#: shell keeps the names together as one value:
+#:
+#:     USE_ONLY="rx ry rz cx" sbatch scripts/exaqc_rl_job.sh ...
+USE_ONLY=${USE_ONLY:-rx ry rz p u crx cry crz cp rxx ryy rzz cx cy cz}
 
 if [ $# -lt 7 ]; then
     echo "usage: $0 <env> <input_qubits> <output_qubits> <run_name> <n_islands> <max_island_size> <topology> [topology arguments...]" >&2
@@ -175,6 +182,22 @@ if [ -n "$EVAL_SEED" ]; then
     EVAL_SEED_ARGUMENTS=(--eval_seed "$EVAL_SEED")
 fi
 
+# Gate names are lowercase letters and digits, so anything else (a comma, a
+# shell character) is a malformed list rather than a gate. Checking the
+# characters first also means the split below cannot glob.
+case "$USE_ONLY" in
+    *[!a-z0-9\ ]*)
+        echo "error: USE_ONLY must be space-separated gate names (lowercase letters and digits), but found: $USE_ONLY" >&2
+        exit 2
+        ;;
+    *[a-z0-9]*) ;;
+    *)
+        echo "error: USE_ONLY must name at least one gate, but found: '$USE_ONLY'" >&2
+        exit 2
+        ;;
+esac
+read -r -a USE_ONLY_GATES <<<"$USE_ONLY"
+
 # --topology takes any number of values, so it comes last: a flag after it would
 # be read as another one of its arguments.
 #
@@ -209,6 +232,8 @@ COMMAND=(
     -qom probs
     --encoding linear
     --decoding linear
+    # --use_only takes any number of values, so another flag must follow it
+    --use_only "${USE_ONLY_GATES[@]}"
     --out_dir "$OUT_DIR"
     --improvement_cutoff "$IMPROVEMENT_CUTOFF"
     --shared_file_system

@@ -59,7 +59,18 @@
 #                    name, so give each combination its own tag:
 #                      EPISODES=0 NUMBER_GENOMES=200000 EVAL_SEED=1000 \
 #                          sh scripts/submit_exaqc_rl_jobs.sh 1 5 inherit_fixedeval walker2d 6 6 fully_connected
-#   TIME_LIMIT       Slurm wall-time limit for each job, passed to sbatch as
+#   USE_ONLY         the gates the search may use, passed to --use_only as
+#                    space-separated gate method names (default
+#                    "rx ry rz p u crx cry crz cp rxx ryy rzz cx cy cz").
+#                    Quote it, so the shell keeps the names together as one
+#                    value -- without quotes the second name is run as the
+#                    command:
+#                      USE_ONLY="rx ry rz cx cy cz" \
+#                          sh scripts/submit_exaqc_rl_jobs.sh 1 5 rxyz_cxyz walker2d 6 6 fully_connected
+#                    Like the settings above it does not change the run name,
+#                    so give each gate set its own tag; a resubmitted run
+#                    resumes its archive with the gate set it was started with
+#   TIME_LIMIT      Slurm wall-time limit for each job, passed to sbatch as
 #                    -t (e.g. 2-00:00:00 for two days, or 12:00:00); unset keeps
 #                    the job script's own #SBATCH -t default of 1 day, which is
 #                    kept short so jobs get through the queue faster
@@ -119,10 +130,12 @@ examples:
       sh scripts/submit_exaqc_rl_jobs.sh 1 5 inherit_fixedeval walker2d 6 6 2d_mesh 4 5
   EPISODES=20 IMPROVEMENT_CUTOFF=5 LOG_EVERY=1 EVAL_SEED=1000 \
       sh scripts/submit_exaqc_rl_jobs.sh 1 5 ep20_cut5_fixedeval walker2d 6 6 fully_connected
+  USE_ONLY="rx ry rz cx cy cz" \
+      sh scripts/submit_exaqc_rl_jobs.sh 1 5 rxyz_cxyz walker2d 6 6 fully_connected
 
 environment variables (all optional; see the comments at the top of this script):
   N_ISLANDS, MAX_ISLAND_SIZE, HEALTHY_REWARD, EPISODES, IMPROVEMENT_CUTOFF,
-  LOG_EVERY, NUMBER_GENOMES, EVAL_SEED, TIME_LIMIT, DRY_RUN
+  LOG_EVERY, NUMBER_GENOMES, EVAL_SEED, USE_ONLY (quoted), TIME_LIMIT, DRY_RUN
 USAGE
     exit 2
 }
@@ -221,6 +234,19 @@ fi
 if [ -n "${EVAL_SEED:-}" ]; then
     is_whole_number "$EVAL_SEED" ||
         die "EVAL_SEED must be a non-negative integer, but found: $EVAL_SEED"
+fi
+
+# Unset or empty, the job script's default gate set applies.
+if [ -n "${USE_ONLY:-}" ]; then
+    case "$USE_ONLY" in
+        *[!a-z0-9\ ]*)
+            die "USE_ONLY must be space-separated gate names (lowercase letters and digits), but found: $USE_ONLY"
+            ;;
+        *[a-z0-9]*) ;;
+        *)
+            die "USE_ONLY must name at least one gate, but found: '$USE_ONLY'"
+            ;;
+    esac
 fi
 
 # Only the forms this script documents are accepted: days-hours:minutes:seconds

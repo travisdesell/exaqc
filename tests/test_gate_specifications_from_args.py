@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from argparse import Namespace
 
+import pytest
+
 from src.circuits.gate_specifications import GateSpecifications
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
 from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
@@ -50,3 +52,12 @@ def test_from_args_use_only_restricts_the_gate_set() -> None:
     assert specs is not pennylane_gate_specifications
     assert "cx" in pennylane_gate_specifications.keys()
     assert len(list(pennylane_gate_specifications.keys())) > len(kept)
+
+
+def test_from_args_use_only_rejects_unknown_gate_names() -> None:
+    """A ``--use_only`` name the backend lacks is an error, not silently dropped."""
+
+    with pytest.raises(ValueError, match="cnot"):
+        GateSpecifications.from_args(
+            Namespace(target="pennylane", use_only=["cx", "cnot"])
+        )
