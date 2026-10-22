@@ -252,7 +252,11 @@ class SteadyStateIslands(PopulationStrategy):
         """Takes back the islands a stopped run held, so its search continues.
 
         Each genome goes back to the island it was inserted into, and each
-        island works out its own status from what it holds. The connections are
+        island works out its own status from what it holds and whether an
+        extinction event cleared it -- so an island the run emptied keeps
+        repopulating from its neighbors rather than sending the whole search
+        back to initializing, and one the run never filled keeps initializing
+        rather than being bred from early. The connections are
         taken from what the run recorded rather than being drawn again, because
         a ``random`` topology would otherwise come out differently.
 
@@ -278,7 +282,11 @@ class SteadyStateIslands(PopulationStrategy):
             held.setdefault(int(island_id), []).append(genome)
 
         for island in self.islands:
-            island.restore(held.get(island.id, []), state.next_genome_number)
+            island.restore(
+                held.get(island.id, []),
+                state.next_genome_number,
+                cleared=island.id in state.cleared_islands,
+            )
 
         self._restore_topology(state.island_neighbors)
 

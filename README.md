@@ -205,7 +205,7 @@ records how long its worker waited for it as `timing.request_wait_seconds`.
 | Argument | Default | Description |
 |---|---|---|
 | `--target` | `pennylane` | Backend: [`pennylane`](https://docs.pennylane.ai/en/stable/) or [`qiskit`](https://quantum.cloud.ibm.com/docs/en/guides) |
-| `--use_only` | all gates | Restrict the search to only these gate method names (e.g. `cx ry rz`) |
+| `--use_only` | all gates | Restrict the search to only these gate method names (e.g. `cx ry rz`); a name the backend does not have is an error |
 | `--input_qubits` | *required* | Qubits the inputs are encoded onto |
 | `--output_qubits` | *required* | Qubits measured for the output |
 | `--quantum_input_mode`, `-qim` | `u3` | How classical values become circuit inputs: `u3`, `rx`, `ry`, `rz`, `basis`, `amplitude` |
@@ -406,9 +406,10 @@ non-negative) both halves are forced non-negative: the action mean can never go
 below `0` on a `[-1, 1]` action space, and `log_std >= 0` pins the sampled
 action noise at `sigma >= 1`. Measured on Walker2d, `clipped` yields means in
 `[0.00, 1.00]` and `sigma` in `[1.00, 1.44]`, where `linear` yields means in
-`[-0.27, 0.22]` and `sigma` in `[0.85, 1.17]`. Greedy evaluation hides the
-second half of this, because it reads only the mean and discards `log_std` —
-see [`--eval_policy`](#evaluation-regime---eval_policy).
+`[-0.27, 0.22]` and `sigma` in `[0.85, 1.17]`. Greedy evaluation (the default)
+hides the second half of this from fitness, because it reads only the mean and
+discards `log_std`, but training still samples with that noise — see
+[`--eval_policy`](#evaluation-regime---eval_policy).
 
 Shared arguments: `--episodes`, `--eval_episodes`, `--eval_policy`,
 `--max_steps`, `--gamma`, `--learning_rate`, `--adam_beta1`, `--adam_beta2`,
@@ -465,32 +466,33 @@ configuration error and is rejected.
 ##### Evaluation regime (`--eval_policy`)
 
 A genome's fitness is the return it achieves during evaluation, and
-`--eval_policy` decides **which policy** that measures. It matters because the
-two regimes are genuinely different policies: on a continuous environment the
-greedy action is the distribution mean, which discards the learned
-log-standard-deviation — half of the policy outputs — while the policy-gradient
-trainers collect every rollout by *sampling* using it.
+`--eval_policy` decides **which policy** that measures. Training always explores:
+the policy-gradient trainers sample their actions and the value-based ones act
+ε-greedily. Evaluation, by default, takes the deterministic action instead.
 
 | `--eval_policy` | Evaluation uses |
 |---|---|
-| `match` (default) | the regime the chosen `--algo` optimizes (see below) |
-| `greedy` | the deterministic action: argmax over logits, or the distribution mean |
-| `stochastic` | an action sampled from the policy |
-| `both` | both regimes; the `match` one drives fitness, the other is recorded beside it |
+| `greedy` (default) | the deterministic action: argmax over logits (or Q-values), or the distribution mean |
+| `stochastic` | an action sampled from the policy (`reinforce`, `actor_critic`, `a2c`, `ppo` only) |
+| `both` | both regimes; `greedy` drives fitness, and both means are recorded |
 
-`match` resolves per algorithm, because the correct regime is not the same for
-all of them:
+Greedy is the default for every algorithm. It follows the common convention for
+evaluating a trained policy: Stable-Baselines3's `evaluate_policy` and
+`EvalCallback` default to deterministic actions, and the RL Zoo evaluates
+deterministically everywhere except Atari and MiniGrid. It also suits an
+evolutionary search. A stochastic score adds the policy's own sampling noise to
+fitness. It also penalizes a genome for the exploration noise (`log_std`) that its
+training, and its offspring's, relies on.
 
-| `--algo` | `match` resolves to | Why |
-|---|---|---|
-| `reinforce`, `actor_critic`, `a2c`, `ppo` | `stochastic` | the objective is the expected return of the *sampled* policy |
-| `q_learning`, `sarsa` | `greedy` | Q-learning's target policy is the greedy one; ε-greedy is only its behaviour policy |
+`q_learning` and `sarsa` accept only `greedy`. Their outputs are Q-values, not a
+policy distribution, so sampling from them would score a policy they never learn.
+Asking for `stochastic` or `both` with them is rejected at startup.
 
 Two consequences worth knowing:
 
 - **Fitness under different regimes is not comparable.** The regime each genome
   was scored under is recorded in its `fitness` as `eval_policy`, and under
-  `--eval_policy both` the unselected regime is recorded as
+  `--eval_policy both` the two regimes' means are recorded as
   `eval_greedy_return_mean` / `eval_stochastic_return_mean`.
 - **A stochastic evaluation is noisier than a greedy one**, since the policy's
   own sampling adds variance on top of the environment's. `--eval_episodes`
@@ -633,8 +635,10 @@ fail instead of starting a new run, which catches a mistyped `--out_dir`.
 
 The archive is authoritative: a restart rebuilds the search from the arguments
 the run recorded, so genome numbering, gate innovation numbers, the population,
-each island's members and connections, and the best genomes all continue rather
-than starting over. Only `--number_genomes` and the flags saying where and how
+each island's members, connections and status, and the best genomes all continue
+rather than starting over: an island an extinction event emptied keeps
+repopulating from its best neighbor, and one that never filled keeps
+initializing. Only `--number_genomes` and the flags saying where and how
 this process runs (`--out_dir`, `--shared_file_system`, `--device`,
 `--logging_level`, `--timing_report_every`) may differ; any other changed argument is refused, naming
 what differs, unless `--force_restart` says to continue the run as it was
@@ -695,7 +699,9 @@ well as the `all_genomes/` directories of older runs.
 
 An archive is also an ordinary database, so a run can be queried directly. Each
 genome's `loss` and `target_metric` are indexed columns generated from its stored
-fitness, which keeps ranking queries fast however long the run is:
+fitness, which keeps ranking queries fast however long the run is (query those
+columns rather than `json_extract(fitness, '$.loss')`, which cannot use the
+index), and `saved_at` is indexed too, so a run's latest write is a lookup:
 
 ```
 sqlite3 ./artifacts/iris/genomes.sqlar "select genome_number, loss from genomes order by loss limit 5"
@@ -1007,7 +1013,7 @@ environments work only with `reinforce`, `actor_critic`/`a2c` and `ppo`.
 | `--output_qubits` | *required* | Readout qubits. Must be wide enough to carry the policy's outputs — at least `ceil(log2(n_policy_outputs))`, where a discrete policy needs one output per action and a continuous one two per action dimension |
 | `--episodes` | `60` | Training episodes per genome, after the episode-0 evaluation of its inherited weights; 0 scores them only |
 | `--eval_episodes` | `10` | Episodes used to score a genome |
-| `--eval_policy` | `match` | Action-selection regime evaluation scores under: `match`, `greedy`, `stochastic` or `both` |
+| `--eval_policy` | `greedy` | Action-selection regime evaluation scores under: `greedy`, `stochastic` or `both` (`stochastic`/`both` need a policy-gradient `--algo`) |
 | `--eval_seed` | random per genome | Base seed for evaluation episodes and their action sampling, kept disjoint from the training seeds; set it to score every genome on the same episodes with the same sampling noise |
 | `--forward_reward_weight` | the environment's own | MuJoCo: weight on forward progress (`reward += weight * dx/dt`) |
 | `--ctrl_cost_weight` | the environment's own | MuJoCo: weight on the control cost (`reward -= weight * sum(a^2)`) |
@@ -1369,7 +1375,11 @@ database, for questions the typed tools do not cover. A roll-up holds each run's
 a `run` column, and both kinds of query can read a `genome_operators` view with
 one row per operator that generated a genome, and the run's annotations as
 `notes` and `genome_tags` tables (a tag still applied has a null `removed_at`),
-so a query can, for example, pick out every genome tagged `promising`. Results are capped (at most 200
+so a query can, for example, pick out every genome tagged `promising`. A roll-up
+gathers only the tables and columns its statement reads, reading the runs
+concurrently, so naming the columns needed rather than `SELECT *` keeps it fast
+on large runs; a `query_sql` call, roll-up included, is stopped after 10 seconds
+(`export_query` after 60) with a hint on narrowing it. Results are capped (at most 200
 rows, series downsampled) and most carry a link into the dashboard showing the
 same view. `export_query` is the exception to the cap: it runs the same
 statements for a client collecting data to analyze itself, returning pages of up
@@ -1434,7 +1444,7 @@ python3 -m src.examples.reinforcement_learning_fixed --env cartpole --algo ppo -
 | `--out_dir` | `artifacts` | Where `run.log` is written |
 | `--episodes` | `60` | Training episodes, after the episode-0 evaluation of the initial weights |
 | `--eval_episodes` | `10` | Episodes used to score the model |
-| `--eval_policy` | `match` | Action-selection regime evaluation scores under: `match`, `greedy`, `stochastic` or `both` |
+| `--eval_policy` | `greedy` | Action-selection regime evaluation scores under: `greedy`, `stochastic` or `both` (`stochastic`/`both` need a policy-gradient `--algo`) |
 | `--eval_seed` | random | Base seed for evaluation episodes, kept disjoint from the training seeds |
 | `--max_steps` | `500` | Step cap per episode |
 | `--log_every` | `10` | Evaluate and log every N episodes |
@@ -1453,7 +1463,7 @@ python3 -m src.examples.reinforcement_learning_fixed --env cartpole --algo ppo -
 Plus the shared trainer arguments (`--gamma`, `--learning_rate`,
 `--entropy_coef`, ...) and the per-algorithm arguments in
 [Trainers](#trainers). The rollout uses the policy the model was scored under
-(the algorithm's own regime for `--eval_policy both`).
+(`greedy` for `--eval_policy both`).
 
 ---
 

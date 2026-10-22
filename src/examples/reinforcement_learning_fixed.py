@@ -440,16 +440,20 @@ def main() -> None:
     # algorithm choice.
     trainer = build_trainer(args.algo)
 
-    resolved_eval_policy = (
-        trainer.natural_eval_policy if args.eval_policy == "match" else args.eval_policy
-    )
+    # Value-based trainers have no policy distribution to sample from; reject a
+    # stochastic regime now rather than inside the model's first evaluation.
+    try:
+        selected_eval_policy = trainer.selected_eval_policy(args.eval_policy)
+    except ValueError as error:
+        p.error(str(error))
 
-    # Identical episodes are only a concern for a greedy rollout: a stochastic
-    # policy varies episode to episode even in a deterministic environment.
+    # Identical episodes are only a concern for a greedy rollout (including the
+    # greedy half of "both"): a stochastic policy varies episode to episode even
+    # in a deterministic environment.
     if (
         environment.deterministic
         and args.eval_episodes > 1
-        and resolved_eval_policy == "greedy"
+        and args.eval_policy != "stochastic"
     ):
         logger.warning(
             f"environment {environment.env_id} is deterministic, so greedy "
@@ -523,7 +527,15 @@ def main() -> None:
     # --live shows a live window; --output_file saves a GIF. They are
     # independent (you can do both); when neither is given nothing is
     # visualized.
-    if environment.deterministic and args.visualize_episodes > 1:
+    # roll out the policy the model was scored under; under "both" that is the
+    # greedy one, which drove its fitness
+    visualize_policy = selected_eval_policy
+
+    if (
+        environment.deterministic
+        and args.visualize_episodes > 1
+        and visualize_policy == "greedy"
+    ):
         logger.warning(
             f"environment {environment.env_id} is deterministic, so the greedy "
             f"policy yields identical visualization episodes; consider "
@@ -538,13 +550,6 @@ def main() -> None:
     save_gif_requested = args.output_file is not None
     show_live = args.live
 
-    # roll out the policy the model was scored under; "both" scores under two
-    # regimes, so it falls back to the one the algorithm optimizes
-    visualize_policy = (
-        resolved_eval_policy
-        if resolved_eval_policy in ("greedy", "stochastic")
-        else trainer.natural_eval_policy
-    )
     logger.info(
         f"visualizing best model (seed={visualize_seed}, policy={visualize_policy}, "
         f"live={show_live}, gif={save_gif_requested})"
