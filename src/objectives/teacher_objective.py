@@ -8,6 +8,8 @@ MPI.
 
 from __future__ import annotations
 
+from typing import Any
+
 from torch.utils.data import DataLoader
 
 from src.circuits.circuit import CircuitGenome
@@ -83,15 +85,39 @@ class TeacherObjective(Objective):
             of the best training and validation loss) and a ``"target_metric"``
             holding the corresponding mean fidelity, matching the fitness keys
             the classification objective writes so the analysis tooling reads
-            both the same way.
+            both the same way. Also sets ``genome.metadata["initial_fitness"]``:
+            the same fitness for the inherited weights, before any training.
         """
 
         self.trainer.train(genome)
 
-        training = genome.metadata["best_training_metrics"]
-        validation = genome.metadata["best_validation_metrics"]
+        genome.fitness = self.fitness_from_metrics(
+            genome.metadata["best_training_metrics"],
+            genome.metadata["best_validation_metrics"],
+        )
+        initial_training = genome.metadata.get("initial_training_metrics")
+        initial_validation = genome.metadata.get("initial_validation_metrics")
+        if initial_training is not None and initial_validation is not None:
+            genome.metadata["initial_fitness"] = self.fitness_from_metrics(
+                initial_training, initial_validation
+            )
 
-        genome.fitness = {
+    @staticmethod
+    def fitness_from_metrics(
+        training: dict[str, Any], validation: dict[str, Any]
+    ) -> dict[str, float]:
+        """Computes teacher-imitation fitness from one epoch's metrics.
+
+        Args:
+            training: The training-data metrics (``loss`` and ``fidelity``).
+            validation: The validation-data metrics, with the same keys.
+
+        Returns:
+            The fitness: ``loss`` is the mean of the training and validation
+            loss, and ``target_metric`` the mean of their mean fidelity.
+        """
+
+        return {
             "loss": (float(training["loss"]) + float(validation["loss"])) / 2.0,
             "target_metric": (
                 float(training["fidelity"]["mean"])

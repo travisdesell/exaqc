@@ -354,6 +354,10 @@ its weights at the end, and stops early after `improvement_cutoff` epochs
 without improvement. Epoch 0 competes too: if training never improves on the
 inherited weights they are kept, and `best_epoch` is `0`. With `--epochs 0` no
 training happens at all and every genome is scored on the weights it inherited.
+Epoch 0's training and validation metrics are also kept as
+`initial_training_metrics` and `initial_validation_metrics`, and the objective
+scores them like fitness into `initial_fitness`, so every genome records what
+training added on top of the weights it inherited.
 
 | Hyperparameter | Argument | Description |
 |---|---|---|
@@ -379,7 +383,12 @@ an evaluation every `--log_every` episodes and after the last. The
 best-evaluated weights are restored at the end, and episode 0 competes too: if
 training never improves on the inherited weights they are kept, and
 `best_episode` is `0`. With `--episodes 0` no training happens at all and every
-genome is scored on the weights it inherited.
+genome is scored on the weights it inherited. The training returns in
+`best_training_metrics` (and so fitness's `train_return_mean`) are taken as of
+`best_episode` -- the weights kept -- not as of the last episode trained, whose
+weights are discarded; when the inherited weights are kept they are episode 0's
+returns. Episode 0's evaluation is also kept as `initial_validation_metrics`, and
+the objective scores it like fitness into `initial_fitness`.
 
 | `--algo` | Class | Continuous actions | Extra decoder outputs |
 |---|---|---|---|
@@ -627,7 +636,11 @@ one in its place; it takes precedence over the default offer to continue. Pass
 `--restart never` to refuse to touch a directory that already holds a run at all.
 Runs written before archives recorded their arguments and gate innovation numbers,
 or before they recorded per-genome timing (archive format 6), cannot be
-restarted; they are still listed, browsed and charted as before.
+restarted; they are still listed, browsed and charted as before. A format-6 run can
+be restarted: its archive gains the format-7 columns, which its earlier genomes
+leave empty. Format 7 also changed reinforcement learning's `train_return_mean`
+to be taken at the best episode, so a restarted format-6 RL run mixes the two
+definitions in its fitness.
 
 ### What a run directory holds
 
@@ -690,8 +703,15 @@ population statistic is then recomputed from the genomes themselves, which is wh
 lets progress be charted against any metric a run recorded -- a loss, a return, a
 fidelity, a gate count -- rather than only the handful a search would have had to
 choose in advance, while it was still running. Each genome's summary row also carries `n_cnot` and `n_rot`
-(its circuit complexity once decomposed) and `final_metrics` (the last value of every
-per-epoch or per-episode metric it recorded), and when and where it was evaluated:
+(its circuit complexity once decomposed); three records of every per-epoch or
+per-episode metric it recorded, keyed `<series>.<metric>`: `initial_metrics` (step 0,
+the inherited weights before training), `best_metrics` (its `best_epoch` or
+`best_episode`, the weights it keeps and its fitness describes -- what the dashboard
+charts and sorts by) and `last_metrics` (the last step trained, whose weights are
+discarded when training stopped improving); `initial_fitness` (the fitness its
+inherited weights had), with `initial_loss`, `initial_target_metric` and
+`target_gain` (`target_metric - initial_target_metric`: what training added) as
+columns; and when and where it was evaluated:
 `generated_at_insertion` (how many genomes had been inserted when it was created, so
 `insertion - generated_at_insertion` is how many insertions happened while it was
 being evaluated), `evaluation_seconds`, `evaluated_host` and `evaluated_rank`, and
@@ -700,7 +720,11 @@ waited for it, under MPI), `generation_seconds` (how long the search took to
 generate it) and `turnaround_seconds` (from being generated to being inserted, on
 the search's own clock, so it includes evaluation, transfer and time queued for
 the master). Archives written before these three columns (format 6) lack them,
-and the dashboard shows their runs as having no timing recorded. A
+and the dashboard shows their runs as having no timing recorded. Archives written
+before format 7 instead have a `final_metrics` column (the last-step record) and
+none of the metric projections or initial fitness: they read as unrecorded, so such
+a run offers no training metrics to chart. Reopening an older archive to continue its
+run (`--restart`) adds the missing columns, which its earlier genomes leave empty. A
 discarded genome's row gives its `discard_reason`: `worse_than_population`,
 `duplicate_of_better` or `generated_before_repopulation`. The genome's JSON holds
 the rest -- `timing` (when it was generated, when its evaluation started and
@@ -1212,21 +1236,26 @@ beside its archive (created on the first write), marked as written over MCP.
 
 The tools are `list_runs`, `describe_run`, `list_genomes`, `get_genome`,
 `genome_metrics`, `compare_genomes`, `genome_lineage`, `fitness_summary`,
-`operator_insertion_rates`, `progress_series`, `get_run_timing`, `gate_statistics`,
-`compare_runs`, `list_annotations`, `describe_schema`, `query_sql` and
-`export_query`, plus `add_note`, `tag_genome` and `untag_genome` under
-`--allow_annotations` (`list_annotations` shows removed tags when
-`include_removed` is set). The first fifteen answer
+`training_gain_summary`, `operator_insertion_rates`, `progress_series`,
+`get_run_timing`, `gate_statistics`, `compare_runs`, `list_annotations`,
+`describe_schema`, `query_sql` and `export_query`, plus `add_note`, `tag_genome`
+and `untag_genome` under `--allow_annotations` (`list_annotations` shows removed
+tags when `include_removed` is set). The first sixteen answer
 common questions with typed arguments (`get_run_timing` reports whether a run's
 MPI master kept up with its workers, as a whole-run summary and series over the
-run, and says when a run's archive predates timing; `genome_metrics` returns a genome's
+run, and says when a run's archive predates timing; `training_gain_summary`
+reports how much training changed a run's genomes -- the distribution of
+`target_gain`, the shares of genomes training improved or left unchanged, and both
+by quartile of the inherited weights' score, optionally grouped by `insert_type`,
+`island` or `generated_by` -- and needs an archive of format 7; `genome_metrics` returns a genome's
 recorded training history, each series keyed by its own epoch or episode column;
 `list_runs` leaves out each run's command line unless `include_command_line` is
 set, while `describe_run` always shows it); `query_sql` runs a single read-only
 `SELECT` against one run's archive, or against several runs rolled into one
 database, for questions the typed tools do not cover. A roll-up holds each run's
 `genomes`, `genome_parents`, `population_events`, `run_info` and `master_timing`
-(with the timing columns read as null for runs whose archives predate them), every table with
+(with the timing columns, metric projections and initial-fitness columns read as
+null for runs whose archives predate them), every table with
 a `run` column, and both kinds of query can read a `genome_operators` view with
 one row per operator that generated a genome, and the run's annotations as
 `notes` and `genome_tags` tables (a tag still applied has a null `removed_at`),

@@ -1341,13 +1341,19 @@ class ReinforcementLearningTrainer(ABC):
             ``training_episode_metrics`` (per-episode returns for episodes
             ``1..hp.episodes``; there is no episode 0, since nothing was trained
             before it), ``evaluation_episode_metrics`` (starting with episode
-            0), ``best_episode`` (0 when the inherited weights were never
-            improved on), ``best_training_metrics``, ``best_validation_metrics``,
-            ``n_trainable_parameters``, the ``training_seed`` its episodes were
-            seeded from (drawn at random unless the genome's hyperparameters fix
-            a ``seed``), the ``evaluation_seed`` and the ``eval_policy`` the
-            evaluation returns were measured under. When nothing is trained,
-            ``best_training_metrics`` holds the episode-0 evaluation's returns.
+            0), ``initial_training_metrics`` and ``initial_validation_metrics``
+            (episode 0's evaluation of the inherited weights; nothing has been
+            trained yet, so the training side holds its returns too),
+            ``best_episode`` (0 when the inherited weights were never improved
+            on), ``best_training_metrics`` (the training returns' moving average
+            and best episode return as of ``best_episode`` -- the weights the
+            genome keeps -- rather than as of the last episode trained),
+            ``best_validation_metrics``, ``n_trainable_parameters``, the
+            ``training_seed`` its episodes were seeded from (drawn at random
+            unless the genome's hyperparameters fix a ``seed``), the
+            ``evaluation_seed`` and the ``eval_policy`` the evaluation returns
+            were measured under. When the inherited weights are kept,
+            ``best_training_metrics`` equals ``initial_training_metrics``.
 
         Raises:
             ValueError: If ``environment`` is continuous but this trainer does
@@ -1409,8 +1415,18 @@ class ReinforcementLearningTrainer(ABC):
             f"({genome.metadata['eval_policy']})"
         )
 
+        # nothing has been trained yet, so the inherited weights' training-side
+        # metrics are their evaluation returns (as when no training happens)
+        initial_training_metrics = {
+            "return_mean": initial_evaluation["return_mean"],
+            "best_episode_return": initial_evaluation["best_episode_return"],
+        }
+        genome.metadata["initial_training_metrics"] = initial_training_metrics
+        genome.metadata["initial_validation_metrics"] = initial_evaluation
+
         best_return = initial_evaluation["return_mean"]
         best_evaluation = initial_evaluation
+        best_training_metrics = dict(initial_training_metrics)
         best_episode = 0
         genome.metadata["best_episode"] = best_episode
 
@@ -1423,10 +1439,7 @@ class ReinforcementLearningTrainer(ABC):
                 )
             else:
                 logger.info("training for 0 episodes; evaluating only.")
-            genome.metadata["best_training_metrics"] = {
-                "return_mean": initial_evaluation["return_mean"],
-                "best_episode_return": initial_evaluation["best_episode_return"],
-            }
+            genome.metadata["best_training_metrics"] = best_training_metrics
             genome.metadata["best_validation_metrics"] = initial_evaluation
             return
 
@@ -1487,6 +1500,12 @@ class ReinforcementLearningTrainer(ABC):
                     best_evaluation = evaluation
                     best_state = genome.clone_state_dict()
                     best_episode = episode
+                    # the training returns as of these weights, not as of the
+                    # (discarded) weights training ends with
+                    best_training_metrics = {
+                        "return_mean": float(ema_return),
+                        "best_episode_return": float(np.max(recent_returns)),
+                    }
 
                 elif (
                     hp.improvement_cutoff > 0
@@ -1505,12 +1524,7 @@ class ReinforcementLearningTrainer(ABC):
         genome.set_state_dict(best_state)
 
         genome.metadata["best_episode"] = best_episode
-        genome.metadata["best_training_metrics"] = {
-            "return_mean": float(ema_return) if ema_return is not None else 0.0,
-            "best_episode_return": (
-                float(np.max(recent_returns)) if recent_returns else 0.0
-            ),
-        }
+        genome.metadata["best_training_metrics"] = best_training_metrics
         genome.metadata["best_validation_metrics"] = best_evaluation
 
         # Leave the genome with no active dropout so the returned/serialized

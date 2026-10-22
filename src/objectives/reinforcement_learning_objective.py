@@ -486,13 +486,57 @@ class ReinforcementLearningObjective(Objective):
 
         Returns:
             None. Sets the genome's ``fitness``, whose ``loss`` is the negative
-            weighted mean return described on the class.
+            weighted mean return described on the class, and
+            ``genome.metadata["initial_fitness"]``: the same fitness for the
+            inherited weights, from the episode-0 evaluation before training.
         """
 
         self.trainer.train(genome, self.environment)
 
-        training_metrics = genome.metadata["best_training_metrics"]
-        validation_metrics = genome.metadata["best_validation_metrics"]
+        genome.fitness = self.fitness_from_metrics(
+            genome,
+            genome.metadata["best_training_metrics"],
+            genome.metadata["best_validation_metrics"],
+        )
+        initial_training = genome.metadata.get("initial_training_metrics")
+        initial_validation = genome.metadata.get("initial_validation_metrics")
+        if initial_training is not None and initial_validation is not None:
+            genome.metadata["initial_fitness"] = self.fitness_from_metrics(
+                genome, initial_training, initial_validation
+            )
+
+        logger.info(
+            f"[{genome.genome_number:04d}] "
+            f"train_return_mean={genome.fitness['train_return_mean']:.2f} "
+            f"best_episode_return={genome.fitness['best_episode_return']:.2f} "
+            f"eval_return_mean={genome.fitness['eval_return_mean']:.2f} "
+            f"eval_return_std={genome.fitness['eval_return_std']:.2f} "
+            f"eval_policy={genome.fitness['eval_policy']} "
+            f"env={self.environment.env_id}"
+        )
+
+    def fitness_from_metrics(
+        self,
+        genome: CircuitGenome,
+        training_metrics: dict[str, Any],
+        validation_metrics: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Computes reinforcement-learning fitness from one point's metrics.
+
+        Args:
+            genome: The genome being scored; its ``eval_policy`` metadata names
+                the regime the evaluation returns were measured under.
+            training_metrics: The training returns (``return_mean`` and
+                ``best_episode_return``).
+            validation_metrics: The evaluation returns (``return_mean``,
+                ``return_std`` and, under ``eval_policy="both"``, each regime's
+                ``<regime>_return_mean``).
+
+        Returns:
+            The fitness: ``loss`` is the negative weighted mean return described
+            on the class, ``target_metric`` the evaluation return, plus the
+            individual returns, the environment and the evaluation policy.
+        """
 
         # the bias weights the training return; the evaluation return gets the rest
         mean_return = (
@@ -502,7 +546,7 @@ class ReinforcementLearningObjective(Objective):
         # "loss" (lower is better) drives population sorting via compare();
         # the remaining keys mirror the RL fields used by save_circuit's tag
         # fallback and by downstream analysis.
-        genome.fitness = {
+        fitness = {
             "loss": -mean_return,
             "target_metric": validation_metrics["return_mean"],
             "eval_return_mean": validation_metrics["return_mean"],
@@ -520,14 +564,6 @@ class ReinforcementLearningObjective(Objective):
         for regime in ("greedy", "stochastic"):
             recorded = validation_metrics.get(f"{regime}_return_mean")
             if recorded is not None:
-                genome.fitness[f"eval_{regime}_return_mean"] = recorded
+                fitness[f"eval_{regime}_return_mean"] = recorded
 
-        logger.info(
-            f"[{genome.genome_number:04d}] "
-            f"train_return_mean={genome.fitness['train_return_mean']:.2f} "
-            f"best_episode_return={genome.fitness['best_episode_return']:.2f} "
-            f"eval_return_mean={genome.fitness['eval_return_mean']:.2f} "
-            f"eval_return_std={genome.fitness['eval_return_std']:.2f} "
-            f"eval_policy={genome.fitness['eval_policy']} "
-            f"env={self.environment.env_id}"
-        )
+        return fitness
