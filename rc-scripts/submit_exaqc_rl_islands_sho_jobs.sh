@@ -10,7 +10,9 @@
 #   sh scripts/submit_exaqc_rl_islands_sho_jobs.sh 1 10 sho ring
 #   NAMES=cartpole sh scripts/submit_exaqc_rl_islands_sho_jobs.sh 1 10 sho 2d_mesh 2 5
 #
-# Every environment (cartpole frozenlake walker2d mountaincar_continuous) is submitted unless NAMES picks some.
+# cartpole, frozenlake, walker2d and mountaincar_continuous are submitted unless
+# NAMES picks others; any of cartpole acrobot mountaincar frozenlake
+# mountaincar_continuous pendulum hopper walker2d halfcheetah ant humanoid works.
 # The island count, island size and topology are part of each run's job and
 # archive name, so runs on different topologies never share an archive. Run i is
 # seeded with --seed i, so runs are independent and reproducible. The run range
@@ -24,7 +26,8 @@
 # Written for POSIX sh (invoked as `sh ...`), so no arrays and no [[ ]].
 #
 # Environment variables:
-#   NAMES               environments to submit (default: all of them)
+#   NAMES               environments to submit (default: cartpole frozenlake
+#                       walker2d mountaincar_continuous)
 #   N_ISLANDS           islands per run (default 10); the 2d_mesh and
 #                       random topologies are validated against it
 #   MAX_ISLAND_SIZE     genomes per island (default 5, so 50 genomes
@@ -41,7 +44,7 @@ set -eu
 
 #: Islands per run, genomes per island and islands cleared per extinction.
 #: The defaults keep the 50-genome population of the steady-state batch.
-N_ISLANDS=${N_ISLANDS:-10}
+N_ISLANDS=${N_ISLANDS:-6}
 MAX_ISLAND_SIZE=${MAX_ISLAND_SIZE:-5}
 ISLANDS_TO_EXTINCT=${ISLANDS_TO_EXTINCT:-1}
 
@@ -53,7 +56,11 @@ LOG_DIR=${LOG_DIR:-/home/dk7405/logs/exaqc}
 
 #: The environments the job script accepts. Kept space-delimited for an
 #: exact-token match below.
-NAMES_ALLOWED="cartpole frozenlake walker2d mountaincar_continuous"
+NAMES_ALLOWED="cartpole acrobot mountaincar frozenlake mountaincar_continuous pendulum hopper walker2d halfcheetah ant humanoid"
+
+#: The environments submitted when NAMES is unset: the original four, so an
+#: unset NAMES does not quietly queue every MuJoCo task.
+NAMES_DEFAULT="cartpole frozenlake walker2d mountaincar_continuous"
 
 usage() {
     cat >&2 <<'USAGE'
@@ -73,7 +80,9 @@ usage: sh scripts/submit_exaqc_rl_islands_sho_jobs.sh <min_run> <max_run> <tag> 
               random <min_edges> <max_edges>  1 <= min_edges <= max_edges,
                                               max_edges < N_ISLANDS
 
-  NAMES picks the environments (default: all of cartpole frozenlake walker2d mountaincar_continuous).
+  NAMES picks the environments from: cartpole acrobot mountaincar frozenlake
+  mountaincar_continuous pendulum hopper walker2d halfcheetah ant humanoid
+  (default: cartpole frozenlake walker2d mountaincar_continuous).
 
 examples:
   sh scripts/submit_exaqc_rl_islands_sho_jobs.sh 1 10 sho ring
@@ -135,7 +144,7 @@ is_tag "$TAG" ||
     die "tag must be non-empty and contain only letters, digits, '-' and '_', but found: $TAG"
 
 if [ -z "${NAMES:-}" ]; then
-    NAMES=$NAMES_ALLOWED
+    NAMES=$NAMES_DEFAULT
 else
     for name in $NAMES; do
         contains_word "$NAMES_ALLOWED" "$name" ||

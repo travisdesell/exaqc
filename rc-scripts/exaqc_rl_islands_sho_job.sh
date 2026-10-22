@@ -6,7 +6,8 @@
 #                                     <n_islands> <max_island_size> <islands_to_extinct> \
 #                                     <topology> [topology arguments...]
 #
-# <environment> is one of: cartpole frozenlake walker2d mountaincar_continuous
+# <environment> is one of: cartpole acrobot mountaincar frozenlake
+# mountaincar_continuous pendulum hopper walker2d halfcheetah ant humanoid
 #
 # Each runs with the settings of its local batch script (run_rl_10_runs.sh), but on
 # an islands population connected by <topology> instead of one steady-state one,
@@ -40,7 +41,7 @@ set -eu
 VENV=${VENV:-/home/dk7405/envs/exaqc}
 
 #: Where each run's genome archive is written.
-ARCHIVE_DIR=${ARCHIVE_DIR:-/home/dk7405/genome_archives/sho}
+ARCHIVE_DIR=${ARCHIVE_DIR:-/home/dk7405/genome_archives/sho02}
 
 if [ $# -lt 7 ]; then
     echo "usage: $0 <environment> <seed> <run_name> <n_islands> <max_island_size> <islands_to_extinct> <topology> [topology arguments...]" >&2
@@ -53,8 +54,15 @@ RUN_NAME=$3
 N_ISLANDS=$4
 MAX_ISLAND_SIZE=$5
 ISLANDS_TO_EXTINCT=$6
-QOM="expval"
 shift 6
+
+#: The quantum readout: probs (2^output_qubits values) or expval (one value per
+#: output qubit). It decides each environment's output qubit count below.
+QOM=${QOM:-expval}
+case "$QOM" in
+    probs | expval) ;;
+    *) echo "error: QOM must be probs or expval, but found: $QOM" >&2; exit 2 ;;
+esac
 # whatever is left is the topology and its own arguments
 
 # The archive directory *is* the job name, so a job in the queue and the archive
@@ -85,40 +93,112 @@ OPERATOR_TUNE=(
 )
 
 # the learning rate's SHO burn-in sits around each env's configured rate
-# (the default 0.01, or 3e-4 for the MuJoCo and continuous-control ones)
+# (the default 0.01, or 3e-4 for the MuJoCo and continuous-control ones).
+#
+# The output qubits must carry the policy's outputs: one per discrete action, or
+# a mean and log-std per continuous action dimension, plus one state value for
+# PPO. probs gives 2^output_qubits values, so it needs
+# ceil(log2(outputs)) qubits; expval gives one value per qubit, so it needs one
+# qubit per output, capped at 8 (halfcheetah and walker2d have 13 outputs, ant
+# 17 and humanoid 35, which would otherwise mean a 13- to 35-qubit circuit; the
+# linear decoder maps the 8 values onto them). The MuJoCo tasks share
+# walker2d's settings, with --healthy_reward only for those that have an alive
+# bonus (not halfcheetah).
+MUJOCO_GATES=(--use_only rx ry rz p u crx cry crz cp rxx ryy rzz cx cy cz)
+MUJOCO_ARGUMENTS=(--learning_rate 3e-4 --rollout_steps 2048 --max_steps 1000 --episodes 200 "${MUJOCO_GATES[@]}")
 case "$NAME" in
     cartpole)
-        ENV_ARGUMENTS=(--input_qubits 4 --output_qubits 2 --episodes 1000)
+        # 2 actions + value = 3 outputs
+        ENV_ARGUMENTS=(--input_qubits 4 --episodes 200)
+        OUTPUT_QUBITS_PROBS=2
+        OUTPUT_QUBITS_EXPVAL=3
+        LR_TUNE=learning_rate=log:1e-3:5e-2:1e-5:0.3
+        ;;
+    acrobot)
+        # 3 actions + value = 4 outputs
+        ENV_ARGUMENTS=(--input_qubits 4 --episodes 200)
+        OUTPUT_QUBITS_PROBS=2
+        OUTPUT_QUBITS_EXPVAL=4
+        LR_TUNE=learning_rate=log:1e-3:5e-2:1e-5:0.3
+        ;;
+    mountaincar)
+        # 3 actions + value = 4 outputs
+        ENV_ARGUMENTS=(--input_qubits 2 --episodes 200)
+        OUTPUT_QUBITS_PROBS=2
+        OUTPUT_QUBITS_EXPVAL=4
         LR_TUNE=learning_rate=log:1e-3:5e-2:1e-5:0.3
         ;;
     frozenlake)
-        ENV_ARGUMENTS=(--map_name 4x4 --is_slippery --input_qubits 4 --output_qubits 4 --episodes 1000 --eval_episodes 10)
+        # 4 actions + value = 5 outputs
+        ENV_ARGUMENTS=(--map_name 4x4 --is_slippery --input_qubits 4 --episodes 200 --eval_episodes 10)
+        OUTPUT_QUBITS_PROBS=3
+        OUTPUT_QUBITS_EXPVAL=5
         LR_TUNE=learning_rate=log:1e-3:5e-2:1e-5:0.3
         ;;
     walker2d)
-        ENV_ARGUMENTS=(--learning_rate 3e-4 --rollout_steps 2048 --max_steps 1000 --healthy_reward 0.1 --input_qubits 6 --output_qubits 6 --episodes 1000)
+        # 6 action dimensions x (mean, log-std) + value = 13 outputs
+        ENV_ARGUMENTS=("${MUJOCO_ARGUMENTS[@]}" --healthy_reward 0.1 --input_qubits 6)
+        OUTPUT_QUBITS_PROBS=4
+        OUTPUT_QUBITS_EXPVAL=8
+        LR_TUNE=learning_rate=log:1e-4:1e-3:1e-5:0.1
+        ;;
+    hopper)
+        # 3 action dimensions x (mean, log-std) + value = 7 outputs
+        ENV_ARGUMENTS=("${MUJOCO_ARGUMENTS[@]}" --healthy_reward 0.1 --input_qubits 4)
+        OUTPUT_QUBITS_PROBS=3
+        OUTPUT_QUBITS_EXPVAL=7
+        LR_TUNE=learning_rate=log:1e-4:1e-3:1e-5:0.1
+        ;;
+    halfcheetah)
+        # 6 action dimensions x (mean, log-std) + value = 13 outputs; no alive bonus
+        ENV_ARGUMENTS=("${MUJOCO_ARGUMENTS[@]}" --input_qubits 6)
+        OUTPUT_QUBITS_PROBS=4
+        OUTPUT_QUBITS_EXPVAL=8
+        LR_TUNE=learning_rate=log:1e-4:1e-3:1e-5:0.1
+        ;;
+    ant)
+        # 8 action dimensions x (mean, log-std) + value = 17 outputs
+        ENV_ARGUMENTS=("${MUJOCO_ARGUMENTS[@]}" --healthy_reward 0.1 --input_qubits 8)
+        OUTPUT_QUBITS_PROBS=5
+        OUTPUT_QUBITS_EXPVAL=8
+        LR_TUNE=learning_rate=log:1e-4:1e-3:1e-5:0.1
+        ;;
+    humanoid)
+        # 17 action dimensions x (mean, log-std) + value = 35 outputs
+        ENV_ARGUMENTS=("${MUJOCO_ARGUMENTS[@]}" --healthy_reward 0.1 --input_qubits 8)
+        OUTPUT_QUBITS_PROBS=6
+        OUTPUT_QUBITS_EXPVAL=8
         LR_TUNE=learning_rate=log:1e-4:1e-3:1e-5:0.1
         ;;
     mountaincar_continuous)
-        ENV_ARGUMENTS=(--episodes 1000 --learning_rate 3e-4 --rollout_steps 1024 --max_steps 1000 --input_qubits 2 --output_qubits 2)
+        # 1 action dimension x (mean, log-std) + value = 3 outputs
+        ENV_ARGUMENTS=(--episodes 200 --learning_rate 3e-4 --rollout_steps 1024 --max_steps 1000 --input_qubits 2)
+        OUTPUT_QUBITS_PROBS=2
+        OUTPUT_QUBITS_EXPVAL=3
+        LR_TUNE=learning_rate=log:1e-4:1e-3:1e-5:0.1
+        ;;
+    pendulum)
+        # 1 action dimension x (mean, log-std) + value = 3 outputs; episodes
+        # end at Gymnasium's 200-step limit
+        ENV_ARGUMENTS=(--episodes 200 --learning_rate 3e-4 --rollout_steps 1024 --max_steps 1000 --input_qubits 2)
+        OUTPUT_QUBITS_PROBS=2
+        OUTPUT_QUBITS_EXPVAL=3
         LR_TUNE=learning_rate=log:1e-4:1e-3:1e-5:0.1
         ;;
     *) echo "error: unknown RL environment: $NAME" >&2; exit 2 ;;
 esac
 
-# expval measurement needs one extra output qubit
-if [[ "$QOM" == "expval" ]]; then
-    for i in "${!ENV_ARGUMENTS[@]}"; do
-        if [[ "${ENV_ARGUMENTS[i]}" == "--output_qubits" ]]; then
-            ENV_ARGUMENTS[i+1]=$(( ENV_ARGUMENTS[i+1] + 1 ))
-            break
-        fi
-    done
+if [ "$QOM" = "probs" ]; then
+    ENV_ARGUMENTS+=(--output_qubits "$OUTPUT_QUBITS_PROBS")
+else
+    ENV_ARGUMENTS+=(--output_qubits "$OUTPUT_QUBITS_EXPVAL")
 fi
 
-# Normalizing
-# near the top
-STABILIZE=${STABILIZE:-1}
+#: Whether to switch on the PPO training stabilizers: running observation
+#: normalization, reward scaling, linear learning-rate decay, KL early stopping
+#: (which is what makes the 10 passes per rollout safe) and a tighter log-std
+#: clamp. Off by default; STABILIZE=1 switches them on.
+STABILIZE=${STABILIZE:-0}
 STABILIZER_ARGUMENTS=()
 if [ "$STABILIZE" = "1" ]; then
     STABILIZER_ARGUMENTS=(--normalize_observations --ppo_reward_scaling --lr_anneal linear --ppo_target_kl 0.015 --log_std_max 0.5 --ppo_passes 10)
@@ -144,7 +224,7 @@ COMMAND=(
         adam_beta1=linear:0.9:0.99 adam_beta2=linear:0.9:0.999 adam_epsilon=log:1e-9:1e-8
         "${OPERATOR_TUNE[@]}"
     --sho_genomes 4 --sho_l1 2.0 --sho_l2 0.5
-    --seed "$SEED"
+    --training_seed "$SEED"
     --out_dir "$OUT_DIR"
     --shared_file_system
     islands

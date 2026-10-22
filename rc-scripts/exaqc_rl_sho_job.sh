@@ -103,7 +103,7 @@ COMMAND=(
         adam_beta1=linear:0.9:0.99 adam_beta2=linear:0.9:0.999 adam_epsilon=log:1e-9:1e-8
         "${OPERATOR_TUNE[@]}"
     --sho_genomes 4 --sho_l1 2.0 --sho_l2 0.5
-    --seed "$SEED"
+    --training_seed "$SEED"
     --out_dir "$OUT_DIR"
     --shared_file_system
     steady_state --max_population_size 50
