@@ -610,8 +610,10 @@ fail instead of starting a new run, which catches a mistyped `--out_dir`.
 
 The archive is authoritative: a restart rebuilds the search from the arguments
 the run recorded, so genome numbering, gate innovation numbers, the population,
-each island's members and connections, and the best genomes all continue rather
-than starting over. Only `--number_genomes` and the flags saying where and how
+each island's members, connections and status, and the best genomes all continue
+rather than starting over: an island an extinction event emptied keeps
+repopulating from its best neighbor, and one that never filled keeps
+initializing. Only `--number_genomes` and the flags saying where and how
 this process runs (`--out_dir`, `--shared_file_system`, `--device`,
 `--logging_level`, `--timing_report_every`) may differ; any other changed argument is refused, naming
 what differs, unless `--force_restart` says to continue the run as it was
