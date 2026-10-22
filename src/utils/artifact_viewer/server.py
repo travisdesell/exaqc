@@ -22,9 +22,10 @@ import statistics
 import threading
 import time
 from collections import OrderedDict
-from concurrent.futures import Future, ProcessPoolExecutor
+from collections.abc import Callable, Iterator, Sequence
+from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypeVar
 
 from loguru import logger
 
@@ -49,6 +50,17 @@ MAX_ANCESTRY_DEPTH = 20
 #: The least time between scans for newly written run archives, in seconds.
 #: Pages poll every few seconds, so this bounds how often the disk is searched.
 RESCAN_INTERVAL_SECONDS = 5.0
+
+#: How many archives a request reading several runs reads at once. In a large
+#: archive the ``genomes`` table's pages lie scattered among the stored genomes'
+#: blobs, so reading it is mostly waiting on the disk; concurrent readers overlap
+#: that waiting. Over ten 200k-genome (4 GB) archives, 16 readers rolled their
+#: genomes up about five times faster than one.
+READ_WORKERS = 16
+
+#: What :func:`read_concurrently` reads, and what each read returns.
+_Item = TypeVar("_Item")
+_Read = TypeVar("_Read")
 
 #: Directories never searched for runs: a legacy run's per-genome JSON files,
 #: which can number in the tens of thousands.
@@ -503,6 +515,62 @@ class Run:
     directory: str
     archive_path: str
     groups: list[str] = field(default_factory=list)
+
+
+def read_concurrently(
+    items: Sequence[_Item], read: Callable[[_Item], _Read]
+) -> Iterator[_Read]:
+    """Reads several archives (or parts of them) at once, each on its own thread.
+
+    SQLite releases the interpreter lock while it reads, so the threads overlap
+    their waits on the disk (see :data:`READ_WORKERS`). Each read must open its
+    own connection.
+
+    Args:
+        items: What to read, such as runs.
+        read: Reads one item.
+
+    Returns:
+        An iterator over what ``read`` returned for each item, in the order of
+        ``items``, yielding each as soon as it and those before it are done.
+
+    Raises:
+        Exception: Whatever ``read`` raised, for the first item (in order) whose
+            read failed, once iteration reaches it.
+    """
+
+    if len(items) <= 1:
+        yield from (read(item) for item in items)
+        return
+    with ThreadPoolExecutor(max_workers=min(READ_WORKERS, len(items))) as pool:
+        yield from pool.map(read, items)
+
+
+def archive_version(path: str) -> tuple[int, ...] | None:
+    """Identifies the state of an archive's files, to tell when it has changed.
+
+    A search writing in WAL mode appends to ``genomes.sqlar-wal`` and only
+    copies the log into the archive now and then, so the log is part of the
+    archive's state.
+
+    Args:
+        path: The archive's path.
+
+    Returns:
+        The modification time (in nanoseconds) and size of the archive and of
+        its write-ahead log, if it has one; ``None`` if the archive is missing.
+    """
+
+    version: list[int] = []
+    for name in (path, f"{path}-wal"):
+        try:
+            status = os.stat(name)
+        except FileNotFoundError:
+            if name == path:
+                return None
+            continue
+        version += [status.st_mtime_ns, status.st_size]
+    return tuple(version)
 
 
 def find_archives(directory: str) -> list[str]:
@@ -1140,6 +1208,10 @@ class ArtifactViewer:
         self.registry = registry
         self.renderer = renderer
         self.allow_annotations = allow_annotations
+        # what each archive's summary was read from, and the summary: a finished
+        # run's never changes, and reading it can scan its genomes
+        self._summaries: dict[str, tuple[tuple[int, ...], dict[str, Any]]] = {}
+        self._summaries_lock = threading.Lock()
 
     def run(self, index: int) -> Run:
         """Looks up a served run.
@@ -1167,7 +1239,8 @@ class ArtifactViewer:
             genome, last write time, best ``loss`` and ``target_metric``, and
             ``master_busy_percent`` (the MPI master's busy share over the run,
             ``None`` when it recorded no master timing). An unreadable archive
-            is reported under ``error`` instead.
+            is reported under ``error`` instead. What is read from the archive
+            is kept until the archive changes (see :func:`archive_version`).
         """
 
         summary: dict[str, Any] = {
@@ -1176,32 +1249,41 @@ class ArtifactViewer:
             "directory": run.directory,
             "groups": run.groups,
         }
+        version = archive_version(run.archive_path)
+        with self._summaries_lock:
+            cached = self._summaries.get(run.archive_path)
+        if version is not None and cached is not None and cached[0] == version:
+            summary.update(cached[1])
+            return summary
+
         try:
             with GenomeArchive.open_readonly(run.archive_path) as reader:
                 info = reader.run_info()
-                summary.update(
-                    {
-                        "task": info.get("task"),
-                        "task_target": info.get("task_target"),
-                        "target": info.get("target"),
-                        "population_strategy": info.get("population_strategy"),
-                        "command_line": info.get("command_line"),
-                        "start_time": info.get("start_time"),
-                        "genomes": reader.count(),
-                        "max_genome_number": reader.max_genome_number(),
-                        "last_saved_at": reader.last_saved_at(),
-                        "best_loss": reader.best_value("loss", higher_is_better=False),
-                        "best_target_metric": reader.best_value(
-                            "target_metric", higher_is_better=True
-                        ),
-                        "master_busy_percent": master_busy_percent(
-                            reader.master_timing()
-                        ),
-                    }
-                )
+                read: dict[str, Any] = {
+                    "task": info.get("task"),
+                    "task_target": info.get("task_target"),
+                    "target": info.get("target"),
+                    "population_strategy": info.get("population_strategy"),
+                    "command_line": info.get("command_line"),
+                    "start_time": info.get("start_time"),
+                    "genomes": reader.count(),
+                    "max_genome_number": reader.max_genome_number(),
+                    "last_saved_at": reader.last_saved_at(),
+                    "best_loss": reader.best_value("loss", higher_is_better=False),
+                    "best_target_metric": reader.best_value(
+                        "target_metric", higher_is_better=True
+                    ),
+                    "master_busy_percent": master_busy_percent(reader.master_timing()),
+                }
         except sqlite3.DatabaseError as error:
             logger.warning("Could not read {}: {}", run.archive_path, error)
             summary["error"] = str(error)
+            return summary
+
+        if version is not None:
+            with self._summaries_lock:
+                self._summaries[run.archive_path] = (version, read)
+        summary.update(read)
         return summary
 
     def runs_payload(self) -> dict[str, Any]:
@@ -1214,7 +1296,7 @@ class ArtifactViewer:
 
         self.registry.refresh()
         return {
-            "runs": [self._summary(run) for run in self.registry.runs],
+            "runs": list(read_concurrently(self.registry.runs, self._summary)),
             "groups": list(self.registry.groups),
             "source": self.registry.source(),
         }
@@ -1990,26 +2072,40 @@ class ArtifactViewer:
             scope = {"kind": "all"}
             specs = self._comparison_entries()
 
+        def tally(run: Run) -> tuple[int, dict[str, dict[str, int]]] | str:
+            """Counts a run's genomes and its operators' insert types.
+
+            Args:
+                run: The run to read.
+
+            Returns:
+                The genome count and :meth:`GenomeArchive.operator_counts`, or
+                the error that kept the archive from being read.
+            """
+
+            try:
+                with GenomeArchive.open_readonly(run.archive_path) as reader:
+                    return reader.count(), reader.operator_counts()
+            except sqlite3.DatabaseError as error:
+                logger.warning("Could not read {}: {}", run.archive_path, error)
+                return str(error)
+
         # each run is read once, even when it appears in more than one column
-        read: dict[int, tuple[int, dict[str, dict[str, int]]] | None] = {}
-        errors: list[dict[str, Any]] = []
+        unique = list({run.index: run for _, _, runs in specs for run in runs}.values())
+        tallies = list(read_concurrently(unique, tally))
+        read = {run.index: entry for run, entry in zip(unique, tallies)}
+        errors: list[dict[str, Any]] = [
+            {"index": run.index, "name": run.name, "error": entry}
+            for run, entry in zip(unique, tallies)
+            if isinstance(entry, str)
+        ]
         columns: list[dict[str, Any]] = []
         for label, kind, runs in specs:
             genomes = 0
             counts: dict[str, dict[str, int]] = {}
             for run in runs:
-                if run.index not in read:
-                    try:
-                        with GenomeArchive.open_readonly(run.archive_path) as reader:
-                            read[run.index] = (reader.count(), reader.operator_counts())
-                    except sqlite3.DatabaseError as error:
-                        logger.warning("Could not read {}: {}", run.archive_path, error)
-                        errors.append(
-                            {"index": run.index, "name": run.name, "error": str(error)}
-                        )
-                        read[run.index] = None
                 entry = read[run.index]
-                if entry is None:
+                if isinstance(entry, str):
                     continue
                 genomes += entry[0]
                 for operator, outcomes in entry[1].items():

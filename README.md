@@ -672,7 +672,9 @@ well as the `all_genomes/` directories of older runs.
 
 An archive is also an ordinary database, so a run can be queried directly. Each
 genome's `loss` and `target_metric` are indexed columns generated from its stored
-fitness, which keeps ranking queries fast however long the run is:
+fitness, which keeps ranking queries fast however long the run is (query those
+columns rather than `json_extract(fitness, '$.loss')`, which cannot use the
+index), and `saved_at` is indexed too, so a run's latest write is a lookup:
 
 ```
 sqlite3 ./artifacts/iris/genomes.sqlar "select genome_number, loss from genomes order by loss limit 5"
@@ -1226,7 +1228,11 @@ database, for questions the typed tools do not cover. A roll-up holds each run's
 a `run` column, and both kinds of query can read a `genome_operators` view with
 one row per operator that generated a genome, and the run's annotations as
 `notes` and `genome_tags` tables (a tag still applied has a null `removed_at`),
-so a query can, for example, pick out every genome tagged `promising`. Results are capped (at most 200
+so a query can, for example, pick out every genome tagged `promising`. A roll-up
+gathers only the tables and columns its statement reads, reading the runs
+concurrently, so naming the columns needed rather than `SELECT *` keeps it fast
+on large runs; a `query_sql` call, roll-up included, is stopped after 10 seconds
+(`export_query` after 60) with a hint on narrowing it. Results are capped (at most 200
 rows, series downsampled) and most carry a link into the dashboard showing the
 same view. `export_query` is the exception to the cap: it runs the same
 statements for a client collecting data to analyze itself, returning pages of up
