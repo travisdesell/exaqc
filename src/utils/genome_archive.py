@@ -98,6 +98,11 @@ WRITE_RETRIES = 5
 #: every further attempt.
 WRITE_RETRY_DELAY_SECONDS = 1.0
 
+#: Fitness keys the ``genomes`` table also holds as indexed generated columns.
+#: Reads of these keys name the column, so SQLite can use its index; extracting
+#: the same value from the fitness JSON would scan every genome instead.
+GENERATED_FITNESS_COLUMNS = ("loss", "target_metric")
+
 #: Summary-table columns a genome listing can be sorted on directly. Any other
 #: sort key is looked up in the genome's fitness.
 SORTABLE_COLUMNS = frozenset(
@@ -219,12 +224,16 @@ CREATE TABLE IF NOT EXISTS master_timing(
 """
 
 
-def _index_fitness_columns(connection: sqlite3.Connection) -> None:
-    """Indexes the generated ``loss`` and ``target_metric`` columns.
+def _index_genome_columns(connection: sqlite3.Connection) -> None:
+    """Indexes the generated fitness columns and ``saved_at``.
 
-    Ranking a run by either key is by far the archive's most common query, so
-    both are generated from each genome's stored fitness and indexed rather than
-    extracted from JSON on every read.
+    Ranking a run by ``loss`` or ``target_metric`` is by far the archive's most
+    common query, so both are generated from each genome's stored fitness (see
+    :data:`GENERATED_FITNESS_COLUMNS`) and indexed rather than extracted from
+    JSON on every read. ``saved_at`` is indexed so a run's latest write -- which
+    the run list reads for every run on every load -- is a lookup rather than a
+    scan of the ``genomes`` table, whose pages lie scattered among the stored
+    genomes' blobs in a large archive.
 
     Args:
         connection: The archive's connection, open for writing.
@@ -233,7 +242,7 @@ def _index_fitness_columns(connection: sqlite3.Connection) -> None:
         None. Creates each column's index if it does not already exist.
     """
 
-    for column in ("loss", "target_metric"):
+    for column in (*GENERATED_FITNESS_COLUMNS, "saved_at"):
         connection.execute(
             f"CREATE INDEX IF NOT EXISTS genomes_{column} ON genomes({column})"
         )
@@ -657,13 +666,15 @@ def _sort_expression(sort_key: str) -> tuple[str, list[Any]]:
             genomes' fitness dicts, or a recorded training metric.
 
     Returns:
-        The SQL expression and the parameters it binds.
+        The SQL expression and the parameters it binds. A fitness key held in
+        one of the :data:`GENERATED_FITNESS_COLUMNS` is read from that column,
+        so its index can be used.
 
     Raises:
         ValueError: If ``sort_key`` is none of those.
     """
 
-    if sort_key in SORTABLE_COLUMNS:
+    if sort_key in SORTABLE_COLUMNS or sort_key in GENERATED_FITNESS_COLUMNS:
         return sort_key, []
     if "." in sort_key:
         # Training metrics are always keyed ``<series>.<metric>``, so a dotted
@@ -998,7 +1009,7 @@ class GenomeArchive:
         )
         connection.execute("PRAGMA synchronous=NORMAL")
         connection.executescript(_SCHEMA)
-        _index_fitness_columns(connection)
+        _index_genome_columns(connection)
 
         archive = cls(
             path,
@@ -1853,11 +1864,16 @@ class GenomeArchive:
             ValueError: If ``key`` is not a valid key.
         """
 
+        # The best value is found first and then the lowest genome holding it:
+        # for an indexed column both are index lookups, where ordering by the
+        # value and then by ascending genome number cannot be read from the index
+        # when larger is better, and would scan every genome.
         expression, parameters = self._value_expression(key)
         row = self.connection.execute(
-            f"SELECT genome_number, {expression} AS value FROM genomes WHERE {expression} IS NOT NULL "
-            f"ORDER BY value {'DESC' if higher_is_better else 'ASC'}, genome_number ASC LIMIT 1",
-            [*parameters, *parameters],
+            f"SELECT genome_number, {expression} FROM genomes WHERE {expression} = "
+            f"(SELECT {'MAX' if higher_is_better else 'MIN'}({expression}) FROM genomes) "
+            "ORDER BY genome_number LIMIT 1",
+            [*parameters, *parameters, *parameters],
         ).fetchone()
         return None if row is None else {"genome_number": row[0], "value": row[1]}
 

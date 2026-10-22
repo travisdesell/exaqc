@@ -752,12 +752,14 @@ def test_an_expected_failure_reaches_the_caller(tools: DashboardTools) -> None:
 def test_a_roll_up_names_an_archive_missing_its_columns(
     tools: DashboardTools, tmp_path: Path
 ) -> None:
-    """A run too old to roll up is named, rather than failing as bare SQL.
+    """A run too old for a roll-up's query is named, rather than failing as bare SQL.
 
     The roll-up copies columns the archive gained over time, so a run written
-    before one of them cannot join it. Saying which run and which column -- and
-    that it can still be queried alone -- is the difference between a caller
-    correcting itself and a caller seeing ``no such column: n_cnot``.
+    before one of them cannot join a query reading it. Saying which run and
+    which column -- and that it can still be queried alone -- is the difference
+    between a caller correcting itself and a caller seeing ``no such column:
+    n_cnot``. Only the columns a query reads are copied, so a query that does
+    not read the missing column still rolls the run up.
 
     Args:
         tools: The tool layer fixture.
@@ -772,12 +774,57 @@ def test_a_roll_up_names_an_archive_missing_its_columns(
     # the run is still perfectly queryable on its own
     assert tools.query_sql("select count(*) from genomes", run="iris_2")["rows"]
 
+    counted = tools.query_sql(
+        "select run, count(*) from genomes group by run", runs=["iris_1", "iris_2"]
+    )
+    assert [row[0] for row in counted["rows"]] == ["iris_1", "iris_2"]
+
     with pytest.raises(ValueError, match="iris_2") as refused:
         tools.query_sql(
-            "select run, count(*) from genomes group by run",
+            "select run, sum(n_cnot) from genomes group by run",
             runs=["iris_1", "iris_2"],
         )
     assert "n_cnot" in str(refused.value)
+
+
+def test_a_roll_up_gathers_every_column_its_query_reads(tools: DashboardTools) -> None:
+    """A roll-up answers as each run would, though it copies only what is read.
+
+    Columns a query does not read are left out of a roll-up, so a read the
+    roll-up failed to notice -- one through the ``genome_operators`` view, or
+    ``SELECT *`` -- would come back NULL rather than fail.
+
+    Args:
+        tools: The tool layer fixture.
+    """
+
+    runs = ["iris_1", "iris_2"]
+    for name in runs:
+        single = tools.query_sql(
+            "select operator, count(*) from genome_operators group by 1 order by 1",
+            run=name,
+        )["rows"]
+        rolled = tools.query_sql(
+            "select operator, count(*) from genome_operators "
+            f"where run = '{name}' group by 1 order by 1",
+            runs=runs,
+        )["rows"]
+        assert single and rolled == single
+
+        columns = "genome_number, insert_type, generated_by, n_gates, fitness"
+        single = tools.query_sql(
+            f"select {columns} from genomes order by genome_number", run=name
+        )
+        everything = tools.query_sql(
+            f"select * from genomes where run = '{name}' order by genome_number",
+            runs=runs,
+        )
+        positions = [
+            everything["columns"].index(column) for column in single["columns"]
+        ]
+        assert [
+            [row[position] for position in positions] for row in everything["rows"]
+        ] == single["rows"]
 
 
 def test_cross_run_sql_reaches_the_recorded_training_metrics(
