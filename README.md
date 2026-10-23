@@ -59,6 +59,7 @@ classical layers train together with ordinary backpropagation and the standard P
   - [visualize_rl](#visualize_rl)
   - [exaqc_dashboard](#exaqc_dashboard)
   - [exaqc_mcp](#exaqc_mcp)
+  - [backfill_archive](#backfill_archive)
   - [classical_image_classification](#classical_image_classification)
   - [reinforcement_learning_fixed](#reinforcement_learning_fixed)
 - [Reproducing 2026 PPSN results](#reproducing-2026-ppsn-results)
@@ -724,7 +725,8 @@ and the dashboard shows their runs as having no timing recorded. Archives writte
 before format 7 instead have a `final_metrics` column (the last-step record) and
 none of the metric projections or initial fitness: they read as unrecorded, so such
 a run offers no training metrics to chart. Reopening an older archive to continue its
-run (`--restart`) adds the missing columns, which its earlier genomes leave empty. A
+run (`--restart`) adds the missing columns, which its earlier genomes leave empty;
+[`backfill_archive`](#backfill_archive) fills them in from the genomes' stored JSON. A
 discarded genome's row gives its `discard_reason`: `worse_than_population`,
 `duplicate_of_better` or `generated_before_repopulation`. The genome's JSON holds
 the rest -- `timing` (when it was generated, when its evaluation started and
@@ -755,7 +757,8 @@ sqlite3 ./artifacts/iris/genomes.sqlar "select step, wall_seconds, genomes, json
 All entry points live in [`src/examples/`](./src/examples). The three evolutionary ones
 (`classification`, `teacher`, `reinforcement_learning`) share the search,
 population and [run output](#run-output-arguments) arguments described above; the
-rest are single-genome tools and the run viewer.
+rest are single-genome tools, the run viewer and its MCP interface, and the
+archive backfill.
 
 Common to the evolutionary entry points:
 
@@ -1247,7 +1250,8 @@ run, and says when a run's archive predates timing; `training_gain_summary`
 reports how much training changed a run's genomes -- the distribution of
 `target_gain`, the shares of genomes training improved or left unchanged, and both
 by quartile of the inherited weights' score, optionally grouped by `insert_type`,
-`island` or `generated_by` -- and needs an archive of format 7; `genome_metrics` returns a genome's
+`island` or `generated_by` -- and needs an archive of format 7, or an older one
+brought up to date with [`backfill_archive`](#backfill_archive); `genome_metrics` returns a genome's
 recorded training history, each series keyed by its own epoch or episode column;
 `list_runs` leaves out each run's command line unless `include_command_line` is
 set, while `describe_run` always shows it); `query_sql` runs a single read-only
@@ -1288,6 +1292,49 @@ from the repository root:
 ```
 claude mcp add exaqc -- python3 -m src.examples.exaqc_mcp --directory ./artifacts
 ```
+
+### [`backfill_archive`](./src/examples/backfill_archive.py)
+
+Brings archives written before format 7 up to it, so older runs get the
+training-metric columns: `initial_metrics`, `best_metrics` and `last_metrics`, and
+`initial_fitness` with its generated `initial_loss`, `initial_target_metric` and
+`target_gain` (see [Working with a run's archive](#working-with-a-runs-archive)).
+Every genome's JSON is stored in the archive, so they are re-derived from it:
+
+```
+python3 -m src.examples.backfill_archive ./artifacts/walker2d_1 ./artifacts/walker2d_2 --output_dir ./backfilled
+```
+
+- The **metric projections** are computed for every genome of every task, exactly
+  as a current search records them.
+- **`initial_fitness`** is the genome's own recorded `initial_fitness` when it has
+  one. A reinforcement-learning genome without one is scored from its episode-0
+  evaluation (its inherited weights, before training; recorded by runs from
+  2026-09-30 on) with the search's own fitness formula, using the run's recorded
+  `--train_vs_validation_bias` (`0.1` when it recorded none). Classification and
+  teacher genomes never stored their epoch-0 *training* metrics, so theirs is
+  left empty rather than guessed.
+- Nothing else a run recorded is rewritten -- not its fitness, its
+  `format_version` or its old `final_metrics` column. What was done is recorded in
+  `run_info` as `backfilled_format_7`: when, the code's git commit, how many
+  genomes were updated, and how many initial fitnesses were recorded, derived or
+  unavailable. Running it again changes nothing.
+
+Writing is always explicit: exactly one of `--output_dir` and `--in_place` is
+required. Under `--output_dir` the original is only ever copied (with its journal,
+so a run stopped mid-write is recovered in the copy), never opened. A search
+records no end, so an archive whose latest genome was saved within
+`--idle_minutes` is refused as possibly still being written; one that saves
+genomes less often than that cannot be told apart from a finished run, so stop a
+search before backfilling its archive in place.
+
+| Argument | Default | Description |
+|---|---|---|
+| `archives` | *required* | Run output directories, or their `genomes.sqlar` files, to backfill |
+| `--output_dir` | one of `--output_dir` / `--in_place` is required | Copy each run's archive into `<output_dir>/<run directory name>/` and backfill the copy, leaving the original untouched; an existing copy is never overwritten |
+| `--in_place` | one of `--output_dir` / `--in_place` is required | Backfill the given archives themselves |
+| `--idle_minutes` | `10.0` | Refuse an archive whose latest genome was saved within this many minutes; `0` skips the check |
+| `--logging_level` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
 
 ### [`classical_image_classification`](./src/examples/classical_image_classification.py)
 

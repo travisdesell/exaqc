@@ -435,7 +435,8 @@ def build_mcp_server(
             "had before training, the share of genomes it improved or left "
             "unchanged, and both by quartile of the starting score; optionally "
             "grouped by insert_type, island or generated_by. Needs an archive of "
-            "format 7 or later."
+            "format 7 or later, or an older one brought up to date by "
+            "src.examples.backfill_archive."
         )
     )
     def training_gain_summary(run: str, group_by: str | None = None) -> dict[str, Any]:

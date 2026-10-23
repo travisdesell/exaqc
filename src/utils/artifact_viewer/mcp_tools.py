@@ -1506,7 +1506,9 @@ class DashboardTools:
                     f"{resolved.name} was written before archives recorded the "
                     "fitness of a genome's inherited weights (format 7), so its "
                     "training gain is not summarized; genome_metrics still shows "
-                    "each genome's step-0 evaluation."
+                    "each genome's step-0 evaluation, and "
+                    "`python3 -m src.examples.backfill_archive` can bring the "
+                    "archive up to date."
                 )
             genomes = reader.connection.execute(
                 "SELECT initial_target_metric, target_gain FROM genomes "
