@@ -53,6 +53,13 @@ def mark_discarded(
 
 class PopulationStrategy(ABC):
 
+    #: Whether a hyperparameter strategy may tune how this strategy's children
+    #: are generated (see :data:`src.evolution.exaqc.OPERATOR_HYPERPARAMETERS`).
+    #: Only island searches allow it: each island can settle on its own operator
+    #: settings, whereas a single population converges on one set that mostly
+    #: follows its best circuits.
+    supports_operator_tuning: bool = False
+
     @staticmethod
     def initialize_parser(parser: argparse.ArgumentParser) -> None:
         """Adds the population-strategy sub-commands to a parser.
@@ -206,6 +213,38 @@ class PopulationStrategy(ABC):
             function (best first). Modifying it does not affect the strategy.
         """
         pass
+
+    def get_population_for_child(self, metadata: dict[str, Any]) -> list[CircuitGenome]:
+        """Returns the genomes a child is generated among, best first.
+
+        Used by hyperparameter strategies that learn from the population (see
+        :mod:`src.evolution.hyperparameter_strategy`). By default this is the
+        whole population; a strategy with sub-populations can narrow it to the
+        one the child's metadata targets.
+
+        Args:
+            metadata: The child's metadata, as returned with its parents by
+                :meth:`get_parent` or :meth:`get_parents`.
+
+        Returns:
+            A new list of genomes, sorted best first.
+        """
+
+        return self.get_population()
+
+    def next_child_metadata(self) -> dict[str, Any]:
+        """Describes where the next child will be generated, before its parents are drawn.
+
+        Lets a hyperparameter strategy choose values that decide *how* the
+        child is generated (such as its crossover rates) from the same
+        sub-population :meth:`get_population_for_child` would give it.
+
+        Returns:
+            Metadata for :meth:`get_population_for_child`; empty by default,
+            i.e. the whole population.
+        """
+
+        return {}
 
     @abstractmethod
     def get_parent(self, **kwargs: Any) -> tuple[CircuitGenome, dict[str, Any]]:
