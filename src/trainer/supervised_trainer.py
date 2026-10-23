@@ -308,6 +308,8 @@ class SupervisedTrainer:
             None. Sets ``genome.metadata`` entries ``training_epoch_metrics``
             (epochs ``1..epochs``), ``validation_epoch_metrics`` (epochs
             ``0..epochs``), ``n_trainable_parameters``,
+            ``initial_training_metrics`` and ``initial_validation_metrics``
+            (epoch 0's evaluation of the inherited weights),
             ``best_training_metrics``, ``best_validation_metrics`` and
             ``best_epoch`` (0 when the inherited weights were never improved
             on), and leaves the genome holding the best epoch's weights.
@@ -351,6 +353,10 @@ class SupervisedTrainer:
             initial_validation_metrics,
         )
         genome.metadata["validation_epoch_metrics"].append(initial_validation_metrics)
+        # kept apart from the best-epoch metrics so the inherited weights' score
+        # survives training, letting fitness be compared before and after it
+        genome.metadata["initial_training_metrics"] = initial_training_metrics
+        genome.metadata["initial_validation_metrics"] = initial_validation_metrics
 
         best_loss = (
             initial_training_metrics["loss"] + initial_validation_metrics["loss"]

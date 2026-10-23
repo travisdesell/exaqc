@@ -128,6 +128,14 @@ documented there, and most are also wrapped by a script in
   the dashboard page and MCP. `query_sql` must stay read-only: it is guarded by
   a single-statement check *and* a SQLite authorizer, and sees annotations as
   copied `notes`/`genome_tags` tables rather than by attaching the sidecar.
+- **Archive backfill:** `python3 -m src.examples.backfill_archive`, which brings
+  archives written before format 7 up to it by filling the metric projections
+  and `initial_fitness` from each stored genome's JSON (logic in
+  `src.utils.archive_backfill`). It has no wrapper script and requires exactly
+  one of `--output_dir` (backfill a copy) and `--in_place`. It re-derives what
+  `GenomeArchive.add_genome` records, so a change to the summary columns or to
+  a task's fitness formula (the RL one is shared through
+  `reinforcement_learning_fitness`) must be reflected here too.
 - **Analysis:** `python3 -m src.analysis.analyze_genome_generation`.
 
 A search's outputs (`--out_dir`, `--shared_file_system`, `genomes.sqlar` and the
@@ -220,7 +228,7 @@ for a in m.build_parser()._actions: print(a.dest, a.default, a.choices)"
 ```
 
 `classification`, `teacher`, `reinforcement_learning`, `refine_genome`,
-`exaqc_dashboard`, `exaqc_mcp` and `classical_image_classification` expose `build_parser()`
+`exaqc_dashboard`, `exaqc_mcp`, `backfill_archive` and `classical_image_classification` expose `build_parser()`
 alongside a `main()`,
 which is the pattern to follow for any new entry point. The rest
 (`reinforcement_learning_fixed`, `evaluate`, `visualize_rl`) still build their

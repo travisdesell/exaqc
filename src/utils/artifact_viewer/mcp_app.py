@@ -430,6 +430,30 @@ def build_mcp_server(
 
     @server.tool(
         description=(
+            "Summarize how much training (backpropagation) changed a run's genomes: "
+            "the distribution of target_metric minus the score the inherited weights "
+            "had before training, the share of genomes it improved or left "
+            "unchanged, and both by quartile of the starting score; optionally "
+            "grouped by insert_type, island or generated_by. Needs an archive of "
+            "format 7 or later, or an older one brought up to date by "
+            "src.examples.backfill_archive."
+        )
+    )
+    def training_gain_summary(run: str, group_by: str | None = None) -> dict[str, Any]:
+        """Summarizes the gain from training.
+
+        Args:
+            run: A run index or name.
+            group_by: Optional grouping column.
+
+        Returns:
+            Overall, per-starting-score and per-group gain statistics.
+        """
+
+        return tools.training_gain_summary(run, group_by)
+
+    @server.tool(
+        description=(
             "Report how the genomes each operator generated were inserted (global best, "
             "local best, inserted, discarded), for a run or a group of runs."
         )
