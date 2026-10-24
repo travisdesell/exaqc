@@ -168,7 +168,8 @@ own. The 2026 PPSN experiments have scripts of their own (see
 | `TOPOLOGY` | `2d_mesh 5 5` | `--topology` and its arguments, as one quoted value (`islands` only) |
 | `MAX_POPULATION_SIZE` | `30` | `--max_population_size` (`steady_state` only) |
 | `USE_ONLY` | `rx ry rz p u crx cry crz cp rxx ryy rzz cx cy cz` | `--use_only` gates, as one quoted value |
-| `OUT_DIR` | `./exaqc_runs/<dataset or env>_<topology>_i<n_islands>`, or `..._steady_state_p<max_population_size>` | `--out_dir` |
+| `BASE_DIR` | `./exaqc_runs` | Directory the default `OUT_DIR` is created in |
+| `OUT_DIR` | `<BASE_DIR>/<dataset or env>_<topology>_i<n_islands>`, or `..._steady_state_p<max_population_size>` | `--out_dir` |
 | `TAG` | unset | Appended to the output directory as `_<TAG>` (letters, digits, `-` and `_`) |
 | `PYTHON` / `MPIEXEC` / `MPIEXEC_ARGS` | `python3` / `mpiexec` / `--oversubscribe` | Interpreter and launcher; clear `MPIEXEC_ARGS` for an MPI other than Open MPI |
 | `DRY_RUN` | unset | When set, print the command instead of running it |
@@ -1481,7 +1482,8 @@ are in the scripts.
 
 Each call is one run. `TAG` names it by its index, so run `i` is written to
 `./2026_ppsn_exaqc/classification/<name>_i30_per_class_<i>` (`<name>` is
-`breast` for `breast_cancer`) or `./2026_ppsn_exaqc/rl/<env>_i50_per_class_<i>`.
+`breast` for `breast_cancer`) or `./2026_ppsn_exaqc/rl/<env>_i50_per_class_<i>`;
+`BASE_DIR` (default `./2026_ppsn_exaqc`) moves both.
 The ten repeats of every experiment:
 
 ```
@@ -1495,7 +1497,7 @@ done
 ```
 
 Only settings that leave the search unchanged can be set alongside: `N_PROCESSES`
-(default `12`), `OUT_DIR`, `PYTHON`, `MPIEXEC` and `MPIEXEC_ARGS`, as for the
+(default `12`), `BASE_DIR`, `OUT_DIR`, `PYTHON`, `MPIEXEC` and `MPIEXEC_ARGS`, as for the
 [local run scripts](#local-run-scripts). `DRY_RUN=1` prints the exact command a
 run would execute:
 

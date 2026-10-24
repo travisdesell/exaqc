@@ -9,7 +9,8 @@
 # frozenlake, walker2d or mountaincar_continuous. Each runs with exactly the
 # settings of the original experiment script; for other searches use
 # scripts/run_rl.sh. Run i of an experiment is reproduced, into
-# ./2026_ppsn_exaqc/rl/<environment>_i50_per_class_<i>, with:
+# ./2026_ppsn_exaqc/rl/<environment>_i50_per_class_<i> (BASE_DIR replaces
+# ./2026_ppsn_exaqc), with:
 #
 #   TAG=1 bash scripts/run_ppsn2026_rl.sh cartpole
 #
@@ -33,6 +34,10 @@ N_PROCESSES=${N_PROCESSES:-12}
 #: Label appended to the output directory as _${TAG}; the experiments used the
 #: run index. Letters, digits, - and _ only; unset adds nothing.
 TAG=${TAG:-}
+
+#: Directory the experiments' archives are written under, in its rl/
+#: subdirectory.
+BASE_DIR=${BASE_DIR:-./2026_ppsn_exaqc}
 
 #: Python and MPI launcher to use. MPIEXEC_ARGS defaults to Open MPI's
 #: --oversubscribe so N_PROCESSES may exceed the core count; clear it for an MPI
@@ -110,7 +115,7 @@ esac
 
 # Where the run's genome archive is written, in the layout the experiments used.
 # TAG, when given, is appended to it, or to an OUT_DIR given explicitly.
-OUT_DIR=${OUT_DIR:-./2026_ppsn_exaqc/rl/${ENVIRONMENT}_i50_per_class}
+OUT_DIR=${OUT_DIR:-${BASE_DIR%/}/rl/${ENVIRONMENT}_i50_per_class}
 OUT_DIR=${OUT_DIR%/}${TAG:+_$TAG}
 
 read -r -a MPIEXEC_ARGUMENTS <<<"$MPIEXEC_ARGS"

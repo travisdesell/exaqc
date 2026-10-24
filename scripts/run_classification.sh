@@ -12,6 +12,7 @@
 #   DATASET=wine TOPOLOGY="2d_mesh 4 5" N_ISLANDS=20 bash scripts/run_classification.sh
 #   DATASET=breast_cancer N_PROCESSES=8 EPOCHS=10 bash scripts/run_classification.sh
 #   USE_ONLY="rx ry rz cx cy cz" OUT_DIR=./exaqc_runs/rxyz_cxyz bash scripts/run_classification.sh
+#   BASE_DIR=~/Data/exaqc_runs bash scripts/run_classification.sh
 #   POPULATION=steady_state MAX_POPULATION_SIZE=30 bash scripts/run_classification.sh
 #   TAG=run2 bash scripts/run_classification.sh
 #
@@ -81,6 +82,9 @@ USE_ONLY=${USE_ONLY:-rx ry rz p u crx cry crz cp rxx ryy rzz cx cy cz}
 #: differ only in settings the directory name does not show stay apart. Letters,
 #: digits, - and _ only; unset adds nothing.
 TAG=${TAG:-}
+
+#: Directory the default output directory is created in.
+BASE_DIR=${BASE_DIR:-./exaqc_runs}
 
 #: Python and MPI launcher to use. MPIEXEC_ARGS defaults to Open MPI's
 #: --oversubscribe so N_PROCESSES may exceed the core count; clear it for an MPI
@@ -167,12 +171,12 @@ if [ "$POPULATION" = islands ]; then
         echo "${TOPOLOGY_ARGUMENTS[*]}"
     )
     # e.g. ./exaqc_runs/iris_2d_mesh_5_5_i25
-    DEFAULT_OUT_DIR=./exaqc_runs/${DATASET}_${TOPOLOGY_TAG}_i${N_ISLANDS}
+    DEFAULT_OUT_DIR=${BASE_DIR%/}/${DATASET}_${TOPOLOGY_TAG}_i${N_ISLANDS}
 else
     require_positive MAX_POPULATION_SIZE "$MAX_POPULATION_SIZE"
     POPULATION_ARGUMENTS=(steady_state --max_population_size "$MAX_POPULATION_SIZE")
     # e.g. ./exaqc_runs/iris_steady_state_p30
-    DEFAULT_OUT_DIR=./exaqc_runs/${DATASET}_steady_state_p${MAX_POPULATION_SIZE}
+    DEFAULT_OUT_DIR=${BASE_DIR%/}/${DATASET}_steady_state_p${MAX_POPULATION_SIZE}
 fi
 
 # Where the run's genome archive is written. TAG, when given, is appended to it,
