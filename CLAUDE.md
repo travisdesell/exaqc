@@ -89,11 +89,19 @@ documented there, and most are also wrapped by a script in
 [`scripts/`](scripts):
 
 - **Classification:** `python3 -m src.examples.classification`, wrapped by
-  `scripts/run_iris.sh`, `scripts/run_seeds.sh`, `scripts/run_breast_cancer.sh`,
-  and `scripts/run_wine.sh`.
+  `scripts/run_classification.sh` (a configurable local run) and
+  `scripts/run_ppsn2026_classification.sh` (the 2026 PPSN experiments).
 - **Reinforcement learning:** `python3 -m src.examples.reinforcement_learning`,
-  wrapped by `scripts/run_cartpole.sh`, `scripts/run_frozenlake.sh`,
-  `scripts/run_walker2d.sh`, and `scripts/run_mountaincar_continuous.sh`.
+  wrapped by `scripts/run_rl.sh` (a configurable local run),
+  `scripts/run_ppsn2026_rl.sh` (the 2026 PPSN experiments), and the Slurm pair
+  `scripts/submit_exaqc_rl_jobs.sh` / `scripts/exaqc_rl_job.sh`.
+
+  The `run_classification.sh` / `run_rl.sh` scripts take every setting as an
+  environment variable, documented in the README's "Local run scripts" section
+  and each entry point's **Script** table, so a new or changed variable needs a
+  row there. The `run_ppsn2026_*.sh` scripts reproduce published experiments:
+  keep the command they build fixed, and if a code change forces a change to it,
+  flag it per the sync section below.
 - **Quantum teacher imitation:** `python3 -m src.examples.teacher`, wrapped by
   `scripts/run_teacher.sh`. Unlike the other two this evolves *purely quantum*
   genomes (no encoder or decoder), so it has no `--encoding`/`--decoding`
