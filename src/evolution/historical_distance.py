@@ -1,9 +1,9 @@
-"""Structural compatibility distance on historical innovation IDs.
+"""Structural compatibility distance on enabled-gate innovation IDs.
 
 The distance is ``(c_E * E + c_D * D) / N`` with
 ``N = max(1, |H1|, |H2|)``. Excess genes are mismatched IDs greater than
 ``min(max(H1), max(H2))`` (an empty history has max 0). There is no
-parameter/angle term.
+parameter/angle term. Speciation passes only enabled-gate innovations.
 """
 
 from __future__ import annotations
@@ -17,8 +17,8 @@ def excess_disjoint(h1: list[int], h2: list[int]) -> tuple[int, int, int]:
     Inputs are treated as sets, so order and repeated IDs do not matter.
 
     Args:
-        h1: Innovation IDs of the first genome.
-        h2: Innovation IDs of the second genome.
+        h1: Enabled-gate innovation IDs of the first genome.
+        h2: Enabled-gate innovation IDs of the second genome.
 
     Returns:
         ``(E, D, N)`` where ``E`` is the excess count, ``D`` the disjoint
@@ -43,8 +43,8 @@ def historical_distance(
     """Returns the structural speciation distance.
 
     Args:
-        h1: Innovation IDs of the first genome.
-        h2: Innovation IDs of the second genome.
+        h1: Enabled-gate innovation IDs of the first genome.
+        h2: Enabled-gate innovation IDs of the second genome.
         excess_coefficient: Non-negative finite weight on excess genes.
         disjoint_coefficient: Non-negative finite weight on disjoint genes.
 

@@ -42,13 +42,22 @@ class MockGenome:
         self.metadata: dict[str, object] = {}
 
     def get_historical_gate_innovations(self) -> list[int]:
-        """Returns sorted unique innovation IDs.
+        """Returns sorted unique enabled innovation IDs.
+
+        Disabled records are omitted so the mock matches
+        ``CircuitGenome.get_historical_gate_innovations``.
 
         Returns:
-            Sorted unique IDs.
+            Sorted unique IDs of enabled innovations.
         """
 
-        return sorted(set(self.innovations))
+        return sorted(
+            {
+                innovation
+                for innovation, is_enabled in zip(self.innovations, self.enabled)
+                if is_enabled
+            }
+        )
 
     def get_historical_gate_signature(self) -> frozenset[tuple[int, bool]]:
         """Returns historical duplicate identity.
@@ -65,21 +74,25 @@ def compatible(
 ) -> MockGenome:
     """Returns a genome that joins species ``{1,2,3}`` with a unique signature.
 
+    Enabled innovations are always ``{1, 2, 3}``. ``mask`` only varies a
+    trailing disabled gene so signatures differ while the speciation
+    history stays the same.
+
     Args:
         genome_number: Unique identity.
         loss: Fitness loss.
-        mask: Enable bits for innovations 2 and 3 (innovation 1 stays enabled).
+        mask: Distinguishes the extra disabled innovation (``100 + mask``).
         target_metric: Optional target metric.
 
     Returns:
-        A mock genome with ``H = {1, 2, 3}``.
+        A mock genome whose enabled history is ``{1, 2, 3}``.
     """
 
     return MockGenome(
         genome_number,
-        [1, 2, 3],
+        [1, 2, 3, 100 + mask],
         loss,
-        enabled=[True, bool(mask & 1), bool(mask & 2)],
+        enabled=[True, True, True, False],
         target_metric=target_metric,
     )
 
@@ -171,6 +184,20 @@ def test_assignment_joins_compatible_and_creates_otherwise() -> None:
     assert pop.insert_genome(compatible(2, 0.3, 1))
     assert len(pop.species_list) == 1
     assert pop.insert_genome(distant(3, 0.2, (10, 20)))
+    assert len(pop.species_list) == 2
+
+
+def test_disabled_gates_do_not_enter_distance() -> None:
+    """Genomes that differ only by disabled genes share a species."""
+
+    pop = make_pop(species_threshold=0.01)
+    first = MockGenome(1, [1, 2, 99], 0.4, enabled=[True, True, False])
+    second = MockGenome(2, [1, 2, 100], 0.3, enabled=[True, True, False])
+    assert pop.insert_genome(first)
+    assert pop.insert_genome(second)
+    assert len(pop.species_list) == 1
+    third = MockGenome(3, [1, 2, 100], 0.2, enabled=[True, True, True])
+    assert pop.insert_genome(third)
     assert len(pop.species_list) == 2
 
 
@@ -329,6 +356,7 @@ def test_run_info_records_speciation_config() -> None:
         "species_threshold": 0.4,
         "neat_c1": 1.0,
         "neat_c2": 1.0,
+        "neat_c3": 0.0,
         "inter_species_parent_rate": 0.2,
     }
 

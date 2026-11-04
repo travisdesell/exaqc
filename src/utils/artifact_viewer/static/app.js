@@ -711,6 +711,40 @@
   }
 
   /**
+   * Summarizes each species from the chart's genomes. Returns `speciesOf` (each
+   * genome's species, by genome number), `species` (each species' genome count
+   * and best value of `yKey`, with the genome holding it) and `migrations` (how
+   * many genomes were created in one species from a parent in another, keyed
+   * "parent species>child species").
+   */
+  function speciesStatistics(points, links, yKey) {
+    const speciesOf = new Map();
+    const species = new Map();
+    const better = lowerIsBetter(yKey) ? (a, b) => a < b : (a, b) => a > b;
+    for (let i = 0; i < points.genome_number.length; i++) {
+      const id = points.species[i];
+      if (id === null || id === undefined) continue;
+      speciesOf.set(points.genome_number[i], id);
+      if (!species.has(id)) species.set(id, { genomes: 0, best: null, bestGenome: null });
+      const entry = species.get(id);
+      entry.genomes++;
+      const value = points.y[i];
+      if (isNumber(value) && (entry.best === null || better(value, entry.best))) {
+        entry.best = value;
+        entry.bestGenome = points.genome_number[i];
+      }
+    }
+    const migrations = new Map();
+    for (let k = 0; links && k < links.child.length; k++) {
+      const from = speciesOf.get(links.parent[k]);
+      const to = speciesOf.get(links.child[k]);
+      if (from === undefined || to === undefined || from === to) continue;
+      migrations.set(`${from}>${to}`, (migrations.get(`${from}>${to}`) || 0) + 1);
+    }
+    return { speciesOf, species, migrations };
+  }
+
+  /**
    * Counts where a genome's ancestry crossed between islands: for the genome and
    * every ancestor, each parent on another island, keyed "parent island>child
    * island".
@@ -1371,10 +1405,13 @@
     const recordsTiming = (run.metrics || []).includes("turnaround_seconds");
     const islandCount = run.filter_options && run.filter_options.island ? run.filter_options.island.length : 0;
     const speciesCount = run.filter_options && run.filter_options.species ? run.filter_options.species.length : 0;
+    // Partition strategies open colored by their partition (species, else island);
+    // steady-state and other runs keep insert-type coloring.
+    const defaultEncoding = speciesCount > 0 ? "species" : islandCount > 0 ? "island" : "insert_type";
     const state = {
       mode: "progress",
       yKey: keys.includes("loss") ? "loss" : keys[0] || "n_gates",
-      encoding: "insert_type",
+      encoding: defaultEncoding,
       // what coloring by island colors: "each" island its own color (offered only while the
       // palette has a color per island), the "selected" genome's island, or a pinned island
       islandFocus: islandCount <= CATEGORICAL_SLOTS - 1 ? "each" : "selected",
@@ -1480,6 +1517,11 @@
       run.island_topology && (run.island_topology.neighbors || []).length
         ? h("details", { class: "island-topology", ontoggle: () => renderTopology() }, h("summary", { text: `Island topology (${(run.island_topology.topology || []).join(" ")})` }), h("div"))
         : null;
+    // a speciation search's species table: drawn once opened, then redrawn as genomes arrive or the selection changes
+    const speciesSummaryNode =
+      run.filter_options && run.filter_options.species && run.filter_options.species.length
+        ? h("details", { class: "species-summary", ontoggle: () => renderSpeciesSummary() }, h("summary", { text: `Species (${run.filter_options.species.length})` }), h("div"))
+        : null;
     // whether the MPI master kept up with its workers: loaded when opened, then refreshed as genomes arrive
     const timingNode = h("details", { class: "run-timing", ontoggle: () => loadTiming() }, h("summary", { text: "Timing" }), h("div"));
     let timingCharts = [];
@@ -1503,6 +1545,7 @@
         summary.command_line ? h("details", {}, h("summary", { text: "Command line" }), h("div", { class: "command" }, h("pre", { text: summary.command_line }), copyButton(summary.command_line))) : null,
         runNotesNode,
         topologyNode,
+        speciesSummaryNode,
         timingNode
       );
     }
@@ -2428,9 +2471,11 @@
     }
 
     /**
-     * Draws each species' genome count and best charted metric into its section,
-     * when the run recorded species membership and the section is open. Clicking
-     * a species colors the chart around it.
+     * Draws the run's species membership into its section when species exist and
+     * the section is open: a circle-layout flow graph (nodes sized by genome
+     * count, shaded by best charted metric; edges for inter-species parent→child
+     * creation), then the config meta and a per-species table with size bars.
+     * Clicking a species node or table row colors the chart around it.
      */
     function renderSpeciesSummary() {
       if (!speciesSummaryNode || !speciesSummaryNode.open) return;
@@ -2440,30 +2485,218 @@
         return;
       }
       const better = lowerIsBetter(state.yKey) ? (a, b) => a < b : (a, b) => a > b;
-      const bySpecies = new Map();
-      for (let i = 0; i < state.points.genome_number.length; i++) {
-        const id = state.points.species[i];
-        if (id === null || id === undefined) continue;
-        if (!bySpecies.has(id)) bySpecies.set(id, { genomes: 0, best: null, bestGenome: null });
-        const entry = bySpecies.get(id);
-        entry.genomes += 1;
-        const value = state.points.y[i];
-        if (isNumber(value) && (entry.best === null || better(value, entry.best))) {
-          entry.best = value;
-          entry.bestGenome = state.points.genome_number[i];
+      const plural = (n, word) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
+      const { speciesOf, species, migrations } = speciesStatistics(state.points, state.links, state.yKey);
+      const rows = [...species.entries()].sort((a, b) => a[0] - b[0]);
+      const config = run.speciation || {};
+      const maxGenomes = Math.max(1, ...rows.map(([, entry]) => entry.genomes));
+
+      // focus follows the chart: a pinned species, else the selected genome's, else the best
+      let focus = null;
+      if (state.encoding === "species" && state.speciesFocus !== "each") {
+        if (Number.isInteger(state.speciesFocus)) focus = state.speciesFocus;
+        else if (speciesOf.has(state.selected)) focus = speciesOf.get(state.selected);
+        else {
+          for (const [id, entry] of species) {
+            if (isNumber(entry.best) && (focus === null || better(entry.best, species.get(focus).best))) focus = id;
+          }
         }
       }
-      const rows = [...bySpecies.entries()].sort((a, b) => a[0] - b[0]);
-      const config = run.speciation || {};
+      const selectedSpecies = speciesOf.get(state.selected);
+      const crossings =
+        state.highlightLineage && selectedSpecies !== undefined ? ancestryMigrations(state.selected, state.links, speciesOf) : new Map();
+
+      const values = [...species.values()].map((entry) => entry.best).filter(isNumber);
+      const low = values.length ? Math.min(...values) : 0;
+      const high = values.length ? Math.max(...values) : 0;
+      const light = token("--sequential-light");
+      const dark = token("--sequential-dark");
+      const shade = (value) => {
+        if (!isNumber(value)) return token("--surface-2");
+        const t = high > low ? (value - low) / (high - low) : 1;
+        return mixColors(light, dark, lowerIsBetter(state.yKey) ? 1 - t : t);
+      };
+
+      const focusOn = (id) => {
+        state.encoding = "species";
+        state.speciesFocus = id;
+        renderChartControls();
+        chart.setOptions({ encoding: "species", speciesFocus: id });
+        renderSpeciesSummary();
+      };
+
+      // circle layout of active species only (no fixed topology)
+      let flowGraph = null;
+      if (rows.length) {
+        const margin = 36;
+        const layoutRadius = Math.max(70, 28 + 14 * Math.sqrt(rows.length));
+        const svgSize = 2 * (margin + layoutRadius + 28);
+        const cx = svgSize / 2;
+        const cy = svgSize / 2;
+        const at = (id) => {
+          const i = rows.findIndex(([sid]) => sid === id);
+          const angle = rows.length === 1 ? -Math.PI / 2 : (2 * Math.PI * i) / rows.length - Math.PI / 2;
+          return { x: cx + layoutRadius * Math.cos(angle), y: cy + layoutRadius * Math.sin(angle) };
+        };
+        const nodeRadius = (count) => 8 + 10 * Math.sqrt(count / maxGenomes);
+        const trimmed = (from, to, gapFrom, gapTo) => {
+          const dx = to.x - from.x;
+          const dy = to.y - from.y;
+          const distance = Math.hypot(dx, dy) || 1;
+          return {
+            x1: from.x + (dx / distance) * gapFrom,
+            y1: from.y + (dy / distance) * gapFrom,
+            x2: to.x - (dx / distance) * gapTo,
+            y2: to.y - (dy / distance) * gapTo,
+          };
+        };
+        const arrowhead = (id, color) =>
+          s("marker", { id, viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 9, markerHeight: 9, markerUnits: "userSpaceOnUse", orient: "auto" }, s("path", { d: "M0,0 L10,5 L0,10 z", fill: color }));
+        const graph = s(
+          "svg",
+          {
+            class: "species-flow",
+            width: svgSize,
+            height: svgSize,
+            viewBox: `0 0 ${svgSize} ${svgSize}`,
+            role: "img",
+            "aria-label": `Species flow: ${rows.length} species`,
+          },
+          s("defs", {}, arrowhead("species-flow-edge", token("--text-muted")), arrowhead("species-flow-ancestry", token("--text-primary")))
+        );
+
+        const most = Math.max(1, ...migrations.values());
+        for (const [key, count] of migrations) {
+          const [fromId, toId] = key.split(">").map(Number);
+          if (!species.has(fromId) || !species.has(toId)) continue;
+          const from = at(fromId);
+          const to = at(toId);
+          const segment = trimmed(from, to, nodeRadius(species.get(fromId).genomes) + 3, nodeRadius(species.get(toId).genomes) + 3);
+          graph.append(
+            s(
+              "g",
+              {},
+              s("title", { text: `${plural(count, "genome")} created in species ${toId} from a parent in species ${fromId}` }),
+              s("line", { ...segment, stroke: "transparent", "stroke-width": 12 }),
+              s("line", {
+                ...segment,
+                stroke: token("--text-muted"),
+                "stroke-width": 1 + 5 * Math.sqrt(count / most),
+                "stroke-linecap": "round",
+                "marker-end": "url(#species-flow-edge)",
+              })
+            )
+          );
+        }
+
+        const mostCrossings = Math.max(1, ...crossings.values());
+        for (const [key, crossed] of crossings) {
+          const [fromId, toId] = key.split(">").map(Number);
+          if (!species.has(fromId) || !species.has(toId)) continue;
+          const from = at(fromId);
+          const to = at(toId);
+          const dx = to.x - from.x;
+          const dy = to.y - from.y;
+          const distance = Math.hypot(dx, dy) || 1;
+          const bend = Math.min(30, distance * 0.3);
+          const control = { x: (from.x + to.x) / 2 + (dy / distance) * bend, y: (from.y + to.y) / 2 - (dx / distance) * bend };
+          const rFrom = nodeRadius(species.get(fromId).genomes) + 3;
+          const rTo = nodeRadius(species.get(toId).genomes) + 3;
+          const start = trimmed(from, control, rFrom, 0);
+          const end = trimmed(control, to, 0, rTo);
+          graph.append(
+            s(
+              "path",
+              {
+                d: `M${start.x1},${start.y1} Q${control.x},${control.y} ${end.x2},${end.y2}`,
+                fill: "none",
+                stroke: token("--text-primary"),
+                "stroke-width": 1.5 + 2 * Math.sqrt(crossed / mostCrossings),
+                "marker-end": "url(#species-flow-ancestry)",
+              },
+              s("title", {
+                text: `Genome ${state.selected}'s ancestry: ${plural(crossed, "genome")} created in species ${toId} from a parent in species ${fromId}`,
+              })
+            )
+          );
+        }
+
+        for (const [id, entry] of rows) {
+          const { x, y } = at(id);
+          const r = nodeRadius(entry.genomes);
+          const ring = id === focus ? slotColor(1) : null;
+          const title = [
+            `Species ${id}`,
+            plural(entry.genomes, "genome"),
+            isNumber(entry.best) ? `best ${state.yKey} ${formatNumber(entry.best)} (genome ${entry.bestGenome})` : `no ${state.yKey} recorded`,
+          ].join(" · ");
+          graph.append(
+            s(
+              "g",
+              {
+                class: "species-node",
+                tabindex: "0",
+                role: "button",
+                "aria-label": `${title}. Color the chart around species ${id}.`,
+                onclick: () => focusOn(id),
+                onkeydown: (event) => {
+                  if (event.key !== "Enter" && event.key !== " ") return;
+                  event.preventDefault();
+                  focusOn(id);
+                },
+              },
+              s("title", { text: title }),
+              ...(id === selectedSpecies
+                ? [s("circle", { cx: x, cy: y, r: r + 7, fill: "none", stroke: token("--text-primary"), "stroke-width": 1.5, "stroke-dasharray": "3 2" })]
+                : []),
+              s("circle", { cx: x, cy: y, r, fill: shade(entry.best), stroke: ring || token("--surface-1"), "stroke-width": ring ? 4 : 2 }),
+              s("text", { x: x + r + 3, y: y - r + 1, text: id })
+            )
+          );
+        }
+
+        const totalMigrations = [...migrations.values()].reduce((sum, n) => sum + n, 0);
+        const legend = h(
+          "div",
+          { class: "chart-legend" },
+          h("span", {}, h("span", { class: "swatch", style: `background:linear-gradient(90deg, ${light}, ${dark})` }), `species' best ${state.yKey}, worse to better`),
+          ...(focus !== null ? [legendItem(slotColor(1), `focus species ${focus} (ring)`)] : []),
+          legendItem(token("--text-muted"), "genomes created across species (width)", true),
+          ...(selectedSpecies !== undefined ? [h("span", { class: "muted", text: `dotted outline: genome ${state.selected}'s species` })] : []),
+          ...(selectedSpecies !== undefined && state.highlightLineage
+            ? [
+                crossings.size
+                  ? legendItem(token("--text-primary"), `genome ${state.selected}'s ancestry crossing species`, true)
+                  : h("span", { class: "muted", text: `genome ${state.selected}'s ancestry never left species ${selectedSpecies}` }),
+              ]
+            : [])
+        );
+        flowGraph = [
+          h(
+            "div",
+            { class: "toolbar" },
+            h("span", { class: "meta", text: `${rows.length} species · ${plural(totalMigrations, "genome")} created from a parent in another species` }),
+            h("span", { class: "spacer" }),
+            h("span", { class: "muted", text: "click a species to color the chart around it" })
+          ),
+          legend,
+          h("div", { class: "topology-frame species-flow-frame" }, graph),
+        ];
+      }
+
       setChildren(
         body,
+        ...(flowGraph || []),
         Object.keys(config).length
           ? h(
               "div",
               { class: "meta" },
               h("span", {}, "threshold ", h("b", { text: String(config.species_threshold) })),
               h("span", {}, "capacity ", h("b", { text: String(config.max_population_size) })),
-              h("span", {}, "inter-species rate ", h("b", { text: String(config.inter_species_parent_rate) }))
+              h("span", {}, "inter-species rate ", h("b", { text: String(config.inter_species_parent_rate) })),
+              config.neat_c1 !== undefined ? h("span", {}, "c1 ", h("b", { text: String(config.neat_c1) })) : null,
+              config.neat_c2 !== undefined ? h("span", {}, "c2 ", h("b", { text: String(config.neat_c2) })) : null,
+              config.neat_c3 !== undefined ? h("span", {}, "c3 ", h("b", { text: String(config.neat_c3) })) : null
             )
           : null,
         h(
@@ -2472,7 +2705,15 @@
           h(
             "thead",
             {},
-            h("tr", {}, h("th", { text: "species" }), h("th", { class: "number", text: "genomes" }), h("th", { class: "number", text: `best ${state.yKey}` }), h("th", { text: "best genome" }))
+            h(
+              "tr",
+              {},
+              h("th", { text: "species" }),
+              h("th", { class: "number", text: "genomes" }),
+              h("th", { text: "size" }),
+              h("th", { class: "number", text: `best ${state.yKey}` }),
+              h("th", { text: "best genome" })
+            )
           ),
           h(
             "tbody",
@@ -2483,16 +2724,19 @@
                 {
                   class: "clickable",
                   title: `Color the chart around species ${id}`,
-                  onclick: () => {
-                    state.encoding = "species";
-                    state.speciesFocus = id;
-                    renderChartControls();
-                    chart.setOptions({ encoding: "species", speciesFocus: id });
-                    renderSpeciesSummary();
-                  },
+                  onclick: () => focusOn(id),
                 },
                 h("td", { text: String(id) }),
                 h("td", { class: "number", text: formatNumber(entry.genomes) }),
+                h(
+                  "td",
+                  { class: "species-size-cell" },
+                  h("div", {
+                    class: "species-size-bar",
+                    style: `width:${Math.max(4, Math.round((100 * entry.genomes) / maxGenomes))}%`,
+                    title: plural(entry.genomes, "genome"),
+                  })
+                ),
                 h("td", { class: "number", text: formatNumber(entry.best) }),
                 h("td", {}, entry.bestGenome !== null ? h("a", { href: genomeHref(index, entry.bestGenome), text: entry.bestGenome }) : "—")
               )

@@ -338,6 +338,7 @@ main {
 
 .run-notes,
 .island-topology,
+.species-summary,
 .run-timing {
   margin-top: 8px;
 }
@@ -367,13 +368,31 @@ main {
   font-size: 11px;
 }
 
-.topology-frame .island {
+.topology-frame .island,
+.topology-frame .species-node {
   cursor: pointer;
 }
 
-.topology-frame .island:focus-visible {
+.topology-frame .island:focus-visible,
+.topology-frame .species-node:focus-visible {
   outline: 2px solid var(--series-1);
   outline-offset: 2px;
+}
+
+.species-flow-frame {
+  margin-bottom: 8px;
+}
+
+td.species-size-cell {
+  min-width: 72px;
+  vertical-align: middle;
+}
+
+.species-size-bar {
+  height: 8px;
+  border-radius: 2px;
+  background: var(--text-muted);
+  opacity: 0.55;
 }
 
 /* ---------- tables ---------- */

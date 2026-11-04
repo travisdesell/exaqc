@@ -352,15 +352,22 @@ Multi-word values take their arguments as separate tokens — for example
 ### [`steady_state_speciation`](./src/evolution/steady_state_speciation.py)
 
 A single population with global capacity, partitioned into **species** by
-structural distance on gate innovation IDs (the same idea as NEAT-style
-speciation). A new genome joins the first compatible species or starts its own;
+structural distance on **enabled** gate innovation IDs (the same idea as
+NEAT-style speciation, except disabled gates do not enter the distance).
+A new genome joins the first compatible species or starts its own;
 parents are drawn round-robin within a species, with a small chance of
 inter-species crossover. Capacity is enforced globally (worst non-singleton
 members are preferred for eviction). Species membership is stored on each
 genome as `metadata["species_id"]`; the search archive indexes that as the
 summary `species` column (alongside `island` for island searches) so the
 dashboard and MCP can filter and color by species the same way they do for
-islands.
+islands. The archive's `run_info` records a `speciation` object with
+`max_population_size`, `species_threshold`, `neat_c1`, `neat_c2`, `neat_c3`,
+and `inter_species_parent_rate`. Parent-selection metadata uses
+`crossover_type` values `mutation`, `intra`, and `inter` (islands instead use
+`intra-island` / `inter-island`). A local breast-cancer wrapper that exercises
+this strategy is [`scripts/run_breast_cancer_local.sh`](scripts/run_breast_cancer_local.sh)
+(`GENOMES`, `POP_SIZE`, `SPECIES_THRESHOLD`).
 
 | Argument | Default | Description |
 |---|---|---|

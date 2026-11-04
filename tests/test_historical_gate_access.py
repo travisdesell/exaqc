@@ -51,12 +51,21 @@ def _genome(*gates: Gate) -> CircuitGenome:
 
 
 def test_enabled_only_ignores_disabled_records() -> None:
-    """Legacy accessors still see only enabled gates."""
+    """Innovation lists omit disabled gates; the signature keeps enable bits."""
 
     genome = _genome(_ry(1, True, 0.2), _ry(2, False, 0.6))
     assert genome.get_gate_innovations() == [1]
-    assert genome.get_historical_gate_innovations() == [1, 2]
+    assert genome.get_historical_gate_innovations() == [1]
     assert genome.get_historical_gate_signature() == frozenset({(1, True), (2, False)})
+
+
+def test_all_disabled_historical_innovations_are_empty() -> None:
+    """A genome of only disabled gates has an empty speciation history."""
+
+    genome = _genome(_ry(1, False, 0.2), _ry(2, False, 0.6))
+    assert genome.get_gate_innovations() == []
+    assert genome.get_historical_gate_innovations() == []
+    assert genome.get_historical_gate_signature() == frozenset({(1, False), (2, False)})
 
 
 def test_has_same_gates_is_unchanged() -> None:

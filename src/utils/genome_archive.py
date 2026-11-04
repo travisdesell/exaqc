@@ -333,6 +333,29 @@ def _index_genome_columns(connection: sqlite3.Connection) -> None:
         )
 
 
+def _ensure_species_column(connection: sqlite3.Connection) -> None:
+    """Adds the ``species`` summary column when an older archive lacks it.
+
+    Some format-6 archives (and older ones) were created without a ``species``
+    column; ``CREATE TABLE IF NOT EXISTS`` will not alter them. Adding a
+    nullable column keeps those archives readable and writable under the
+    current layout used by speciation searches.
+
+    Args:
+        connection: The archive's connection, open for writing.
+
+    Returns:
+        None. Mutates the ``genomes`` table when ``species`` is missing.
+    """
+
+    existing = {
+        row[1] for row in connection.execute("PRAGMA table_info(genomes)").fetchall()
+    }
+    if "species" not in existing:
+        connection.execute("ALTER TABLE genomes ADD COLUMN species INTEGER")
+        connection.commit()
+
+
 def _provenance() -> dict[str, Any]:
     """Collects what produced a run, so results can be traced back to code.
 
@@ -1139,6 +1162,7 @@ class GenomeArchive:
         )
         connection.execute("PRAGMA synchronous=NORMAL")
         connection.executescript(_SCHEMA)
+        _ensure_species_column(connection)
         _index_fitness_columns(connection)
 
         archive = cls(

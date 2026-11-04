@@ -1,11 +1,12 @@
 """Speciation as a third EXAQC population strategy.
 
-Species membership is decided at insertion by structural distance on all
-gate innovation IDs (join iff distance is at most the threshold). Species
-are examined in cyclic order from a rotating assignment cursor. Parents are
-drawn round-robin within species, with a small inter-species rate. Capacity
-is global. The matching-gene angle term is reserved for later investigation
-(``neat_c3`` must stay 0.0). This strategy does not subclass or modify islands.
+Species membership is decided at insertion by structural distance on enabled
+gate innovation IDs (join iff distance is at most the threshold). Disabled
+gates are ignored by that distance. Species are examined in cyclic order from
+a rotating assignment cursor. Parents are drawn round-robin within species,
+with a small inter-species rate. Capacity is global. The matching-gene angle
+term is reserved for later investigation (``neat_c3`` must stay 0.0). This
+strategy does not subclass or modify islands.
 """
 
 from __future__ import annotations
@@ -155,6 +156,7 @@ class SteadyStateSpeciation(PopulationStrategy):
         self.species_threshold = species_threshold
         self.neat_c1 = neat_c1
         self.neat_c2 = neat_c2
+        self.neat_c3 = neat_c3
         self.inter_species_parent_rate = inter_species_parent_rate
         self.rng = random.Random(rng_seed)
         self.insertions = 0
@@ -213,7 +215,8 @@ class SteadyStateSpeciation(PopulationStrategy):
 
         Returns:
             A ``speciation`` dict with the capacity, join threshold, distance
-            coefficients and inter-species parent rate used for the run.
+            coefficients (including ``neat_c3``) and inter-species parent rate
+            used for the run.
         """
 
         return {
@@ -222,6 +225,7 @@ class SteadyStateSpeciation(PopulationStrategy):
                 "species_threshold": self.species_threshold,
                 "neat_c1": self.neat_c1,
                 "neat_c2": self.neat_c2,
+                "neat_c3": self.neat_c3,
                 "inter_species_parent_rate": self.inter_species_parent_rate,
             }
         }

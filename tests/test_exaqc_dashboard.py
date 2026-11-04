@@ -1026,6 +1026,7 @@ def test_speciation_runs_show_species_and_each_parents_species(tmp_path) -> None
         "species_threshold": 0.6,
         "neat_c1": 1.0,
         "neat_c2": 1.0,
+        "neat_c3": 0.0,
         "inter_species_parent_rate": 0.1,
     }
     build_run(
@@ -1052,6 +1053,23 @@ def test_speciation_runs_show_species_and_each_parents_species(tmp_path) -> None
         assert payload["speciation"] == speciation
         assert payload["filter_options"]["species"] == [0, 1]
         assert get_json(f"{url}/api/runs/{steady}")["speciation"] is None
+
+        # The run page builds a species-summary details panel when species exist,
+        # defaults color-by to species when filters are present, and draws a
+        # species-flow graph analogous to island topology.
+        status, _, app_js = get(f"{url}/static/app.js")
+        assert status == 200
+        assert b'class: "species-summary"' in app_js
+        assert b"speciesSummaryNode" in app_js
+        assert b'speciesCount > 0 ? "species"' in app_js
+        assert b"speciesStatistics" in app_js
+        assert b"species-flow" in app_js
+        assert b"species-size-bar" in app_js
+        status, _, app_css = get(f"{url}/static/app.css")
+        assert status == 200
+        assert b".species-summary" in app_css
+        assert b".species-size-bar" in app_css
+        assert b".species-node" in app_css
 
         crossover = get_json(f"{url}/api/runs/{speciation_run}/genomes/3")
         assert crossover["summary"]["parents"] == [1, 2]

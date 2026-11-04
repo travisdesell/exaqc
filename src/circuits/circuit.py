@@ -375,16 +375,17 @@ class CircuitGenome:
         return gates
 
     def get_historical_gate_innovations(self) -> list[int]:
-        """Returns sorted unique innovation IDs from every gate record.
+        """Returns sorted unique innovation IDs of enabled gates.
 
-        Disabled gates are included. Enabled-only identity remains
-        :meth:`get_gate_innovations`.
+        Speciation distance uses this set, so disabled gates are left out.
+        Duplicate identity still uses :meth:`get_historical_gate_signature`,
+        which keeps every record's enable bit.
 
         Returns:
-            Sorted unique innovation numbers over ``self.gates``.
+            Sorted unique innovation numbers over enabled gates in ``self.gates``.
         """
 
-        return sorted({gate.innovation_number for gate in self.gates})
+        return sorted({gate.innovation_number for gate in self.gates if gate.enabled})
 
     def get_historical_gate_signature(self) -> frozenset[tuple[int, bool]]:
         """Returns ``(innovation_number, enabled)`` pairs for every gate record.
