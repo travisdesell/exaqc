@@ -152,7 +152,8 @@ class GateSpecifications:
             default=None,
             help=(
                 "Restrict the search to only these gate method names (e.g. 'cx "
-                "ry rz'). When omitted, every gate the backend supports is used."
+                "ry rz'); a name the backend does not have is an error. When "
+                "omitted, every gate the backend supports is used."
             ),
         )
 
@@ -193,14 +194,30 @@ class GateSpecifications:
         return gate_specifications
 
     def use_only(self, allowed_methods: list[str]) -> GateSpecifications:
-        """
-        Used to create a new GateSpecifications object which only has the
-        provided gate methods.
+        """Creates a new GateSpecifications holding only the named gate methods.
+
+        Every name must be a gate this backend has: an unknown one (a typo such
+        as ``cnot`` for ``cx``) is an error rather than silently dropped, which
+        would otherwise leave the search with a smaller gate set than asked for.
 
         Args:
-            allow_methods: are the gate method names for the gates to be
-                kept and used.
+            allowed_methods: The gate method names for the gates to be kept
+                and used.
+
+        Returns:
+            A new GateSpecifications for the same target with only those gates.
+
+        Raises:
+            ValueError: If any name in ``allowed_methods`` is not a gate of this
+                backend.
         """
+
+        unknown = [name for name in allowed_methods if name not in self.specifications]
+        if unknown:
+            raise ValueError(
+                f"unknown gate name(s) for the {self.target} backend: "
+                f"{' '.join(unknown)} (available: {' '.join(sorted(self.specifications))})"
+            )
 
         new_specs = GateSpecifications(self.target)
 

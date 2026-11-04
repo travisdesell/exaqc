@@ -59,6 +59,9 @@ class FakeGenome:
                 {"episode": episode, "return": value}
                 for episode, value in enumerate(returns)
             ]
+            # like a trainer, name the episode whose weights were kept; the last
+            # one here, so a series' best-step metrics are its final values
+            self.serialized["metadata"]["best_episode"] = len(returns) - 1
         if accuracies is not None:
             breakdown: dict[str, Any] = {
                 str(index): {"acc": value, "correct": int(value * 10), "total": 10}
@@ -68,6 +71,7 @@ class FakeGenome:
             self.serialized["metadata"]["validation_epoch_metrics"] = [
                 {"epoch": 0, "loss": loss, "mean_class_accuracy": breakdown}
             ]
+            self.serialized["metadata"]["best_epoch"] = 0
 
     def to_dict(self) -> dict[str, Any]:
         """Returns the genome's serialized form.

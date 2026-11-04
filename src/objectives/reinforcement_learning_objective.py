@@ -486,41 +486,24 @@ class ReinforcementLearningObjective(Objective):
 
         Returns:
             None. Sets the genome's ``fitness``, whose ``loss`` is the negative
-            weighted mean return described on the class.
+            weighted mean return described on the class, and
+            ``genome.metadata["initial_fitness"]``: the same fitness for the
+            inherited weights, from the episode-0 evaluation before training.
         """
 
         self.trainer.train(genome, self.environment)
 
-        training_metrics = genome.metadata["best_training_metrics"]
-        validation_metrics = genome.metadata["best_validation_metrics"]
-
-        # the bias weights the training return; the evaluation return gets the rest
-        mean_return = (
-            self.train_vs_validation_bias * training_metrics["return_mean"]
-        ) + ((1.0 - self.train_vs_validation_bias) * validation_metrics["return_mean"])
-
-        # "loss" (lower is better) drives population sorting via compare();
-        # the remaining keys mirror the RL fields used by save_circuit's tag
-        # fallback and by downstream analysis.
-        genome.fitness = {
-            "loss": -mean_return,
-            "target_metric": validation_metrics["return_mean"],
-            "eval_return_mean": validation_metrics["return_mean"],
-            "eval_return_std": validation_metrics["return_std"],
-            "train_return_mean": training_metrics["return_mean"],
-            "best_episode_return": training_metrics["best_episode_return"],
-            "env_id": self.environment.env_id,
-            # which policy the evaluation returns describe; genomes scored
-            # under different regimes are not comparable with one another
-            "eval_policy": genome.metadata.get("eval_policy", "greedy"),
-        }
-
-        # under eval_policy="both" the regime that did not drive fitness is
-        # carried alongside it, so the gap between the two can be analyzed
-        for regime in ("greedy", "stochastic"):
-            recorded = validation_metrics.get(f"{regime}_return_mean")
-            if recorded is not None:
-                genome.fitness[f"eval_{regime}_return_mean"] = recorded
+        genome.fitness = self.fitness_from_metrics(
+            genome,
+            genome.metadata["best_training_metrics"],
+            genome.metadata["best_validation_metrics"],
+        )
+        initial_training = genome.metadata.get("initial_training_metrics")
+        initial_validation = genome.metadata.get("initial_validation_metrics")
+        if initial_training is not None and initial_validation is not None:
+            genome.metadata["initial_fitness"] = self.fitness_from_metrics(
+                genome, initial_training, initial_validation
+            )
 
         logger.info(
             f"[{genome.genome_number:04d}] "
@@ -531,3 +514,97 @@ class ReinforcementLearningObjective(Objective):
             f"eval_policy={genome.fitness['eval_policy']} "
             f"env={self.environment.env_id}"
         )
+
+    def fitness_from_metrics(
+        self,
+        genome: CircuitGenome,
+        training_metrics: dict[str, Any],
+        validation_metrics: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Computes reinforcement-learning fitness from one point's metrics.
+
+        Args:
+            genome: The genome being scored; its ``eval_policy`` metadata names
+                the regime the evaluation returns were measured under.
+            training_metrics: The training returns (``return_mean`` and
+                ``best_episode_return``).
+            validation_metrics: The evaluation returns (``return_mean``,
+                ``return_std`` and, under ``eval_policy="both"``, each regime's
+                ``<regime>_return_mean``).
+
+        Returns:
+            The fitness: ``loss`` is the negative weighted mean return described
+            on the class, ``target_metric`` the evaluation return, plus the
+            individual returns, the environment and the evaluation policy.
+        """
+
+        return reinforcement_learning_fitness(
+            training_metrics,
+            validation_metrics,
+            train_vs_validation_bias=self.train_vs_validation_bias,
+            env_id=self.environment.env_id,
+            eval_policy=genome.metadata.get("eval_policy", "greedy"),
+        )
+
+
+def reinforcement_learning_fitness(
+    training_metrics: dict[str, Any],
+    validation_metrics: dict[str, Any],
+    train_vs_validation_bias: float,
+    env_id: str | None,
+    eval_policy: str,
+) -> dict[str, Any]:
+    """Computes reinforcement-learning fitness from one point's metrics.
+
+    :meth:`ReinforcementLearningObjective.fitness_from_metrics` scores genomes
+    with this as they are evaluated, and :mod:`src.utils.archive_backfill`
+    scores the inherited weights of genomes an archive stored before
+    ``metadata["initial_fitness"]`` was recorded, so both use one formula.
+
+    Args:
+        training_metrics: The training returns (``return_mean`` and
+            ``best_episode_return``).
+        validation_metrics: The evaluation returns (``return_mean``,
+            ``return_std`` and, under ``eval_policy="both"``, each regime's
+            ``<regime>_return_mean``).
+        train_vs_validation_bias: The weight of the training return in the
+            ``loss``; the evaluation return gets ``1 - bias``.
+        env_id: The Gymnasium id of the environment the returns were measured
+            on.
+        eval_policy: The regime the evaluation returns were measured under.
+
+    Returns:
+        The fitness: ``loss`` is ``-(bias * training return + (1 - bias) *
+        evaluation return)``, ``target_metric`` the evaluation return, plus the
+        individual returns, the environment and the evaluation policy.
+    """
+
+    # the bias weights the training return; the evaluation return gets the rest
+    mean_return = (train_vs_validation_bias * training_metrics["return_mean"]) + (
+        (1.0 - train_vs_validation_bias) * validation_metrics["return_mean"]
+    )
+
+    # "loss" (lower is better) drives population sorting via compare();
+    # the remaining keys mirror the RL fields used by save_circuit's tag
+    # fallback and by downstream analysis.
+    fitness = {
+        "loss": -mean_return,
+        "target_metric": validation_metrics["return_mean"],
+        "eval_return_mean": validation_metrics["return_mean"],
+        "eval_return_std": validation_metrics["return_std"],
+        "train_return_mean": training_metrics["return_mean"],
+        "best_episode_return": training_metrics["best_episode_return"],
+        "env_id": env_id,
+        # which policy the evaluation returns describe; genomes scored
+        # under different regimes are not comparable with one another
+        "eval_policy": eval_policy,
+    }
+
+    # under eval_policy="both" the regime that did not drive fitness is
+    # carried alongside it, so the gap between the two can be analyzed
+    for regime in ("greedy", "stochastic"):
+        recorded = validation_metrics.get(f"{regime}_return_mean")
+        if recorded is not None:
+            fitness[f"eval_{regime}_return_mean"] = recorded
+
+    return fitness

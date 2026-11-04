@@ -88,14 +88,40 @@ class ClassificationObjective(Objective):
         Returns:
             None. Sets ``genome.fitness`` with a minimized ``"loss"`` (the mean
             of the best training and validation loss) and a ``"target_metric"``
-            holding the corresponding mean class accuracy.
+            holding the corresponding mean class accuracy, and
+            ``genome.metadata["initial_fitness"]``: the same fitness for the
+            inherited weights, before any training.
         """
         self.trainer.train(genome)
 
-        training = genome.metadata["best_training_metrics"]
-        validation = genome.metadata["best_validation_metrics"]
+        genome.fitness = self.fitness_from_metrics(
+            genome.metadata["best_training_metrics"],
+            genome.metadata["best_validation_metrics"],
+        )
+        initial_training = genome.metadata.get("initial_training_metrics")
+        initial_validation = genome.metadata.get("initial_validation_metrics")
+        if initial_training is not None and initial_validation is not None:
+            genome.metadata["initial_fitness"] = self.fitness_from_metrics(
+                initial_training, initial_validation
+            )
 
-        genome.fitness = {
+    @staticmethod
+    def fitness_from_metrics(
+        training: dict[str, Any], validation: dict[str, Any]
+    ) -> dict[str, float]:
+        """Computes classification fitness from one epoch's metrics.
+
+        Args:
+            training: The training-data metrics (``loss`` and
+                ``mean_class_accuracy``).
+            validation: The validation-data metrics, with the same keys.
+
+        Returns:
+            The fitness: ``loss`` is the mean of the training and validation
+            loss, and ``target_metric`` the mean of their mean class accuracy.
+        """
+
+        return {
             "loss": (float(training["loss"]) + float(validation["loss"])) / 2.0,
             "target_metric": (
                 float(training["mean_class_accuracy"]["mean"])

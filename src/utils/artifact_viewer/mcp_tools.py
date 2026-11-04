@@ -19,8 +19,15 @@ Two constraints shape the design, both measured on a 20k-genome archive:
   listings are capped and paged;
 * queries spanning several runs cannot ``ATTACH`` the archives, because SQLite
   allows at most 10 attached databases and that ceiling is fixed at compile
-  time. Cross-run SQL instead copies the per-run summary rows into one
-  in-memory database, which costs about 5.5 ms per run.
+  time. Cross-run SQL instead copies rows into one in-memory database.
+
+Large runs add a third. A 200k-genome archive is about 4 GB, almost all of it
+stored genomes, and the ``genomes`` table's pages (150 MB) lie scattered among
+their blobs, so reading the table cold takes about 2.5 s of waiting on the disk.
+A roll-up therefore copies only the columns its statement reads, and reads the
+runs concurrently, each large run in several ranges at once; ten such runs
+roll up in a few seconds rather than half a minute. The run list's summaries
+are kept until a run's archive changes.
 """
 
 from __future__ import annotations
@@ -28,11 +35,14 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
 import re
 import sqlite3
 import statistics
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from functools import partial
 from typing import Any
 from urllib.parse import quote
 
@@ -43,8 +53,13 @@ from src.utils.artifact_viewer.server import (
     Run,
     RunRegistry,
     higher_is_better,
+    read_concurrently,
 )
-from src.utils.genome_archive import MASTER_TIMING_FIELDS, TIMING_COLUMNS, GenomeArchive
+from src.utils.genome_archive import (
+    MASTER_TIMING_FIELDS,
+    OPTIONAL_COLUMNS,
+    GenomeArchive,
+)
 
 #: Rows a listing returns when the caller does not say, and the most it may ask
 #: for: 50 rows is roughly 4k tokens, 200 roughly 16k.
@@ -61,7 +76,13 @@ MAX_RESPONSE_BYTES = 64 * 1024
 #: The most runs one cross-run query may roll up.
 MAX_RUNS_PER_QUERY = 64
 
-#: How long a ``query_sql`` statement may run before it is interrupted.
+#: A run's genomes are copied into a roll-up in ranges of at most this many
+#: genome numbers, each by its own reader, so that rolling up a few large runs
+#: still keeps every reader busy.
+ROLLUP_CHUNK_GENOMES = 50_000
+
+#: How long a ``query_sql`` call may take, including rolling several runs up,
+#: before it is interrupted.
 QUERY_TIMEOUT_SECONDS = 10.0
 
 #: Rows one ``export_query`` page holds when the caller does not say, and the
@@ -74,8 +95,8 @@ MAX_EXPORT_ROWS = 50_000
 #: early rather than exceed it, and says where the next one starts.
 MAX_EXPORT_BYTES = 4 * 1024 * 1024
 
-#: How long an ``export_query`` statement may run: longer than an interactive
-#: query, since a page may scan every genome of many runs.
+#: How long an ``export_query`` call may take, including any roll-up: longer
+#: than an interactive query, since a page may scan every genome of many runs.
 EXPORT_TIMEOUT_SECONDS = 60.0
 
 #: The encodings ``export_query`` returns a page in.
@@ -120,13 +141,21 @@ _ROLLUP_SELECT: tuple[tuple[str, str, str], ...] = (
     ("evaluated_host", "TEXT", "evaluated_host"),
     ("evaluated_rank", "INTEGER", "evaluated_rank"),
     ("discard_reason", "TEXT", "discard_reason"),
-    ("final_metrics", "TEXT", "final_metrics"),
+    ("initial_metrics", "TEXT", "initial_metrics"),
+    ("best_metrics", "TEXT", "best_metrics"),
+    ("last_metrics", "TEXT", "last_metrics"),
     ("fitness", "TEXT", "fitness"),
+    ("initial_fitness", "TEXT", "initial_fitness"),
     ("request_wait_seconds", "REAL", "request_wait_seconds"),
     ("generation_seconds", "REAL", "generation_seconds"),
     ("turnaround_seconds", "REAL", "turnaround_seconds"),
     ("loss", "REAL", "json_extract(fitness, '$.loss')"),
     ("target_metric", "REAL", "json_extract(fitness, '$.target_metric')"),
+    # read from the archive's own generated columns, so an archive older than
+    # them (format 7) has them selected as NULL like any other optional column
+    ("initial_loss", "REAL", "initial_loss"),
+    ("initial_target_metric", "REAL", "initial_target_metric"),
+    ("target_gain", "REAL", "target_gain"),
 )
 
 #: Every column of the cross-run ``genomes`` table, the run's name first.
@@ -373,6 +402,282 @@ def _csv_line(values: Sequence[Any]) -> str:
     return buffer.getvalue()
 
 
+def _query_failure(error: sqlite3.Error, timeout_seconds: float) -> ValueError:
+    """Explains why a statement failed, saying what to do if it ran out of time.
+
+    Args:
+        error: What SQLite raised.
+        timeout_seconds: The limit the statement ran under.
+
+    Returns:
+        The error to raise in its place.
+    """
+
+    if isinstance(error, sqlite3.OperationalError) and str(error) == "interrupted":
+        return ValueError(
+            f"Query failed: it ran past the {timeout_seconds:g} s limit. Narrow it "
+            "(a WHERE clause, fewer runs, or fewer joins), or aggregate in SQL "
+            "rather than returning per-genome rows."
+        )
+    return ValueError(f"Query failed: {error}")
+
+
+def _interrupt_at(connection: sqlite3.Connection, deadline: float) -> None:
+    """Makes a connection interrupt whatever it is running once a deadline passes.
+
+    Args:
+        connection: The connection to bound.
+        deadline: The :func:`time.monotonic` time past which to interrupt.
+
+    Returns:
+        None. Sets the connection's progress handler; an interrupted statement
+        raises :class:`sqlite3.OperationalError`.
+    """
+
+    connection.set_progress_handler(
+        lambda: 1 if time.monotonic() > deadline else 0, 10_000
+    )
+
+
+def _create_rollup_tables(connection: sqlite3.Connection) -> None:
+    """Creates a roll-up's tables, empty.
+
+    Args:
+        connection: The in-memory database to create them in.
+
+    Returns:
+        None. Creates the ``runs`` and ``genomes`` tables and the
+        :data:`_ROLLUP_TABLES`, each with a ``run`` column first.
+    """
+
+    connection.execute(
+        "CREATE TABLE runs(run TEXT, run_index INTEGER, task TEXT, "
+        "task_target TEXT, strategy TEXT, genomes INTEGER)"
+    )
+    declarations = ", ".join(
+        f"{name} {sql_type}" for name, sql_type, _ in _ROLLUP_SELECT
+    )
+    connection.execute(f"CREATE TABLE genomes(run TEXT, {declarations})")
+    for table, columns in _ROLLUP_TABLES:
+        connection.execute(f"CREATE TABLE {table}(run TEXT, {', '.join(columns)})")
+
+
+def _read_columns(
+    connection: sqlite3.Connection, statement: str
+) -> dict[str, set[str]]:
+    """Finds the table columns a statement reads, without running it.
+
+    The statement is compiled against the roll-up's tables while they are still
+    empty, with an authorizer recording every read -- including reads through
+    the ``genome_operators`` view, which SQLite reports against ``genomes``.
+    A table read for its rows alone (``SELECT COUNT(*) FROM genomes``) is
+    reported with the column ``""``.
+
+    Args:
+        connection: The roll-up, with its tables and views created.
+        statement: A statement already checked by :func:`_single_statement`.
+
+    Returns:
+        The columns read, keyed by table.
+
+    Raises:
+        ValueError: If the statement does not compile, or does anything but read.
+    """
+
+    reads: dict[str, set[str]] = {}
+
+    def record(action: int, table: str | None, column: str | None, *_: Any) -> int:
+        """Records a read and allows only what a query is allowed."""
+        if action == sqlite3.SQLITE_READ and table:
+            reads.setdefault(table, set()).add(column or "")
+        return (
+            sqlite3.SQLITE_OK if action in _ALLOWED_SQL_ACTIONS else sqlite3.SQLITE_DENY
+        )
+
+    connection.set_authorizer(record)
+    try:
+        connection.execute(f"EXPLAIN {_bounded(statement)}", (0, 0)).fetchall()
+    except sqlite3.Error as error:
+        raise ValueError(f"Query failed: {error}") from error
+    finally:
+        connection.set_authorizer(None)
+    return reads
+
+
+@dataclass
+class _RollupSource:
+    """What a roll-up needs to know about one run before copying from it.
+
+    Attributes:
+        run: The run.
+        info: Its ``run_info``.
+        genomes: How many genomes it holds.
+        max_genome_number: Its highest genome number (0 when it has none).
+        genome_columns: The columns its archive's ``genomes`` table has.
+        tables: The tables its archive has.
+    """
+
+    run: Run
+    info: dict[str, Any]
+    genomes: int
+    max_genome_number: int
+    genome_columns: frozenset[str]
+    tables: frozenset[str]
+
+
+def _rollup_source(
+    run: Run, reads: dict[str, set[str]], deadline: float
+) -> _RollupSource:
+    """Surveys one run for a roll-up, checking it has what the statement reads.
+
+    Args:
+        run: The run to survey.
+        reads: The columns the statement reads, keyed by table.
+        deadline: The :func:`time.monotonic` time past which to stop.
+
+    Returns:
+        The run's survey.
+
+    Raises:
+        ValueError: If the run's archive predates a ``genomes`` column the
+            statement reads (other than the optional ones in
+            :data:`~src.utils.genome_archive.OPTIONAL_COLUMNS`, read as NULL for
+            an archive without them), which would otherwise
+            fail as a bare SQL error naming neither the run nor what to do.
+        sqlite3.OperationalError: If the deadline passed.
+    """
+
+    with GenomeArchive.open_readonly(run.archive_path) as reader:
+        _interrupt_at(reader.connection, deadline)
+        present = reader.genome_columns
+        missing = sorted(
+            expression
+            for name, _, expression in _ROLLUP_SELECT
+            if name in reads.get("genomes", ())
+            and expression.isidentifier()
+            and expression not in OPTIONAL_COLUMNS
+            and expression not in present
+        )
+        if missing:
+            raise ValueError(
+                f"{run.name} was written before its archive recorded "
+                f"{', '.join(missing)}, so it cannot be rolled up with other "
+                "runs. Query it on its own, or re-run it to record them."
+            )
+        tables = frozenset(
+            name
+            for (name,) in reader.connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        )
+        return _RollupSource(
+            run=run,
+            info=reader.run_info(),
+            genomes=reader.count(),
+            max_genome_number=reader.max_genome_number() or 0,
+            genome_columns=present,
+            tables=tables,
+        )
+
+
+def _rollup_part(
+    source: _RollupSource,
+    reads: dict[str, set[str]],
+    genome_range: tuple[int, int] | None,
+    deadline: float,
+) -> bytes:
+    """Copies part of one run into a private in-memory database.
+
+    Copying runs inside SQLite, from the archive attached read-only, so no row
+    passes through Python; and only the columns the statement reads are copied
+    (the rest stay NULL), which spares both the reading and the memory of
+    columns such as ``fitness`` and ``best_metrics``. Parts are copied on
+    separate threads, so each gets its own database, returned serialized for
+    the roll-up to merge.
+
+    Args:
+        source: The run's survey.
+        reads: The columns the statement reads, keyed by table.
+        genome_range: The genome numbers to copy, from the first up to but
+            excluding the second; ``None`` copies the run's other tables read
+            instead.
+        deadline: The :func:`time.monotonic` time past which to stop.
+
+    Returns:
+        The part, as :meth:`sqlite3.Connection.serialize` returns it, with the
+        roll-up's tables.
+
+    Raises:
+        sqlite3.OperationalError: If the deadline passed.
+    """
+
+    if time.monotonic() > deadline:
+        raise sqlite3.OperationalError("interrupted")
+    part = sqlite3.connect(":memory:", uri=True)
+    try:
+        _create_rollup_tables(part)
+        _interrupt_at(part, deadline)
+        part.execute(
+            "ATTACH DATABASE ? AS archive",
+            (f"file:{quote(source.run.archive_path)}?mode=ro",),
+        )
+        if genome_range is None:
+            for table, columns in _ROLLUP_TABLES:
+                if table not in reads or table not in source.tables:
+                    # an archive older than the table contributes no rows to it
+                    continue
+                read = [column for column in columns if column in reads[table]]
+                part.execute(
+                    f"INSERT INTO {table}({', '.join(('run', *read))}) "
+                    f"SELECT {', '.join(('?', *read))} FROM archive.{table}",
+                    (source.run.name,),
+                )
+        else:
+            read_genomes = [
+                (
+                    name,
+                    (
+                        "NULL"
+                        if expression in OPTIONAL_COLUMNS
+                        and expression not in source.genome_columns
+                        else expression
+                    ),
+                )
+                for name, _, expression in _ROLLUP_SELECT
+                if name in reads["genomes"]
+            ]
+            part.execute(
+                f"INSERT INTO genomes({', '.join(('run', *(n for n, _ in read_genomes)))}) "
+                f"SELECT {', '.join(('?', *(e for _, e in read_genomes)))} "
+                "FROM archive.genomes WHERE genome_number >= ? AND genome_number < ?",
+                (source.run.name, *genome_range),
+            )
+        part.commit()
+        part.execute("DETACH DATABASE archive")
+        return part.serialize()
+    finally:
+        part.close()
+
+
+def _genome_ranges(max_genome_number: int) -> list[tuple[int, int]]:
+    """Splits a run's genome numbers into the ranges a roll-up copies separately.
+
+    Args:
+        max_genome_number: The run's highest genome number.
+
+    Returns:
+        Contiguous ranges, each starting at its first genome number and ending
+        before its last, covering every genome number from 0 to
+        ``max_genome_number`` in pieces of at most
+        :data:`ROLLUP_CHUNK_GENOMES`.
+    """
+
+    end = max_genome_number + 1
+    pieces = math.ceil(end / ROLLUP_CHUNK_GENOMES)
+    size = math.ceil(end / pieces)
+    return [(start, min(start + size, end)) for start in range(0, end, size)]
+
+
 class DashboardTools:
     """The tools exposed over MCP, backed by the dashboard's data layer.
 
@@ -490,67 +795,40 @@ class DashboardTools:
             )
         return payload
 
-    def _summary_rows(self, run: Run) -> list[tuple[Any, ...]]:
-        """Reads one run's per-genome summary rows for a cross-run roll-up.
-
-        Args:
-            run: The run to read.
-
-        Returns:
-            One tuple per genome, in :data:`_ROLLUP_COLUMNS` order after the run
-            name.
-
-        Raises:
-            ValueError: If the run's archive predates a column the roll-up holds
-                (other than the optional :data:`TIMING_COLUMNS`, read as NULL
-                for an archive without them), which would otherwise fail as a
-                bare SQL error naming neither the run nor what to do about it.
-        """
-
-        required = {
-            expression
-            for _, _, expression in _ROLLUP_SELECT
-            if expression.isidentifier() and expression not in TIMING_COLUMNS
-        }
-
-        with GenomeArchive.open_readonly(run.archive_path) as reader:
-            present = reader.genome_columns
-            expressions = ", ".join(
-                (
-                    "NULL"
-                    if expression in TIMING_COLUMNS and expression not in present
-                    else expression
-                )
-                for _, _, expression in _ROLLUP_SELECT
-            )
-            missing = sorted(required - present)
-            if missing:
-                raise ValueError(
-                    f"{run.name} was written before its archive recorded "
-                    f"{', '.join(missing)}, so it cannot be rolled up with other "
-                    "runs. Query it on its own, or re-run it to record them."
-                )
-            return reader.connection.execute(
-                f"SELECT {expressions} FROM genomes"
-            ).fetchall()
-
-    def _rollup(self, runs: list[Run]) -> sqlite3.Connection:
-        """Copies several runs' summary rows into one in-memory database.
+    def _rollup(
+        self, runs: list[Run], statement: str, deadline: float
+    ) -> sqlite3.Connection:
+        """Rolls several runs up into one in-memory database to run a statement on.
 
         This is how cross-run SQL is served: SQLite allows at most 10 attached
         databases, a compile-time ceiling that cannot be raised at runtime, so
-        the rows are gathered instead of the files being attached.
+        the rows are gathered instead of the files being queried in place.
+
+        Only what the statement reads is gathered (see :func:`_read_columns`):
+        in a large archive the ``genomes`` table's pages lie scattered among
+        the stored genomes' blobs, so reading one is mostly waiting on the disk,
+        and a roll-up of every column of many such runs would fill gigabytes of
+        memory. The runs are read concurrently, a large run's genomes in
+        several ranges at once (see :data:`ROLLUP_CHUNK_GENOMES`), and copied
+        inside SQLite (see :func:`_rollup_part`).
 
         Args:
             runs: The runs to roll up.
+            statement: The statement that will run on the roll-up, already
+                checked by :func:`_single_statement`.
+            deadline: The :func:`time.monotonic` time past which to stop.
 
         Returns:
-            A connection holding a ``runs`` table, the ``genomes`` summary rows
-            and the :data:`_ROLLUP_TABLES` -- each with a ``run`` column naming
-            each row's run -- and the ``genome_operators`` view over them.
+            A connection holding a ``runs`` table, the ``genomes`` rows and the
+            :data:`_ROLLUP_TABLES` -- each with a ``run`` column naming each
+            row's run, and the columns the statement does not read left NULL --
+            the runs' annotations, and the ``genome_operators`` view.
 
         Raises:
-            ValueError: If more than :data:`MAX_RUNS_PER_QUERY` runs are given.
+            ValueError: If more than :data:`MAX_RUNS_PER_QUERY` runs are given,
+                the statement does not compile or does anything but read, or a
+                run predates a column it reads.
+            sqlite3.OperationalError: If the deadline passed (``interrupted``).
         """
 
         if len(runs) > MAX_RUNS_PER_QUERY:
@@ -560,59 +838,56 @@ class DashboardTools:
             )
 
         memory = sqlite3.connect(":memory:")
-        memory.execute(
-            "CREATE TABLE runs(run TEXT, run_index INTEGER, task TEXT, "
-            "task_target TEXT, strategy TEXT, genomes INTEGER)"
-        )
-        declarations = ", ".join(
-            f"{name} {sql_type}" for name, sql_type, _ in _ROLLUP_SELECT
-        )
-        memory.execute(f"CREATE TABLE genomes(run TEXT, {declarations})")
-        for table, columns in _ROLLUP_TABLES:
-            memory.execute(f"CREATE TABLE {table}(run TEXT, {', '.join(columns)})")
-        placeholders = ", ".join(["?"] * len(_ROLLUP_COLUMNS))
-        for run in runs:
-            rows = self._summary_rows(run)
+        try:
+            _create_rollup_tables(memory)
+            _add_annotation_tables(memory, runs, with_run=True)
+            memory.execute(_genome_operators_view(with_run=True))
+            memory.commit()
+            reads = _read_columns(memory, statement)
+            _interrupt_at(memory, deadline)
+
+            sources = list(
+                read_concurrently(
+                    runs, partial(_rollup_source, reads=reads, deadline=deadline)
+                )
+            )
+            parts: list[Callable[[], bytes]] = []
+            for source in sources:
+                if "genomes" in reads:
+                    parts += [
+                        partial(_rollup_part, source, reads, genome_range, deadline)
+                        for genome_range in _genome_ranges(source.max_genome_number)
+                    ]
+                if any(table in reads for table, _ in _ROLLUP_TABLES):
+                    parts.append(partial(_rollup_part, source, reads, None, deadline))
+
+            # each part is merged as soon as it, and every part before it, is read
+            for data in read_concurrently(parts, lambda copy: copy()):
+                memory.execute("ATTACH DATABASE ':memory:' AS part")
+                memory.deserialize(data, name="part")
+                for table in ("genomes", *(table for table, _ in _ROLLUP_TABLES)):
+                    memory.execute(f"INSERT INTO {table} SELECT * FROM part.{table}")
+                memory.commit()
+                memory.execute("DETACH DATABASE part")
+
             memory.executemany(
-                f"INSERT INTO genomes VALUES ({placeholders})",
-                [(run.name, *row) for row in rows],
-            )
-            with GenomeArchive.open_readonly(run.archive_path) as reader:
-                info = reader.run_info()
-                present = {
-                    name
-                    for (name,) in reader.connection.execute(
-                        "SELECT name FROM sqlite_master WHERE type = 'table'"
-                    )
-                }
-                for table, columns in _ROLLUP_TABLES:
-                    if table not in present:
-                        # an archive older than the table contributes no rows to it
-                        continue
-                    memory.executemany(
-                        f"INSERT INTO {table} VALUES "
-                        f"(?, {', '.join(['?'] * len(columns))})",
-                        [
-                            (run.name, *row)
-                            for row in reader.connection.execute(
-                                f"SELECT {', '.join(columns)} FROM {table}"
-                            )
-                        ],
-                    )
-            memory.execute(
                 "INSERT INTO runs VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    run.name,
-                    run.index,
-                    info.get("task"),
-                    info.get("task_target"),
-                    info.get("population_strategy"),
-                    len(rows),
-                ),
+                [
+                    (
+                        source.run.name,
+                        source.run.index,
+                        source.info.get("task"),
+                        source.info.get("task_target"),
+                        source.info.get("population_strategy"),
+                        source.genomes,
+                    )
+                    for source in sources
+                ],
             )
-        _add_annotation_tables(memory, runs, with_run=True)
-        memory.execute(_genome_operators_view(with_run=True))
-        memory.commit()
+            memory.commit()
+        except BaseException:
+            memory.close()
+            raise
         return memory
 
     def _selected_runs(
@@ -1194,6 +1469,144 @@ class DashboardTools:
             "dashboard_url": self._url(f"/run/{resolved.index}"),
         }
 
+    def training_gain_summary(
+        self,
+        run: int | str,
+        group_by: str | None = None,
+    ) -> dict[str, Any]:
+        """Summarizes how much training changed a run's genomes.
+
+        A genome's ``target_gain`` is its ``target_metric`` less the one its
+        inherited weights scored before any training (the epoch- or episode-0
+        evaluation), so it measures what backpropagation added on top of the
+        weights a child inherited. Higher is better for every task, and a gain of
+        exactly zero means the inherited weights were kept.
+
+        Args:
+            run: A run index or name.
+            group_by: Optionally ``insert_type``, ``island`` or ``generated_by``,
+                to summarize each group separately.
+
+        Returns:
+            ``overall`` gain statistics with the shares of genomes training
+            ``improved`` and left ``unchanged``; ``by_starting_score``, the same
+            for each quartile of the inherited weights' ``initial_target_metric``
+            (training helps weak starting points most); per-group ``rows`` when
+            grouping; a Markdown ``table`` and a ``dashboard_url``.
+
+        Raises:
+            KeyError: If there is no such run.
+            ValueError: If ``group_by`` is not a groupable column, or the run's
+                archive predates the inherited weights' fitness (format 7).
+        """
+
+        resolved = self._resolve(run)
+        if group_by is not None and group_by not in (
+            "insert_type",
+            "island",
+            "generated_by",
+        ):
+            raise ValueError("group_by must be insert_type, island or generated_by.")
+
+        with GenomeArchive.open_readonly(resolved.archive_path) as reader:
+            if "target_gain" not in reader.genome_columns:
+                raise ValueError(
+                    f"{resolved.name} was written before archives recorded the "
+                    "fitness of a genome's inherited weights (format 7), so its "
+                    "training gain is not summarized; genome_metrics still shows "
+                    "each genome's step-0 evaluation, and "
+                    "`python3 -m src.examples.backfill_archive` can bring the "
+                    "archive up to date."
+                )
+            genomes = reader.connection.execute(
+                "SELECT initial_target_metric, target_gain FROM genomes "
+                "WHERE target_gain IS NOT NULL"
+            ).fetchall()
+            if group_by == "generated_by":
+                grouped_rows = reader.connection.execute(
+                    "SELECT json_each.value, target_gain "
+                    "FROM genomes, json_each(genomes.generated_by) "
+                    "WHERE target_gain IS NOT NULL"
+                ).fetchall()
+            elif group_by:
+                grouped_rows = reader.connection.execute(
+                    f"SELECT {group_by}, target_gain FROM genomes "
+                    "WHERE target_gain IS NOT NULL"
+                ).fetchall()
+            else:
+                grouped_rows = []
+
+        def gain_statistics(gains: list[float]) -> dict[str, Any]:
+            """Summarizes gains, with the shares that improved or did not change."""
+            summary = _statistics(gains)
+            if gains:
+                summary["improved"] = sum(gain > 0 for gain in gains) / len(gains)
+                summary["unchanged"] = sum(gain == 0 for gain in gains) / len(gains)
+            return summary
+
+        overall = gain_statistics([gain for _, gain in genomes])
+
+        by_starting_score: list[dict[str, Any]] = []
+        starting = _statistics([initial for initial, _ in genomes])
+        if starting["n"]:
+            edges = [
+                starting["min"],
+                starting["p25"],
+                starting["median"],
+                starting["p75"],
+                starting["max"],
+            ]
+            for index in range(4):
+                low, high = edges[index], edges[index + 1]
+                last_bin = index == 3
+                gains = [
+                    gain
+                    for initial, gain in genomes
+                    if initial is not None
+                    and low <= initial
+                    and (initial <= high if last_bin else initial < high)
+                ]
+                by_starting_score.append(
+                    {
+                        "quartile": index + 1,
+                        "from": low,
+                        "to": high,
+                        **gain_statistics(gains),
+                    }
+                )
+
+        grouped: dict[Any, list[float]] = {}
+        for group, gain in grouped_rows:
+            grouped.setdefault(group, []).append(gain)
+        per_group = [
+            {"group": group, **gain_statistics(gains)}
+            for group, gains in sorted(grouped.items(), key=lambda item: str(item[0]))
+        ]
+
+        shown = per_group if group_by else [{"group": "all", **overall}]
+        table = _markdown_table(
+            ["group", "n", "median gain", "mean gain", "improved", "unchanged"],
+            [
+                [
+                    row["group"],
+                    row["n"],
+                    row.get("median"),
+                    row.get("mean"),
+                    row.get("improved"),
+                    row.get("unchanged"),
+                ]
+                for row in shown
+            ],
+        )
+        return {
+            "run": resolved.name,
+            "overall": overall,
+            "by_starting_score": by_starting_score,
+            "rows": per_group if group_by else [],
+            "table": table,
+            "dashboard_url": self._url(f"/run/{resolved.index}"),
+        }
+
     def operator_insertion_rates(
         self, run: int | str | None = None, group: str | None = None
     ) -> dict[str, Any]:
@@ -1474,20 +1887,29 @@ class DashboardTools:
             )
 
         better_is_higher = higher_is_better(key)
-        rows = []
-        for run in selected:
+
+        def compared(run: Run) -> dict[str, Any]:
+            """Reads one run's size and its best genome by ``key``.
+
+            Args:
+                run: The run to read.
+
+            Returns:
+                The run's row of the comparison.
+            """
+
             with GenomeArchive.open_readonly(run.archive_path) as reader:
                 best = reader.best_value(key, higher_is_better=better_is_higher)
-                rows.append(
-                    {
-                        "run": run.name,
-                        "index": run.index,
-                        "genomes": reader.count(),
-                        "best": (best or {}).get("value"),
-                        "best_genome": (best or {}).get("genome_number"),
-                        "groups": run.groups,
-                    }
-                )
+                return {
+                    "run": run.name,
+                    "index": run.index,
+                    "genomes": reader.count(),
+                    "best": (best or {}).get("value"),
+                    "best_genome": (best or {}).get("genome_number"),
+                    "groups": run.groups,
+                }
+
+        rows = list(read_concurrently(selected, compared))
 
         values = [row["best"] for row in rows if row["best"] is not None]
         return self._fit(
@@ -1513,6 +1935,7 @@ class DashboardTools:
 
     def _query_connection(
         self,
+        statement: str,
         run: int | str | None,
         runs: list[int | str] | None,
         group: str | None,
@@ -1521,29 +1944,34 @@ class DashboardTools:
         """Opens the guarded, read-only connection a SQL tool runs a statement on.
 
         A single run is read from its archive opened ``mode=ro``; several are
-        rolled into memory. Either way the connection gains the
-        ``genome_operators`` view, is interrupted past its deadline, and has an
-        authorizer denying everything but reads, so writes, ``ATTACH`` and
-        ``PRAGMA`` fail whatever the SQL says.
+        rolled into memory, gathering what the statement reads. Either way the
+        connection gains the ``genome_operators`` view, is interrupted past the
+        deadline, and has an authorizer denying everything but reads, so
+        writes, ``ATTACH`` and ``PRAGMA`` fail whatever the SQL says.
 
         Args:
+            statement: The statement that will run, already checked by
+                :func:`_single_statement`.
             run: A single run to query (its own tables).
             runs: Several runs to roll up and query together.
             group: A group of runs to roll up and query together.
-            timeout_seconds: How long a statement may run before it is interrupted.
+            timeout_seconds: How long, from now, the roll-up and the statement
+                together may take before they are interrupted.
 
         Returns:
             The connection, which the caller closes, and the ``scope`` it covers.
 
         Raises:
             KeyError: If a run or group is unknown.
-            ValueError: If both a single run and several are given, or too many
-                runs are selected.
+            ValueError: If both a single run and several are given, too many
+                runs are selected, the statement fails to compile against a
+                roll-up, or rolling the runs up passed the deadline.
         """
 
         if run is not None and (runs or group):
             raise ValueError("Query a single run, or several runs, not both.")
 
+        deadline = time.monotonic() + timeout_seconds
         connection: sqlite3.Connection
         if run is not None:
             resolved = self._resolve(run)
@@ -1556,12 +1984,21 @@ class DashboardTools:
         else:
             selected = self._selected_runs(runs, group)
             scope = {"kind": "rollup", "runs": [item.name for item in selected]}
-            connection = self._rollup(selected)
+            try:
+                connection = self._rollup(selected, statement, deadline)
+            except sqlite3.OperationalError as error:
+                if time.monotonic() <= deadline:
+                    raise ValueError(f"Query failed: {error}") from error
+                raise ValueError(
+                    f"Rolling up {len(selected)} runs did not finish within the "
+                    f"{timeout_seconds:g} s limit, so the query was not run. "
+                    "Select fewer runs, or "
+                    "query each run on its own with run=. Only the tables and "
+                    "columns the statement names are gathered, so naming fewer "
+                    "(rather than SELECT *) also makes a roll-up faster."
+                ) from error
 
-        deadline = time.monotonic() + timeout_seconds
-        connection.set_progress_handler(
-            lambda: 1 if time.monotonic() > deadline else 0, 10_000
-        )
+        _interrupt_at(connection, deadline)
         connection.set_authorizer(
             lambda action, *_: (
                 sqlite3.SQLITE_OK
@@ -1590,12 +2027,22 @@ class DashboardTools:
                     "how many insertions it waited), evaluation_seconds, evaluated_host, "
                     "evaluated_rank, discard_reason (worse_than_population, "
                     "duplicate_of_better or generated_before_repopulation), "
-                    "final_metrics (JSON object), "
-                    "fitness (JSON object), request_wait_seconds (how long the "
+                    "initial_metrics, best_metrics and last_metrics (JSON objects: "
+                    "each training series' record at step 0 -- the inherited "
+                    "weights before training --, at the genome's best step -- the "
+                    "weights it keeps, which fitness describes -- and at its last "
+                    "step, which describes discarded weights when training stopped "
+                    "improving), fitness (JSON object), initial_fitness (JSON "
+                    "object: the fitness the inherited weights had), "
+                    "initial_loss, initial_target_metric and target_gain "
+                    "(target_metric - initial_target_metric: what training added, "
+                    "higher is better), request_wait_seconds (how long the "
                     "evaluating worker waited for the genome), generation_seconds "
                     "(how long the master took to generate it), turnaround_seconds "
-                    "(generated to inserted, on the master's clock) -- the last "
-                    "three only in archives of format 6 or later"
+                    "(generated to inserted, on the master's clock). The timing "
+                    "columns exist in archives of format 6 or later, the metric "
+                    "projections and initial fitness columns in format 7 or later; "
+                    "an older archive reads them as NULL"
                 ),
                 "master_timing": (
                     "step (the insertion count ending the interval), recorded_at, "
@@ -1631,11 +2078,12 @@ class DashboardTools:
                 ),
                 "note": (
                     "Fitness keys are read with json_extract(fitness, '$.loss'); "
-                    "operators with the genome_operators view. final_metrics "
-                    "holds the last value of every metric a genome recorded while "
-                    "training, keyed '<series>.<metric>' -- the dots are part of the "
-                    "key, so the path is quoted: "
-                    "json_extract(final_metrics, '$.\"validation_epoch_metrics.loss\"')."
+                    "operators with the genome_operators view. The metric "
+                    "projections are keyed '<series>.<metric>' -- the dots are part "
+                    "of the key, so the path is quoted: "
+                    "json_extract(best_metrics, '$.\"validation_epoch_metrics.loss\"'). "
+                    "Prefer best_metrics to last_metrics: genomes keep their best "
+                    "step's weights."
                 ),
             },
             "cross_run": {
@@ -1653,7 +2101,10 @@ class DashboardTools:
                     "where every table gains a run column naming each row's run (it "
                     "exists only here, not when querying a single run) and loss and "
                     "target_metric are plain genome columns. Genome numbers repeat "
-                    "across runs, so join on run as well as the genome number."
+                    "across runs, so join on run as well as the genome number. "
+                    "Only the tables and columns a statement names are gathered, "
+                    "so naming the columns needed (rather than SELECT *) rolls "
+                    "large runs up faster; the time limit covers gathering them."
                 ),
             },
             "limits": {
@@ -1676,10 +2127,14 @@ class DashboardTools:
                 "SELECT run, MIN(loss) FROM genomes GROUP BY run ORDER BY 2",
                 "SELECT json_each.value AS operator, COUNT(*) FROM genomes, "
                 "json_each(genomes.generated_by) GROUP BY 1 ORDER BY 2 DESC",
-                "SELECT run, genome_number, json_extract(final_metrics, "
+                "SELECT run, genome_number, json_extract(best_metrics, "
                 "'$.\"validation_epoch_metrics.loss\"') AS validation_loss "
                 "FROM genomes WHERE validation_loss IS NOT NULL "
                 "ORDER BY validation_loss LIMIT 5",
+                "SELECT o.operator, COUNT(*) AS n, AVG(g.target_gain) AS mean_gain, "
+                "AVG(g.target_gain > 0) AS improved FROM genome_operators o "
+                "JOIN genomes g ON g.run = o.run AND g.genome_number = o.genome_number "
+                "WHERE g.target_gain IS NOT NULL GROUP BY 1 ORDER BY 3 DESC",
                 "SELECT o.operator, AVG(g.insert_type != 'discarded') AS kept "
                 "FROM genome_operators o JOIN genomes g "
                 "ON g.run = o.run AND g.genome_number = o.genome_number "
@@ -1731,7 +2186,7 @@ class DashboardTools:
 
         statement = _single_statement(sql)
         connection, scope = self._query_connection(
-            run, runs, group, QUERY_TIMEOUT_SECONDS
+            statement, run, runs, group, QUERY_TIMEOUT_SECONDS
         )
 
         rows_limit = min(int(limit), MAX_ROWS)
@@ -1740,7 +2195,7 @@ class DashboardTools:
             columns = [description[0] for description in cursor.description or []]
             rows = [list(row) for row in cursor.fetchall()]
         except sqlite3.Error as error:
-            raise ValueError(f"Query failed: {error}") from error
+            raise _query_failure(error, QUERY_TIMEOUT_SECONDS) from error
         finally:
             connection.close()
 
@@ -1807,7 +2262,7 @@ class DashboardTools:
         page_limit = max(1, min(int(limit), MAX_EXPORT_ROWS))
         start = max(0, int(offset))
         connection, scope = self._query_connection(
-            run, runs, group, EXPORT_TIMEOUT_SECONDS
+            statement, run, runs, group, EXPORT_TIMEOUT_SECONDS
         )
 
         page: list[Any] = []
@@ -1830,7 +2285,7 @@ class DashboardTools:
                 page.append(entry)
                 size += row_bytes
         except sqlite3.Error as error:
-            raise ValueError(f"Query failed: {error}") from error
+            raise _query_failure(error, EXPORT_TIMEOUT_SECONDS) from error
         finally:
             connection.close()
 

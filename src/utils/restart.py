@@ -20,8 +20,10 @@ cannot be restarted; they are still listed, browsed and charted as before.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -80,6 +82,9 @@ class RestartState:
         inserted_genomes: How many genomes the run had inserted.
         max_innovation_number: The highest gate innovation number handed out, so
             a restart never reuses one for a different gate.
+        cleared_islands: The islands an extinction event emptied at least once,
+            so a restart can tell an island refilling after extinction from one
+            that has never filled.
     """
 
     archive_path: str
@@ -91,6 +96,7 @@ class RestartState:
     next_genome_number: int = 1
     inserted_genomes: int = 0
     max_innovation_number: int = 0
+    cleared_islands: set[int] = field(default_factory=set)
 
     @property
     def island_neighbors(self) -> list[list[int]] | None:
@@ -189,6 +195,7 @@ def load(out_dir: str) -> RestartState:
         ]
         best_genome = _best_by(reader, "loss", "ASC")
         target_metric_best = _best_by(reader, "target_metric", "DESC")
+        cleared_islands = _cleared_islands(reader)
 
     logger.info(
         "restarting {} from {} inserted genomes ({} in the population)",
@@ -207,7 +214,45 @@ def load(out_dir: str) -> RestartState:
         next_genome_number=int(max_genome) + 1,
         inserted_genomes=int(max_insertion or 0),
         max_innovation_number=int(max_innovation),
+        cleared_islands=cleared_islands,
     )
+
+
+def _cleared_islands(reader: GenomeArchive) -> set[int]:
+    """Finds the islands an extinction event emptied, from how the population changed.
+
+    An island only loses genomes when an extinction event clears it: an
+    insertion that pushes a genome out of an island also puts one into it. So an
+    island holding fewer genomes after a recorded step than before it was
+    cleared during that step.
+
+    Args:
+        reader: The archive to read, opened for reading.
+
+    Returns:
+        The ids of the islands cleared at least once; empty for a run that was
+        not an island search or never had an extinction event.
+    """
+
+    island_of: dict[int, int] = dict(
+        reader.connection.execute(
+            "SELECT genome_number, island FROM genomes WHERE island IS NOT NULL"
+        )
+    )
+
+    cleared: set[int] = set()
+    for added, removed in reader.connection.execute(
+        "SELECT added, removed FROM population_events ORDER BY step"
+    ):
+        change: Counter[int] = Counter()
+        for number in json.loads(removed or "[]"):
+            if number in island_of:
+                change[island_of[number]] -= 1
+        for number in json.loads(added or "[]"):
+            if number in island_of:
+                change[island_of[number]] += 1
+        cleared.update(island for island, delta in change.items() if delta < 0)
+    return cleared
 
 
 def _best_by(

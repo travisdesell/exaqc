@@ -54,8 +54,10 @@ _METRIC_SERIES = re.compile(r"_(epoch|episode)_metrics$")
 
 #: Version of the archive layout, recorded in ``run_info``. Version 6 added the
 #: per-genome timing columns (:data:`TIMING_COLUMNS`) and the ``master_timing``
-#: table.
-ARCHIVE_FORMAT_VERSION = 6
+#: table. Version 7 replaced ``final_metrics`` with the training-metric
+#: projections and added the inherited weights' fitness
+#: (:data:`PROJECTION_COLUMNS` and :data:`INITIAL_FITNESS_COLUMNS`).
+ARCHIVE_FORMAT_VERSION = 7
 
 #: Per-genome timing summary columns, added in archive format 6: how long the
 #: evaluating worker waited for the genome, how long the master took to generate
@@ -66,6 +68,38 @@ TIMING_COLUMNS: tuple[str, ...] = (
     "request_wait_seconds",
     "generation_seconds",
     "turnaround_seconds",
+)
+
+#: Training-metric summary columns, added in archive format 7. Each holds one
+#: record of every per-epoch or per-episode series a genome recorded, flattened
+#: and keyed ``<series>.<metric>``: ``initial_metrics`` the epoch- or episode-0
+#: evaluation of the weights it inherited, before any training;
+#: ``best_metrics`` the record at its ``best_epoch``/``best_episode`` -- the
+#: weights it keeps, which its fitness describes; and ``last_metrics`` the last
+#: record trained, which describes weights a genome that stopped improving has
+#: discarded. ``initial_fitness`` is the fitness the inherited weights would have
+#: had (``metadata["initial_fitness"]``).
+PROJECTION_COLUMNS: tuple[str, ...] = (
+    "initial_metrics",
+    "best_metrics",
+    "last_metrics",
+    "initial_fitness",
+)
+
+#: Generated columns read from ``initial_fitness`` (archive format 7): the
+#: inherited weights' ``loss`` and ``target_metric``, and ``target_gain`` -- how
+#: much training changed ``target_metric`` (higher is better for every task).
+INITIAL_FITNESS_COLUMNS: tuple[str, ...] = (
+    "initial_loss",
+    "initial_target_metric",
+    "target_gain",
+)
+
+#: Summary columns an archive written by an older version may lack. Reads treat
+#: a missing one as unrecorded (``NULL``) rather than failing, and reopening such
+#: an archive to continue its run adds them (see :data:`_ADDED_GENOME_COLUMNS`).
+OPTIONAL_COLUMNS: frozenset[str] = frozenset(
+    {*TIMING_COLUMNS, *PROJECTION_COLUMNS, *INITIAL_FITNESS_COLUMNS}
 )
 
 #: Columns of the ``master_timing`` table: one row per interval of the MPI
@@ -98,6 +132,11 @@ WRITE_RETRIES = 5
 #: every further attempt.
 WRITE_RETRY_DELAY_SECONDS = 1.0
 
+#: Fitness keys the ``genomes`` table also holds as indexed generated columns.
+#: Reads of these keys name the column, so SQLite can use its index; extracting
+#: the same value from the fitness JSON would scan every genome instead.
+GENERATED_FITNESS_COLUMNS = ("loss", "target_metric")
+
 #: Summary-table columns a genome listing can be sorted on directly. Any other
 #: sort key is looked up in the genome's fitness.
 SORTABLE_COLUMNS = frozenset(
@@ -120,6 +159,7 @@ SORTABLE_COLUMNS = frozenset(
         "evaluated_rank",
         "discard_reason",
         *TIMING_COLUMNS,
+        *INITIAL_FITNESS_COLUMNS,
     }
 )
 
@@ -134,6 +174,7 @@ _NUMERIC_COLUMNS = (
     "n_rot",
     "evaluation_seconds",
     *TIMING_COLUMNS,
+    *INITIAL_FITNESS_COLUMNS,
 )
 
 #: Filters :meth:`GenomeArchive.list_genomes` understands.
@@ -160,8 +201,38 @@ _SUMMARY_COLUMNS = (
     "crossover_type, island, species, n_gates, n_enabled_gates, n_parameters, "
     "n_cnot, n_rot, max_innovation_number, generated_at_insertion, "
     "evaluation_seconds, evaluated_host, evaluated_rank, discard_reason, "
-    "final_metrics, fitness, request_wait_seconds, generation_seconds, "
-    "turnaround_seconds"
+    "initial_metrics, best_metrics, last_metrics, fitness, initial_fitness, "
+    "request_wait_seconds, generation_seconds, turnaround_seconds"
+)
+
+#: Definitions of the ``genomes`` columns added since archive format 5, so an
+#: archive written before them can be brought up to date when it is reopened to
+#: continue its run (its old rows read them as ``NULL``). Generated columns can
+#: only be added as ``VIRTUAL``, which is how :data:`_SCHEMA` declares them too.
+_ADDED_GENOME_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("request_wait_seconds", "request_wait_seconds REAL"),
+    ("generation_seconds", "generation_seconds REAL"),
+    ("turnaround_seconds", "turnaround_seconds REAL"),
+    ("initial_metrics", "initial_metrics TEXT"),
+    ("best_metrics", "best_metrics TEXT"),
+    ("last_metrics", "last_metrics TEXT"),
+    ("initial_fitness", "initial_fitness TEXT"),
+    (
+        "initial_loss",
+        "initial_loss REAL GENERATED ALWAYS AS "
+        "(json_extract(initial_fitness, '$.loss')) VIRTUAL",
+    ),
+    (
+        "initial_target_metric",
+        "initial_target_metric REAL GENERATED ALWAYS AS "
+        "(json_extract(initial_fitness, '$.target_metric')) VIRTUAL",
+    ),
+    (
+        "target_gain",
+        "target_gain REAL GENERATED ALWAYS AS "
+        "(json_extract(fitness, '$.target_metric') - "
+        "json_extract(initial_fitness, '$.target_metric')) VIRTUAL",
+    ),
 )
 
 _SCHEMA = """
@@ -192,14 +263,24 @@ CREATE TABLE IF NOT EXISTS genomes(
     evaluated_host TEXT,
     evaluated_rank INTEGER,
     discard_reason TEXT,
-    final_metrics TEXT,
+    initial_metrics TEXT,
+    best_metrics TEXT,
+    last_metrics TEXT,
     fitness TEXT,
+    initial_fitness TEXT,
     request_wait_seconds REAL,
     generation_seconds REAL,
     turnaround_seconds REAL,
     loss REAL GENERATED ALWAYS AS (json_extract(fitness, '$.loss')) VIRTUAL,
     target_metric REAL GENERATED ALWAYS AS
-        (json_extract(fitness, '$.target_metric')) VIRTUAL
+        (json_extract(fitness, '$.target_metric')) VIRTUAL,
+    initial_loss REAL GENERATED ALWAYS AS
+        (json_extract(initial_fitness, '$.loss')) VIRTUAL,
+    initial_target_metric REAL GENERATED ALWAYS AS
+        (json_extract(initial_fitness, '$.target_metric')) VIRTUAL,
+    target_gain REAL GENERATED ALWAYS AS
+        (json_extract(fitness, '$.target_metric')
+         - json_extract(initial_fitness, '$.target_metric')) VIRTUAL
 );
 CREATE TABLE IF NOT EXISTS population_events(
     step INTEGER PRIMARY KEY,
@@ -228,12 +309,16 @@ CREATE TABLE IF NOT EXISTS master_timing(
 """
 
 
-def _index_fitness_columns(connection: sqlite3.Connection) -> None:
-    """Indexes the generated ``loss`` and ``target_metric`` columns.
+def _index_genome_columns(connection: sqlite3.Connection) -> None:
+    """Indexes the generated fitness columns and ``saved_at``.
 
-    Ranking a run by either key is by far the archive's most common query, so
-    both are generated from each genome's stored fitness and indexed rather than
-    extracted from JSON on every read.
+    Ranking a run by ``loss`` or ``target_metric`` is by far the archive's most
+    common query, so both are generated from each genome's stored fitness (see
+    :data:`GENERATED_FITNESS_COLUMNS`) and indexed rather than extracted from
+    JSON on every read. ``saved_at`` is indexed so a run's latest write -- which
+    the run list reads for every run on every load -- is a lookup rather than a
+    scan of the ``genomes`` table, whose pages lie scattered among the stored
+    genomes' blobs in a large archive.
 
     Args:
         connection: The archive's connection, open for writing.
@@ -242,32 +327,10 @@ def _index_fitness_columns(connection: sqlite3.Connection) -> None:
         None. Creates each column's index if it does not already exist.
     """
 
-    for column in ("loss", "target_metric"):
+    for column in (*GENERATED_FITNESS_COLUMNS, "saved_at"):
         connection.execute(
             f"CREATE INDEX IF NOT EXISTS genomes_{column} ON genomes({column})"
         )
-
-
-def _ensure_species_column(connection: sqlite3.Connection) -> None:
-    """Adds the ``species`` summary column when an older archive lacks it.
-
-    Archives written before format version 6 have no ``species`` column;
-    ``CREATE TABLE IF NOT EXISTS`` will not alter them. Adding a nullable
-    column keeps those archives readable and writable under the current layout.
-
-    Args:
-        connection: The archive's connection, open for writing.
-
-    Returns:
-        None. Mutates the ``genomes`` table when ``species`` is missing.
-    """
-
-    existing = {
-        row[1] for row in connection.execute("PRAGMA table_info(genomes)").fetchall()
-    }
-    if "species" not in existing:
-        connection.execute("ALTER TABLE genomes ADD COLUMN species INTEGER")
-        connection.commit()
 
 
 def _provenance() -> dict[str, Any]:
@@ -572,40 +635,76 @@ def _flatten_numbers(record: dict[str, Any], prefix: str = "") -> dict[str, floa
     return flattened
 
 
-def _final_metrics(metadata: dict[str, Any]) -> dict[str, float]:
-    """Extracts the last value of every metric a genome recorded while training.
+def _metric_projections(
+    metadata: dict[str, Any],
+) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+    """Extracts three records of every metric a genome recorded while training.
 
     What a genome records depends on its task, so nothing is assumed: every
     metadata entry named ``*_epoch_metrics`` or ``*_episode_metrics`` contributes
-    its final record, flattened and prefixed by the series it came from.
-    Recording these on the summary row keeps a run's task metrics queryable --
-    and plottable against -- without reopening every genome's JSON.
+    up to three of its records, flattened and prefixed by the series they came
+    from. Recording these on the summary row keeps a run's task metrics
+    queryable -- and plottable against -- without reopening every genome's JSON.
 
-    Args:
-        metadata: The genome's serialized metadata.
+    The three records differ because a genome keeps neither its first nor its
+    last weights in general: trainers evaluate the inherited weights at step 0,
+    keep training past the best step until improvement stalls, then restore the
+    best step's weights. So:
+
+    * the *initial* record is the series' step-0 record, when it has one (a
+      training series has none: nothing was trained before step 1);
+    * the *best* record is the one at the genome's ``best_epoch`` or
+      ``best_episode`` -- the weights it keeps, which its fitness describes;
+    * the *last* record is the series' final one, which for a genome that
+      stopped improving describes weights it has discarded.
 
     Each series' own step counter is left out: ``epoch`` and ``episode`` number
     the records rather than measuring anything, so summarizing them across a
     population would say nothing about the search.
 
+    Args:
+        metadata: The genome's serialized metadata.
+
     Returns:
-        Each metric's final recorded value, keyed by ``<series>.<metric>``;
-        empty when the genome recorded no series.
+        The initial, best and last projections, each keyed by
+        ``<series>.<metric>``; empty when the genome recorded no such record.
     """
 
-    final: dict[str, float] = {}
+    initial: dict[str, float] = {}
+    best: dict[str, float] = {}
+    last: dict[str, float] = {}
+
+    def flatten_record(
+        series: str, record: dict[str, Any], step_key: str
+    ) -> dict[str, float]:
+        """Flattens one record's metrics, prefixed by its series, minus its step."""
+        return {
+            f"{series}.{metric}": value
+            for metric, value in _flatten_numbers(record).items()
+            if metric != step_key
+        }
+
     for name, records in (metadata or {}).items():
         match = _METRIC_SERIES.search(name)
-        if not match or not isinstance(records, list):
-            continue
-        if not records or not isinstance(records[-1], dict):
+        if not match or not isinstance(records, list) or not records:
             continue
         step_key = match.group(1)
-        for metric, value in _flatten_numbers(records[-1]).items():
-            if metric == step_key:
-                continue
-            final[f"{name}.{metric}"] = value
-    return final
+
+        first = records[0]
+        if isinstance(first, dict) and first.get(step_key) == 0:
+            initial.update(flatten_record(name, first, step_key))
+
+        best_step = (metadata or {}).get(f"best_{step_key}")
+        if best_step is not None:
+            for record in records:
+                if isinstance(record, dict) and record.get(step_key) == best_step:
+                    best.update(flatten_record(name, record, step_key))
+                    break
+
+        if isinstance(records[-1], dict):
+            last.update(flatten_record(name, records[-1], step_key))
+
+    return initial, best, last
 
 
 def _encode_member(data: bytes) -> bytes:
@@ -688,20 +787,23 @@ def _sort_expression(sort_key: str) -> tuple[str, list[Any]]:
             genomes' fitness dicts, or a recorded training metric.
 
     Returns:
-        The SQL expression and the parameters it binds.
+        The SQL expression and the parameters it binds. A fitness key held in
+        one of the :data:`GENERATED_FITNESS_COLUMNS` is read from that column,
+        so its index can be used.
 
     Raises:
         ValueError: If ``sort_key`` is none of those.
     """
 
-    if sort_key in SORTABLE_COLUMNS:
+    if sort_key in SORTABLE_COLUMNS or sort_key in GENERATED_FITNESS_COLUMNS:
         return sort_key, []
     if "." in sort_key:
         # Training metrics are always keyed ``<series>.<metric>``, so a dotted
-        # key can only be one of those. The path is quoted rather than spliced
-        # in bare, because the key's own dots would otherwise read as steps
-        # into the JSON.
-        return "json_extract(final_metrics, ?)", [f'$."{sort_key}"']
+        # key can only be one of those, read at the genome's best epoch or
+        # episode (the weights its fitness describes). The path is quoted rather
+        # than spliced in bare, because the key's own dots would otherwise read
+        # as steps into the JSON.
+        return "json_extract(best_metrics, ?)", [f'$."{sort_key}"']
     if re.fullmatch(r"[A-Za-z0-9_]+", sort_key):
         return "json_extract(fitness, ?)", [f"$.{sort_key}"]
     raise ValueError(f"Cannot sort genomes by {sort_key!r}.")
@@ -818,8 +920,11 @@ def _summary_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
         evaluated_host,
         evaluated_rank,
         discard_reason,
-        final_metrics,
+        initial_metrics,
+        best_metrics,
+        last_metrics,
         fitness,
+        initial_fitness,
         request_wait_seconds,
         generation_seconds,
         turnaround_seconds,
@@ -845,8 +950,11 @@ def _summary_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
         "evaluated_host": evaluated_host,
         "evaluated_rank": evaluated_rank,
         "discard_reason": discard_reason,
-        "final_metrics": json.loads(final_metrics) if final_metrics else {},
+        "initial_metrics": json.loads(initial_metrics) if initial_metrics else {},
+        "best_metrics": json.loads(best_metrics) if best_metrics else {},
+        "last_metrics": json.loads(last_metrics) if last_metrics else {},
         "fitness": json.loads(fitness) if fitness else None,
+        "initial_fitness": json.loads(initial_fitness) if initial_fitness else None,
         "request_wait_seconds": request_wait_seconds,
         "generation_seconds": generation_seconds,
         "turnaround_seconds": turnaround_seconds,
@@ -1031,7 +1139,6 @@ class GenomeArchive:
         )
         connection.execute("PRAGMA synchronous=NORMAL")
         connection.executescript(_SCHEMA)
-        _ensure_species_column(connection)
         _index_fitness_columns(connection)
 
         archive = cls(
@@ -1111,8 +1218,8 @@ class GenomeArchive:
         Returns:
             None. Sets the archive's path, connection and mode, and
             ``genome_columns`` -- the ``genomes`` columns this archive has, so
-            reads of an archive written before a column existed (such as the
-            :data:`TIMING_COLUMNS`) see it as unrecorded rather than failing.
+            reads of an archive written before a column existed (any of
+            :data:`OPTIONAL_COLUMNS`) see it as unrecorded rather than failing.
         """
 
         self.path = path
@@ -1140,14 +1247,15 @@ class GenomeArchive:
         """Returns the summary columns to select, allowing for older archives.
 
         Returns:
-            :data:`_SUMMARY_COLUMNS` with any timing column this archive lacks
-            selected as ``NULL`` instead, so rows keep the same shape.
+            :data:`_SUMMARY_COLUMNS` with any optional column this archive lacks
+            (see :data:`OPTIONAL_COLUMNS`) selected as ``NULL`` instead, so rows
+            keep the same shape.
         """
 
         return ", ".join(
             (
                 f"NULL AS {column}"
-                if column in TIMING_COLUMNS and column not in self.genome_columns
+                if column in OPTIONAL_COLUMNS and column not in self.genome_columns
                 else column
             )
             for column in (name.strip() for name in _SUMMARY_COLUMNS.split(","))
@@ -1161,14 +1269,17 @@ class GenomeArchive:
                 :func:`_sort_expression`).
 
         Returns:
-            The SQL expression and its parameters; ``NULL`` for a timing column
-            this archive predates.
+            The SQL expression and its parameters; ``NULL`` for an optional
+            column (see :data:`OPTIONAL_COLUMNS`) this archive predates, and for
+            a training metric when it predates ``best_metrics``.
 
         Raises:
             ValueError: If ``key`` is not a valid key.
         """
 
-        if key in TIMING_COLUMNS and key not in self.genome_columns:
+        if key in OPTIONAL_COLUMNS and key not in self.genome_columns:
+            return "NULL", []
+        if "." in key and "best_metrics" not in self.genome_columns:
             return "NULL", []
         return _sort_expression(key)
 
@@ -1331,6 +1442,8 @@ class GenomeArchive:
 
         timing = metadata.get("timing") or {}
         placement = metadata.get("evaluated_by") or {}
+        initial_metrics, best_metrics, last_metrics = _metric_projections(metadata)
+        initial_fitness = metadata.get("initial_fitness")
 
         summary = (
             genome_number,
@@ -1361,8 +1474,15 @@ class GenomeArchive:
             placement.get("host"),
             placement.get("rank"),
             metadata.get("discard_reason"),
-            json.dumps(_finite_or_none(_final_metrics(metadata))),
+            json.dumps(_finite_or_none(initial_metrics)),
+            json.dumps(_finite_or_none(best_metrics)),
+            json.dumps(_finite_or_none(last_metrics)),
             json.dumps(_finite_or_none(serialized.get("fitness"))),
+            (
+                json.dumps(_finite_or_none(initial_fitness))
+                if initial_fitness is not None
+                else None
+            ),
             _seconds(timing.get("request_wait_seconds")),
             _seconds(timing.get("generation_seconds")),
             _turnaround_seconds(timing),
@@ -1526,18 +1646,21 @@ class GenomeArchive:
             members.update(json.loads(added or "[]"))
         return sorted(members)
 
-    def final_metric_keys(self) -> list[str]:
-        """Lists the training metrics genomes recorded a final value for.
+    def metric_keys(self) -> list[str]:
+        """Lists the training metrics genomes recorded at their best step.
 
         Returns:
-            Every key stored in the genomes' ``final_metrics``, sorted; empty
-            when no genome recorded a per-epoch or per-episode series.
+            Every key stored in the genomes' ``best_metrics``, sorted; empty
+            when no genome recorded a per-epoch or per-episode series, or when
+            the archive predates ``best_metrics`` (format 7).
         """
 
+        if "best_metrics" not in self.genome_columns:
+            return []
         return sorted(
             row[0]
             for row in self.connection.execute(
-                "SELECT DISTINCT metric.key FROM genomes, json_each(genomes.final_metrics) AS metric"
+                "SELECT DISTINCT metric.key FROM genomes, json_each(genomes.best_metrics) AS metric"
             )
         )
 
@@ -1546,27 +1669,27 @@ class GenomeArchive:
 
         Returns:
             The numeric summary columns, the genomes' fitness keys and their
-            recorded training metrics, in that order.
+            training metrics at their best step, in that order.
         """
 
         return [
             *self._numeric_columns(),
             *self.fitness_keys(),
-            *self.final_metric_keys(),
+            *self.metric_keys(),
         ]
 
     def _numeric_columns(self) -> list[str]:
         """Lists the numeric summary columns this archive actually has.
 
         Returns:
-            :data:`_NUMERIC_COLUMNS`, less any timing column the archive was
-            written before.
+            :data:`_NUMERIC_COLUMNS`, less any optional column (see
+            :data:`OPTIONAL_COLUMNS`) the archive was written before.
         """
 
         return [
             column
             for column in _NUMERIC_COLUMNS
-            if column not in TIMING_COLUMNS or column in self.genome_columns
+            if column not in OPTIONAL_COLUMNS or column in self.genome_columns
         ]
 
     def primary_series_metrics(self) -> list[str]:
@@ -1585,7 +1708,7 @@ class GenomeArchive:
         """
 
         primary = [*self._numeric_columns(), *self.fitness_keys()]
-        for key in self.final_metric_keys():
+        for key in self.metric_keys():
             _, _, leaf = key.partition(".")
             if "." not in leaf or (leaf.count(".") == 1 and leaf.endswith(".mean")):
                 primary.append(key)
@@ -1596,7 +1719,7 @@ class GenomeArchive:
 
         A metric is resolved in the order :meth:`series_metrics` lists: a numeric
         summary column, then a fitness key, then a training metric recorded in
-        ``final_metrics``. Fitness keys are checked before training metrics so a
+        ``best_metrics``. Fitness keys are checked before training metrics so a
         run that happens to record both under one name keeps its fitness meaning.
 
         Args:
@@ -1897,11 +2020,16 @@ class GenomeArchive:
             ValueError: If ``key`` is not a valid key.
         """
 
+        # The best value is found first and then the lowest genome holding it:
+        # for an indexed column both are index lookups, where ordering by the
+        # value and then by ascending genome number cannot be read from the index
+        # when larger is better, and would scan every genome.
         expression, parameters = self._value_expression(key)
         row = self.connection.execute(
-            f"SELECT genome_number, {expression} AS value FROM genomes WHERE {expression} IS NOT NULL "
-            f"ORDER BY value {'DESC' if higher_is_better else 'ASC'}, genome_number ASC LIMIT 1",
-            [*parameters, *parameters],
+            f"SELECT genome_number, {expression} FROM genomes WHERE {expression} = "
+            f"(SELECT {'MAX' if higher_is_better else 'MIN'}({expression}) FROM genomes) "
+            "ORDER BY genome_number LIMIT 1",
+            [*parameters, *parameters, *parameters],
         ).fetchone()
         return None if row is None else {"genome_number": row[0], "value": row[1]}
 
