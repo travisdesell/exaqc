@@ -1163,7 +1163,7 @@ class GenomeArchive:
         connection.execute("PRAGMA synchronous=NORMAL")
         connection.executescript(_SCHEMA)
         _ensure_species_column(connection)
-        _index_fitness_columns(connection)
+        _index_genome_columns(connection)
 
         archive = cls(
             path,
