@@ -99,7 +99,7 @@ INITIAL_FITNESS_COLUMNS: tuple[str, ...] = (
 #: a missing one as unrecorded (``NULL``) rather than failing, and reopening such
 #: an archive to continue its run adds them (see :data:`_ADDED_GENOME_COLUMNS`).
 OPTIONAL_COLUMNS: frozenset[str] = frozenset(
-    {*TIMING_COLUMNS, *PROJECTION_COLUMNS, *INITIAL_FITNESS_COLUMNS}
+    {*TIMING_COLUMNS, *PROJECTION_COLUMNS, *INITIAL_FITNESS_COLUMNS, "species"}
 )
 
 #: Columns of the ``master_timing`` table: one row per interval of the MPI
@@ -233,6 +233,9 @@ _ADDED_GENOME_COLUMNS: tuple[tuple[str, str], ...] = (
         "(json_extract(fitness, '$.target_metric') - "
         "json_extract(initial_fitness, '$.target_metric')) VIRTUAL",
     ),
+    # Speciation summary column; added here so main's format-7 migrator
+    # brings older archives up to date when they are reopened for writing.
+    ("species", "species INTEGER"),
 )
 
 _SCHEMA = """
@@ -333,27 +336,29 @@ def _index_genome_columns(connection: sqlite3.Connection) -> None:
         )
 
 
-def _ensure_species_column(connection: sqlite3.Connection) -> None:
-    """Adds the ``species`` summary column when an older archive lacks it.
+def _add_missing_genome_columns(connection: sqlite3.Connection) -> list[str]:
+    """Adds the ``genomes`` columns an archive written by an older version lacks.
 
-    Some format-6 archives (and older ones) were created without a ``species``
-    column; ``CREATE TABLE IF NOT EXISTS`` will not alter them. Adding a
-    nullable column keeps those archives readable and writable under the
-    current layout used by speciation searches.
+    ``CREATE TABLE IF NOT EXISTS`` leaves an existing table as it is, so without
+    this a run reopened to continue it (``--restart``) would fail on its first
+    insert of the current summary columns. Rows written before keep ``NULL`` in
+    the added columns, which reads already treat as unrecorded.
 
     Args:
         connection: The archive's connection, open for writing.
 
     Returns:
-        None. Mutates the ``genomes`` table when ``species`` is missing.
+        The names of the columns added, in order; empty for an up-to-date
+        archive.
     """
 
-    existing = {
-        row[1] for row in connection.execute("PRAGMA table_info(genomes)").fetchall()
-    }
-    if "species" not in existing:
-        connection.execute("ALTER TABLE genomes ADD COLUMN species INTEGER")
-        connection.commit()
+    present = {row[1] for row in connection.execute("PRAGMA table_xinfo(genomes)")}
+    added = []
+    for name, definition in _ADDED_GENOME_COLUMNS:
+        if name not in present:
+            connection.execute(f"ALTER TABLE genomes ADD COLUMN {definition}")
+            added.append(name)
+    return added
 
 
 def _provenance() -> dict[str, Any]:
@@ -1162,7 +1167,14 @@ class GenomeArchive:
         )
         connection.execute("PRAGMA synchronous=NORMAL")
         connection.executescript(_SCHEMA)
-        _ensure_species_column(connection)
+        added_columns = _add_missing_genome_columns(connection)
+        if added_columns:
+            logger.info(
+                "added the summary columns {} to {}, which an older version wrote; "
+                "its earlier genomes leave them empty.",
+                ", ".join(added_columns),
+                path,
+            )
         _index_genome_columns(connection)
 
         archive = cls(
@@ -1217,9 +1229,6 @@ class GenomeArchive:
 
         archive_path = resolve_archive_path(path)
         connection = _connect(archive_path)
-        # Older archives lack the species column; add it before locking reads so
-        # the current summary layout can be queried uniformly.
-        _ensure_species_column(connection)
         connection.execute("PRAGMA query_only=ON")
         return cls(archive_path, connection, writable=False)
 
@@ -2083,8 +2092,12 @@ class GenomeArchive:
             "island": distinct(
                 "SELECT DISTINCT island FROM genomes WHERE island IS NOT NULL ORDER BY 1"
             ),
-            "species": distinct(
-                "SELECT DISTINCT species FROM genomes WHERE species IS NOT NULL ORDER BY 1"
+            "species": (
+                distinct(
+                    "SELECT DISTINCT species FROM genomes WHERE species IS NOT NULL ORDER BY 1"
+                )
+                if "species" in self.genome_columns
+                else []
             ),
         }
 
@@ -2105,9 +2118,12 @@ class GenomeArchive:
         """
 
         expression, parameters = self._value_expression(y_key)
+        species_select = (
+            "species" if "species" in self.genome_columns else "NULL AS species"
+        )
         rows = self.connection.execute(
             f"SELECT genome_number, insertion, {expression}, insert_type, generated_by, "
-            "crossover_type, island, species "
+            f"crossover_type, island, {species_select} "
             "FROM genomes ORDER BY genome_number",
             parameters,
         ).fetchall()
