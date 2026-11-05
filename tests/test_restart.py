@@ -61,6 +61,19 @@ ISLAND_ARGUMENTS: dict[str, Any] = {
     "number_genomes": 8,
 }
 
+#: The arguments a speciation run records.
+SPECIATION_ARGUMENTS: dict[str, Any] = {
+    "population_strategy": "steady_state_speciation",
+    "max_population_size": 4,
+    "species_threshold": 0.6,
+    "neat_c1": 1.0,
+    "neat_c2": 1.0,
+    "neat_c3": 0.0,
+    "inter_species_parent_rate": 0.1,
+    "number_genomes": 6,
+    "out_dir": "recorded/by/the/run",
+}
+
 
 def compare(genome1: Any, genome2: Any) -> float:
     """Orders genomes by ``fitness["loss"]``, lower first.

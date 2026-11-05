@@ -374,6 +374,31 @@ class CircuitGenome:
         gates.sort()
         return gates
 
+    def get_historical_gate_innovations(self) -> list[int]:
+        """Returns sorted unique innovation IDs of enabled gates.
+
+        Speciation distance uses this set, so disabled gates are left out.
+        Duplicate identity still uses :meth:`get_historical_gate_signature`,
+        which keeps every record's enable bit.
+
+        Returns:
+            Sorted unique innovation numbers over enabled gates in ``self.gates``.
+        """
+
+        return sorted({gate.innovation_number for gate in self.gates if gate.enabled})
+
+    def get_historical_gate_signature(self) -> frozenset[tuple[int, bool]]:
+        """Returns ``(innovation_number, enabled)`` pairs for every gate record.
+
+        Used by speciation for duplicate identity. If the
+        same innovation appears enabled and disabled, both pairs are kept.
+
+        Returns:
+            A frozenset of innovation/enable pairs over ``self.gates``.
+        """
+
+        return frozenset((gate.innovation_number, gate.enabled) for gate in self.gates)
+
     def has_same_gates(self, other: CircuitGenome) -> bool:
         """
         This checks to see if this genome has the exact same enabled

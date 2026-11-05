@@ -99,7 +99,7 @@ INITIAL_FITNESS_COLUMNS: tuple[str, ...] = (
 #: a missing one as unrecorded (``NULL``) rather than failing, and reopening such
 #: an archive to continue its run adds them (see :data:`_ADDED_GENOME_COLUMNS`).
 OPTIONAL_COLUMNS: frozenset[str] = frozenset(
-    {*TIMING_COLUMNS, *PROJECTION_COLUMNS, *INITIAL_FITNESS_COLUMNS}
+    {*TIMING_COLUMNS, *PROJECTION_COLUMNS, *INITIAL_FITNESS_COLUMNS, "species"}
 )
 
 #: Columns of the ``master_timing`` table: one row per interval of the MPI
@@ -147,6 +147,7 @@ SORTABLE_COLUMNS = frozenset(
         "insert_type",
         "crossover_type",
         "island",
+        "species",
         "n_gates",
         "n_enabled_gates",
         "n_parameters",
@@ -178,7 +179,14 @@ _NUMERIC_COLUMNS = (
 
 #: Filters :meth:`GenomeArchive.list_genomes` understands.
 FILTER_KEYS = frozenset(
-    {"insert_type", "generated_by", "crossover_type", "island", "max_genome_number"}
+    {
+        "insert_type",
+        "generated_by",
+        "crossover_type",
+        "island",
+        "species",
+        "max_genome_number",
+    }
 )
 
 #: File mode recorded for archive members (a regular, world-readable file).
@@ -190,7 +198,7 @@ _ITERATION_BATCH_SIZE = 200
 
 _SUMMARY_COLUMNS = (
     "genome_number, insertion, saved_at, insert_type, generated_by, "
-    "crossover_type, island, n_gates, n_enabled_gates, n_parameters, "
+    "crossover_type, island, species, n_gates, n_enabled_gates, n_parameters, "
     "n_cnot, n_rot, max_innovation_number, generated_at_insertion, "
     "evaluation_seconds, evaluated_host, evaluated_rank, discard_reason, "
     "initial_metrics, best_metrics, last_metrics, fitness, initial_fitness, "
@@ -225,6 +233,9 @@ _ADDED_GENOME_COLUMNS: tuple[tuple[str, str], ...] = (
         "(json_extract(fitness, '$.target_metric') - "
         "json_extract(initial_fitness, '$.target_metric')) VIRTUAL",
     ),
+    # Speciation summary column; added here so main's format-7 migrator
+    # brings older archives up to date when they are reopened for writing.
+    ("species", "species INTEGER"),
 )
 
 _SCHEMA = """
@@ -243,6 +254,7 @@ CREATE TABLE IF NOT EXISTS genomes(
     generated_by TEXT,
     crossover_type TEXT,
     island INTEGER,
+    species INTEGER,
     n_gates INTEGER,
     n_enabled_gates INTEGER,
     n_parameters INTEGER,
@@ -924,6 +936,7 @@ def _summary_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
         generated_by,
         crossover_type,
         island,
+        species,
         n_gates,
         n_enabled_gates,
         n_parameters,
@@ -953,6 +966,7 @@ def _summary_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
         "generated_by": json.loads(generated_by) if generated_by else [],
         "crossover_type": crossover_type,
         "island": island,
+        "species": species,
         "n_gates": n_gates,
         "n_enabled_gates": n_enabled_gates,
         "n_parameters": n_parameters,
@@ -1403,7 +1417,11 @@ class GenomeArchive:
         return False
 
     def add_genome(
-        self, genome: CircuitGenome, insertion: int, island: int | None = None
+        self,
+        genome: CircuitGenome,
+        insertion: int,
+        island: int | None = None,
+        species: int | None = None,
     ) -> bool:
         """Stores an evaluated genome, its summary row and its parent links.
 
@@ -1415,6 +1433,8 @@ class GenomeArchive:
             insertion: How many genomes had been inserted into the search when
                 this one was (its position in the search's insertion order).
             island: The island the genome was inserted into, for island
+                strategies.
+            species: The species the genome was assigned to, for speciation
                 strategies.
 
         Returns:
@@ -1466,6 +1486,7 @@ class GenomeArchive:
             json.dumps(list(metadata.get("generated_by") or [])),
             metadata.get("crossover_type"),
             island,
+            species,
             len(gates),
             sum(1 for gate in gates if gate.get("enabled", True)),
             sum(len(gate.get("parameters") or {}) for gate in gates),
@@ -2050,7 +2071,8 @@ class GenomeArchive:
 
         Returns:
             The sorted distinct ``insert_type``, ``generated_by`` (operators),
-            ``crossover_type`` and ``island`` values, keyed by filter.
+            ``crossover_type``, ``island`` and ``species`` values, keyed by
+            filter.
         """
 
         def distinct(query: str) -> list[Any]:
@@ -2070,6 +2092,13 @@ class GenomeArchive:
             "island": distinct(
                 "SELECT DISTINCT island FROM genomes WHERE island IS NOT NULL ORDER BY 1"
             ),
+            "species": (
+                distinct(
+                    "SELECT DISTINCT species FROM genomes WHERE species IS NOT NULL ORDER BY 1"
+                )
+                if "species" in self.genome_columns
+                else []
+            ),
         }
 
     def points(self, y_key: str) -> dict[str, list[Any]]:
@@ -2082,15 +2111,19 @@ class GenomeArchive:
             Parallel lists: ``genome_number``, ``insertion``, ``y`` (``None`` when
             a genome has no value), ``insert_type``, ``generated_by`` (each
             genome's list of generating operators), ``operator`` (its first
-            generating operator), ``crossover_type`` and ``island``.
+            generating operator), ``crossover_type``, ``island`` and ``species``.
 
         Raises:
             ValueError: If ``y_key`` is not a valid key.
         """
 
         expression, parameters = self._value_expression(y_key)
+        species_select = (
+            "species" if "species" in self.genome_columns else "NULL AS species"
+        )
         rows = self.connection.execute(
-            f"SELECT genome_number, insertion, {expression}, insert_type, generated_by, crossover_type, island "
+            f"SELECT genome_number, insertion, {expression}, insert_type, generated_by, "
+            f"crossover_type, island, {species_select} "
             "FROM genomes ORDER BY genome_number",
             parameters,
         ).fetchall()
@@ -2106,6 +2139,7 @@ class GenomeArchive:
             ],
             "crossover_type": [row[5] for row in rows],
             "island": [row[6] for row in rows],
+            "species": [row[7] for row in rows],
         }
 
     def parent_links(self) -> dict[str, list[int]]:
@@ -2133,7 +2167,7 @@ class GenomeArchive:
             ``nodes``: the genome and its ancestors, each with its
             ``genome_number``, ``generation`` (the fewest steps back it is
             reached in), whether it is ``in_archive`` (the seed genome never is),
-            and its ``insert_type``, ``island``, ``generated_by`` and
+            and its ``insert_type``, ``island``, ``species``, ``generated_by`` and
             ``fitness``; and
             ``edges``: the ``child``/``parent`` links among them.
         """
@@ -2179,6 +2213,7 @@ class GenomeArchive:
                     "in_archive": genome in summaries,
                     "insert_type": summary.get("insert_type"),
                     "island": summary.get("island"),
+                    "species": summary.get("species"),
                     "generated_by": summary.get("generated_by", []),
                     "fitness": summary.get("fitness"),
                 }
@@ -2304,8 +2339,8 @@ class GenomeArchive:
 
         Returns:
             The summary: genome number, insertion, saved time, insert type,
-            generating operators, crossover type, island, gate/parameter counts,
-            fitness and ``parents``.
+            generating operators, crossover type, island, species,
+            gate/parameter counts, fitness and ``parents``.
 
         Raises:
             KeyError: If the archive holds no such genome.
@@ -2419,6 +2454,28 @@ class GenomeArchive:
                 ).fetchall()
             )
         return [islands.get(int(number)) for number in genome_numbers]
+
+    def species_of(self, genome_numbers: list[int]) -> list[int | None]:
+        """Looks up the species each of several genomes was assigned to.
+
+        Args:
+            genome_numbers: The genomes to look up, e.g. a genome's parents.
+
+        Returns:
+            Each genome's species, in the order given: ``None`` for a genome
+            that is not stored (the seed genome) or was not evolved under
+            speciation.
+        """
+
+        species: dict[int, int | None] = {}
+        for chunk in _chunks(sorted({int(number) for number in genome_numbers})):
+            species.update(
+                self.connection.execute(
+                    f"SELECT genome_number, species FROM genomes WHERE genome_number IN ({', '.join('?' * len(chunk))})",
+                    chunk,
+                ).fetchall()
+            )
+        return [species.get(int(number)) for number in genome_numbers]
 
     def _parents_of(self, genome_numbers: list[int]) -> dict[int, list[int]]:
         """Looks up the parents of several genomes at once.

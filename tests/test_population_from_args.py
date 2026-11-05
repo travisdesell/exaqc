@@ -12,10 +12,13 @@ from __future__ import annotations
 from argparse import Namespace
 from typing import Any
 
+import pytest
+
 from src.circuits.circuit import CircuitGenome
 from src.evolution.population_strategy import PopulationStrategy
 from src.evolution.steady_state_islands import SteadyStateIslands
 from src.evolution.steady_state_population import SteadyStatePopulation
+from src.evolution.steady_state_speciation import SteadyStateSpeciation
 
 
 def compare(genome1: CircuitGenome, genome2: CircuitGenome) -> int:
@@ -75,6 +78,29 @@ def islands_args(**overrides: Any) -> Namespace:
     return Namespace(**values)
 
 
+def speciation_args(**overrides: Any) -> Namespace:
+    """Builds a parsed-args namespace selecting the speciation strategy.
+
+    Args:
+        **overrides: Values replacing the defaults below.
+
+    Returns:
+        The namespace ``from_args`` reads.
+    """
+
+    values = {
+        "population_strategy": "steady_state_speciation",
+        "max_population_size": 8,
+        "species_threshold": 0.6,
+        "neat_c1": 1.0,
+        "neat_c2": 1.0,
+        "neat_c3": 0.0,
+        "inter_species_parent_rate": 0.1,
+    }
+    values.update(overrides)
+    return Namespace(**values)
+
+
 def test_from_args_builds_steady_state_population() -> None:
     """A ``steady_state`` sub-command yields a SteadyStatePopulation."""
 
@@ -94,6 +120,26 @@ def test_from_args_builds_islands_population() -> None:
     assert len(population.islands) == 2
 
 
+def test_from_args_builds_speciation_population() -> None:
+    """A ``steady_state_speciation`` sub-command yields SteadyStateSpeciation."""
+
+    population = PopulationStrategy.from_args(speciation_args(), compare)
+
+    assert isinstance(population, SteadyStateSpeciation)
+    assert population.max_population_size == 8
+    assert population.species_threshold == 0.6
+    assert population.inter_species_parent_rate == 0.1
+
+
+def test_from_args_rejects_unknown_strategy() -> None:
+    """An unknown sub-command raises ``ValueError``."""
+
+    with pytest.raises(ValueError, match="Unknown population strategy"):
+        PopulationStrategy.from_args(
+            Namespace(population_strategy="not_a_strategy"), compare
+        )
+
+
 def test_from_args_writes_nothing_to_disk(tmp_path, monkeypatch) -> None:
     """Building a strategy no longer creates an output directory.
 
@@ -106,5 +152,6 @@ def test_from_args_writes_nothing_to_disk(tmp_path, monkeypatch) -> None:
 
     PopulationStrategy.from_args(steady_state_args(), compare)
     PopulationStrategy.from_args(islands_args(), compare)
+    PopulationStrategy.from_args(speciation_args(), compare)
 
     assert list(tmp_path.iterdir()) == []

@@ -37,6 +37,7 @@ from src.evolution.objective import evaluate_genome  # noqa: E402
 from src.evolution.population_strategy import PopulationStrategy  # noqa: E402
 from src.evolution.steady_state_islands import SteadyStateIslands  # noqa: E402
 from src.evolution.steady_state_population import SteadyStatePopulation  # noqa: E402
+from src.evolution.steady_state_speciation import SteadyStateSpeciation  # noqa: E402
 from src.utils.genome_archive import ARCHIVE_FILENAME, GenomeArchive  # noqa: E402
 
 
@@ -85,6 +86,26 @@ class FakeGenome:
         """
 
         return list(self.gates)
+
+    def get_historical_gate_innovations(self) -> list[int]:
+        """Returns sorted unique enabled innovation IDs for speciation distance.
+
+        This fake has no disabled gates, so the result is every stored ID.
+
+        Returns:
+            Sorted unique gate innovation numbers.
+        """
+
+        return sorted(set(self.gates))
+
+    def get_historical_gate_signature(self) -> frozenset[tuple[int, bool]]:
+        """Returns historical duplicate identity for speciation.
+
+        Returns:
+            Pairs of innovation number and enabled flag (all enabled here).
+        """
+
+        return frozenset((gate, True) for gate in self.gates)
 
 
 def compare(genome1: Any, genome2: Any) -> float:
@@ -190,6 +211,29 @@ def test_island_topology_is_recorded_when_the_search_starts() -> None:
     }
 
 
+def test_speciation_config_is_recorded_when_the_search_starts() -> None:
+    """A speciation search records its fixed hyperparameters in run_info."""
+
+    archive = MagicMock()
+    population = SteadyStateSpeciation(
+        max_population_size=12,
+        compare=compare,
+        species_threshold=0.4,
+        inter_species_parent_rate=0.2,
+    )
+    build_search(population, archive)
+
+    info = archive.set_run_info.call_args.kwargs
+    assert info["speciation"] == {
+        "max_population_size": 12,
+        "species_threshold": 0.4,
+        "neat_c1": 1.0,
+        "neat_c2": 1.0,
+        "neat_c3": 0.0,
+        "inter_species_parent_rate": 0.2,
+    }
+
+
 def test_mutations_are_drawn_from_the_weighted_list() -> None:
     """mutate draws from the weights expanded in their fixed order.
 
@@ -241,8 +285,8 @@ def test_inserted_genomes_are_archived_in_insertion_order() -> None:
         search.insert_genome(genome)
 
     assert archive.add_genome.call_args_list == [
-        call(genomes[0], insertion=1, island=None),
-        call(genomes[1], insertion=2, island=None),
+        call(genomes[0], insertion=1, island=None, species=None),
+        call(genomes[1], insertion=2, island=None, species=None),
     ]
     assert [
         recorded.kwargs["step"] for recorded in archive.record_population.call_args_list
@@ -427,6 +471,27 @@ def test_island_genomes_are_archived_with_their_island() -> None:
     # the population snapshot merges the islands into one ranking, best first
     snapshot = archive.record_population.call_args_list[-1].kwargs["population"]
     assert [genome.genome_number for genome in snapshot] == [1, 2, 3, 4]
+
+
+def test_speciation_genomes_are_archived_with_their_species() -> None:
+    """Speciation strategies record which species each genome was assigned to."""
+
+    archive = MagicMock()
+    population = SteadyStateSpeciation(max_population_size=4, compare=compare)
+    search = build_search(population, archive)
+
+    genomes = [
+        FakeGenome(number, loss=float(number), target_metric=0.0)
+        for number in range(1, 5)
+    ]
+    for genome in genomes:
+        search.insert_genome(genome)
+
+    species = [
+        recorded.kwargs["species"] for recorded in archive.add_genome.call_args_list
+    ]
+    assert [genome.metadata["species_id"] for genome in genomes] == species
+    assert all(value is not None for value in species)
 
 
 def test_get_population_returns_a_sorted_copy() -> None:

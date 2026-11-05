@@ -27,8 +27,13 @@ import pytest
 from src.circuits.circuit import CircuitGenome
 from src.circuits.decoder import ClippedDecoder, initialize_decoder
 from src.circuits.encoder import IdentityEncoder, initialize_encoder
+from src.circuits.gate import Gate
 from src.circuits.registers import expand_registers
-from src.evolution.crossover import crossover_encoder_decoder, torch_simplex_crossover
+from src.evolution.crossover import (
+    crossover_encoder_decoder,
+    exponential_crossover,
+    torch_simplex_crossover,
+)
 
 
 def _snapshot(module: torch.nn.Module) -> dict[str, torch.Tensor]:
@@ -282,3 +287,62 @@ def test_crossover_encoder_decoder_copies_non_trainable_coders() -> None:
     # so the child coders come from the primary parent, not the others.
     assert child_encoder is parents[0].encoder
     assert child_decoder is parents[0].decoder
+
+
+def test_exponential_crossover_copies_parent_gates() -> None:
+    """Exponential children hold distinct gate objects from both parents."""
+
+    def _parent(
+        genome_number: int, depth: float, innovation_number: int
+    ) -> CircuitGenome:
+        """Builds a one-gate genome for exponential crossover.
+
+        Args:
+            genome_number: Identity stamped on the parent.
+            depth: Gate depth in ``(0, 1)``.
+            innovation_number: Historical marking.
+
+        Returns:
+            A pennylane genome with one ``ry`` gate.
+        """
+
+        genome = CircuitGenome(
+            genome_number=genome_number,
+            input_qubits=expand_registers({"i": 2}),
+            output_qubits=expand_registers({"o": 2}),
+            target="pennylane",
+        )
+        genome.hyperparameters = {}
+        genome.add_existing_gate(
+            Gate(
+                depth=depth,
+                method_name="ry",
+                qubits=[("i", 0)],
+                parameters={"phi": 0.1 * genome_number},
+                innovation_number=innovation_number,
+                target="pennylane",
+                enabled=True,
+            )
+        )
+        genome.encoder = None
+        genome.decoder = None
+        return genome
+
+    parent1 = _parent(1, 0.2, 1)
+    parent2 = _parent(2, 0.8, 2)
+    child = CircuitGenome(
+        genome_number=3,
+        input_qubits=expand_registers({"i": 2}),
+        output_qubits=expand_registers({"o": 2}),
+        target="pennylane",
+        metadata={},
+    )
+    child.encoder = None
+    child.decoder = None
+    exponential_crossover(child, parent1, parent2)
+    assert child.gates
+    parent_ids = {id(gate) for gate in parent1.gates + parent2.gates}
+    assert {id(gate) for gate in child.gates}.isdisjoint(parent_ids)
+    child.gates[0].enabled = False
+    assert parent1.gates[0].enabled
+    assert parent2.gates[0].enabled
