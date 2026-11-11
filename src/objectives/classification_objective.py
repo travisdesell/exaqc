@@ -17,6 +17,7 @@ from src.circuits.circuit import CircuitGenome
 from src.datasets.classification_loaders import (
     IMAGE_DATASETS,
     get_image_dataloaders,
+    get_image_test_dataloader,
     get_uci_dataloaders,
     get_uci_test_dataloader,
 )
@@ -174,17 +175,28 @@ def load_data(
 def load_test_data(args: argparse.Namespace) -> DataLoader | None:
     """Loads the held-out test set a search scores its best genomes on.
 
-    Only UCI datasets have one: an image dataset's official test split is scored
-    separately, by ``src.examples.evaluate``.
+    An image dataset's is its official test split; a UCI dataset's is the test
+    fraction of ``--uci_split``.
 
     Args:
         args: Parsed command-line arguments, as given to :func:`load_data`.
 
     Returns:
-        The test dataloader, or ``None`` when the dataset has no test split here.
+        The test dataloader, or ``None`` when a UCI split holds no test samples.
     """
     if args.dataset in IMAGE_DATASETS:
-        return None
+        return get_image_test_dataloader(
+            args.dataset,
+            data_dir=args.data_dir,
+            batch_size=(
+                args.validation_batch_size
+                if args.validation_batch_size is not None
+                else args.batch_size
+            ),
+            download=args.download_dataset,
+            num_workers=args.num_workers,
+            pin_memory=args.pin_memory,
+        )
 
     return get_uci_test_dataloader(
         args.dataset,

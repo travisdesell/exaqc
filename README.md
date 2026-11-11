@@ -826,8 +826,9 @@ the best genome by `loss` and the best by `target_metric` are scored on them, an
 the results are stored under `final_test_results` in the archive's `run_info`.
 Restarting a run from before `--uci_split` existed keeps it on the 80/20 split and
 whole-dataset scaling it began on, with no test evaluation (as does any test
-fraction of `0`). Image datasets are scored on their official
-test split separately, with [`evaluate`](#evaluate).
+fraction of `0`). An image dataset's best genomes are scored the same way on its
+official test split (10,000 images, scored on the main process, so expect it to
+take a while); [`evaluate`](#evaluate) scores any other saved genome on it.
 
 #### Co-evolving training hyperparameters
 
