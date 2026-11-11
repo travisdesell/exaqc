@@ -48,6 +48,13 @@ def main() -> None:
     parser.add_argument("--data_dir", default="data")
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument(
+        "--classes",
+        type=int,
+        nargs="+",
+        default=None,
+        help="The --classes the search ran with; scores only those test classes.",
+    )
+    parser.add_argument(
         "--download_dataset",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -70,6 +77,7 @@ def main() -> None:
         data_dir=args.data_dir,
         batch_size=args.batch_size,
         download=args.download_dataset,
+        classes=args.classes,
     )
 
     metrics = {"mean_class_accuracy": MeanClassAccuracy(testing_loader.n_labels)}

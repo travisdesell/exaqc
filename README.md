@@ -840,6 +840,7 @@ mpiexec -n 12 python3 -m src.examples.classification \
 | `--validation_batch_size` | = `--batch_size` | Validation batch size |
 | `--validation_fraction` | `0.1` | Held-out fraction when no fixed split exists |
 | `--normalization` | `minmax` | `none`, `zscore`, `minmax` |
+| `--classes` | all | Image datasets only: keep these original labels (e.g. `3 6` for a binary task), renumbered `0..k-1` in the order given |
 | `--training_samples` / `--validation_samples` | all | Cap the splits for quick runs |
 | `--data_dir` | `data` | Where datasets are stored |
 | `--download_dataset` | on | Download image datasets if missing |
@@ -1108,6 +1109,7 @@ python3 -m src.examples.evaluate --archive ./artifacts/mnist --genome_number 42 
 | `--genome_number` | — | Genome to load from `--archive` (required with it) |
 | `--dataset` | *required* | `mnist`, `fashion_mnist`, `cifar10` |
 | `--data_dir` | `data` | Dataset location |
+| `--classes` | all | The `--classes` the search ran with; scores only those test classes |
 | `--batch_size` | `32` | Evaluation batch size |
 | `--download_dataset` | on | Download if missing |
 

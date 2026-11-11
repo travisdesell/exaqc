@@ -14,7 +14,10 @@ from src.circuits.circuit import CircuitGenome
 from src.circuits.decoder import initialize_decoder
 from src.circuits.encoder import initialize_encoder
 from src.circuits.gate_specifications import GateSpecifications
-from src.datasets.classification_loaders import CLASSIFICATION_DATASETS
+from src.datasets.classification_loaders import (
+    CLASSIFICATION_DATASETS,
+    IMAGE_DATASETS,
+)
 from src.evolution.exaqc import EXAQC
 from src.evolution.master_worker import run_evolution
 from src.evolution.population_strategy import PopulationStrategy
@@ -106,6 +109,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.1,
         help="Fraction of the training data held out for validation when no fixed split exists.",
+    )
+
+    parser.add_argument(
+        "--classes",
+        type=int,
+        nargs="+",
+        default=None,
+        help=(
+            "Image datasets only: keep just these original class labels "
+            "(e.g. 0 1 for a binary task), relabelled 0..k-1 in the order given. "
+            "Uses every class when unset."
+        ),
     )
 
     parser.add_argument(
@@ -255,6 +270,9 @@ def main() -> None:
     #     parser.error("Image datasets require --encoding cnn in this implementation.")
     if not training_loader.is_image and args.encoding == "cnn":
         parser.error("CNN encoding is only valid for image datasets.")
+
+    if args.classes is not None and args.dataset not in IMAGE_DATASETS:
+        parser.error("--classes is only supported for image datasets.")
 
     metrics: dict[str, Metric] = {
         "mean_class_accuracy": MeanClassAccuracy(training_loader.n_labels)
