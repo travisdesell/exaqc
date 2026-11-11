@@ -18,6 +18,7 @@ from src.datasets.classification_loaders import (
     IMAGE_DATASETS,
     get_image_dataloaders,
     get_uci_dataloaders,
+    get_uci_test_dataloader,
 )
 from src.evolution.objective import Objective
 from src.metrics.metric import Metric
@@ -52,6 +53,8 @@ class ClassificationObjective(Objective):
         validation_loss_function: Any,
         metrics: dict[str, Metric],
         device: str | None = None,
+        testing_dataloader: DataLoader | None = None,
+        testing_loss_function: Any | None = None,
     ) -> None:
         """Initializes the classification objective.
 
@@ -66,6 +69,9 @@ class ClassificationObjective(Objective):
             validation_loss_function: Validation loss function.
             metrics: Evaluation metrics.
             device: PyTorch device to train on, or ``None`` to auto-select.
+            testing_dataloader: Batched held-out test loader, if there is one.
+            testing_loss_function: Test loss function; defaults to the validation
+                loss function.
 
         Returns:
             None. Sets ``trainer``.
@@ -76,6 +82,8 @@ class ClassificationObjective(Objective):
             training_loss_function=training_loss_function,
             validation_loss_function=validation_loss_function,
             metrics=metrics,
+            testing_dataloader=testing_dataloader,
+            testing_loss_function=testing_loss_function,
             device=device,
         )
 
@@ -103,6 +111,26 @@ class ClassificationObjective(Objective):
             )
             / 2.0,
         }
+
+    def test(self, genome: CircuitGenome) -> dict[str, Any] | None:
+        """Scores a trained genome on the held-out test set.
+
+        The model is rebuilt from the weights stored on the genome, so this gives
+        the same answer for a genome held in memory, received over MPI or read
+        back from an archive.
+
+        Args:
+            genome: The trained genome to score. Its weights are not changed.
+
+        Returns:
+            The test loss and metrics, or ``None`` when there is no test set.
+        """
+        if self.trainer.testing_dataloader is None:
+            return None
+
+        genome.initialize_model()
+        genome.hybrid_model.to(self.trainer.device)
+        return self.trainer.test(genome)
 
 
 def load_data(
@@ -136,7 +164,32 @@ def load_data(
     training_loader, validation_loader = get_uci_dataloaders(
         args.dataset,
         normalize=args.normalization,
+        split=args.uci_split,
         batch_size=args.batch_size,
         seed=args.seed,
     )
     return training_loader, validation_loader
+
+
+def load_test_data(args: argparse.Namespace) -> DataLoader | None:
+    """Loads the held-out test set a search scores its best genomes on.
+
+    Only UCI datasets have one: an image dataset's official test split is scored
+    separately, by ``src.examples.evaluate``.
+
+    Args:
+        args: Parsed command-line arguments, as given to :func:`load_data`.
+
+    Returns:
+        The test dataloader, or ``None`` when the dataset has no test split here.
+    """
+    if args.dataset in IMAGE_DATASETS:
+        return None
+
+    return get_uci_test_dataloader(
+        args.dataset,
+        normalize=args.normalization,
+        split=args.uci_split,
+        batch_size=args.batch_size,
+        seed=args.seed,
+    )

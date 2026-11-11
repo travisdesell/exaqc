@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,13 @@ IMAGE_DATASETS = {
     "cifar10",
 }
 CLASSIFICATION_DATASETS = sorted(UCI_DATASETS | IMAGE_DATASETS)
+
+#: Training, validation and test fractions of a UCI dataset.
+DEFAULT_UCI_SPLIT: tuple[float, float, float] = (0.8, 0.1, 0.1)
+
+#: The split of runs recorded before ``--uci_split`` existed: they hold no test
+#: set, and a restart must keep training them on the data they started with.
+LEGACY_UCI_SPLIT: tuple[float, float, float] = (0.8, 0.2, 0.0)
 
 
 @dataclass(frozen=True)
@@ -549,10 +557,109 @@ def get_uci_dataset(dataset: str) -> tuple[np.ndarray, np.ndarray]:
     raise ValueError(f"Unknown UCI dataset: {dataset}")
 
 
+def _split_uci_dataset(
+    dataset: str,
+    normalize: str,
+    split: Sequence[float],
+    seed: int,
+) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    """Normalizes a UCI dataset and divides it into stratified splits.
+
+    The test samples are drawn first, so one seed gives the same three splits to
+    the training and test dataloaders. Normalization is fitted on the training
+    samples alone, so held-out values may fall outside the training range.
+
+    A split with no test samples draws only the training samples and fits
+    ``minmax`` on the whole dataset, so it reproduces exactly the features runs
+    saw before the test split existed and a restart can continue them.
+
+    Args:
+        dataset: UCI dataset name.
+        normalize: One of ``none``, ``zscore``, or ``minmax``.
+        split: Training, validation and test fractions, summing to one. Training
+            and validation must be positive; test may be zero.
+        seed: Split seed.
+
+    Returns:
+        ``(features, labels)`` keyed ``training``, ``validation`` and ``test``;
+        the test features and labels are empty when the test fraction is zero.
+
+    Raises:
+        ValueError: If ``normalize`` or ``split`` is invalid.
+    """
+    if normalize not in {"none", "zscore", "minmax"}:
+        raise ValueError("normalize must be one of 'none', 'zscore', or 'minmax'.")
+
+    training_fraction, validation_fraction, test_fraction = split
+    if (
+        training_fraction <= 0.0
+        or validation_fraction <= 0.0
+        or test_fraction < 0.0
+        or not math.isclose(sum(split), 1.0)
+    ):
+        raise ValueError(
+            "The UCI split must be training, validation and test fractions summing "
+            f"to 1, with positive training and validation fractions; got {list(split)}."
+        )
+
+    x, y = get_uci_dataset(dataset)
+
+    if test_fraction > 0.0:
+        # sample counts rather than fractions, whose floating-point products can
+        # fall just short of a whole number and round a sample out of a split
+        x, x_test, y, y_test = train_test_split(
+            x,
+            y,
+            test_size=round(test_fraction * len(y)),
+            random_state=seed,
+            stratify=y,
+        )
+        x_train, x_validation, y_train, y_validation = train_test_split(
+            x,
+            y,
+            test_size=round(validation_fraction * (len(y) + len(y_test))),
+            random_state=seed,
+            stratify=y,
+        )
+        if normalize == "minmax":
+            scaler = MinMaxScaler().fit(x_train)
+            x_train = scaler.transform(x_train) * math.pi
+            x_validation = scaler.transform(x_validation) * math.pi
+            x_test = scaler.transform(x_test) * math.pi
+    else:
+        if normalize == "minmax":
+            x = MinMaxScaler().fit_transform(x) * math.pi
+        x_test, y_test = x[:0], y[:0]
+        x_train, x_validation, y_train, y_validation = train_test_split(
+            x,
+            y,
+            train_size=training_fraction,
+            random_state=seed,
+            stratify=y,
+        )
+
+    x_train = x_train.astype(np.float32)
+    x_validation = x_validation.astype(np.float32)
+    x_test = x_test.astype(np.float32)
+
+    if normalize == "zscore":
+        mean = np.mean(x_train, axis=0)
+        std = np.std(x_train, axis=0)
+        x_train = (x_train - mean) / (std + 1e-8)
+        x_validation = (x_validation - mean) / (std + 1e-8)
+        x_test = (x_test - mean) / (std + 1e-8)
+
+    return {
+        "training": (x_train, y_train),
+        "validation": (x_validation, y_validation),
+        "test": (x_test, y_test),
+    }
+
+
 def get_uci_dataloaders(
     dataset: str,
     normalize: str = "minmax",
-    training_size: float = 0.8,
+    split: Sequence[float] = DEFAULT_UCI_SPLIT,
     batch_size: int = 1,
     seed: int = 0,
 ) -> tuple[DataLoader, DataLoader]:
@@ -564,7 +671,8 @@ def get_uci_dataloaders(
     Args:
         dataset: UCI dataset name.
         normalize: One of ``none``, ``zscore``, or ``minmax``.
-        training_size: Fraction used for training.
+        split: Training, validation and test fractions; the test samples are left
+            out here (see :func:`get_uci_test_dataloader`).
         batch_size: Batch size. Use one for per-sample execution.
         seed: Split seed.
 
@@ -574,30 +682,13 @@ def get_uci_dataloaders(
     Raises:
         ValueError: If arguments are invalid.
     """
-    if normalize not in {"none", "zscore", "minmax"}:
-        raise ValueError("normalize must be one of 'none', 'zscore', or 'minmax'.")
     if batch_size <= 0:
         raise ValueError("batch_size must be positive.")
 
-    x, y = get_uci_dataset(dataset)
-
-    if normalize == "minmax":
-        x = MinMaxScaler().fit_transform(x) * math.pi
-
-    x = x.astype(np.float32)
-    x_train, x_validation, y_train, y_validation = train_test_split(
-        x,
-        y,
-        train_size=training_size,
-        random_state=seed,
-        stratify=y,
-    )
-
-    if normalize == "zscore":
-        mean = np.mean(x_train, axis=0)
-        std = np.std(x_train, axis=0)
-        x_train = (x_train - mean) / (std + 1e-8)
-        x_validation = (x_validation - mean) / (std + 1e-8)
+    splits = _split_uci_dataset(dataset, normalize, split, seed)
+    x_train, y_train = splits["training"]
+    x_validation, y_validation = splits["validation"]
+    y = np.concatenate((y_train, y_validation, splits["test"][1]))
 
     training_dataset = ClassificationDataset(x_train, y_train)
     validation_dataset = ClassificationDataset(
@@ -608,8 +699,8 @@ def get_uci_dataloaders(
     n_labels = int(max(y.max(), 0) + 1)
     data_spec = ClassificationDataSpec(
         name=dataset,
-        input_shape=(x.shape[1],),
-        n_features=int(x.shape[1]),
+        input_shape=(x_train.shape[1],),
+        n_features=int(x_train.shape[1]),
         n_labels=n_labels,
         is_image=False,
     )
@@ -662,6 +753,62 @@ def get_uci_dataloaders(
     )
 
     return training_loader, validation_loader
+
+
+def get_uci_test_dataloader(
+    dataset: str,
+    normalize: str = "minmax",
+    split: Sequence[float] = DEFAULT_UCI_SPLIT,
+    batch_size: int = 1,
+    seed: int = 0,
+) -> DataLoader | None:
+    """Builds the dataloader of a UCI dataset's held-out test samples.
+
+    Given the same arguments as :func:`get_uci_dataloaders`, this holds exactly
+    the samples that function leaves out.
+
+    Args:
+        dataset: UCI dataset name.
+        normalize: One of ``none``, ``zscore``, or ``minmax``.
+        split: Training, validation and test fractions.
+        batch_size: Batch size.
+        seed: Split seed.
+
+    Returns:
+        The test loader, or ``None`` when the test fraction is zero.
+
+    Raises:
+        ValueError: If arguments are invalid.
+    """
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive.")
+
+    splits = _split_uci_dataset(dataset, normalize, split, seed)
+    x_test, y_test = splits["test"]
+    if len(y_test) == 0:
+        return None
+
+    test_dataset = ClassificationDataset(x_test, y_test)
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        num_workers=0,
+        shuffle=False,
+    )
+
+    y = np.concatenate(tuple(labels for _, labels in splits.values()))
+    _attach_loader_metadata(
+        test_loader,
+        labels=test_dataset.y.long(),
+        data_spec=ClassificationDataSpec(
+            name=dataset,
+            input_shape=(x_test.shape[1],),
+            n_features=int(x_test.shape[1]),
+            n_labels=int(max(y.max(), 0) + 1),
+            is_image=False,
+        ),
+    )
+    return test_loader
 
 
 def get_classification_dataloaders(

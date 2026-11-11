@@ -428,7 +428,8 @@ def run_evolution(
 
     Returns:
         None. Runs the search to completion on this rank; the serial run and the
-        master close the search's output archive when it ends, even on error.
+        master then score its best genomes on the objective's test data, if it
+        has any, and close its output archive, even on error.
     """
 
     comm = MPI.COMM_WORLD
@@ -455,5 +456,6 @@ def run_evolution(
                 run_for=run_for,
                 timing_report_every=timing_report_every,
             )
+        exaqc.evaluate_best_on_test()
     finally:
         exaqc.close()

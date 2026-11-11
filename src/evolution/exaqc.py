@@ -1247,6 +1247,62 @@ class EXAQC:
         )
         return True
 
+    def evaluate_best_on_test(self) -> None:
+        """Scores the search's best genomes on the objective's held-out test data.
+
+        Called once the search has finished, so the test data cannot influence
+        it. The best genome by fitness and the best by ``target_metric`` are
+        scored; when they are the same genome it is scored once.
+
+        Returns:
+            None. Records the results in the archive's ``final_test_results``
+            run info, replacing any from an earlier run of this search. Nothing
+            is written when the objective has no test data, including an
+            objective that is a plain callable rather than an ``Objective``.
+        """
+
+        test = getattr(self.objective, "test", None)
+        if test is None:
+            return
+
+        best = {
+            "best_fitness": self.population.get_best_genome(),
+            "best_target_metric": self.target_metric_best_genome,
+        }
+
+        # the genomes to score, with what each one is the best by
+        roles: dict[int, list[str]] = {}
+        genomes: dict[int, CircuitGenome] = {}
+        for role, genome in best.items():
+            if genome is not None:
+                roles.setdefault(genome.genome_number, []).append(role)
+                genomes[genome.genome_number] = genome
+
+        results: list[dict[str, Any]] = []
+        for number, genome in genomes.items():
+            metrics = test(genome)
+            if metrics is None:
+                return
+            logger.success(
+                f"genome {number} ({', '.join(roles[number])}) test metrics: {metrics}"
+            )
+            results.append(
+                {
+                    "genome_number": number,
+                    "best_by": roles[number],
+                    "metrics": metrics,
+                }
+            )
+
+        if results and self.archive is not None:
+            self.archive.set_run_info(
+                final_test_results={
+                    "evaluated_at": time.time(),
+                    "inserted_genomes": self.inserted_genomes,
+                    "genomes": results,
+                }
+            )
+
     def close(self) -> None:
         """Finishes the search's output, closing the archive if there is one.
 

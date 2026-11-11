@@ -797,7 +797,8 @@ mpiexec -n 12 python3 -m src.examples.classification \
 | `--improvement_cutoff` | `3` | Epochs without validation improvement before stopping, 0 to disable |
 | `--batch_size` | `5` | Samples per gradient step |
 | `--validation_batch_size` | = `--batch_size` | Validation batch size |
-| `--validation_fraction` | `0.1` | Held-out fraction when no fixed split exists |
+| `--validation_fraction` | `0.1` | Held-out fraction of an image dataset's official training split |
+| `--uci_split` | `0.8 0.1 0.1` | Training, validation and test fractions of a UCI dataset, summing to 1; a test fraction of `0` holds none out |
 | `--normalization` | `minmax` | `none`, `zscore`, `minmax` |
 | `--training_samples` / `--validation_samples` | all | Cap the splits for quick runs |
 | `--data_dir` | `data` | Where datasets are stored |
@@ -818,6 +819,15 @@ features straight through, so the feature count must equal the circuit's input
 width — pair it with `-qim amplitude`, which absorbs many features into few
 qubits. `--decoding clipped` normalises circuit outputs into class scores and
 suits `probs`. Fitness records `loss` and `target_metric` (mean class accuracy).
+
+**Test split.** The search never sees a UCI dataset's test samples, and
+`--normalization` is fitted on the training samples alone. When it ends,
+the best genome by `loss` and the best by `target_metric` are scored on them, and
+the results are stored under `final_test_results` in the archive's `run_info`.
+Restarting a run from before `--uci_split` existed keeps it on the 80/20 split and
+whole-dataset scaling it began on, with no test evaluation (as does any test
+fraction of `0`). Image datasets are scored on their official
+test split separately, with [`evaluate`](#evaluate).
 
 #### Co-evolving training hyperparameters
 
