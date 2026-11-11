@@ -96,9 +96,9 @@ COMMAND=(
     --validation_batch_size 64
     --epochs 20
     --learning_rate 0.001
-    --number_genomes 500
-    --mutation_strategy uniform 1 3
-    --parent_strategy uniform 2 3
+    --number_genomes 1000
+    --mutation_strategy uniform 1 5
+    --parent_strategy uniform 2 5
     --hyperparameter_strategy simplex
     --sho_tune learning_rate=log:1e-4:1e-2:1e-5:0.1
         weight_decay=linear:0:1e-4:0:1e-3

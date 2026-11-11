@@ -21,7 +21,7 @@
 # IMPROVEMENT_CUTOFF, LOG_EVERY, NUMBER_GENOMES, EVAL_SEED, USE_ONLY and DRY_RUN.
 #
 #SBATCH -J exaqc_rl
-#SBATCH -t 1-00:00:00
+#SBATCH -t 3-00:00:00
 #SBATCH -A examm-rnn -p tigris
 #SBATCH -o /home/dk7405/logs/exaqc/output_%j.o
 #SBATCH -e /home/dk7405/logs/exaqc/error_%j.e
@@ -60,7 +60,7 @@ HEALTHY_REWARD=${HEALTHY_REWARD:-}
 
 #: Training episodes per genome. 0 evaluates each genome's inherited weights
 #: without training it.
-EPISODES=${EPISODES:-200}
+EPISODES=${EPISODES:-500}
 
 #: Episodes without an improved evaluation before a genome's training stops
 #: early; 0 disables early stopping.
@@ -186,7 +186,7 @@ fi
 #: normalization, reward scaling, linear learning-rate decay, KL early stopping
 #: and a tighter log-std clamp. On by default; STABILIZE=0 leaves the code's own
 #: defaults.
-STABILIZE=${STABILIZE:-1}
+STABILIZE=${STABILIZE:-0}
 STABILIZER_ARGUMENTS=()
 if [ "$STABILIZE" = "1" ]; then
     STABILIZER_ARGUMENTS=(--normalize_observations --ppo_reward_scaling --lr_anneal linear --ppo_target_kl 0.015 --log_std_max 0.5 --ppo_passes 10)
