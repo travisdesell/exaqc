@@ -88,7 +88,7 @@ REPO=${REPO:-/home/dk7405/Quantum/exaqc}
 VENV=${VENV:-.exaqc}
 PYTHON=${PYTHON:-python3.12}
 DATA_DIR=${DATA_DIR:-/home/dk7405/datasets}
-OUT_ROOT=${OUT_ROOT:-/home/dk7405/genome_archives/two_class_runs}
+OUT_ROOT=${OUT_ROOT:-/home/dk7405/genome_archives/two_class_runs2}
 OPENMPI=${OPENMPI:-/ttqroyz}
 
 CLASS_TAG=$(IFS=v; echo "${CLASSES[*]}")
