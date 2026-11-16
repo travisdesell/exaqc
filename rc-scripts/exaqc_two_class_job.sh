@@ -71,6 +71,7 @@ NUMBER_GENOMES=${NUMBER_GENOMES:-$DEFAULT_GENOMES}
 EPOCHS=${EPOCHS:-100}
 QUBITS=${QUBITS:-$DEFAULT_QUBITS}
 INPUT_MODE=${INPUT_MODE:-ry}
+ENCODING=${ENCODING:-cnn}
 ENCODER_CONFIG=${ENCODER_CONFIG:-$DEFAULT_ENCODER}
 read -r -a MUTATIONS <<< "${MUTATIONS:-1 5}"
 read -r -a PARENTS <<< "${PARENTS:-2 5}"
@@ -101,7 +102,7 @@ COMMAND=(
     --classes "${CLASSES[@]}"
     --data_dir "$DATA_DIR"
     --target pennylane
-    --encoding cnn
+    --encoding "$ENCODING"
     --encoder_config "$ENCODER_CONFIG"
     --decoding linear
     --input_qubits "$QUBITS"
