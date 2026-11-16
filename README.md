@@ -60,6 +60,7 @@ classical layers train together with ordinary backpropagation and the standard P
   - [exaqc_dashboard](#exaqc_dashboard)
   - [exaqc_mcp](#exaqc_mcp)
   - [backfill_archive](#backfill_archive)
+  - [collect_calibration](#collect_calibration)
   - [classical_image_classification](#classical_image_classification)
   - [reinforcement_learning_fixed](#reinforcement_learning_fixed)
 - [Reproducing 2026 PPSN results](#reproducing-2026-ppsn-results)
@@ -816,6 +817,31 @@ width — pair it with `-qim amplitude`, which absorbs many features into few
 qubits. `--decoding clipped` normalises circuit outputs into class scores and
 suits `probs`. Fitness records `loss` and `target_metric` (mean class accuracy).
 
+**Simulated noise.** By default circuits run on a perfect simulator. Any noise
+flag switches the PennyLane target to the `default.mixed` (density-matrix)
+simulator and adds a noise channel after every evolved gate while circuits are
+trained and scored; each genome records its noise settings as `noise_*`
+hyperparameters. Noise is only simulated with `--target pennylane`; asking for it
+with `--target qiskit` is an error. Noisy simulation is much slower, roughly the
+square of the noiseless cost.
+
+| Argument | Default | Description |
+|---|---|---|
+| `--noise_type` | `none` | `none`, `depolarizing`, `bit_flip`, `phase_flip`, `amplitude_damping`, `phase_damping`, `thermal_relaxation`, `mixed`, `ibm_backend`. `ibm_backend` requires `--noise_calibration` and `--noise_qubits` |
+| `--noise_p` | `0.0` | Error probability for gates without a size-specific rate |
+| `--noise_p_1q` / `--noise_p_2q` | = `--noise_p` | Error probability after one-qubit / multi-qubit gates |
+| `--noise_gamma` | `0.0` | Strength of the damping and `mixed` noise types |
+| `--noise_t1` / `--noise_t2` | `5e-05` / `7e-05` | Qubit T1 / T2 in seconds (thermal relaxation) |
+| `--noise_gate_time_1q` / `--noise_gate_time_2q` | `5e-08` / `3e-07` | Gate durations in seconds (thermal relaxation) |
+| `--noise_excited_state_population` | `0.0` | Thermal excited-state population (thermal relaxation) |
+| `--noise_after_encoding` | off | Also add the hand-set noise right after the input encoding. Chip noise (`--noise_calibration`) always adds it there |
+| `--noise_after_gates` | on | Add noise after each evolved gate (`--no-noise_after_gates` to disable) |
+| `--noise_before_measurement` | off | Also add the hand-set noise just before measurement. Chip noise (`--noise_calibration`) always adds each qubit's readout error there |
+| `--noise_calibration` | none | Gives each wire the rates and timings of its own physical qubit, read from a stored IBM calibration file written by [`collect_calibration`](#collect_calibration). Given as the file's path (`data/calibration/<chip>/<chip>_<date>.json`) or as `<chip>:<date>` (e.g. `ibm_fez:2026-11-06`), which uses that day's stored file or, if it is missing, fetches it once from IBM with your saved Qiskit account and stores it under that name; a failed fetch stops the run and prints the `collect_calibration` command to run by hand. Uses the calibrated `ibm_backend` channel; any other `--noise_type` is refused. Every genome records the file's path, chip, date and values. Requires `--noise_qubits` |
+| `--noise_qubits` | none | Comma-separated physical qubits of that file that wires 0, 1, ... map to (e.g. `10,11,12,13`); list exactly as many as each circuit has wires, the larger of `--input_qubits` and `--output_qubits`; consecutive qubits must be wired neighbours. Each genome is translated into the chip's own gates on these qubits, with moves where qubits are not wired together, and each gate is charged the noise of the chip gates it becomes. Requires `--noise_calibration` |
+| `--noise_transpile_level` | `2` | Chip noise: how hard Qiskit's translator shrinks each genome when turning it into the chip's gates (`0` to `3`). Use the same level as the real-chip run |
+| `--noise_transpile_seed` | `7` | Chip noise: seed for the translator's random choices, for repeatable runs |
+
 ### [`teacher`](./src/examples/teacher.py)
 
 Evolves **purely quantum** circuits to reproduce the outputs of a known
@@ -1336,6 +1362,46 @@ search before backfilling its archive in place.
 | `--idle_minutes` | `10.0` | Refuse an archive whose latest genome was saved within this many minutes; `0` skips the check |
 | `--logging_level` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
 
+### [`collect_calibration`](./src/examples/collect_calibration.py)
+
+Saves a real IBM chip's calibration, raw, as one JSON file per chip and day. It
+is the step of the noise work that talks to IBM: the simulated-noise
+options of [`classification`](#classification) (`--noise_calibration`,
+`--noise_qubits`) read the file it writes, one file per chip and date being
+the single source of noise values for a run. A run given
+`--noise_calibration <chip>:<date>` for a day not stored yet fetches that one
+file itself, with the same functions and the saved Qiskit account, so a
+cluster job needs an IBM account only then. The file holds the calibration exactly as IBM
+reports it (`BackendProperties.to_dict()`: per-qubit T1, T2 and readout error,
+per-gate error and duration) plus the chip's qubit count, basis gates and
+coupling map. Rerunning for a day already stored rewrites that day's file.
+
+```
+python3 -m src.examples.collect_calibration --chip ibm_fez ibm_kingston ibm_marrakesh --api_key_file ~/.ibm/quantum_apikey.json
+```
+
+writes `data/calibration/<chip>/<chip>_<YYYY-MM-DD>.json` for each chip. The
+file is named by the day asked for (today, or `--date`); the served
+calibration's own stamp is inside it as `calibration_date`, and on a day the
+chip was not recalibrated that stamp is an earlier day. Credentials come from a JSON file downloaded from IBM Cloud (its
+`apikey` field) or from the account saved once with
+`QiskitRuntimeService.save_account`; the key is used in memory only and never
+written to any output. Keep the key file outside the repository (`*apikey*.json`
+is git-ignored as a safety net). `--date` fetches the calibration as it stood
+at the end of a past day, and `--from_date` / `--to_date` a whole range of days,
+which is how a day-by-day series is filled in (about 1.5 MB per chip per day).
+
+| Argument | Default | Description |
+|---|---|---|
+| `--chip` | none | One or more IBM backend names, e.g. `ibm_fez ibm_kingston`; required unless `--list_chips` is given |
+| `--api_key_file` | none | JSON file from IBM Cloud with an `apikey` field (optionally a `crn` field); default: the saved Qiskit account |
+| `--instance` | none | Instance CRN; default: the `crn` in the key file, else the account's only instance |
+| `--date` | none | Past day (`YYYY-MM-DD`) whose end-of-day calibration to fetch; default: the current calibration |
+| `--from_date` | none | With `--to_date`: fetch every day from this one (inclusive), skipping days already stored; IBM serves at least a year back. Cannot be combined with `--date` |
+| `--to_date` | today | Last day of the `--from_date` range (inclusive) |
+| `--out_dir` | `data/calibration` | Archive root; files go to `<out_dir>/<chip>/<chip>_<date>.json` |
+| `--list_chips` | off | Print the backends the account can see and exit |
+
 ### [`classical_image_classification`](./src/examples/classical_image_classification.py)
 
 A **classical baseline**, with no quantum circuit and no evolution: it trains a
@@ -1422,6 +1488,25 @@ sh scripts/run_seeds.sh 1 10 per_class ./2026_ppsn_exaqc/classification
 sh scripts/run_breast_cancer.sh 1 10 per_class ./2026_ppsn_exaqc/classification
 sh scripts/run_wine.sh 1 10 per_class ./2026_ppsn_exaqc/classification
 ```
+
+The same iris search under the three noise settings of the
+[simulated-noise options](#classification), one archive per run: no noise (the
+baseline), hand-set depolarizing noise, and chip noise from a stored IBM
+calibration. The three scripts share every search setting and differ only in
+their noise flags:
+
+```
+sh scripts/run_iris_noiseless.sh 1 10 ./noise_study
+sh scripts/run_iris_noise_synthetic.sh 1 10 ./noise_study
+sh scripts/run_iris_noise_chip.sh 1 10 ./noise_study
+```
+
+Each reads its settings from environment variables with the defaults listed at
+the top of the script: `NUMBER_GENOMES` (1000) and `N_PROCS` (12) for all
+three; `NOISE_TYPE`, `NOISE_P_1Q` and `NOISE_P_2Q` (depolarizing, 0.001, 0.01)
+for the synthetic one; `CHIP`, `DATE` and `QUBITS` (ibm_fez, 2026-11-06,
+10,11,12,13) for the chip one, which names the calibration as `CHIP:DATE` and so
+fetches a day not stored yet (see `--noise_calibration`).
 
 Reinforcement learning experiments:
 

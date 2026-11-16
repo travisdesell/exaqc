@@ -6,6 +6,7 @@ import sys
 
 import json
 from pathlib import Path
+from typing import Any
 
 import torch
 from loguru import logger
@@ -28,6 +29,7 @@ from src.metrics.mean_class_accuracy import MeanClassAccuracy
 from src.metrics.metric import Metric
 from src.trainer.supervised_trainer import SupervisedTrainer
 from src.utils.genome_archive import GenomeArchive
+from src.noise.pennylane_noise_model import PennyLaneNoiseModel
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -72,6 +74,11 @@ def build_parser() -> argparse.ArgumentParser:
     # quantum dropout, encoder/decoder) are owned by CircuitGenome so every
     # entry point stays in sync.
     CircuitGenome.initialize_parser(parser)
+
+    # The simulated-noise flags (--noise_type, --noise_p_1q, ...,
+    # --noise_calibration, --noise_qubits) are owned by the noise model; all
+    # default to no noise.
+    PennyLaneNoiseModel.initialize_parser(parser)
 
     parser.add_argument(
         "--encoder_config",
@@ -223,6 +230,46 @@ def load_encoder_config(
     return config
 
 
+def noise_hyperparameters_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    """Returns the genome ``noise_*`` settings requested on the command line.
+
+    ``main`` calls this early, so bad noise flags fail before any work, and
+    merges the result into the genome ``hyperparameters``, so every genome
+    carries the noise settings to the workers and into the archive. The
+    PennyLane noise model is used because the base class cannot be created.
+
+    Args:
+        args: The parsed command-line arguments, including the noise flags
+            added by ``PennyLaneNoiseModel.initialize_parser``.
+
+    Returns:
+        The ``noise_*`` hyperparameters; they describe no noise when no noise
+        flag was given.
+
+    Raises:
+        ValueError: If a noise flag is out of range, noise is requested with
+            ``--target qiskit``, the calibration file or chosen qubits cannot
+            be used (see ``BaseNoiseModel.from_args``), or ``--noise_qubits``
+            does not list exactly one chip qubit per circuit wire.
+    """
+    hp = PennyLaneNoiseModel.from_args(args).to_hyperparameters()
+
+    # Chip noise needs one chosen chip qubit per circuit wire. Inputs and
+    # outputs share the "input" register (see build_exaqc), so a circuit has
+    # max(--input_qubits, --output_qubits) wires, fixed for the whole run.
+    per_qubit = hp.get("noise_per_qubit")
+    if per_qubit is not None:
+        n_wires = max(args.input_qubits, args.output_qubits)
+        n_chosen = len(per_qubit["qubits"])
+        if n_chosen != n_wires:
+            raise ValueError(
+                f"--noise_qubits lists {n_chosen} qubits but each circuit has "
+                f"{n_wires} (the larger of --input_qubits {args.input_qubits} and "
+                f"--output_qubits {args.output_qubits}); list exactly {n_wires}."
+            )
+    return hp
+
+
 def main() -> None:
     """Runs a classification experiment."""
     parser = build_parser()
@@ -248,6 +295,13 @@ def main() -> None:
     )
 
     logger.info("Using PyTorch device: {}", device)
+
+    # Checked on every rank before any work, so bad noise flags stop the run at once.
+    try:
+        noise_hyperparameters = noise_hyperparameters_from_args(args)
+    except ValueError as error:
+        parser.error(str(error))
+    logger.info("Noise settings: {}", noise_hyperparameters)
 
     training_loader, validation_loader = load_data(args)
 
@@ -344,6 +398,9 @@ def main() -> None:
             "quantum_dropout": args.quantum_dropout,
             "quantum_dropout_type": args.quantum_dropout_type,
             "quantum_dropout_rate": args.quantum_dropout_rate,
+            # every genome carries the noise settings; they describe no noise
+            # unless noise flags were given
+            **noise_hyperparameters,
         }
 
         # The gate set and population strategy are built from `args` by their own

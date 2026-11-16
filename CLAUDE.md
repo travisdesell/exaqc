@@ -90,7 +90,10 @@ documented there, and most are also wrapped by a script in
 
 - **Classification:** `python3 -m src.examples.classification`, wrapped by
   `scripts/run_iris.sh`, `scripts/run_seeds.sh`, `scripts/run_breast_cancer.sh`,
-  and `scripts/run_wine.sh`.
+  and `scripts/run_wine.sh`; and, for the noise study, by
+  `scripts/run_iris_noiseless.sh`, `scripts/run_iris_noise_synthetic.sh` and
+  `scripts/run_iris_noise_chip.sh`, which share the iris settings and differ
+  only in their `--noise_*` flags.
 - **Reinforcement learning:** `python3 -m src.examples.reinforcement_learning`,
   wrapped by `scripts/run_cartpole.sh`, `scripts/run_frozenlake.sh`,
   `scripts/run_walker2d.sh`, and `scripts/run_mountaincar_continuous.sh`.

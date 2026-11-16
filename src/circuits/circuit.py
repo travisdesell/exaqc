@@ -28,6 +28,7 @@ from src.circuits.encoder import ENCODING_OPTIONS, Encoder
 from src.utils.draw_hybrid_model import draw_hybrid_model
 from src.utils import training_plots
 from src.dropout.quantum_dropout import apply_qubit_readout_dropout
+from src.noise.pennylane_noise_model import PennyLaneNoiseModel
 
 QUANTUM_INPUT_MODES = ["u3", "rx", "ry", "rz", "basis", "amplitude"]
 
@@ -1034,17 +1035,33 @@ class CircuitGenome:
 
     def generate_pennylane_circuit(
         self,
-        device_name: str = "default.qubit",
+        device_name: str | None = None,
     ) -> None:
-        """
-        Converts this genome into a PennyLane QNode-backed torch layer.
+        """Converts this genome into a PennyLane QNode-backed torch layer.
 
         Builds the PennyLane device and QNode implementing this circuit genome
-        and stores the resulting ``qml.qnn.TorchLayer`` on ``self.torch_model``
-        (this method has no return value).
+        and stores the resulting ``qml.qnn.TorchLayer`` on ``self.torch_model``.
+
+        Noise comes from the genome's ``noise_*`` hyperparameters (see
+        :meth:`src.noise.base_noise_model.BaseNoiseModel.from_hyperparameters`).
+        A genome without them gets no noise and builds exactly as before. With
+        noise on, the circuit runs on ``default.mixed`` (a density-matrix
+        simulator), and noise channels are inserted after the input encoding,
+        after each applied gate, and before measurement, as the noise settings
+        enable.
 
         Args:
-            device_name: Name of the PennyLane device to use.
+            device_name: Name of the PennyLane device to use, or ``None`` to
+                choose automatically: ``default.qubit`` without noise and
+                ``default.mixed`` with it.
+
+        Returns:
+            None. Sets ``self.total_qubits`` and ``self.torch_model``.
+
+        Raises:
+            ValueError: If ``device_name`` is ``"default.qubit"`` while the
+                genome's noise settings enable noise, since that device cannot
+                represent noisy (mixed) states.
         """
         # Create wire registers via qml.registers
         self.total_qubits = len(self.qubits)
@@ -1052,6 +1069,22 @@ class CircuitGenome:
         logger.info(
             f"input indexes: {self.input_indexes}, output_indexes: {self.output_indexes}"
         )
+
+        # Genomes without noise_* hyperparameters get noise_type "none", for
+        # which every hook below is a no-op.
+        noise_model = PennyLaneNoiseModel.from_hyperparameters(self.hyperparameters)
+        if device_name is None:
+            device_name = noise_model.device_name()
+        elif noise_model.is_noisy() and device_name == "default.qubit":
+            raise ValueError(
+                "default.qubit cannot simulate noise; use default.mixed or pass "
+                "device_name=None to choose automatically."
+            )
+
+        # chip noise: translate this genome into the chip's own gates once, in
+        # the same gate order the circuit below runs them (no-op otherwise)
+        self.sort_gates()
+        noise_model.begin_circuit(self)
 
         # Instantiate PennyLane device
         dev = qml.device(
@@ -1067,7 +1100,29 @@ class CircuitGenome:
         def qnode_fn(
             inputs: Tensor,
             weights: Tensor,
+        ) -> (
+            qml.measurements.MeasurementProcess
+            | list[qml.measurements.MeasurementProcess]
         ):
+            """Runs the genome's circuit, with any configured noise, on inputs.
+
+            Args:
+                inputs: The quantum-circuit inputs, ``[n_quantum_inputs]`` or
+                    ``[batch_size, n_quantum_inputs]``.
+                weights: The flat gate-parameter vector, ordered as
+                    ``get_parameters_as_list`` returns it.
+
+            Returns:
+                The measurement: ``qml.probs`` over the output wires in
+                ``probs`` mode, or one ``qml.expval`` of Pauli-Z per output
+                wire in ``expval`` mode.
+
+            Raises:
+                ValueError: If the quantum input or output mode is unknown.
+            """
+
+            # start-up error of each qubit (chip noise only; no-op otherwise)
+            noise_model.before_input_encoding(range(self.total_qubits))
 
             # initialize the qubits given the specified input mode
             input_mode = self.hyperparameters["quantum_input_mode"]
@@ -1108,6 +1163,8 @@ class CircuitGenome:
             else:
                 raise ValueError(f"Unknown quantum_input_mode={input_mode}")
 
+            noise_model.after_input_encoding(self.input_indexes)
+
             # Apply all gates in depth order
             self.sort_gates()
             offset = 0
@@ -1119,7 +1176,12 @@ class CircuitGenome:
                     gate.add_to_pennylane_circuit(
                         self.qubits, weights=weights, offset=offset
                     )
+                    # noise only follows gates that actually ran; passing the
+                    # gate lets a multi-CNOT gate carry its full error
+                    noise_model.after_gate(gate.get_pennylane_wires(self.qubits), gate)
                 offset += len(gate.parameters)
+
+            noise_model.before_measurement(self.output_indexes)
 
             if output_mode == "probs":
                 return qml.probs(wires=self.output_indexes)
