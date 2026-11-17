@@ -395,7 +395,7 @@ def create_classical_image_model(
             input_shape=input_shape,
             n_classes=n_classes,
             hidden_layers=model_config.get(
-                "hidden_layers",
+                "fully_connected_layers",
                 (512, 128),
             ),
             activation=str(model_config.get("activation", "relu")),
