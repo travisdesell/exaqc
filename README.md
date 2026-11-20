@@ -29,6 +29,7 @@ classical layers train together with ordinary backpropagation and the standard P
 
 - [Installation](#installation)
 - [How a run is put together](#how-a-run-is-put-together)
+  - [Local run scripts](#local-run-scripts)
 - [EXAQC: the evolutionary search](#exaqc-the-evolutionary-search)
   - [How the search works](#how-the-search-works)
   - [Search command-line arguments](#search-command-line-arguments)
@@ -132,11 +133,50 @@ mpiexec -n 12 python3 -m src.examples.classification ... steady_state --max_popu
 
 > **Long runs should abort on a crash.** If any rank raises, the rest keep
 > waiting on it and the job idles until its time limit. Starting the module
-> through `python3 -m mpi4py -m <module>` (as `scripts/exaqc_rl_job.sh` does)
-> makes an uncaught exception on any rank abort the whole job instead.
+> through `python3 -m mpi4py -m <module>` (as `scripts/exaqc_rl_job.sh` and the
+> [local run scripts](#local-run-scripts) do) makes an uncaught exception on any
+> rank abort the whole job instead.
 
 Because each genome is trained independently, the search scales close to
 linearly with the number of workers.
+
+### Local run scripts
+
+[`scripts/run_classification.sh`](./scripts/run_classification.sh) and
+[`scripts/run_rl.sh`](./scripts/run_rl.sh) run one search of
+[`classification`](#classification) or
+[`reinforcement_learning`](#reinforcement_learning) on this machine through the
+local `mpiexec`. They take no arguments: every setting is an environment
+variable with a default, so a run changes only what it names:
+
+```
+DATASET=wine POPULATION=steady_state bash scripts/run_classification.sh
+ENVIRONMENT=hopper TOPOLOGY="2d_mesh 4 5" N_ISLANDS=20 TAG=run2 bash scripts/run_rl.sh
+```
+
+The variables both scripts share are below; each entry point's section lists its
+own. The 2026 PPSN experiments have scripts of their own (see
+[Reproducing 2026 PPSN results](#reproducing-2026-ppsn-results)).
+
+| Variable | Default | Description |
+|---|---|---|
+| `N_PROCESSES` | `12` | MPI processes (`mpiexec -n`): one master plus the workers; at least 2 |
+| `INPUT_QUBITS` / `OUTPUT_QUBITS` | `5` / `5` | `--input_qubits` / `--output_qubits` |
+| `QIM` / `QOM` | `u3` / `probs` | `-qim` / `-qom` |
+| `ENCODING` / `DECODING` | `linear` / `linear` | `--encoding` (`identity`, `linear`) / `--decoding` (`clipped`, `linear`) |
+| `POPULATION` | `islands` | Population sub-command: `islands` or `steady_state` |
+| `N_ISLANDS` / `MAX_ISLAND_SIZE` | `25` / `5` | `--n_islands` / `--max_island_size` (`islands` only; `--islands_to_extinct` is fixed at 1) |
+| `TOPOLOGY` | `2d_mesh 5 5` | `--topology` and its arguments, as one quoted value (`islands` only) |
+| `MAX_POPULATION_SIZE` | `30` | `--max_population_size` (`steady_state` only) |
+| `USE_ONLY` | `rx ry rz p u crx cry crz cp rxx ryy rzz cx cy cz` | `--use_only` gates, as one quoted value |
+| `BASE_DIR` | `./exaqc_runs` | Directory the default `OUT_DIR` is created in |
+| `OUT_DIR` | `<BASE_DIR>/<dataset or env>_<topology>_i<n_islands>`, or `..._steady_state_p<max_population_size>` | `--out_dir` |
+| `TAG` | unset | Appended to the output directory as `_<TAG>` (letters, digits, `-` and `_`) |
+| `PYTHON` / `MPIEXEC` / `MPIEXEC_ARGS` | `python3` / `mpiexec` / `--oversubscribe` | Interpreter and launcher; clear `MPIEXEC_ARGS` for an MPI other than Open MPI |
+| `DRY_RUN` | unset | When set, print the command instead of running it |
+
+`--restart` defaults to `auto`, so running again into the same output directory
+continues that run; give a new run its own `TAG`.
 
 ---
 
@@ -779,7 +819,7 @@ mpiexec -n 12 python3 -m src.examples.classification \
     --number_genomes 1000 \
     -ms uniform 1 3 -ps uniform 5 5 \
     --binary_crossover_rate 0.1 --n_ary_crossover_rate 0.1 --exponential_crossover_rate 0.1 \
-    -qim amplitude -qom probs --encoding identity --decoding clipped \
+    -qim u3 -qom probs --encoding linear --decoding linear \
     --out_dir ./artifacts/iris \
     steady_state --max_population_size 30
 ```
@@ -817,6 +857,22 @@ width — pair it with `-qim amplitude`, which absorbs many features into few
 qubits. `--decoding clipped` normalises circuit outputs into class scores and
 suits `probs`. Fitness records `loss` and `target_metric` (mean class accuracy).
 
+**Script.** [`scripts/run_classification.sh`](./scripts/run_classification.sh)
+runs the non-vision datasets locally, configured by the
+[shared variables](#local-run-scripts) and these. It fixes
+`-ms uniform 1 3 -ps uniform 2 5` and crossover rates of `0.0` (binary), `0.2`
+(n-ary) and `0.1` (exponential).
+
+| Variable | Default | Description |
+|---|---|---|
+| `DATASET` | `iris` | `--dataset`: `breast_cancer`, `iris`, `seeds` or `wine` |
+| `NUMBER_GENOMES` | `1000` | `--number_genomes` |
+| `EPOCHS` | `30` | `--epochs` |
+| `IMPROVEMENT_CUTOFF` | `3` | `--improvement_cutoff` |
+| `BATCH_SIZE` | `3` | `--batch_size` |
+| `NOISE_TYPE` / `NOISE_P_1Q` / `NOISE_P_2Q` | unset | Synthetic noise: `--noise_type` / `--noise_p_1q` / `--noise_p_2q`, all three together or none |
+| `NOISE_CALIBRATION` / `NOISE_QUBITS` | unset | Chip noise: `--noise_calibration` / `--noise_qubits`, both together or none, and not with the synthetic variables |
+
 **Simulated noise.** By default circuits run on a perfect simulator. Any noise
 flag switches the PennyLane target to the `default.mixed` (density-matrix)
 simulator and adds a noise channel after every evolved gate while circuits are
@@ -837,7 +893,7 @@ square of the noiseless cost.
 | `--noise_after_encoding` | off | Also add the hand-set noise right after the input encoding. Chip noise (`--noise_calibration`) always adds it there |
 | `--noise_after_gates` | on | Add noise after each evolved gate (`--no-noise_after_gates` to disable) |
 | `--noise_before_measurement` | off | Also add the hand-set noise just before measurement. Chip noise (`--noise_calibration`) always adds each qubit's readout error there |
-| `--noise_calibration` | none | Gives each wire the rates and timings of its own physical qubit, read from a stored IBM calibration file written by [`collect_calibration`](#collect_calibration). Given as the file's path (`data/calibration/<chip>/<chip>_<date>.json`) or as `<chip>:<date>` (e.g. `ibm_fez:2026-11-06`), which uses that day's stored file or, if it is missing, fetches it once from IBM with your saved Qiskit account and stores it under that name; a failed fetch stops the run and prints the `collect_calibration` command to run by hand. Uses the calibrated `ibm_backend` channel; any other `--noise_type` is refused. Every genome records the file's path, chip, date and values. Requires `--noise_qubits` |
+| `--noise_calibration` | none | Gives each wire the rates and timings of its own physical qubit, read from a stored IBM calibration file written by [`collect_calibration`](#collect_calibration). Given as the file's path (`data/calibration/<chip>/<chip>_<date>.json`) or as `<chip>:<date>` (e.g. `ibm_fez:2026-11-06`), which uses that day's stored file or, if it is missing, fetches it once from IBM with the saved Qiskit account and stores it under that name; a failed fetch stops the run and prints the `collect_calibration` command to run by hand. Uses the calibrated `ibm_backend` channel; any other `--noise_type` is refused. Every genome records the file's path, chip, date and values. Requires `--noise_qubits` |
 | `--noise_qubits` | none | Comma-separated physical qubits of that file that wires 0, 1, ... map to (e.g. `10,11,12,13`); list exactly as many as each circuit has wires, the larger of `--input_qubits` and `--output_qubits`; consecutive qubits must be wired neighbours. Each genome is translated into the chip's own gates on these qubits, with moves where qubits are not wired together, and each gate is charged the noise of the chip gates it becomes. Requires `--noise_calibration` |
 | `--noise_transpile_level` | `2` | Chip noise: how hard Qiskit's translator shrinks each genome when turning it into the chip's gates (`0` to `3`). Use the same level as the real-chip run |
 | `--noise_transpile_seed` | `7` | Chip noise: seed for the translator's random choices, for repeatable runs |
@@ -908,11 +964,11 @@ Evolves hybrid circuits as control policies for
 
 ```
 mpiexec -n 12 python3 -m src.examples.reinforcement_learning \
-    --env cartpole --algo ppo \
+    --env cartpole --algo reinforce \
     --input_qubits 4 --output_qubits 2 --episodes 100 --number_genomes 1000 \
     --mutation_strategy uniform 1 3 --parent_strategy uniform 5 5 \
     --binary_crossover_rate 0.1 --n_ary_crossover_rate 0.1 --exponential_crossover_rate 0.1 \
-    -qim amplitude -qom probs --encoding identity --decoding linear \
+    -qim u3 -qom probs --encoding linear --decoding linear \
     --out_dir ./artifacts/cartpole \
     steady_state --max_population_size 50
 ```
@@ -964,6 +1020,15 @@ environments work only with `reinforce`, `actor_critic`/`a2c` and `ppo`.
 
 Plus the per-algorithm arguments in [Trainers](#trainers).
 
+**Simulated noise.** The `--noise_*` arguments documented under
+[`classification`](#classification) are accepted here too, with the same
+defaults and meaning: any noise flag moves the circuits onto the density-matrix
+simulator while policies are trained and scored, and every genome records its
+`noise_*` settings. For chip noise, `--noise_qubits` lists one physical qubit
+per circuit wire, the larger of `--input_qubits` and `--output_qubits`. Noisy
+simulation costs more here than in classification, since a policy's circuit
+runs once per environment step rather than once per sample.
+
 #### MuJoCo reward knobs
 
 The MuJoCo locomotion rewards are the sum of three terms, each exposed as a
@@ -1013,6 +1078,24 @@ ranked by `loss`, which weights the evaluation return (episodes on the
 best checkpoint) far above the smoothed training return by default: the training
 return is a short, noisy sample, so ranking mostly on it selects genomes that got
 lucky episodes rather than ones whose policies evaluate well.
+
+**Script.** [`scripts/run_rl.sh`](./scripts/run_rl.sh) runs a search locally,
+configured by the [shared variables](#local-run-scripts) and these. It is the
+local counterpart to the cluster job script `scripts/exaqc_rl_job.sh`, with the
+same fixed trainer settings: `--algo ppo --learning_rate 0.0005
+--rollout_steps 2048 --max_steps 1000 --entropy_coef 0.015 --eval_episodes 20
+--ema_alpha 0.1 -ms uniform 1 3 -ps uniform 2 5`.
+
+| Variable | Default | Description |
+|---|---|---|
+| `ENVIRONMENT` | `halfcheetah` | `--env` |
+| `NUMBER_GENOMES` | `2000` | `--number_genomes` |
+| `EPISODES` | `220` | `--episodes`; 0 scores inherited weights without training |
+| `IMPROVEMENT_CUTOFF` | `5` | `--improvement_cutoff`; 0 disables early stopping |
+| `LOG_EVERY` | `1` | `--log_every` |
+| `EVAL_SEED` | `50` | `--eval_seed`; set empty (`EVAL_SEED=`) to draw one per genome |
+| `NOISE_TYPE` / `NOISE_P_1Q` / `NOISE_P_2Q` | unset | Synthetic noise: `--noise_type` / `--noise_p_1q` / `--noise_p_2q`, all three together or none |
+| `NOISE_CALIBRATION` / `NOISE_QUBITS` | unset | Chip noise: `--noise_calibration` / `--noise_qubits`, both together or none, and not with the synthetic variables |
 
 ### [`refine_genome`](./src/examples/refine_genome.py)
 
@@ -1366,7 +1449,8 @@ search before backfilling its archive in place.
 
 Saves a real IBM chip's calibration, raw, as one JSON file per chip and day. It
 is the step of the noise work that talks to IBM: the simulated-noise
-options of [`classification`](#classification) (`--noise_calibration`,
+options of [`classification`](#classification) and
+[`reinforcement_learning`](#reinforcement_learning) (`--noise_calibration`,
 `--noise_qubits`) read the file it writes, one file per chip and date being
 the single source of noise values for a run. A run given
 `--noise_calibration <chip>:<date>` for a day not stored yet fetches that one
@@ -1466,55 +1550,39 @@ Plus the shared trainer arguments (`--gamma`, `--learning_rate`,
 
 ## Reproducing 2026 PPSN results
 
-For this work, the classification benchmarks use amplitude encoding, the `probs` output mode
-with a `clipped` decoder, and an identity encoder:
+The classification and reinforcement-learning experiments are reproduced by
+[`scripts/run_ppsn2026_classification.sh`](./scripts/run_ppsn2026_classification.sh)
+and [`scripts/run_ppsn2026_rl.sh`](./scripts/run_ppsn2026_rl.sh), which take the
+dataset or environment as their one argument and run it with exactly the
+experiment's settings. Both use amplitude encoding, the `probs` output mode with
+a `clipped` decoder, an identity encoder and a `steady_state` population (30
+genomes for classification, 50 for reinforcement learning, which trains with
+`reinforce`); the per-dataset qubit counts and per-environment trainer settings
+are in the scripts.
+
+Each call is one run. `TAG` names it by its index, so run `i` is written to
+`./2026_ppsn_exaqc/classification/<name>_i30_per_class_<i>` (`<name>` is
+`breast` for `breast_cancer`) or `./2026_ppsn_exaqc/rl/<env>_i50_per_class_<i>`;
+`BASE_DIR` (default `./2026_ppsn_exaqc`) moves both.
+The ten repeats of every experiment:
 
 ```
-mpiexec -n 12 python3 -m src.examples.classification --logging_level INFO --dataset breast_cancer --number_genomes 1000 --input_qubits 8 --output_qubits 1 --batch_size 3 -ms uniform 1 3 -ps uniform 5 5 --binary_crossover_rate 0.1 --n_ary_crossover_rate 0.1 --exponential_crossover_rate 0.1 -qim amplitude -qom probs --encoding identity --decoding clipped --out_dir ./2026_ppsn_exaqc/breast_i30_per_class_1 steady_state --max_population_size 30
+for dataset in iris seeds breast_cancer wine; do
+    for i in $(seq 1 10); do TAG=$i bash scripts/run_ppsn2026_classification.sh $dataset; done
+done
 
-mpiexec -n 12 python3 -m src.examples.classification --logging_level INFO --dataset iris --number_genomes 1000 --input_qubits 4 --output_qubits 2 --batch_size 3 -ms uniform 1 3 -ps uniform 5 5 --binary_crossover_rate 0.1 --n_ary_crossover_rate 0.1 --exponential_crossover_rate 0.1 -qim amplitude -qom probs --encoding identity --decoding clipped --out_dir ./2026_ppsn_exaqc/iris_i30_per_class_1 steady_state --max_population_size 30
-
-mpiexec -n 12 python3 -m src.examples.classification --logging_level INFO --dataset seeds --number_genomes 1000 --input_qubits 6 --output_qubits 2 --batch_size 3 -ms uniform 1 3 -ps uniform 5 5 --binary_crossover_rate 0.1 --n_ary_crossover_rate 0.1 --exponential_crossover_rate 0.1 -qim amplitude -qom probs --encoding identity --decoding clipped --out_dir ./2026_ppsn_exaqc/seeds_i30_per_class_1 steady_state --max_population_size 30
-
-mpiexec -n 12 python3 -m src.examples.classification --logging_level INFO --dataset wine --number_genomes 1000 --input_qubits 4 --output_qubits 2 --batch_size 3 -ms uniform 1 3 -ps uniform 5 5 --binary_crossover_rate 0.1 --n_ary_crossover_rate 0.1 --exponential_crossover_rate 0.1 -qim amplitude -qom probs --encoding identity --decoding clipped --out_dir ./2026_ppsn_exaqc/wine_i30_per_class_1 steady_state --max_population_size 30
+for env in cartpole frozenlake walker2d mountaincar_continuous; do
+    for i in $(seq 1 10); do TAG=$i bash scripts/run_ppsn2026_rl.sh $env; done
+done
 ```
 
-Repeated experiments can be run with the scripts in [`./scripts`](./scripts)
-(each creates 10 repeats):
+Only settings that leave the search unchanged can be set alongside: `N_PROCESSES`
+(default `12`), `BASE_DIR`, `OUT_DIR`, `PYTHON`, `MPIEXEC` and `MPIEXEC_ARGS`, as for the
+[local run scripts](#local-run-scripts). `DRY_RUN=1` prints the exact command a
+run would execute:
 
 ```
-sh scripts/run_iris.sh 1 10 per_class ./2026_ppsn_exaqc/classification
-sh scripts/run_seeds.sh 1 10 per_class ./2026_ppsn_exaqc/classification
-sh scripts/run_breast_cancer.sh 1 10 per_class ./2026_ppsn_exaqc/classification
-sh scripts/run_wine.sh 1 10 per_class ./2026_ppsn_exaqc/classification
-```
-
-The same iris search under the three noise settings of the
-[simulated-noise options](#classification), one archive per run: no noise (the
-baseline), hand-set depolarizing noise, and chip noise from a stored IBM
-calibration. The three scripts share every search setting and differ only in
-their noise flags:
-
-```
-sh scripts/run_iris_noiseless.sh 1 10 ./noise_study
-sh scripts/run_iris_noise_synthetic.sh 1 10 ./noise_study
-sh scripts/run_iris_noise_chip.sh 1 10 ./noise_study
-```
-
-Each reads its settings from environment variables with the defaults listed at
-the top of the script: `NUMBER_GENOMES` (1000) and `N_PROCS` (12) for all
-three; `NOISE_TYPE`, `NOISE_P_1Q` and `NOISE_P_2Q` (depolarizing, 0.001, 0.01)
-for the synthetic one; `CHIP`, `DATE` and `QUBITS` (ibm_fez, 2026-11-06,
-10,11,12,13) for the chip one, which names the calibration as `CHIP:DATE` and so
-fetches a day not stored yet (see `--noise_calibration`).
-
-Reinforcement learning experiments:
-
-```
-sh scripts/run_cartpole.sh 1 10 per_class ./2026_ppsn_exaqc/rl
-sh scripts/run_frozenlake.sh 1 10 per_class ./2026_ppsn_exaqc/rl
-sh scripts/run_walker2d.sh 1 10 per_class ./2026_ppsn_exaqc/rl
-sh scripts/run_mountaincar_continuous.sh 1 10 per_class ./2026_ppsn_exaqc/rl
+DRY_RUN=1 TAG=1 bash scripts/run_ppsn2026_classification.sh iris
 ```
 
 Quantum teacher imitation:

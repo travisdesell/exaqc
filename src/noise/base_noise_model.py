@@ -415,7 +415,7 @@ class BaseNoiseModel(ABC):
                 "A stored IBM calibration file written by src.examples.collect_calibration, "
                 "as its path (data/calibration/<chip>/<chip>_<date>.json) or as <chip>:<date> "
                 "(e.g. ibm_fez:2026-11-06), which uses that day's stored file or, if it is "
-                "missing, fetches it once from IBM with your saved Qiskit account. Each "
+                "missing, fetches it once from IBM with the saved Qiskit account. Each "
                 "wire's rates and timings come from its own qubit in that file, replacing "
                 "the hand-set values above. Requires --noise_qubits. Uses the calibrated "
                 "'ibm_backend' channel; any other --noise_type is refused."

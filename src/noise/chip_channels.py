@@ -25,10 +25,18 @@ import numpy as np
 import pennylane as qml
 
 from src.noise.base_noise_model import BaseNoiseModel
-from src.noise.calibration.extract import UNUSABLE_ERROR
 
 if TYPE_CHECKING:
     from src.noise.compiled_schedule import ChipGate
+
+UNUSABLE_ERROR = 1.0
+"""IBM reports this gate error for a coupler or gate that is not calibrated.
+
+Learnt from IBM Torino's 2025-02-26 calibration and confirmed on Fez, Kingston
+and Marrakesh: an error of exactly 1.0 is IBM's flag for an unusable gate and
+not a rate (a chip lists ``rzz`` with error 1.0 on every pair, for example), so
+such a gate is skipped rather than charged.
+"""
 
 _PAULIS = [
     np.eye(2),
@@ -154,7 +162,7 @@ class ChipChannels(BaseNoiseModel):
                 ValueError: If the file has no such gate on those qubits
                     (for ``cz``: they are not wired together), or marks it
                     unusable with an error of exactly
-                    :data:`~src.noise.calibration.extract.UNUSABLE_ERROR`.
+                    :data:`UNUSABLE_ERROR`.
             """
             if len(qubits) == 1:
                 where, verb = f"qubit {qubits[0]}", "has"

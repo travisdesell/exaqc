@@ -70,16 +70,26 @@
 #                    Like the settings above it does not change the run name,
 #                    so give each gate set its own tag; a resubmitted run
 #                    resumes its archive with the gate set it was started with
+#   NOISE_CALIBRATION, NOISE_QUBITS, NOISE_TYPE, NOISE_P_1Q, NOISE_P_2Q
+#                    simulated noise, read by the job script (see its
+#                    comments) and, unlike the settings above, part of the run
+#                    name, so noisy and noiseless runs never share an archive
 #   TIME_LIMIT      Slurm wall-time limit for each job, passed to sbatch as
 #                    -t (e.g. 2-00:00:00 for two days, or 12:00:00); unset keeps
 #                    the job script's own #SBATCH -t default of 1 day, which is
 #                    kept short so jobs get through the queue faster
+#   ACCOUNT          Slurm account, passed to sbatch as -A; unset keeps the job
+#                    script's own #SBATCH -A
+#   LOG_DIR          where Slurm's stdout/stderr go, one pair per job;
+#                    ARCHIVE_DIR and VENV are read by the job script and reach
+#                    it through sbatch's environment export, so set them on
+#                    this command line too
 #   DRY_RUN          when set, print the sbatch commands instead of submitting
 
 set -eu
 
 #: Where the job script writes Slurm's stdout/stderr, one pair per job.
-LOG_DIR=/home/tjdvse/logs/exaqc_test
+LOG_DIR=${LOG_DIR:-/home/tjdvse/logs/exaqc_test}
 
 #: Islands per run. The 2d_mesh and random topologies are defined in terms of
 #: this, so it is owned here (rather than in the job script) and passed down:
@@ -135,7 +145,8 @@ examples:
 
 environment variables (all optional; see the comments at the top of this script):
   N_ISLANDS, MAX_ISLAND_SIZE, HEALTHY_REWARD, EPISODES, IMPROVEMENT_CUTOFF,
-  LOG_EVERY, NUMBER_GENOMES, EVAL_SEED, USE_ONLY (quoted), TIME_LIMIT, DRY_RUN
+  LOG_EVERY, NUMBER_GENOMES, EVAL_SEED, USE_ONLY (quoted), NOISE_*,
+  TIME_LIMIT, ACCOUNT, LOG_DIR, ARCHIVE_DIR, VENV, DRY_RUN
 USAGE
     exit 2
 }
@@ -264,6 +275,22 @@ if [ -n "${TIME_LIMIT:-}" ]; then
     esac
 fi
 
+# The noise setting, when there is one, as the part of the run name that keeps
+# noisy and noiseless archives apart; empty otherwise, so the names of noiseless
+# runs are unchanged. A <chip>:<date> calibration names the run by chip and
+# date, a file path by its basename; colons and commas are not safe in a path,
+# so they become underscores and dashes.
+NOISE_TAG=
+if [ -n "${NOISE_CALIBRATION:-}" ]; then
+    case "$NOISE_CALIBRATION" in
+        */*) calibration_tag=$(basename "$NOISE_CALIBRATION" .json) ;;
+        *) calibration_tag=$(printf '%s' "$NOISE_CALIBRATION" | tr ':' '_') ;;
+    esac
+    NOISE_TAG="_${calibration_tag}_q$(printf '%s' "${NOISE_QUBITS:-}" | tr ',' '-')"
+elif [ -n "${NOISE_TYPE:-}" ]; then
+    NOISE_TAG="_${NOISE_TYPE}_p1q${NOISE_P_1Q:-}_p2q${NOISE_P_2Q:-}"
+fi
+
 # Each topology takes its own arguments, and a wrong count is the mistake this
 # script exists to catch before a job is queued. The rules, and their wording,
 # follow src/evolution/topology.py.
@@ -347,17 +374,20 @@ while [ "$run" -le "$MAX_RUN" ]; do
     # This single string names the Slurm job, its two log files and the archive
     # directory the run writes, so all four agree. The island count is part of
     # it because two island counts of the same experiment are different
-    # experiments and must not share an archive.
-    name="exaqc_${RUN_TAG}_${ENVIRONMENT}_i${N_ISLANDS}_${run}"
+    # experiments and must not share an archive; so is the noise setting, when
+    # there is one (NOISE_TAG is empty otherwise, leaving noiseless names as
+    # they were).
+    name="exaqc_${RUN_TAG}_${ENVIRONMENT}${NOISE_TAG}_i${N_ISLANDS}_${run}"
 
     # The topology and its arguments go last, and stay last all the way into the
     # search: --topology takes any number of values, so anything after it would
     # be swallowed as one of them. TOPOLOGY_ARGUMENTS is deliberately unquoted,
     # so its whole numbers become separate arguments.
-    # TIME_LIMIT, when set, overrides the job script's own #SBATCH -t; both
-    # expansions vanish when it is unset.
+    # TIME_LIMIT and ACCOUNT, when set, override the job script's own #SBATCH
+    # -t and -A; each pair of expansions vanishes when its variable is unset.
     set -- sbatch \
         ${TIME_LIMIT:+-t} ${TIME_LIMIT:+"$TIME_LIMIT"} \
+        ${ACCOUNT:+-A} ${ACCOUNT:+"$ACCOUNT"} \
         -J "$name" \
         -o "${LOG_DIR}/${name}_%j.o" \
         -e "${LOG_DIR}/${name}_%j.e" \

@@ -18,7 +18,8 @@
 #
 # Optional environment variables, normally set on the submitting command line
 # (described where they are read below): HEALTHY_REWARD, EPISODES,
-# IMPROVEMENT_CUTOFF, LOG_EVERY, NUMBER_GENOMES, EVAL_SEED, USE_ONLY and DRY_RUN.
+# IMPROVEMENT_CUTOFF, LOG_EVERY, NUMBER_GENOMES, EVAL_SEED, USE_ONLY, the
+# NOISE_* settings, DRY_RUN, ARCHIVE_DIR and VENV.
 #
 #SBATCH -J exaqc_rl
 #SBATCH -t 1-00:00:00
@@ -34,7 +35,10 @@
 set -eu
 
 #: Where each run's genome archive is written.
-ARCHIVE_DIR=/home/tjdvse/genome_archives
+ARCHIVE_DIR=${ARCHIVE_DIR:-/home/tjdvse/genome_archives}
+
+#: The project virtual environment the job activates.
+VENV=${VENV:-/home/tjdvse/envs/exaqc}
 
 #: The environments whose reward carries an "alive" bonus, and so accept
 #: --healthy_reward. Mirrors what
@@ -86,6 +90,15 @@ EVAL_SEED=${EVAL_SEED:-}
 #:
 #:     USE_ONLY="rx ry rz cx" sbatch scripts/exaqc_rl_job.sh ...
 USE_ONLY=${USE_ONLY:-rx ry rz p u crx cry crz cp rxx ryy rzz cx cy cz}
+
+#: Simulated noise (the --noise_* flags of src.examples.reinforcement_learning),
+#: off unless set: NOISE_CALIBRATION and NOISE_QUBITS for chip noise, or
+#: NOISE_TYPE with NOISE_P_1Q and NOISE_P_2Q for synthetic noise.
+NOISE_CALIBRATION=${NOISE_CALIBRATION:-}
+NOISE_QUBITS=${NOISE_QUBITS:-}
+NOISE_TYPE=${NOISE_TYPE:-}
+NOISE_P_1Q=${NOISE_P_1Q:-}
+NOISE_P_2Q=${NOISE_P_2Q:-}
 
 if [ $# -lt 7 ]; then
     echo "usage: $0 <env> <input_qubits> <output_qubits> <run_name> <n_islands> <max_island_size> <topology> [topology arguments...]" >&2
@@ -198,6 +211,15 @@ case "$USE_ONLY" in
 esac
 read -r -a USE_ONLY_GATES <<<"$USE_ONLY"
 
+# The noise flags, passed on only when set; the entry point checks them at
+# start-up.
+NOISE_ARGUMENTS=()
+[ -z "$NOISE_CALIBRATION" ] || NOISE_ARGUMENTS+=(--noise_calibration "$NOISE_CALIBRATION")
+[ -z "$NOISE_QUBITS" ] || NOISE_ARGUMENTS+=(--noise_qubits "$NOISE_QUBITS")
+[ -z "$NOISE_TYPE" ] || NOISE_ARGUMENTS+=(--noise_type "$NOISE_TYPE")
+[ -z "$NOISE_P_1Q" ] || NOISE_ARGUMENTS+=(--noise_p_1q "$NOISE_P_1Q")
+[ -z "$NOISE_P_2Q" ] || NOISE_ARGUMENTS+=(--noise_p_2q "$NOISE_P_2Q")
+
 # --topology takes any number of values, so it comes last: a flag after it would
 # be read as another one of its arguments.
 #
@@ -234,6 +256,8 @@ COMMAND=(
     --decoding linear
     # --use_only takes any number of values, so another flag must follow it
     --use_only "${USE_ONLY_GATES[@]}"
+    # expands to nothing unless a NOISE_* setting asked for it (written as above)
+    ${NOISE_ARGUMENTS[@]+"${NOISE_ARGUMENTS[@]}"}
     --out_dir "$OUT_DIR"
     --improvement_cutoff "$IMPROVEMENT_CUTOFF"
     --shared_file_system
@@ -256,6 +280,6 @@ export PMIX_MCA_psec="^munge"
 
 spack load openmpi /ttqroyz
 
-source /home/tjdvse/envs/exaqc/bin/activate
+source "${VENV}/bin/activate"
 
 srun "${COMMAND[@]}"
