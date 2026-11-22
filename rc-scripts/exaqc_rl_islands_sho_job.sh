@@ -23,7 +23,7 @@
 # script overrides -J, -o and -e so each run is named and logged separately.
 #
 #SBATCH -J exaqc_rl_islands
-#SBATCH -t 5-00:00:00
+#SBATCH -t 3-00:00:00
 #SBATCH -A examm-rnn -p tigris
 #SBATCH -o /home/dk7405/logs/exaqc/output_%j.o
 #SBATCH -e /home/dk7405/logs/exaqc/error_%j.e
@@ -213,7 +213,7 @@ COMMAND=(
     --logging_level INFO
     --env "$NAME"
     "${ENV_ARGUMENTS[@]}"
-    --number_genomes 10000
+    --number_genomes 20000
     --mutation_strategy uniform 1 7
     --parent_strategy uniform 2 7
     --binary_crossover_rate 0.1 --n_ary_crossover_rate 0.1 --exponential_crossover_rate 0.1
