@@ -11,6 +11,7 @@ number -- on the dataset's official test split::
 from __future__ import annotations
 
 import argparse
+import sys
 
 import torch
 from loguru import logger
@@ -52,10 +53,10 @@ def main() -> None:
         type=str,
         default="cpu",
         help=(
-            "PyTorch device to use for training, e.g. "
-            "'cpu', 'cuda', or 'cuda:0'. "
-            "Defaults to CUDA when available."
+            "PyTorch device to evaluate on, e.g. "
+            "'cpu', 'cuda', or 'cuda:0'. Defaults to 'cpu'."
         ),
+    )
     parser.add_argument(
         "--classes",
         type=int,
@@ -76,6 +77,9 @@ def main() -> None:
     )
     args = parser.parse_args()
     check_genome_source_arguments(parser, args)
+
+    logger.remove()
+    logger.add(sys.stderr, level=args.logging_level)
 
     try:
         serialized = load_genome_dict(

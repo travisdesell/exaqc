@@ -114,6 +114,7 @@ def test_load_data_uses_image_dataloader(
         download=False,
         num_workers=0,
         pin_memory=False,
+        classes=None,
     )
 
 
