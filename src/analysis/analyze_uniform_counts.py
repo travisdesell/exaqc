@@ -25,40 +25,48 @@ from __future__ import annotations
 import argparse
 import matplotlib.pyplot as plt
 import pandas as pd
-import json
 import seaborn as sns
 from scipy import stats
+from typing import Any
 
-from pathlib import Path
+from src.utils.genome_archive import iter_run_genome_dicts
 
 
 def get_group_metrics(
-    mutation_df: dict[str, list[any]],
-    crossover_df: dict[str, list[any]],
+    mutation_df: dict[str, list[Any]],
+    crossover_df: dict[str, list[Any]],
     input_directories: list[str],
     experiment: str,
-    group: str,
-):
+    group: str | None,
+) -> tuple[list[int], list[int], list[float]]:
     """
     Parses through the given input directories for runs with the 'group' flag and then
     generates the count statistics for mutation insertion rates. If the group flag is not
     provided then use all input directories.
 
+    Every genome a run saved is read, from the run's ``genomes.sqlar`` archive or,
+    for runs written before the archive existed, its ``all_genomes/`` directory.
+
     Args:
         mutation_df: a dict for the mutation dataframe which has 'Experiment',
-        'N', and 'Rate (%)' columns, which will have rate rows appended to it.
+            'N', and 'Rate (%)' columns, which will have rate rows appended to it.
         crossover_df: a dict for the crossover dataframe which has 'Experiment',
-        'N', and 'Rate (%)' columns, which will have rate rows appended to it.
-        input_directories: the directories to look through
+            'N', and 'Rate (%)' columns, which will have rate rows appended to it.
+        input_directories: the run directories to look through
         experiment: the first string to glob for to select the correct directories to parse
         group: the second string to glob for to select correct directories to parse
+
+    Returns:
+        The best genome's number of gates, number of parameters and ``test_acc``
+        fitness for each run parsed. Rate rows are appended to ``mutation_df`` and
+        ``crossover_df`` in place.
     """
 
     best_n_gates_list = []
     best_n_parameters_list = []
     best_fitness_list = []
 
-    for directory in args.input_directories:
+    for directory in input_directories:
         # skip the directory if it doesnt contain the experiment search string
         if experiment not in directory:
             continue
@@ -71,8 +79,7 @@ def get_group_metrics(
         best_n_gates = 10000
         best_n_parameters = 10000
 
-        genome_directory = Path(directory + "/all_genomes/")
-        print(f"\tparsing directory: {genome_directory}")
+        print(f"\tparsing run directory: {directory}")
 
         crossover_global_count = {}
         crossover_insert_count = {}
@@ -93,61 +100,57 @@ def get_group_metrics(
             crossover_insert_count[i] = 0
             crossover_total[i] = 0
 
-        for genome_json in genome_directory.glob("*.json"):
+        for genome_json, genome in iter_run_genome_dicts(directory):
             # print(f"\t\tloading json: {genome_json}")
-            with open(genome_json, "r") as file:
-                genome = json.load(file)
 
-                # track the best genome
-                metric_value = genome["fitness"]["test_acc"]
-                n_gates = len(genome["gates"])
-                n_parameters = sum(
-                    [len(gate["parameters"]) for gate in genome["gates"]]
+            # track the best genome
+            metric_value = genome["fitness"]["test_acc"]
+            n_gates = len(genome["gates"])
+            n_parameters = sum([len(gate["parameters"]) for gate in genome["gates"]])
+
+            if metric_value > best_metric:
+                print(
+                    f"genome {genome_json} had NEW best metric {metric_value} with n "
+                    f"gates {n_gates} and n parameters {n_parameters}"
                 )
 
-                if metric_value > best_metric:
+                best_metric = metric_value
+                best_n_gates = n_gates
+                best_n_parameters = n_parameters
+
+            if metric_value == best_metric:
+                if n_gates + n_parameters < best_n_gates + best_n_parameters:
                     print(
-                        f"genome {genome_json} had NEW best metric {metric_value} with n "
+                        f"genome {genome_json} had SMALLER best metric {metric_value} with n "
                         f"gates {n_gates} and n parameters {n_parameters}"
                     )
-
-                    best_metric = metric_value
                     best_n_gates = n_gates
                     best_n_parameters = n_parameters
 
-                if metric_value == best_metric:
-                    if n_gates + n_parameters < best_n_gates + best_n_parameters:
-                        print(
-                            f"genome {genome_json} had SMALLER best metric {metric_value} with n "
-                            f"gates {n_gates} and n parameters {n_parameters}"
-                        )
-                        best_n_gates = n_gates
-                        best_n_parameters = n_parameters
+            metadata = genome["metadata"]
+            insert_type = metadata["insert_type"]
 
-                metadata = genome["metadata"]
-                insert_type = metadata["insert_type"]
+            generated_by = metadata["generated_by"]
 
-                generated_by = metadata["generated_by"]
+            if "n_ary_crossover" in generated_by:
+                n_parents = len(metadata["parent_genomes"])
 
-                if "n_ary_crossover" in generated_by:
-                    n_parents = len(metadata["parent_genomes"])
+                crossover_total[n_parents] += 1
+                if insert_type == "global_best":
+                    crossover_global_count[n_parents] += 1
+                elif insert_type == "inserted":
+                    crossover_insert_count[n_parents] += 1
 
-                    crossover_total[n_parents] += 1
-                    if insert_type == "global_best":
-                        crossover_global_count[n_parents] += 1
-                    elif insert_type == "inserted":
-                        crossover_insert_count[n_parents] += 1
+            elif "exponential_crossover" not in generated_by:
+                # this was then a mutation
 
-                elif "exponential_crossover" not in generated_by:
-                    # this was then a mutation
+                n_mutations = len(generated_by)
 
-                    n_mutations = len(generated_by)
-
-                    mutation_total[n_mutations] += 1
-                    if insert_type == "global_best":
-                        mutation_global_count[n_mutations] += 1
-                    elif insert_type == "inserted":
-                        mutation_insert_count[n_mutations] += 1
+                mutation_total[n_mutations] += 1
+                if insert_type == "global_best":
+                    mutation_global_count[n_mutations] += 1
+                elif insert_type == "inserted":
+                    mutation_insert_count[n_mutations] += 1
 
         best_n_gates_list.append(best_n_gates)
         best_n_parameters_list.append(best_n_parameters)
@@ -218,8 +221,9 @@ def get_group_metrics(
 
 if __name__ == "__main__":
     """
-    This will parse all the provided input directories, reading all the genomes in the
-    `all_genomes` subdirectory to calculate statistics about which crossovers and
+    This will parse all the provided input directories, reading all the genomes each run
+    saved (its `genomes.sqlar` archive, or the `all_genomes` subdirectory of runs written
+    before the archive existed) to calculate statistics about which crossovers and
     mutations had the best results (i.e., global best, local best, inserted or discarded)
     during the evolution process.
 

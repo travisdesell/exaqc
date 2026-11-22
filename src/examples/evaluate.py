@@ -1,9 +1,16 @@
+"""Evaluate a saved image-classification genome on its dataset's test split.
+
+The search only ever trains and validates genomes, so this scores one genome --
+loaded from a JSON file, or from a run's ``genomes.sqlar`` archive by its genome
+number -- on the dataset's official test split::
+
+    python3 -m src.examples.evaluate --genome_json genome_42.json --dataset mnist
+    python3 -m src.examples.evaluate --archive ./artifacts/mnist --genome_number 42 --dataset mnist
+"""
+
 from __future__ import annotations
 
 import argparse
-import json
-import sys
-import os
 
 import torch
 from loguru import logger
@@ -14,12 +21,25 @@ from src.datasets.classification_loaders import (
 )
 from src.metrics.mean_class_accuracy import MeanClassAccuracy
 from src.trainer.supervised_trainer import SupervisedTrainer
+from src.utils.genome_archive import (
+    add_genome_source_arguments,
+    check_genome_source_arguments,
+    load_genome_dict,
+)
 
 
 def main() -> None:
-    """Evaluates a saved classification genome on the official test split."""
+    """Evaluates a saved classification genome on the official test split.
+
+    Returns:
+        None. Logs the genome's test metrics.
+    """
     parser = argparse.ArgumentParser()
-    parser.add_argument("--genome", required=True)
+    # --genome_json or --archive (with --genome_number) chooses the genome.
+    add_genome_source_arguments(
+        parser,
+        json_help="Path to a genome JSON file to evaluate.",
+    )
     parser.add_argument(
         "--dataset",
         choices=["mnist", "fashion_mnist", "cifar10"],
@@ -36,6 +56,12 @@ def main() -> None:
             "'cpu', 'cuda', or 'cuda:0'. "
             "Defaults to CUDA when available."
         ),
+    parser.add_argument(
+        "--classes",
+        type=int,
+        nargs="+",
+        default=None,
+        help="The --classes the search ran with; scores only those test classes.",
     )
     parser.add_argument(
         "--download_dataset",
@@ -49,15 +75,14 @@ def main() -> None:
         help="""One of the 5 default logging levels for showing on terminal. Pick DEBUG to show everything.""",
     )
     args = parser.parse_args()
+    check_genome_source_arguments(parser, args)
 
-    out_dir = "/".join(args.genome.split("/")[:-1])
-
-    logger.remove()
-    logger.add(sys.stdout, level=args.logging_level)
-    logger.add(os.path.join(out_dir, "test.log"))
-
-    with open(args.genome, "r", encoding="utf-8") as file:
-        serialized = json.load(file)
+    try:
+        serialized = load_genome_dict(
+            args.genome_json, args.archive, args.genome_number
+        )
+    except (OSError, ValueError) as error:
+        parser.error(str(error))
 
     genome = CircuitGenome.from_dict(serialized)
     genome.initialize_model()
@@ -68,6 +93,7 @@ def main() -> None:
         data_dir=args.data_dir,
         batch_size=args.batch_size,
         download=args.download_dataset,
+        classes=args.classes,
     )
 
     metrics = {"mean_class_accuracy": MeanClassAccuracy(testing_loader.n_labels)}

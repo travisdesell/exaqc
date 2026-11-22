@@ -143,6 +143,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+.exaqc/
 
 # Spyder project settings
 .spyderproject
@@ -214,3 +215,6 @@ outs/
 outputs/
 logs/
 data/
+
+notes/
+

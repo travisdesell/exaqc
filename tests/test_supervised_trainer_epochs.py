@@ -88,10 +88,13 @@ def test_train_runs_epochs_and_updates_parameters(
 
     When training succeeds, this asserts that:
 
-    * per-epoch training/validation metrics were recorded and are finite.
+    * per-epoch training/validation metrics were recorded and are finite,
+      with the validation history starting at the epoch-0 (pre-training)
+      evaluation and the training history at epoch 1.
     * ``best_training_metrics``/``best_validation_metrics`` were recorded.
-    * at least one trainable parameter (encoder, decoder, or circuit gate)
-      actually changed value, proving gradients were computed and applied.
+    * the genome kept its inherited weights exactly when epoch 0 was best, and
+      otherwise at least one trainable parameter (encoder, decoder, or circuit
+      gate) changed value, proving gradients were computed and applied.
 
     Args:
         target: Either ``"pennylane"`` or ``"qiskit"``.
@@ -135,10 +138,15 @@ def test_train_runs_epochs_and_updates_parameters(
     training_history = genome.metadata["training_epoch_metrics"]
     validation_history = genome.metadata["validation_epoch_metrics"]
 
-    assert len(training_history) >= 1
-    assert len(validation_history) >= 1
-    assert len(training_history) <= epochs
-    assert len(validation_history) <= epochs
+    # epoch 0 is the pre-training evaluation, recorded for validation only
+    assert validation_history[0]["epoch"] == 0
+    assert [entry["epoch"] for entry in training_history] == list(
+        range(1, len(training_history) + 1)
+    )
+    assert [entry["epoch"] for entry in validation_history[1:]] == list(
+        range(1, len(training_history) + 1)
+    )
+    assert 1 <= len(training_history) <= epochs
 
     for epoch_metrics in training_history + validation_history:
         assert "loss" in epoch_metrics
@@ -161,7 +169,17 @@ def test_train_runs_epochs_and_updates_parameters(
     final_gate_parameters = snapshot_gate_parameters(genome)
     gate_params_changed = final_gate_parameters != initial_gate_parameters
 
-    assert encoder_changed or decoder_changed or gate_params_changed, (
-        "expected at least one trainable parameter (encoder, decoder, or "
-        "circuit gate) to change value after training"
-    )
+    if genome.metadata["best_epoch"] == 0:
+        # the inherited weights won, so they are kept -- up to the float32
+        # round trip the gate parameters make through the torch model
+        assert not encoder_changed and not decoder_changed
+        assert final_gate_parameters.keys() == initial_gate_parameters.keys()
+        for innovation_number, parameters in initial_gate_parameters.items():
+            assert final_gate_parameters[innovation_number] == pytest.approx(
+                parameters, abs=1e-6
+            )
+    else:
+        assert encoder_changed or decoder_changed or gate_params_changed, (
+            "expected at least one trainable parameter (encoder, decoder, or "
+            "circuit gate) to change value after training"
+        )

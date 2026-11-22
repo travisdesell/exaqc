@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 #: Rendering kinds understood by the network-architecture compositor
-#: (:func:`src.utils.helpers.draw_network`). Each :class:`LayerSpec` a
+#: (:func:`src.utils.draw_hybrid_model.draw_hybrid_model`). Each :class:`LayerSpec` a
 #: stage produces carries one of these:
 #:
 #: * ``"fc"``         -- a fully connected layer, drawn as a column of nodes.
@@ -33,7 +33,7 @@ class LayerSpec:
     """A drawable description of one stage layer in the architecture diagram.
 
     Encoders and decoders describe themselves as an ordered list of these via
-    ``describe_layers()``; the compositor in :func:`src.utils.helpers.draw_network`
+    ``describe_layers()``; the compositor in :func:`src.utils.draw_hybrid_model.draw_hybrid_model`
     turns each into a visual column. This keeps per-stage knowledge in the stage
     classes and out of the renderer.
 

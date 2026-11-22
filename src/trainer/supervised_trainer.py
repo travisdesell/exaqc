@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import math
+import argparse
 from collections.abc import Callable
 from typing import Any
 
@@ -15,7 +15,76 @@ from src.dropout.quantum_dropout import sample_quantum_dropout
 
 
 class SupervisedTrainer:
-    """Trains EXAQC hybrid models using a fully batched execution path."""
+    """Trains EXAQC hybrid models using a fully batched execution path.
+
+    The trainer is task-agnostic: it drives ``genome.forward`` over the supplied
+    dataloaders and hands each batch's predictions and targets to the caller's
+    loss function and metrics. Targets reach the loss function exactly as the
+    dataloader yielded them, so the same trainer serves classification (integer
+    class indices with cross-entropy) and regression-style tasks such as
+    quantum-teacher imitation (float target vectors with an MSE/KL/fidelity
+    loss).
+    """
+
+    @staticmethod
+    def initialize_parser(parser: argparse.ArgumentParser) -> None:
+        """Adds the supervised-training command-line arguments to a parser.
+
+        The classification and teacher entry points both train genomes with a
+        :class:`SupervisedTrainer`, so they share the same training-loop knobs.
+        Registering them here (mirroring
+        :meth:`~src.evolution.exaqc.EXAQC.initialize_parser` and
+        :meth:`~src.circuits.circuit.CircuitGenome.initialize_parser`) keeps the
+        two entry points in sync. The values become per-genome hyperparameters
+        the trainer reads at train time.
+
+        Args:
+            parser: The parser to add the arguments to.
+
+        Returns:
+            None. Mutates ``parser`` by adding ``--epochs``,
+            ``--learning_rate``/``-lr``, ``--weight_decay``,
+            ``--improvement_cutoff`` and ``--batch_size``.
+        """
+
+        parser.add_argument(
+            "--epochs",
+            type=int,
+            default=30,
+            help=(
+                "Maximum number of training epochs per genome, after the epoch-0 "
+                "evaluation of its inherited weights; 0 scores the inherited weights only."
+            ),
+        )
+
+        parser.add_argument(
+            "--learning_rate",
+            "-lr",
+            type=float,
+            default=5e-3,
+            help="Adam learning rate used when training each genome.",
+        )
+
+        parser.add_argument(
+            "--weight_decay",
+            type=float,
+            default=0.0,
+            help="Adam weight decay (L2 regularization) used when training each genome.",
+        )
+
+        parser.add_argument(
+            "--improvement_cutoff",
+            type=int,
+            default=3,
+            help="Stop training a genome after this many epochs without validation improvement.",
+        )
+
+        parser.add_argument(
+            "--batch_size",
+            type=int,
+            default=5,
+            help="Training batch size.",
+        )
 
     def __init__(
         self,
@@ -27,7 +96,6 @@ class SupervisedTrainer:
         testing_dataloader: DataLoader | None = None,
         testing_loss_function: Callable[[Tensor, Tensor], Tensor] | None = None,
         device: str | None = None,
-        quantum_dropout: bool = False,
     ) -> None:
         """
         This creates a SupervisedTrainer object which can be (re)used to train circuit
@@ -50,11 +118,17 @@ class SupervisedTrainer:
             testing_dataloader: Optional held-out test dataloader.
             testing_loss_function: Optional held-out test loss function.
                 Defaults to the validation loss function.
-            quantum_dropout: Master switch for quantum dropout during training.
-                When ``False`` (the default) no quantum dropout is ever applied,
-                regardless of the ``quantum_dropout_type``/``quantum_dropout_rate``
-                genome hyperparameters. When ``True``, dropout is sampled and
-                applied per training batch according to those hyperparameters.
+
+        Note:
+            Quantum dropout is controlled per genome via its
+            ``quantum_dropout`` hyperparameter (read from
+            ``genome.hyperparameters`` at train time by :meth:`get_metrics`),
+            not by this trainer -- so the evolutionary search can carry and
+            mutate it per genome. When the ``quantum_dropout`` hyperparameter is
+            falsy (the default) no quantum dropout is ever applied, regardless
+            of the ``quantum_dropout_type``/``quantum_dropout_rate``
+            hyperparameters; when truthy, dropout is sampled and applied per
+            training batch according to those hyperparameters.
         """
 
         self.training_dataloader = training_dataloader
@@ -68,7 +142,6 @@ class SupervisedTrainer:
             else validation_loss_function
         )
         self.metrics = metrics
-        self.quantum_dropout = quantum_dropout
 
         self.device = torch.device(
             device
@@ -104,7 +177,11 @@ class SupervisedTrainer:
             genome: the circuit genome to evaluate (without updating weights)
                 on the validation data for this trainer.
             dataloader: a pytorch dataloader for the data to evaluate on.
-            loss_function: the loss function to use for data evaluation.
+            loss_function: the loss function to use for data evaluation. It is
+                called as ``loss_function(predictions, targets)`` with the
+                targets exactly as the dataloader yielded them, so it owns the
+                target dtype contract (integer class indices for cross-entropy,
+                float target vectors for regression-style tasks).
             optimizer: is the optimizer use to train the genome if provided. if not
                 provided metrics are just being gathered for inference/validation and
                 weights should not be updated.
@@ -117,7 +194,7 @@ class SupervisedTrainer:
 
         Raises:
             ValueError: If the model's predictions are not 2-D
-                ``[batch_size, n_classes]``, or if the prediction and target
+                ``[batch_size, n_outputs]``, or if the prediction and target
                 batch sizes differ.
         """
         is_training = optimizer is not None
@@ -138,7 +215,10 @@ class SupervisedTrainer:
 
                 if is_training:
                     optimizer.zero_grad(set_to_none=True)
-                    if self.quantum_dropout:
+                    # Quantum dropout is a per-genome hyperparameter (so the
+                    # evolutionary search can carry/mutate it), read from the
+                    # genome here rather than from trainer-level state.
+                    if genome.hyperparameters.get("quantum_dropout", False):
                         sample_quantum_dropout(genome)
                     else:
                         # Train on the complete evolved circuit; clear any stale
@@ -152,9 +232,8 @@ class SupervisedTrainer:
 
                 if predictions.ndim != 2:
                     raise ValueError(
-                        "Classification predictions must have shape "
-                        "[batch_size, n_classes], received "
-                        f"{tuple(predictions.shape)}."
+                        "Predictions must have shape [batch_size, n_outputs], "
+                        f"received {tuple(predictions.shape)}."
                     )
                 if predictions.shape[0] != y_batch.shape[0]:
                     raise ValueError(
@@ -162,7 +241,11 @@ class SupervisedTrainer:
                         f"{predictions.shape[0]} != {y_batch.shape[0]}."
                     )
 
-                loss = loss_function(predictions.float(), y_batch.long())
+                # Targets are passed through untouched so the loss function owns
+                # the dtype contract: classification supplies integer class
+                # indices for cross-entropy, while regression-style tasks (e.g.
+                # quantum-teacher imitation) supply float target vectors.
+                loss = loss_function(predictions.float(), y_batch)
 
                 # A parameterized gate can be disabled (structurally) or dropped
                 # (transiently, by quantum dropout) so that no enabled gate uses
@@ -181,7 +264,11 @@ class SupervisedTrainer:
                 with torch.no_grad():
                     for prediction, target in zip(predictions, y_batch):
                         for metric in self.metrics.values():
-                            metric.accumulate(prediction.float(), target.long())
+                            # As with the loss, targets reach the metric exactly
+                            # as the dataloader yielded them, so each metric owns
+                            # its own target contract (class indices for accuracy,
+                            # float target vectors for fidelity/KL/MSE).
+                            metric.accumulate(prediction.float(), target)
 
         genome.clear_quantum_dropout()
 
@@ -196,15 +283,36 @@ class SupervisedTrainer:
         return metric_results
 
     def train(self, genome: CircuitGenome) -> None:
-        """
-        Given the data loaders and loss functions provided to this SupervisedTrainer,
-        this will train the provided circuit genome given its hyperparameter
-        specifications.
+        """Evaluates a genome's inherited weights, then trains it.
+
+        Epoch 0 is always a pre-training evaluation of the weights the genome
+        inherited, so the per-epoch history shows whether training improved on
+        them. Training epochs are then numbered ``1`` to ``epochs`` inclusive,
+        and whichever epoch -- including epoch 0 -- has the lowest mean of
+        training and validation loss is kept. A genome with no trainable
+        parameters, or an ``epochs`` hyperparameter of 0, is only evaluated, so
+        its fitness comes from its inherited weights.
+
+        Only the validation history has an epoch 0: no training has happened
+        before the first epoch, so ``training_epoch_metrics`` starts at epoch 1.
+        The training data is still evaluated at epoch 0 (so epoch 0 can be
+        compared against the training epochs), and that evaluation becomes
+        ``best_training_metrics`` if the inherited weights win.
 
         Args:
-            genome: is the CircuitGenome to train. This method will initialize
-                its ``hybrid_model`` (via ``genome.initialize_model()``) so it
-                can be trained with pytorch.
+            genome: The CircuitGenome to train. Its ``hybrid_model`` is built
+                here (via ``genome.initialize_model()``) from the genome's
+                inherited parameters.
+
+        Returns:
+            None. Sets ``genome.metadata`` entries ``training_epoch_metrics``
+            (epochs ``1..epochs``), ``validation_epoch_metrics`` (epochs
+            ``0..epochs``), ``n_trainable_parameters``,
+            ``initial_training_metrics`` and ``initial_validation_metrics``
+            (epoch 0's evaluation of the inherited weights),
+            ``best_training_metrics``, ``best_validation_metrics`` and
+            ``best_epoch`` (0 when the inherited weights were never improved
+            on), and leaves the genome holding the best epoch's weights.
         """
         genome.initialize_model()
         genome.hybrid_model.to(self.device)
@@ -217,56 +325,57 @@ class SupervisedTrainer:
         genome.metadata["training_epoch_metrics"] = []
         genome.metadata["validation_epoch_metrics"] = []
 
-        n_trainable_parameters = sum(
-            p.numel() for p in genome.parameters() if p.requires_grad
-        )
+        # what the optimizer actually updates (encoder/decoder weights and enabled
+        # gates' parameters), recorded the same way by every trainer
+        n_trainable_parameters = genome.count_trainable_parameters()
         genome.metadata["n_trainable_parameters"] = n_trainable_parameters
         genome.metadata["n_circuit_parameters"] = genome.get_genome_circuit_parameters()
 
-        # The quantum weight vector carries one entry per gate parameter for
-        # *every* gate, including disabled ones, but disabled gates are skipped
-        # in the forward pass -- so their parameters are never connected to the
-        # loss. Counting them would send a genome whose only parameterized gates
-        # are disabled down the training path, where backward() fails with
-        # "element 0 of tensors does not require grad". Base the train-vs-eval
-        # decision on the parameters that are actually used (encoder/decoder
-        # plus enabled gates).
-        disabled_gate_parameters = sum(
-            len(gate.parameters) for gate in genome.gates if not gate.enabled
+        logger.debug(f"hybrid model n trainable parameters: {n_trainable_parameters}")
+
+        # epoch 0: evaluate the inherited weights before any training. only the
+        # validation metrics are recorded in the per-epoch history, since there
+        # has been no training yet; the training data evaluation is kept so the
+        # inherited weights can be compared with (and win over) trained ones.
+        initial_training_metrics = self.get_metrics(
+            genome,
+            dataloader=self.training_dataloader,
+            loss_function=self.training_loss_function,
+            epoch=0,
         )
-        effective_trainable_parameters = (
-            n_trainable_parameters - disabled_gate_parameters
+        initial_validation_metrics = self.get_metrics(
+            genome,
+            dataloader=self.validation_dataloader,
+            loss_function=self.validation_loss_function,
+            epoch=0,
         )
-
-        logger.debug(
-            f"hybrid model n trainable parameters: {n_trainable_parameters} "
-            f"(effective/enabled: {effective_trainable_parameters})"
+        logger.info(
+            "[epoch 0] pre-training validation metrics: {}",
+            initial_validation_metrics,
         )
+        genome.metadata["validation_epoch_metrics"].append(initial_validation_metrics)
+        # kept apart from the best-epoch metrics so the inherited weights' score
+        # survives training, letting fitness be compared before and after it
+        genome.metadata["initial_training_metrics"] = initial_training_metrics
+        genome.metadata["initial_validation_metrics"] = initial_validation_metrics
 
-        if effective_trainable_parameters == 0:
-            # this model has no parameters connected to the loss so it can't be
-            # trained. instead just evaluate it on the validation data.
-            logger.info("Model has no trainable (enabled) parameters; evaluating only.")
+        best_loss = (
+            initial_training_metrics["loss"] + initial_validation_metrics["loss"]
+        ) / 2.0
+        best_epoch = 0
+        genome.metadata["best_training_metrics"] = initial_training_metrics
+        genome.metadata["best_validation_metrics"] = initial_validation_metrics
+        genome.metadata["best_epoch"] = best_epoch
 
-            # calculate the metrics on the training data
-            training_metric_results = self.get_metrics(
-                genome,
-                dataloader=self.training_dataloader,
-                loss_function=self.training_loss_function,
-            )
-
-            # calculate the metrics on the validation data
-            validation_metric_results = self.get_metrics(
-                genome,
-                dataloader=self.validation_dataloader,
-                loss_function=self.validation_loss_function,
-            )
-            genome.metadata["best_training_metrics"] = training_metric_results
-            genome.metadata["best_validation_metrics"] = validation_metric_results
-
-            logger.info(f"training metrics were: {training_metric_results}")
-            logger.info(f"validation metrics were: {validation_metric_results}")
-
+        if n_trainable_parameters == 0 or epochs <= 0:
+            # nothing connected to the loss can be trained, or no training was
+            # asked for: the genome's fitness is that of its inherited weights
+            if n_trainable_parameters == 0:
+                logger.info(
+                    "Model has no trainable (enabled) parameters; evaluating only."
+                )
+            else:
+                logger.info("Training for 0 epochs; evaluating only.")
             return
 
         optimizer = torch.optim.Adam(
@@ -283,12 +392,11 @@ class SupervisedTrainer:
         #     min_lr=1e-6,
         # )
 
-        best_loss = math.inf
-        best_epoch = 0
         improvement_cutoff = int(hyperparameters.get("improvement_cutoff", 2))
         best_parameters = genome.clone_state_dict()
 
-        for epoch in range(epochs):
+        # epoch 0 was the pre-training evaluation, so training runs 1..epochs
+        for epoch in range(1, epochs + 1):
             training_metric_results = self.get_metrics(
                 genome,
                 dataloader=self.training_dataloader,
@@ -338,7 +446,7 @@ class SupervisedTrainer:
                 # get a copy of the current state dict of the hybrid model, this will be
                 # all the weights
                 best_parameters = genome.clone_state_dict()
-            elif epoch - best_epoch > improvement_cutoff:
+            elif improvement_cutoff > 0 and epoch - best_epoch > improvement_cutoff:
                 logger.info(
                     "Stopping at epoch {} because the last improvement "
                     "occurred at epoch {}.",
@@ -353,7 +461,8 @@ class SupervisedTrainer:
             epochs,
         )
 
-        # set the genome's parameters to the ones from the best validation loss
+        # set the genome's parameters to the ones from the best epoch (the
+        # inherited ones if training never improved on them)
         genome.set_state_dict(best_parameters)
 
         return

@@ -1,9 +1,167 @@
+from __future__ import annotations
+
+import argparse
+
 from abc import ABC, abstractmethod
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from src.circuits.circuit import CircuitGenome
 
+if TYPE_CHECKING:
+    from src.utils.restart import RestartState
+
+#: Why a population strategy discarded a genome, recorded as its ``discard_reason``:
+#: it was worse than every genome a full population kept, it had the same enabled
+#: gates as a better genome already held, or it was generated for an island that was
+#: repopulated while it was being evaluated.
+DISCARD_REASONS = (
+    "worse_than_population",
+    "duplicate_of_better",
+    "generated_before_repopulation",
+)
+
+
+def mark_discarded(
+    genome: CircuitGenome, reason: str, lost_to: int | None = None
+) -> None:
+    """Records that a population strategy discarded a genome, and why.
+
+    Args:
+        genome: The discarded genome.
+        reason: One of :data:`DISCARD_REASONS`.
+        lost_to: The number of the genome it lost to -- the better duplicate, or
+            the worst genome the full population kept -- when there is one.
+
+    Returns:
+        None. Sets the genome's ``insert_type`` metadata to ``"discarded"``, its
+        ``discard_reason``, and its ``lost_to`` when given.
+
+    Raises:
+        ValueError: If ``reason`` is not one of :data:`DISCARD_REASONS`.
+    """
+
+    if reason not in DISCARD_REASONS:
+        raise ValueError(
+            f"Unknown discard reason {reason!r}; expected one of {DISCARD_REASONS}."
+        )
+    genome.metadata["insert_type"] = "discarded"
+    genome.metadata["discard_reason"] = reason
+    if lost_to is not None:
+        genome.metadata["lost_to"] = int(lost_to)
+
 
 class PopulationStrategy(ABC):
+
+    @staticmethod
+    def initialize_parser(parser: argparse.ArgumentParser) -> None:
+        """Adds the population-strategy sub-commands to a parser.
+
+        Every entry point offers the same choice of how genomes are managed, as
+        a required sub-command that in turn owns its own flags. This registers
+        the ``steady_state`` and ``islands`` sub-parsers and hands each to the
+        concrete strategy's own ``initialize_parser`` (so each class defines its
+        own constructor flags), keeping the entry points in sync.
+
+        The concrete strategies are imported lazily because they subclass
+        :class:`PopulationStrategy`; importing them at module load time would be
+        circular.
+
+        Args:
+            parser: The parser to add the ``population_strategy`` sub-commands
+                to.
+
+        Returns:
+            None. Mutates ``parser`` by adding a required ``population_strategy``
+            sub-command with ``steady_state`` and ``islands`` choices, each
+            carrying that strategy's own arguments.
+        """
+
+        from src.evolution.steady_state_islands import SteadyStateIslands
+        from src.evolution.steady_state_population import SteadyStatePopulation
+
+        populations = parser.add_subparsers(
+            dest="population_strategy",
+            required=True,
+            help="Specify how genomes will be handled.",
+        )
+        # Each population strategy owns the flags for its own constructor.
+        SteadyStatePopulation.initialize_parser(
+            populations.add_parser(
+                "steady_state", help="Use a single steady state population."
+            )
+        )
+        SteadyStateIslands.initialize_parser(
+            populations.add_parser(
+                "islands", help="Use multiple islands of steady state populations."
+            )
+        )
+
+    @staticmethod
+    def from_args(
+        args: argparse.Namespace,
+        compare: Callable[[CircuitGenome, CircuitGenome], int],
+    ) -> "PopulationStrategy":
+        """Builds the selected population strategy from parsed arguments.
+
+        Constructs a :class:`~src.evolution.steady_state_population.SteadyStatePopulation`
+        or :class:`~src.evolution.steady_state_islands.SteadyStateIslands` from
+        the sub-command chosen by :meth:`initialize_parser` and its flags. A
+        population strategy only selects and ranks genomes; everything written
+        to disk goes through the run's
+        :class:`~src.utils.genome_archive.GenomeArchive`.
+
+        Args:
+            args: Parsed arguments carrying ``population_strategy`` and the
+                selected strategy's flags.
+            compare: Genome comparison used to order the population (task
+                specific; each entry point defines its own).
+
+        Returns:
+            The constructed :class:`PopulationStrategy`.
+        """
+
+        # Imported lazily: the concrete strategies subclass this class, so a
+        # module-level import here would be circular.
+        from src.evolution.steady_state_islands import SteadyStateIslands
+        from src.evolution.steady_state_population import SteadyStatePopulation
+
+        if args.population_strategy == "steady_state":
+            return SteadyStatePopulation(
+                max_population_size=args.max_population_size,
+                compare=compare,
+            )
+
+        return SteadyStateIslands(
+            n_islands=args.n_islands,
+            max_island_size=args.max_island_size,
+            genomes_before_extinction=args.genomes_before_extinction,
+            genomes_for_next_extinction=args.genomes_for_next_extinction,
+            islands_to_extinct=args.islands_to_extinct,
+            primary_parent=args.primary_parent,
+            intra_island_crossover_rate=args.intra_island_crossover_rate,
+            compare=compare,
+            topology=args.topology,
+        )
+
+    @abstractmethod
+    def restore(self, state: "RestartState") -> None:
+        """Restores the state a stopped run left, so its search can continue.
+
+        Called when a run is restarted from its archive, before the search
+        generates anything: the strategy takes back the genomes it held when the
+        run stopped, along with whatever internal state it needs to behave as it
+        did (see :mod:`src.utils.restart`).
+
+        Args:
+            state: The stopped run's state: the genomes its population held, the
+                best genome it ever inserted, how many genomes it inserted, and
+                the number the next genome will take.
+
+        Returns:
+            None. Restores the strategy in place.
+        """
+        pass
 
     @abstractmethod
     def is_initializing(self) -> bool:
@@ -17,7 +175,7 @@ class PopulationStrategy(ABC):
         """
         pass
 
-    def get_best_genome(self) -> CircuitGenome:
+    def get_best_genome(self) -> CircuitGenome | None:
         """
         Returns:
             The best genome in the strategy. Will return none if no genomes
@@ -25,8 +183,32 @@ class PopulationStrategy(ABC):
         """
         pass
 
+    def run_info(self) -> dict[str, Any]:
+        """Describes the strategy's fixed configuration, for the run's archive.
+
+        Recorded in the archive's ``run_info`` when the search starts, so tools
+        reading a run can see how its population was arranged.
+
+        Returns:
+            Extra ``run_info`` values keyed by name; none by default.
+        """
+
+        return {}
+
     @abstractmethod
-    def get_parent(self, **kwargs) -> tuple[CircuitGenome, dict[str, any]]:
+    def get_population(self) -> list[CircuitGenome]:
+        """Returns every genome the strategy currently holds, best first.
+
+        Used to record the search's progress after each insertion.
+
+        Returns:
+            A new list of the held genomes, sorted by the strategy's compare
+            function (best first). Modifying it does not affect the strategy.
+        """
+        pass
+
+    @abstractmethod
+    def get_parent(self, **kwargs: Any) -> tuple[CircuitGenome, dict[str, Any]]:
         """
         Used to get a single to be used in mutation or
         other operations to generate children.
@@ -46,8 +228,8 @@ class PopulationStrategy(ABC):
 
     @abstractmethod
     def get_parents(
-        self, n_parents: int = 2, **kwargs
-    ) -> tuple[list[CircuitGenome], dict[str, any]]:
+        self, n_parents: int = 2, **kwargs: Any
+    ) -> tuple[list[CircuitGenome], dict[str, Any]]:
         """
         Used to get two or more parents to be used in crossover or
         other operations to generate children.
@@ -67,7 +249,7 @@ class PopulationStrategy(ABC):
         pass
 
     @abstractmethod
-    def insert_genome(self, genome: CircuitGenome, **kwargs) -> bool:
+    def insert_genome(self, genome: CircuitGenome, **kwargs: Any) -> bool:
         """
         Inserts a genome back into the population.
 
@@ -77,6 +259,9 @@ class PopulationStrategy(ABC):
                 inserting the genome, such as an island or species it came from.
 
         Returns:
-            True if it was inserted into the population, False otherwise.
+            True if the genome should be recorded as evaluated -- whether it was
+            kept or discarded straight away from a full population -- and False
+            if it was rejected without being recorded (a duplicate of a better
+            genome already held).
         """
         pass
