@@ -52,6 +52,7 @@ EXPECTED_TOOLS = {
     "compare_genomes",
     "genome_lineage",
     "fitness_summary",
+    "training_gain_summary",
     "operator_insertion_rates",
     "progress_series",
     "get_run_timing",
@@ -837,13 +838,13 @@ def test_cross_run_sql_reaches_the_recorded_training_metrics(
     """
 
     schema = tools.describe_schema()
-    for column in ("n_cnot", "n_rot", "final_metrics"):
+    for column in ("n_cnot", "n_rot", "best_metrics", "target_gain"):
         assert column in schema["cross_run"]["genomes"]
         assert column in schema["single_run"]["genomes"]
 
     # the query that matters: a training metric, across several runs at once
     result = tools.query_sql(
-        "select run, genome_number, json_extract(final_metrics, "
+        "select run, genome_number, json_extract(best_metrics, "
         "'$.\"validation_epoch_metrics.loss\"') as validation_loss from genomes",
         runs=["iris_1", "iris_2"],
     )

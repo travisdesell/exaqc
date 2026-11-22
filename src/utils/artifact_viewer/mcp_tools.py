@@ -55,7 +55,11 @@ from src.utils.artifact_viewer.server import (
     higher_is_better,
     read_concurrently,
 )
-from src.utils.genome_archive import MASTER_TIMING_FIELDS, TIMING_COLUMNS, GenomeArchive
+from src.utils.genome_archive import (
+    MASTER_TIMING_FIELDS,
+    OPTIONAL_COLUMNS,
+    GenomeArchive,
+)
 
 #: Rows a listing returns when the caller does not say, and the most it may ask
 #: for: 50 rows is roughly 4k tokens, 200 roughly 16k.
@@ -136,13 +140,21 @@ _ROLLUP_SELECT: tuple[tuple[str, str, str], ...] = (
     ("evaluated_host", "TEXT", "evaluated_host"),
     ("evaluated_rank", "INTEGER", "evaluated_rank"),
     ("discard_reason", "TEXT", "discard_reason"),
-    ("final_metrics", "TEXT", "final_metrics"),
+    ("initial_metrics", "TEXT", "initial_metrics"),
+    ("best_metrics", "TEXT", "best_metrics"),
+    ("last_metrics", "TEXT", "last_metrics"),
     ("fitness", "TEXT", "fitness"),
+    ("initial_fitness", "TEXT", "initial_fitness"),
     ("request_wait_seconds", "REAL", "request_wait_seconds"),
     ("generation_seconds", "REAL", "generation_seconds"),
     ("turnaround_seconds", "REAL", "turnaround_seconds"),
     ("loss", "REAL", "json_extract(fitness, '$.loss')"),
     ("target_metric", "REAL", "json_extract(fitness, '$.target_metric')"),
+    # read from the archive's own generated columns, so an archive older than
+    # them (format 7) has them selected as NULL like any other optional column
+    ("initial_loss", "REAL", "initial_loss"),
+    ("initial_target_metric", "REAL", "initial_target_metric"),
+    ("target_gain", "REAL", "target_gain"),
 )
 
 #: Every column of the cross-run ``genomes`` table, the run's name first.
@@ -527,8 +539,9 @@ def _rollup_source(
 
     Raises:
         ValueError: If the run's archive predates a ``genomes`` column the
-            statement reads (other than the optional :data:`TIMING_COLUMNS`,
-            read as NULL for an archive without them), which would otherwise
+            statement reads (other than the optional ones in
+            :data:`~src.utils.genome_archive.OPTIONAL_COLUMNS`, read as NULL for
+            an archive without them), which would otherwise
             fail as a bare SQL error naming neither the run nor what to do.
         sqlite3.OperationalError: If the deadline passed.
     """
@@ -541,7 +554,7 @@ def _rollup_source(
             for name, _, expression in _ROLLUP_SELECT
             if name in reads.get("genomes", ())
             and expression.isidentifier()
-            and expression not in TIMING_COLUMNS
+            and expression not in OPTIONAL_COLUMNS
             and expression not in present
         )
         if missing:
@@ -577,7 +590,7 @@ def _rollup_part(
     Copying runs inside SQLite, from the archive attached read-only, so no row
     passes through Python; and only the columns the statement reads are copied
     (the rest stay NULL), which spares both the reading and the memory of
-    columns such as ``fitness`` and ``final_metrics``. Parts are copied on
+    columns such as ``fitness`` and ``best_metrics``. Parts are copied on
     separate threads, so each gets its own database, returned serialized for
     the roll-up to merge.
 
@@ -624,7 +637,7 @@ def _rollup_part(
                     name,
                     (
                         "NULL"
-                        if expression in TIMING_COLUMNS
+                        if expression in OPTIONAL_COLUMNS
                         and expression not in source.genome_columns
                         else expression
                     ),
@@ -1448,6 +1461,144 @@ class DashboardTools:
             "dashboard_url": self._url(f"/run/{resolved.index}"),
         }
 
+    def training_gain_summary(
+        self,
+        run: int | str,
+        group_by: str | None = None,
+    ) -> dict[str, Any]:
+        """Summarizes how much training changed a run's genomes.
+
+        A genome's ``target_gain`` is its ``target_metric`` less the one its
+        inherited weights scored before any training (the epoch- or episode-0
+        evaluation), so it measures what backpropagation added on top of the
+        weights a child inherited. Higher is better for every task, and a gain of
+        exactly zero means the inherited weights were kept.
+
+        Args:
+            run: A run index or name.
+            group_by: Optionally ``insert_type``, ``island`` or ``generated_by``,
+                to summarize each group separately.
+
+        Returns:
+            ``overall`` gain statistics with the shares of genomes training
+            ``improved`` and left ``unchanged``; ``by_starting_score``, the same
+            for each quartile of the inherited weights' ``initial_target_metric``
+            (training helps weak starting points most); per-group ``rows`` when
+            grouping; a Markdown ``table`` and a ``dashboard_url``.
+
+        Raises:
+            KeyError: If there is no such run.
+            ValueError: If ``group_by`` is not a groupable column, or the run's
+                archive predates the inherited weights' fitness (format 7).
+        """
+
+        resolved = self._resolve(run)
+        if group_by is not None and group_by not in (
+            "insert_type",
+            "island",
+            "generated_by",
+        ):
+            raise ValueError("group_by must be insert_type, island or generated_by.")
+
+        with GenomeArchive.open_readonly(resolved.archive_path) as reader:
+            if "target_gain" not in reader.genome_columns:
+                raise ValueError(
+                    f"{resolved.name} was written before archives recorded the "
+                    "fitness of a genome's inherited weights (format 7), so its "
+                    "training gain is not summarized; genome_metrics still shows "
+                    "each genome's step-0 evaluation, and "
+                    "`python3 -m src.examples.backfill_archive` can bring the "
+                    "archive up to date."
+                )
+            genomes = reader.connection.execute(
+                "SELECT initial_target_metric, target_gain FROM genomes "
+                "WHERE target_gain IS NOT NULL"
+            ).fetchall()
+            if group_by == "generated_by":
+                grouped_rows = reader.connection.execute(
+                    "SELECT json_each.value, target_gain "
+                    "FROM genomes, json_each(genomes.generated_by) "
+                    "WHERE target_gain IS NOT NULL"
+                ).fetchall()
+            elif group_by:
+                grouped_rows = reader.connection.execute(
+                    f"SELECT {group_by}, target_gain FROM genomes "
+                    "WHERE target_gain IS NOT NULL"
+                ).fetchall()
+            else:
+                grouped_rows = []
+
+        def gain_statistics(gains: list[float]) -> dict[str, Any]:
+            """Summarizes gains, with the shares that improved or did not change."""
+            summary = _statistics(gains)
+            if gains:
+                summary["improved"] = sum(gain > 0 for gain in gains) / len(gains)
+                summary["unchanged"] = sum(gain == 0 for gain in gains) / len(gains)
+            return summary
+
+        overall = gain_statistics([gain for _, gain in genomes])
+
+        by_starting_score: list[dict[str, Any]] = []
+        starting = _statistics([initial for initial, _ in genomes])
+        if starting["n"]:
+            edges = [
+                starting["min"],
+                starting["p25"],
+                starting["median"],
+                starting["p75"],
+                starting["max"],
+            ]
+            for index in range(4):
+                low, high = edges[index], edges[index + 1]
+                last_bin = index == 3
+                gains = [
+                    gain
+                    for initial, gain in genomes
+                    if initial is not None
+                    and low <= initial
+                    and (initial <= high if last_bin else initial < high)
+                ]
+                by_starting_score.append(
+                    {
+                        "quartile": index + 1,
+                        "from": low,
+                        "to": high,
+                        **gain_statistics(gains),
+                    }
+                )
+
+        grouped: dict[Any, list[float]] = {}
+        for group, gain in grouped_rows:
+            grouped.setdefault(group, []).append(gain)
+        per_group = [
+            {"group": group, **gain_statistics(gains)}
+            for group, gains in sorted(grouped.items(), key=lambda item: str(item[0]))
+        ]
+
+        shown = per_group if group_by else [{"group": "all", **overall}]
+        table = _markdown_table(
+            ["group", "n", "median gain", "mean gain", "improved", "unchanged"],
+            [
+                [
+                    row["group"],
+                    row["n"],
+                    row.get("median"),
+                    row.get("mean"),
+                    row.get("improved"),
+                    row.get("unchanged"),
+                ]
+                for row in shown
+            ],
+        )
+        return {
+            "run": resolved.name,
+            "overall": overall,
+            "by_starting_score": by_starting_score,
+            "rows": per_group if group_by else [],
+            "table": table,
+            "dashboard_url": self._url(f"/run/{resolved.index}"),
+        }
+
     def operator_insertion_rates(
         self, run: int | str | None = None, group: str | None = None
     ) -> dict[str, Any]:
@@ -1868,12 +2019,22 @@ class DashboardTools:
                     "how many insertions it waited), evaluation_seconds, evaluated_host, "
                     "evaluated_rank, discard_reason (worse_than_population, "
                     "duplicate_of_better or generated_before_repopulation), "
-                    "final_metrics (JSON object), "
-                    "fitness (JSON object), request_wait_seconds (how long the "
+                    "initial_metrics, best_metrics and last_metrics (JSON objects: "
+                    "each training series' record at step 0 -- the inherited "
+                    "weights before training --, at the genome's best step -- the "
+                    "weights it keeps, which fitness describes -- and at its last "
+                    "step, which describes discarded weights when training stopped "
+                    "improving), fitness (JSON object), initial_fitness (JSON "
+                    "object: the fitness the inherited weights had), "
+                    "initial_loss, initial_target_metric and target_gain "
+                    "(target_metric - initial_target_metric: what training added, "
+                    "higher is better), request_wait_seconds (how long the "
                     "evaluating worker waited for the genome), generation_seconds "
                     "(how long the master took to generate it), turnaround_seconds "
-                    "(generated to inserted, on the master's clock) -- the last "
-                    "three only in archives of format 6 or later"
+                    "(generated to inserted, on the master's clock). The timing "
+                    "columns exist in archives of format 6 or later, the metric "
+                    "projections and initial fitness columns in format 7 or later; "
+                    "an older archive reads them as NULL"
                 ),
                 "master_timing": (
                     "step (the insertion count ending the interval), recorded_at, "
@@ -1909,11 +2070,12 @@ class DashboardTools:
                 ),
                 "note": (
                     "Fitness keys are read with json_extract(fitness, '$.loss'); "
-                    "operators with the genome_operators view. final_metrics "
-                    "holds the last value of every metric a genome recorded while "
-                    "training, keyed '<series>.<metric>' -- the dots are part of the "
-                    "key, so the path is quoted: "
-                    "json_extract(final_metrics, '$.\"validation_epoch_metrics.loss\"')."
+                    "operators with the genome_operators view. The metric "
+                    "projections are keyed '<series>.<metric>' -- the dots are part "
+                    "of the key, so the path is quoted: "
+                    "json_extract(best_metrics, '$.\"validation_epoch_metrics.loss\"'). "
+                    "Prefer best_metrics to last_metrics: genomes keep their best "
+                    "step's weights."
                 ),
             },
             "cross_run": {
@@ -1957,10 +2119,14 @@ class DashboardTools:
                 "SELECT run, MIN(loss) FROM genomes GROUP BY run ORDER BY 2",
                 "SELECT json_each.value AS operator, COUNT(*) FROM genomes, "
                 "json_each(genomes.generated_by) GROUP BY 1 ORDER BY 2 DESC",
-                "SELECT run, genome_number, json_extract(final_metrics, "
+                "SELECT run, genome_number, json_extract(best_metrics, "
                 "'$.\"validation_epoch_metrics.loss\"') AS validation_loss "
                 "FROM genomes WHERE validation_loss IS NOT NULL "
                 "ORDER BY validation_loss LIMIT 5",
+                "SELECT o.operator, COUNT(*) AS n, AVG(g.target_gain) AS mean_gain, "
+                "AVG(g.target_gain > 0) AS improved FROM genome_operators o "
+                "JOIN genomes g ON g.run = o.run AND g.genome_number = o.genome_number "
+                "WHERE g.target_gain IS NOT NULL GROUP BY 1 ORDER BY 3 DESC",
                 "SELECT o.operator, AVG(g.insert_type != 'discarded') AS kept "
                 "FROM genome_operators o JOIN genomes g "
                 "ON g.run = o.run AND g.genome_number = o.genome_number "

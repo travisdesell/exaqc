@@ -404,10 +404,13 @@ def test_training_return_mean_is_exponential_moving_average(monkeypatch) -> None
     exponential moving average ``ema = alpha * return + (1 - alpha) * ema``
     (seeded with the first return), not a plain arithmetic mean. ``alpha`` is
     read from the genome's ``ema_alpha`` hyperparameter. ``best_episode_return``
-    must still be the maximum raw return.
+    must still be the maximum raw return. Evaluations are scripted to improve
+    every time, so the best weights are the last episode's and the metrics taken
+    at the best episode cover every training episode.
 
     Args:
-        monkeypatch: pytest fixture used to script ``run_update``'s returns.
+        monkeypatch: pytest fixture used to script ``run_update``'s returns and
+            ``evaluate``'s improving return means.
     """
 
     trainer = build_trainer("reinforce")
@@ -430,9 +433,19 @@ def test_training_return_mean_is_exponential_moving_average(monkeypatch) -> None
     def scripted_update(genome_, environment_, optimizer_, episode_index_, hp_):
         return remaining.pop(0), {}
 
+    original_evaluate = trainer.evaluate
+    evaluation_count = iter(range(len(scripted_returns) + 1))
+
+    def improving_evaluate(genome_, environment_, hp_):
+        evaluation = original_evaluate(genome_, environment_, hp_)
+        evaluation["return_mean"] = float(next(evaluation_count))
+        return evaluation
+
     monkeypatch.setattr(trainer, "run_update", scripted_update)
+    monkeypatch.setattr(trainer, "evaluate", improving_evaluate)
 
     trainer.train(genome, environment)
+    assert genome.metadata["best_episode"] == len(scripted_returns)
 
     expected_ema = scripted_returns[0]
     for value in scripted_returns[1:]:
