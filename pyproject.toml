@@ -62,6 +62,9 @@ dependencies = [
     "loguru",
     "pylatexenc",
     "scikit-learn",
+    # the search-space projections (src/analysis/search_space) score placements
+    # with scipy's pairwise distances; scikit-learn already depends on it
+    "scipy",
     "mpi4py",
     "gymnasium",
     "gymnasium[mujoco]",

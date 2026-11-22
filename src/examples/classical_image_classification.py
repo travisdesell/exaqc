@@ -229,6 +229,8 @@ def main() -> None:
 
     model_config = load_model_config(args.model_config)
 
+    logger.info(f"Loaded model configuration: {model_config}")
+
     model = create_classical_image_model(
         model_name=args.model,
         input_shape=training_loader.input_shape,
