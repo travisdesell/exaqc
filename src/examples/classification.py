@@ -14,7 +14,11 @@ from src.circuits.circuit import CircuitGenome
 from src.circuits.decoder import initialize_decoder
 from src.circuits.encoder import initialize_encoder
 from src.circuits.gate_specifications import GateSpecifications
-from src.datasets.classification_loaders import CLASSIFICATION_DATASETS
+from src.datasets.classification_loaders import (
+    CLASSIFICATION_DATASETS,
+    DEFAULT_UCI_SPLIT,
+    LEGACY_UCI_SPLIT,
+)
 from src.evolution.exaqc import (
     EXAQC,
     MUTATION_WEIGHT_HYPERPARAMETERS,
@@ -27,6 +31,7 @@ from src.objectives.classification_objective import (
     ClassificationObjective,
     compare,
     load_data,
+    load_test_data,
 )
 from src.utils import restart
 from src.metrics.mean_class_accuracy import MeanClassAccuracy
@@ -145,6 +150,19 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.1,
         help="Fraction of the training data held out for validation when no fixed split exists.",
+    )
+
+    parser.add_argument(
+        "--uci_split",
+        type=float,
+        nargs=3,
+        metavar=("TRAIN", "VALIDATION", "TEST"),
+        default=list(DEFAULT_UCI_SPLIT),
+        help=(
+            "Training, validation and test fractions of a UCI dataset, summing to 1. "
+            "The search's best genomes are scored on the test samples when it ends; "
+            "a TEST of 0 holds none out."
+        ),
     )
 
     parser.add_argument(
@@ -271,6 +289,9 @@ def main() -> None:
     # its configuration from the run it continues, so the objective a worker
     # evaluates with matches the search the master restores.
     args, restart_state, run_for = restart.prepare(args, parser.error)
+    # A run from before --uci_split recorded none: it keeps the split it began on.
+    if restart_state is not None and "uci_split" not in restart_state.arguments:
+        args.uci_split = list(LEGACY_UCI_SPLIT)
     # Operator settings may only be tuned for an island search (checked after
     # prepare, so a restarted run's recorded arguments are checked too).
     check_operator_tuning(args, parser.error)
@@ -292,6 +313,7 @@ def main() -> None:
     logger.info("Using PyTorch device: {}", device)
 
     training_loader, validation_loader = load_data(args)
+    testing_loader = load_test_data(args)
 
     # if training_loader.is_image and args.encoding != "cnn":
     #     parser.error("Image datasets require --encoding cnn in this implementation.")
@@ -314,6 +336,15 @@ def main() -> None:
         ),
         metrics=metrics,
         device=args.device,
+        testing_dataloader=testing_loader,
+        testing_loss_function=(
+            None
+            if testing_loader is None
+            else torch.nn.CrossEntropyLoss(
+                weight=testing_loader.label_weights,
+                reduction="mean",
+            )
+        ),
     )
 
     def build_exaqc() -> EXAQC:

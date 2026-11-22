@@ -422,7 +422,7 @@ def plot_figure(genomes: pd.DataFrame, budget: int, out_dir: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="UCI results (plots and table) from EXAQC run archives.")
-    parser.add_argument("archives", nargs="+", help="directories searched (recursively) for genomes.sqlar")
+    parser.add_argument("--archives", nargs="+", help="directories searched (recursively) for genomes.sqlar")
     parser.add_argument("--out_dir", default="uci_results")
     parser.add_argument("--budget", type=int, default=2_000, help="genomes per run to use [2000]")
     parser.add_argument("--all_topologies", action="store_true",

@@ -193,6 +193,10 @@ def test_main_builds_cnn_encoder_for_image_data(
             )
         ),
     )
+    # the official test split would otherwise be read (or downloaded) from disk
+    monkeypatch.setattr(
+        classification, "load_test_data", MagicMock(return_value=validation_loader)
+    )
     monkeypatch.setattr(
         classification,
         "initialize_encoder",
