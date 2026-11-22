@@ -339,7 +339,7 @@ def test_search_settings_keep_their_defaults_when_unset() -> None:
 
     parsed = _parsed_job_command()
 
-    assert parsed.episodes == 200
+    assert parsed.episodes == 500
     assert parsed.improvement_cutoff == 60
     assert parsed.log_every == 5
     assert parsed.number_genomes == 10000
@@ -583,14 +583,15 @@ def _submitted_commands(**settings: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_jobs_default_to_a_one_day_time_limit() -> None:
-    """Unless ``TIME_LIMIT`` says otherwise, a job asks Slurm for one day.
+def test_jobs_default_to_a_three_day_time_limit() -> None:
+    """Unless ``TIME_LIMIT`` says otherwise, a job asks Slurm for three days.
 
-    A short default helps jobs get through the queue faster.
+    That is long enough for a default run (500 training episodes per genome) to
+    finish without a restart.
     """
 
     limits = re.findall(r"^#SBATCH -t (\S+)$", JOB_SCRIPT.read_text(), re.MULTILINE)
-    assert limits == ["1-00:00:00"]
+    assert limits == ["3-00:00:00"]
 
 
 @pytest.mark.parametrize("limit", ["2-00:00:00", "12:00:00"])
