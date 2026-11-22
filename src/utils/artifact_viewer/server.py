@@ -1297,6 +1297,7 @@ class ArtifactViewer:
         self.registry = registry
         self.renderer = renderer
         self.allow_annotations = allow_annotations
+        self.search_spaces = search_spaces or SearchSpaceService(processes=0)
         # what each archive's summary was read from, and the summary: a finished
         # run's never changes, and reading it can scan its genomes
         self._summaries: dict[str, tuple[tuple[int, ...], dict[str, Any]]] = {}

@@ -492,6 +492,7 @@ def create_app(viewer: ArtifactViewer, mcp_server: Any | None = None) -> Starlet
         Route("/api/runs/{run:int}/genomes", api_genomes),
         Route("/api/runs/{run:int}/points", api_points),
         Route("/api/runs/{run:int}/genealogy", api_genealogy),
+        Route("/api/runs/{run:int}/search_space", api_search_space),
         Route("/api/runs/{run:int}/history", api_history),
         Route("/api/runs/{run:int}/timing", api_timing),
         Route("/api/runs/{run:int}/operators", api_operators),
