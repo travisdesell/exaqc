@@ -236,10 +236,10 @@ for a in m.build_parser()._actions: print(a.dest, a.default, a.choices)"
 ```
 
 `classification`, `teacher`, `reinforcement_learning`, `refine_genome`,
-`exaqc_dashboard`, `exaqc_mcp`, `backfill_archive` and `classical_image_classification` expose `build_parser()`
+`exaqc_dashboard`, `exaqc_mcp`, `backfill_archive`, `classical_image_classification` and `evaluate` expose `build_parser()`
 alongside a `main()`,
 which is the pattern to follow for any new entry point. The rest
-(`reinforcement_learning_fixed`, `evaluate`, `visualize_rl`) still build their
+(`reinforcement_learning_fixed`, `visualize_rl`) still build their
 parser inline under `if __name__ == "__main__":`, so read the source or run the
 module with `--help` instead.
 

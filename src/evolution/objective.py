@@ -5,6 +5,7 @@ import platform
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from typing import Any
 
 from src.circuits.circuit import CircuitGenome
 
@@ -20,6 +21,18 @@ class Objective(ABC):
         to have multiple loss functions for multiple objectives.
         """
         pass
+
+    def test(self, genome: CircuitGenome) -> dict[str, Any] | None:
+        """Scores a trained genome on data the search never saw.
+
+        Args:
+            genome: The trained genome to score.
+
+        Returns:
+            The test results, or ``None`` (the default) when this objective has
+            no held-out test data.
+        """
+        return None
 
 
 def evaluate_genome(

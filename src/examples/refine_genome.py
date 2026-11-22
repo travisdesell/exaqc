@@ -37,6 +37,7 @@ import torch
 
 from src.circuits.circuit import CircuitGenome
 from src.datasets.teacher_loaders import get_teacher_dataloaders
+from src.datasets.classification_loaders import DEFAULT_UCI_SPLIT
 from src.evolution.objective import Objective
 from src.metrics.mean_class_accuracy import MeanClassAccuracy
 from src.objectives.classification_objective import ClassificationObjective, load_data
@@ -57,6 +58,7 @@ from src.utils.genome_archive import (
 _CLASSIFICATION_DATA_DEFAULTS: dict[str, Any] = {
     "data_dir": "data",
     "validation_fraction": 0.1,
+    "uci_split": DEFAULT_UCI_SPLIT,
     "training_samples": None,
     "validation_samples": None,
     "download_dataset": True,
