@@ -1235,22 +1235,34 @@ Genomes saved before task recording are refused with an explanatory message.
 
 ### [`evaluate`](./src/examples/evaluate.py)
 
-Scores a saved classification genome on an image dataset's official test split
-(the search itself only ever sees training and validation data).
+Scores a saved classification genome on data the search never saw: an image
+dataset's official test split, or the test fraction of a UCI dataset's
+`--uci_split`.
 
 ```
+python3 -m src.examples.evaluate --archive ./artifacts/iris --genome_number 42
 python3 -m src.examples.evaluate --archive ./artifacts/mnist --genome_number 42 --dataset mnist
 ```
+
+A UCI test split is the samples the run held out only when it is rebuilt with
+the run's split, normalization and seed. With `--archive` these are read from
+the arguments the run recorded, so a genome scores exactly as it did in the run's
+`final_test_results`; with `--genome_json` they come from the flags below, which
+must then match the run's. A run that held out no test samples (one from before
+`--uci_split`, or with a test fraction of `0`) is refused.
 
 | Argument | Default | Description |
 |---|---|---|
 | `--genome_json` | *one of `--genome_json` / `--archive` is required* | Genome JSON |
 | `--archive` | *one of `--genome_json` / `--archive` is required* | A run's `genomes.sqlar`, or the run directory holding it |
 | `--genome_number` | — | Genome to load from `--archive` (required with it) |
-| `--dataset` | *required* | `mnist`, `fashion_mnist`, `cifar10` |
+| `--dataset` | the genome's own | Any [`classification`](#classification) dataset |
 | `--data_dir` | `data` | Dataset location |
 | `--batch_size` | `32` | Evaluation batch size |
 | `--download_dataset` | on | Download if missing |
+| `--uci_split` | the run's, else `0.8 0.1 0.1` | UCI only: training, validation and test fractions |
+| `--normalization` | the run's, else `minmax` | UCI only: `none`, `zscore`, `minmax` |
+| `--seed` | the run's, else `0` | UCI only: split seed |
 
 ### [`visualize_rl`](./src/examples/visualize_rl.py)
 
