@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -104,6 +105,48 @@ def _extract_targets(dataset: Dataset) -> torch.Tensor:
             f"Dataset type {type(dataset).__name__} has no targets attribute."
         )
     return torch.as_tensor(targets, dtype=torch.long)
+
+
+def _keep_classes(dataset: Dataset, classes: Sequence[int] | None) -> np.ndarray:
+    """Restricts a torchvision dataset to some of its classes.
+
+    The dataset's targets are relabelled in place so the kept classes become
+    ``0..len(classes)-1`` in the order given; every other sample is labelled
+    ``-1`` and left out of the returned indices.
+
+    Args:
+        dataset: A torchvision dataset with a ``targets`` attribute.
+        classes: The original labels to keep, or ``None`` to keep all.
+
+    Returns:
+        The indices of the samples to use.
+
+    Raises:
+        ValueError: If fewer than two distinct classes are given, or a class
+            does not occur in the dataset.
+    """
+    targets = _extract_targets(dataset)
+    if classes is None:
+        return np.arange(int(targets.numel()))
+
+    if len(set(classes)) != len(classes) or len(classes) < 2:
+        raise ValueError(f"classes must be at least two distinct labels, got {classes}.")
+
+    present = set(int(value) for value in targets.unique())
+    missing = [label for label in classes if label not in present]
+    if missing:
+        raise ValueError(f"classes {missing} do not occur in the dataset.")
+
+    relabelled = torch.full_like(targets, -1)
+    for new_label, old_label in enumerate(classes):
+        relabelled[targets == old_label] = new_label
+
+    if isinstance(dataset.targets, torch.Tensor):
+        dataset.targets = relabelled
+    else:
+        dataset.targets = relabelled.tolist()
+
+    return np.flatnonzero(relabelled.numpy() >= 0)
 
 
 def _stratified_indices(
@@ -246,6 +289,7 @@ def get_image_dataloaders(
     download: bool = True,
     num_workers: int = 0,
     pin_memory: bool = False,
+    classes: Sequence[int] | None = None,
 ) -> tuple[DataLoader, DataLoader]:
     """Builds batched image-classification dataloaders.
 
@@ -266,6 +310,8 @@ def get_image_dataloaders(
         download: Whether missing data may be downloaded.
         num_workers: Number of dataloader worker processes.
         pin_memory: Whether dataloaders should pin host memory.
+        classes: Original labels to keep (e.g. ``[0, 1]`` for a binary task),
+            relabelled ``0..len(classes)-1`` in that order. ``None`` keeps all.
 
     Returns:
         Training loader and validation loader.
@@ -307,15 +353,16 @@ def get_image_dataloaders(
         training_transform=False,
     )
 
-    labels = _extract_targets(training_full_dataset)
+    all_indices = _keep_classes(training_full_dataset, classes)
+    _keep_classes(validation_full_dataset, classes)
 
-    all_indices = np.arange(len(training_full_dataset))
+    labels = _extract_targets(training_full_dataset)
 
     training_indices, validation_indices = train_test_split(
         all_indices,
         test_size=validation_fraction,
         random_state=seed,
-        stratify=labels.numpy(),
+        stratify=labels[torch.as_tensor(all_indices)].numpy(),
     )
 
     training_labels = labels[torch.as_tensor(training_indices)]
@@ -420,6 +467,7 @@ def get_image_test_dataloader(
     download: bool = True,
     num_workers: int = 0,
     pin_memory: bool = False,
+    classes: Sequence[int] | None = None,
 ) -> DataLoader:
     """Loads the official test split for an image dataset.
 
@@ -430,6 +478,8 @@ def get_image_test_dataloader(
         download: Whether torchvision may download missing files.
         num_workers: Number of dataloader workers.
         pin_memory: Whether to pin host memory.
+        classes: Original labels to keep, relabelled as in
+            :func:`get_image_dataloaders`. ``None`` keeps all.
 
     Returns:
         The test dataloader and dataset specification.
@@ -464,8 +514,8 @@ def get_image_test_dataloader(
         download=download,
     )
 
-    testing_indices = np.arange(len(test_dataset))
-    test_labels = _extract_targets(test_dataset)
+    testing_indices = _keep_classes(test_dataset, classes)
+    test_labels = _extract_targets(test_dataset)[torch.as_tensor(testing_indices)]
 
     selected_testing_positions = _stratified_indices(
         test_labels,

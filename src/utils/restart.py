@@ -116,6 +116,36 @@ class RestartState:
         return list(neighbors) if neighbors else None
 
 
+def _archive_existed_at_start(out_dir: str) -> bool:
+    """Reports whether ``--out_dir`` held an archive before this run began.
+
+    Under MPI every rank calls :func:`prepare`, but only the master creates the
+    archive, and it does so as soon as its own :func:`prepare` returns. A worker
+    that gets here later could otherwise find the master's half-made archive (no
+    run information yet) and take it for a run to continue. So the master
+    decides and the workers take its answer: the broadcast completes before the
+    master can create anything.
+
+    Args:
+        out_dir: A run's output directory, or a ``genomes.sqlar`` file.
+
+    Returns:
+        True if an archive was there to be restarted or overwritten.
+    """
+
+    try:
+        from mpi4py import MPI
+    except ImportError:
+        return archive_exists(out_dir)
+
+    comm = MPI.COMM_WORLD
+    if comm.Get_size() == 1:
+        return archive_exists(out_dir)
+    return comm.bcast(
+        archive_exists(out_dir) if comm.Get_rank() == 0 else None, root=0
+    )
+
+
 def archive_exists(out_dir: str) -> bool:
     """Reports whether a run directory already holds an archive.
 
@@ -388,7 +418,7 @@ def prepare(
             "combined with --restart require."
         )
 
-    if overwriting or not archive_exists(args.out_dir):
+    if overwriting or not _archive_existed_at_start(args.out_dir):
         if wanted == "require":
             fail(
                 f"--restart require was given, but {args.out_dir} holds no run to continue."

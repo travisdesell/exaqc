@@ -371,6 +371,12 @@ class IdentityEncoder(Encoder):
             genome: the circuit genome whose quantum circuit
                 inputs are being set
         """
+        if inputs.ndim > 2:
+            inputs = torch.flatten(
+                inputs,
+                start_dim=1,
+            )
+
         return inputs
 
     def describe_layers(self) -> list[LayerSpec]:
@@ -635,7 +641,7 @@ class CNNEncoder(Encoder, torch.nn.Module):
             Feature extractor and final channel count.
         """
         if not self.conv_blocks_config:
-            return [torch.nn.Identity()], None
+            return torch.nn.Sequential(torch.nn.Identity()), None
 
         layers: list[torch.nn.Module] = []
         in_channels = self.input_channels

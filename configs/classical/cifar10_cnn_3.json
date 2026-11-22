@@ -1,0 +1,56 @@
+{
+    "model": "cnn",
+    "conv_blocks": [
+        {
+            "out_channels": 32,
+            "kernel_size": 3,
+            "stride": 1,
+            "padding": 1,
+            "batch_norm": true,
+            "activation": "relu",
+            "pool": {
+                "type": "max",
+                "kernel_size": 2,
+                "stride": 2
+            }
+        },
+        {
+            "out_channels": 64,
+            "kernel_size": 3,
+            "stride": 1,
+            "padding": 1,
+            "batch_norm": true,
+            "activation": "relu",
+            "pool": {
+                "type": "max",
+                "kernel_size": 2,
+                "stride": 2
+            }
+        },
+        {
+            "out_channels": 128,
+            "kernel_size": 3,
+            "stride": 1,
+            "padding": 1,
+            "batch_norm": true,
+            "activation": "relu",
+            "dropout": 0.1,
+            "pool": {
+                "type": "max",
+                "kernel_size": 2,
+                "stride": 2
+            }
+        }
+    ],
+    "adaptive_pool_size": [2, 2],
+    "fully_connected_layers": [256, 128],
+    "dropout": 0.3,
+
+    "epochs": 75,
+    "batch_size": 128,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0005,
+    "validation_fraction": 0.1,
+
+    "seed": 0
+}

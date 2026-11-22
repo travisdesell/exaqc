@@ -156,6 +156,8 @@ def load_data(
             download=args.download_dataset,
             num_workers=args.num_workers,
             pin_memory=args.pin_memory,
+            # runs recorded before --classes existed use every class
+            classes=getattr(args, "classes", None),
         )
         return training_loader, validation_loader
 

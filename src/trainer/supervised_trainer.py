@@ -329,6 +329,7 @@ class SupervisedTrainer:
         # gates' parameters), recorded the same way by every trainer
         n_trainable_parameters = genome.count_trainable_parameters()
         genome.metadata["n_trainable_parameters"] = n_trainable_parameters
+        genome.metadata["n_circuit_parameters"] = genome.get_genome_circuit_parameters()
 
         logger.debug(f"hybrid model n trainable parameters: {n_trainable_parameters}")
 

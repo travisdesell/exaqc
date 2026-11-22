@@ -11,6 +11,7 @@ number -- on the dataset's official test split::
 from __future__ import annotations
 
 import argparse
+import sys
 
 import torch
 from loguru import logger
@@ -48,12 +49,37 @@ def main() -> None:
     parser.add_argument("--data_dir", default="data")
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument(
+        "--device",
+        type=str,
+        default="cpu",
+        help=(
+            "PyTorch device to evaluate on, e.g. "
+            "'cpu', 'cuda', or 'cuda:0'. Defaults to 'cpu'."
+        ),
+    )
+    parser.add_argument(
+        "--classes",
+        type=int,
+        nargs="+",
+        default=None,
+        help="The --classes the search ran with; scores only those test classes.",
+    )
+    parser.add_argument(
         "--download_dataset",
         action=argparse.BooleanOptionalAction,
         default=True,
     )
+    parser.add_argument(
+        "--logging_level",
+        type=str,
+        default="INFO",
+        help="""One of the 5 default logging levels for showing on terminal. Pick DEBUG to show everything.""",
+    )
     args = parser.parse_args()
     check_genome_source_arguments(parser, args)
+
+    logger.remove()
+    logger.add(sys.stderr, level=args.logging_level)
 
     try:
         serialized = load_genome_dict(
@@ -64,12 +90,14 @@ def main() -> None:
 
     genome = CircuitGenome.from_dict(serialized)
     genome.initialize_model()
+    genome.hybrid_model.to(torch.device(args.device))
 
     testing_loader = get_image_test_dataloader(
         args.dataset,
         data_dir=args.data_dir,
         batch_size=args.batch_size,
         download=args.download_dataset,
+        classes=args.classes,
     )
 
     metrics = {"mean_class_accuracy": MeanClassAccuracy(testing_loader.n_labels)}
@@ -87,6 +115,7 @@ def main() -> None:
         validation_loss_function=testing_loss,
         testing_loss_function=testing_loss,
         metrics=metrics,
+        device=args.device,
     )
 
     test_metrics = trainer.test(genome)
