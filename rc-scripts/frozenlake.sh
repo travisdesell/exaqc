@@ -26,13 +26,6 @@ for i in $(seq 1 10); do
     --input_qubits 4 \
     --output_qubits 4 \
     --episodes 1000 \
-    --eval_episodes 100 \
-    --mutation_strategy uniform 1 3 \
-    --out_dir artifacts/frozenlake/islands/runs/${i} \
-    islands \
-    --n_islands 5 \
-    --max_island_size 6 \
-    --islands_to_extinct 1 \
-    --genomes_before_extinction 50 \
-    --genomes_for_next_extinction 200
+    --shared_file_system \
+    --out_dir artifacts/frozenlake/runs/${i}
 done

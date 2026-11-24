@@ -6,6 +6,9 @@ and environment abstraction this trainer builds on.
 
 from __future__ import annotations
 
+import argparse
+
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -15,9 +18,9 @@ from torch import Tensor
 
 from src.circuits.circuit import CircuitGenome
 from src.trainer.reinforcement_trainer import (
+    SEED_BLOCK,
     RLEnvironment,
     ReinforcementLearningTrainer,
-    RLHyperparameters,
     _normalize,
     action_distribution,
     distribution_entropy,
@@ -43,12 +46,103 @@ class PPOTrainer(ReinforcementLearningTrainer):
     #: Requires one extra decoder output for the scalar state value.
     n_value_outputs: int = 1
 
+    @staticmethod
+    def _seed_block(hp: SimpleNamespace) -> int:
+        """Returns the seed stride between PPO's outer episodes.
+
+        A rollout gathers at least one transition per environment episode, so
+        it rolls at most ``rollout_steps`` of them and needs that many seeds.
+        The stride is widened when a rollout could outgrow :data:`SEED_BLOCK`,
+        which keeps one outer episode's seeds from running into the next
+        one's; for the usual ``rollout_steps`` it is exactly
+        :data:`SEED_BLOCK`, so seeding is unchanged.
+
+        Args:
+            hp: Resolved hyperparameters.
+
+        Returns:
+            The per-outer-episode seed stride.
+        """
+
+        return max(SEED_BLOCK, hp.rollout_steps + 1)
+
+    def training_seed_span(self, hp: SimpleNamespace) -> tuple[int, int]:
+        """Returns the seed range this trainer's rollouts consume.
+
+        PPO is the one trainer whose outer episode spans several environment
+        episodes, so it does not use one seed per outer episode like the base
+        scaffold: :meth:`_collect_rollout` starts a fresh block per outer
+        episode (see :meth:`_seed_block`) and takes one seed per environment
+        episode within it.
+
+        Args:
+            hp: Resolved hyperparameters, with ``training_seed`` already drawn.
+
+        Returns:
+            ``(first, last_exclusive)``, covering every seed any rollout of
+            this configuration can reach.
+        """
+
+        block = self._seed_block(hp)
+        return (
+            hp.training_seed,
+            hp.training_seed + max(0, hp.episodes - 1) * block + block,
+        )
+
+    @staticmethod
+    def initialize_parser(parser: argparse.ArgumentParser) -> None:
+        """Adds PPO's own command-line arguments.
+
+        Args:
+            parser: The parser to add the arguments to.
+
+        Returns:
+            None. Mutates ``parser`` by adding ``--rollout_steps``,
+            ``--ppo_passes``, ``--ppo_minibatch``, ``--ppo_clip`` and
+            ``--gae_lambda``.
+        """
+
+        parser.add_argument(
+            "--rollout_steps",
+            type=int,
+            default=512,
+            help="Environment steps collected per PPO rollout before updating (PPO only).",
+        )
+
+        parser.add_argument(
+            "--ppo_passes",
+            type=int,
+            default=4,
+            help="Passes over each PPO rollout (PPO literature calls these 'epochs').",
+        )
+
+        parser.add_argument(
+            "--ppo_minibatch",
+            type=int,
+            default=128,
+            help="PPO minibatch size (transitions per weight update).",
+        )
+
+        parser.add_argument(
+            "--ppo_clip",
+            type=float,
+            default=0.2,
+            help="PPO clipped-surrogate probability-ratio clip range.",
+        )
+
+        parser.add_argument(
+            "--gae_lambda",
+            type=float,
+            default=0.95,
+            help="Generalized Advantage Estimation (GAE) lambda for PPO.",
+        )
+
     def _collect_rollout(
         self,
         genome: CircuitGenome,
         environment: RLEnvironment,
         episode_index: int,
-        hp: RLHyperparameters,
+        hp: SimpleNamespace,
     ) -> dict[str, Any]:
         """Collects a behavior-policy rollout spanning one or more episodes.
 
@@ -85,7 +179,9 @@ class PPOTrainer(ReinforcementLearningTrainer):
         episode = 0
         while collected < hp.rollout_steps:
             env = environment.make()
-            observation, _ = env.reset(seed=hp.seed + episode_index * 10_000 + episode)
+            observation, _ = env.reset(
+                seed=hp.training_seed + episode_index * self._seed_block(hp) + episode
+            )
             episode += 1
             episode_return = 0.0
 
@@ -135,7 +231,7 @@ class PPOTrainer(ReinforcementLearningTrainer):
         environment: RLEnvironment,
         optimizer: torch.optim.Optimizer,
         episode_index: int,
-        hp: RLHyperparameters,
+        hp: SimpleNamespace,
     ) -> tuple[float, dict[str, float]]:
         """Collects a multi-episode rollout and performs the PPO epochs.
 
@@ -223,8 +319,13 @@ class PPOTrainer(ReinforcementLearningTrainer):
                 )
 
                 optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                # A genome whose only parameterized gates are disabled (or
+                # transiently dropped) produces outputs that are constant w.r.t.
+                # the circuit weights, so the loss has no grad_fn and backward()
+                # would raise. Skip the update for such a minibatch.
+                if loss.requires_grad:
+                    loss.backward()
+                    optimizer.step()
                 last_loss = float(loss.item())
 
         mean_return = (

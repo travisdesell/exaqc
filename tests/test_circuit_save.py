@@ -5,8 +5,10 @@
 * ``genome_<n>.json`` -- the serialized genome (round-trippable via
   ``CircuitGenome.from_dict``),
 * ``genome_<n>.txt``  -- a human-readable gate listing, and
-* ``<insert_type>_genome_<n>_<tag>.png`` -- a drawing of the quantum circuit
-  produced with the genome's target framework (pennylane or qiskit).
+* ``<insert_type>_genome_<n>_<tag>.png`` -- the composed architecture diagram
+  drawn by ``draw_hybrid_model`` (the encoder/decoder stages with the genome's
+  quantum circuit embedded in the middle; see ``tests/test_draw_hybrid_model.py``
+  for focused coverage of the diagram itself).
 
 All of these tests write exclusively into pytest's per-test ``tmp_path``
 directory (which pytest creates and removes automatically) and additionally
@@ -26,7 +28,12 @@ matplotlib.use("Agg")
 
 import json  # noqa: E402
 import os  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+import matplotlib.pyplot as plt  # noqa: E402
 import pytest  # noqa: E402
+from matplotlib.figure import Figure  # noqa: E402
+from matplotlib.text import Text  # noqa: E402
 
 from src.circuits.circuit import CircuitGenome  # noqa: E402
 
@@ -53,11 +60,11 @@ def _build_saveable_genome(
         target: Either ``"pennylane"`` or ``"qiskit"``.
         complexity: A circuit complexity level understood by
             ``build_classification_genome``.
-        with_metrics: If True, populate ``metadata`` with the
+        with_metrics: If True, build a classification genome carrying the
             ``best_training_metrics``/``best_validation_metrics`` that
-            ``save_circuit`` uses to build the PNG filename tag. If False,
-            leave them out and instead set ``fitness`` so the fallback tag
-            path is exercised.
+            ``save_circuit`` uses for the PNG filename tag. If False, build a
+            reinforcement-learning genome instead, whose tag comes from its
+            ``fitness`` returns.
         initialize: If True, call ``initialize_model()`` (the realistic
             post-training state). If False, leave the model uninitialized so
             the lazy circuit-generation branch of ``save_circuit`` is
@@ -78,7 +85,11 @@ def _build_saveable_genome(
 
     # Assign a fresh metadata dict (CircuitGenome's default argument is a
     # shared mutable dict) so tests stay isolated from one another.
+    # The task is what selects the filename tag, and EXAQC stamps it onto every
+    # genome it generates, so the fixtures record it too.
     if with_metrics:
+        genome.task = "classification"
+        genome.task_target = "iris"
         genome.metadata = {
             "best_training_metrics": {
                 "loss": 0.1234,
@@ -90,6 +101,8 @@ def _build_saveable_genome(
             },
         }
     else:
+        genome.task = "reinforcement_learning"
+        genome.task_target = "cartpole"
         genome.metadata = {}
         genome.fitness = {"train_return_mean": 1.5, "eval_return_mean": 2.5}
 
@@ -122,6 +135,9 @@ def test_save_circuit_writes_exactly_the_expected_files(
     target: str, complexity: str, tmp_path, monkeypatch
 ) -> None:
     """``save_circuit`` writes exactly the json/txt/png trio and nothing else.
+
+    The single ``.png`` is the composed architecture diagram, named from the
+    metric tag.
 
     Args:
         target: Either ``"pennylane"`` or ``"qiskit"``.
@@ -268,7 +284,8 @@ def test_save_circuit_works_without_initialize_model(
     genome = _build_saveable_genome(target, initialize=False)
     genome.save_circuit(insert_type="best", out_dir=str(out_dir))
 
-    # the drawing branch must still have produced a png (not just json/txt)
+    # the drawing branch must still have produced a png (not just json/txt),
+    # even though the genome was not pre-initialized
     assert len(_split_by_suffix(str(out_dir)).get(".png", [])) == 1
 
 
@@ -298,3 +315,74 @@ def test_save_circuit_only_touches_out_dir(target: str, tmp_path, monkeypatch) -
     assert os.listdir(tmp_path / "nested") == ["run_output"]
     # and the output directory holds only the three expected artifacts
     assert set(_split_by_suffix(str(out_dir))) == {".json", ".txt", ".png"}
+
+
+# ---------------------------------------------------------------------
+# draw_circuit_figure
+# ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("target", TARGETS)
+def test_draw_circuit_figure_returns_an_open_titled_figure(
+    target: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``draw_circuit_figure`` hands back an open figure titled with the genome.
+
+    It only draws: saving (and closing) is up to the caller, so nothing is
+    written.
+
+    Args:
+        target: Either ``"pennylane"`` or ``"qiskit"``.
+        tmp_path: pytest per-test temporary directory (auto-removed), used as
+            the working directory so any stray write would show up in it.
+        monkeypatch: pytest fixture used to ``chdir`` into ``tmp_path``.
+    """
+
+    monkeypatch.chdir(tmp_path)
+
+    figure = _build_saveable_genome(target).draw_circuit_figure()
+    try:
+        assert isinstance(figure, Figure)
+        assert plt.fignum_exists(figure.number)
+        assert "Genome 7" in [text.get_text() for text in figure.findobj(Text)]
+        assert list(tmp_path.iterdir()) == []
+    finally:
+        plt.close(figure)
+
+
+@pytest.mark.parametrize("target", TARGETS)
+def test_draw_circuit_figure_generates_the_model_only_when_missing(
+    target: str,
+) -> None:
+    """An uninitialized genome gets a model; an initialized one keeps its own.
+
+    Regenerating an existing qiskit circuit corrupts its cached gate
+    parameters, so drawing an initialized genome, even repeatedly, must reuse
+    its model and circuit.
+
+    Args:
+        target: Either ``"pennylane"`` or ``"qiskit"``.
+    """
+
+    fresh = _build_saveable_genome(target, initialize=False)
+    assert getattr(fresh, "hybrid_model", None) is None
+    plt.close(fresh.draw_circuit_figure())
+    assert fresh.hybrid_model is not None
+
+    genome = _build_saveable_genome(target)
+    model = genome.hybrid_model
+    circuit = getattr(genome, "qiskit_circuit", None)
+    for _ in range(2):
+        plt.close(genome.draw_circuit_figure())
+    assert genome.hybrid_model is model
+    assert getattr(genome, "qiskit_circuit", None) is circuit
+
+
+def test_draw_circuit_figure_rejects_an_unknown_target() -> None:
+    """A genome whose target is neither pennylane nor qiskit cannot be drawn."""
+
+    genome = _build_saveable_genome("pennylane")
+    genome.target = "bogus"
+
+    with pytest.raises(ValueError, match="bogus"):
+        genome.draw_circuit_figure()

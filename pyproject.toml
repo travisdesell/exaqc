@@ -56,7 +56,6 @@ dependencies = [
     "qiskit-aer",
     "torch",
     "torchvision",
-    "visualtorch==1.4.1",
     "matplotlib",
     "seaborn",
     "pytest",
@@ -68,4 +67,21 @@ dependencies = [
     "gymnasium[mujoco]",
     "minigrid",
     "python-dotenv",
+
+    # The dashboard serves its web UI, JSON API and MCP endpoint from one
+    # Starlette application run by uvicorn; the MCP SDK (2.x, where FastMCP
+    # became MCPServer) provides the protocol and generates the tool schemas.
+    "mcp>=2,<3",
+    "starlette",
+    "uvicorn",
 ]
+
+[tool.black]
+# src/analysis/plot_gptp_histogram.py is parked: it is not reachable from any
+# entry point and runs all of its work at import time (no __main__ guard), so it
+# is left out of formatting for now rather than being touched.
+extend-exclude = '''
+/(
+  src/analysis/plot_gptp_histogram\.py
+)/?
+'''

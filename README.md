@@ -1,4 +1,74 @@
-# Installation
+# EXAQC
+
+**Evolutionary Exploration of Augmenting Quantum Circuits.**
+
+EXAQC evolves and trains hybrid and parameterized quantum circuits for machine-learning and other tasks. Rather than fixing a
+circuit ansatz up front and only training its rotation angles, EXAQC treats the
+*circuit itself* as the thing being searched: gates are added, disabled,
+reordered and recombined across a population of candidate circuits, while the parameters of each circuit
+candidate is also trained with gradient descent.
+
+A candidate circuit is a **genome**, and a genome is a hybrid model with three stages:
+
+```
+inputs -> [ classical encoder ] -> [ quantum circuit ] -> [ classical decoder ] -> outputs
+```
+
+Either classical stage may be absent, as for example, quantum-teacher imitation uses neither, so in this case
+the search would be over the circuit alone. Circuits for reinforcement learning and classification utilize some
+kind of classical to quantum encoding and quantum to classical decoding, and therefore do utilize and encoder and decoder.
+
+EXAQC represents circuits in an internal JSON format, which allows them to generate targets which can run using either [PennyLane](https://pennylane.ai/) or
+[Qiskit](https://www.ibm.com/quantum/qiskit). The Pennylane or Qiskit models can be exported as 
+[PyTorch](https://pytorch.org/) modules, which is a layer alongside the encoder and decoder modules (if used), so the circuit's gate parameters and the
+classical layers train together with ordinary backpropagation and the standard PyTorch training framework (Datasets, Data Loaders, Optimizers, etc.).
+
+---
+
+## Table of Contents
+
+- [Installation](#installation)
+- [How a run is put together](#how-a-run-is-put-together)
+  - [Local run scripts](#local-run-scripts)
+- [EXAQC: the evolutionary search](#exaqc-the-evolutionary-search)
+  - [How the search works](#how-the-search-works)
+  - [Search command-line arguments](#search-command-line-arguments)
+  - [Circuit and genome arguments](#circuit-and-genome-arguments)
+  - [Choosing search hyperparameters](#choosing-search-hyperparameters)
+- [Population strategies](#population-strategies)
+  - [steady_state](#steady_state)
+  - [islands](#islands)
+  - [Choosing a population strategy](#choosing-a-population-strategy)
+- [Trainers](#trainers)
+  - [SupervisedTrainer](#supervisedtrainer)
+  - [Reinforcement-learning trainers](#reinforcement-learning-trainers)
+    - [REINFORCE](#reinforce)
+    - [Actor-critic (a2c)](#actor-critic-a2c)
+    - [PPO](#ppo)
+    - [Q-learning and SARSA](#q-learning-and-sarsa)
+  - [Choosing trainer hyperparameters](#choosing-trainer-hyperparameters)
+- [Run outputs (GenomeArchive)](#run-outputs-genomearchive)
+  - [Run output arguments](#run-output-arguments)
+  - [What a run directory holds](#what-a-run-directory-holds)
+  - [Working with a run's archive](#working-with-a-runs-archive)
+- [Examples](#examples)
+  - [classification](#classification)
+  - [teacher](#teacher)
+  - [reinforcement_learning](#reinforcement_learning)
+  - [refine_genome](#refine_genome)
+  - [evaluate](#evaluate)
+  - [visualize_rl](#visualize_rl)
+  - [exaqc_dashboard](#exaqc_dashboard)
+  - [exaqc_mcp](#exaqc_mcp)
+  - [backfill_archive](#backfill_archive)
+  - [classical_image_classification](#classical_image_classification)
+  - [reinforcement_learning_fixed](#reinforcement_learning_fixed)
+- [Reproducing 2026 PPSN results](#reproducing-2026-ppsn-results)
+- [Contributing](#contributing)
+
+---
+
+## Installation
 
 To run EXAQC, first create a python3.12 virtual environment (currently the newest
 version which will have the appropriate torch, qiskit and pennylane dependencies):
@@ -13,7 +83,7 @@ Then load that environment:
 source </path/to/exaqc/environment/bin/activate/>
 ```
 
-Then dependencies can be installed with (from the EXAQC project root directory):
+From the EXAQC project root directory, the dependencies can be installed with:
 
 ```
 python3 -m pip install -e .
@@ -31,44 +101,1434 @@ Or on linux with `apt` (replace with your favorite application manager):
 sudo apt-get install openmpi
 ```
 
-# PPSN Result Reproduction
+If you are using Windows, we strongly recommend using EXAQC within WSL and a version of Linux of your choice.
 
-The classification benchmarks (breast cancer, iris, seeds and wine) can be run to reproduce results with the following commands:
+---
 
-```
-mpiexec -n 8 python3 -m src.examples.pl_classification --logging_level INFO --dataset breast_cancer --number_genomes 1000 --input_qubits 8 --batch_size 3 --loss per_class -ms uniform 1 3 --out_dir ./2026_gptp_exaqc/breast_i30_per_class_1 steady_state --max_population_size 30
+## How a run is put together
 
-mpiexec -n 12 python3 -m src.examples.pl_classification --logging_level INFO --dataset iris --number_genomes 1000 --input_qubits 4 --batch_size 3 --loss per_class -ms uniform 1 3 --out_dir ./2026_ppsn_exaqc/iris_i30_per_class_1 steady_state --max_population_size 30
+Every example use of EXAQC (the evolutionary entry points in the [`./src/examples`](./src/examples) directory) combine the same four components, and their
+command-line arguments group the same way:
 
-mpiexec -n 12 python3 -m src.examples.pl_classification --logging_level INFO --dataset seeds --number_genomes 1000 --input_qubits 6 --batch_size 3 --loss per_class -ms uniform 1 3 --out_dir ./2026_ppsn_exaqc/seeds_i30_per_class_1 steady_state --max_population_size 30
+| Piece | What it does | Where its arguments come from |
+|---|---|---|
+| **EXAQC** | Generates new genomes by mutation and crossover | [Search arguments](#search-command-line-arguments) |
+| **Population strategy** | Decides which genomes survive and become parents | [`steady_state`](#steady_state) / [`islands`](#islands) sub-command |
+| **Trainer** | Trains each genome once it is generated | [Trainers](#trainers) |
+| **Objective** | Calls the trainer for a genome and sets its `fitness` | The entry point itself |
+| **Genome archive** | Records every evaluated genome and the search history, the run's only output | [Run outputs](#run-outputs-genomearchive) |
 
-mpiexec -n 12 python3 -m src.examples.pl_classification --logging_level INFO --dataset wine --number_genomes 1000 --input_qubits 6 --batch_size 3 --loss per_class -ms uniform 1 3 --out_dir ./2026_ppsn_exaqc/wine_i30_per_class_1 steady_state --max_population_size 30
-```
+Runs are parallelised with **MPI**: rank 0 is the master that generates genomes
+and owns the population, and every other rank is a worker that trains them.
 
-These can be run for repeated experiments using the scripts provided in the [./scripts](./scripts) directory (the following will create 10 repeats for each):
-
-```
-sh scripts/run_iris.sh 1 10 per_class ./2026_ppsn_exaqc/classification
-sh scripts/run_seeds.sh 1 10 per_class ./2026_ppsn_exaqc/classification
-sh scripts/run_breast_cancer.sh 1 10 per_class ./2026_ppsn_exaqc/classification
-sh scripts/run_wine.sh 1 10 per_class ./2026_ppsn_exaqc/classification
-```
-
-And reinforcement learning experiments can be run with:
-```
-sh scripts/run_cartpole.sh 1 10 per_class ./2026_ppsn_exaqc/rl
-sh scripts/run_frozenlake.sh 1 10 per_class ./2026_ppsn_exaqc/rl
-sh scripts/run_walker2d.sh 1 10 per_class ./2026_ppsn_exaqc/rl
-sh scripts/run_mountaincar_continuous.sh 1 10 per_class ./2026_ppsn_exaqc/rl
-```
-
-The results of these can then be processed to generate the table of mutation and crossover rates as well as statistics on the best found genomes:
+> **A run needs at least 2 MPI processes.** With `-n 1` there are no workers, and the
+> master blocks forever waiting for work requests. Use `mpiexec -n <ranks>`, where
+> `<ranks>` is one master plus however many genomes you want trained
+> concurrently.
 
 ```
-python3 -m src.analysis.analyze_genome_generation --input_directories ./2026_ppsn_exaqc/classification/* --groups iris seeds wine breast_cancer --metric test_acc
-python3 -m src.analysis.analyze_genome_generation --input_directories ./2026_ppsn_exaqc/rl/* --groups iris seeds wine breast_cancer --metric test_acc
+mpiexec -n 12 python3 -m src.examples.classification ... steady_state --max_population_size 30
 ```
 
+> **Long runs should abort on a crash.** If any rank raises, the rest keep
+> waiting on it and the job idles until its time limit. Starting the module
+> through `python3 -m mpi4py -m <module>` (as `scripts/exaqc_rl_job.sh` and the
+> [local run scripts](#local-run-scripts) do) makes an uncaught exception on any
+> rank abort the whole job instead.
+
+Because each genome is trained independently, the search scales close to
+linearly with the number of workers.
+
+### Local run scripts
+
+[`scripts/run_classification.sh`](./scripts/run_classification.sh) and
+[`scripts/run_rl.sh`](./scripts/run_rl.sh) run one search of
+[`classification`](#classification) or
+[`reinforcement_learning`](#reinforcement_learning) on this machine through the
+local `mpiexec`. They take no arguments: every setting is an environment
+variable with a default, so a run changes only what it names:
+
+```
+DATASET=wine POPULATION=steady_state bash scripts/run_classification.sh
+ENVIRONMENT=hopper TOPOLOGY="2d_mesh 4 5" N_ISLANDS=20 TAG=run2 bash scripts/run_rl.sh
+```
+
+The variables both scripts share are below; each entry point's section lists its
+own. The 2026 PPSN experiments have scripts of their own (see
+[Reproducing 2026 PPSN results](#reproducing-2026-ppsn-results)).
+
+| Variable | Default | Description |
+|---|---|---|
+| `N_PROCESSES` | `12` | MPI processes (`mpiexec -n`): one master plus the workers; at least 2 |
+| `INPUT_QUBITS` / `OUTPUT_QUBITS` | `5` / `5` | `--input_qubits` / `--output_qubits` |
+| `QIM` / `QOM` | `u3` / `probs` | `-qim` / `-qom` |
+| `ENCODING` / `DECODING` | `linear` / `linear` | `--encoding` (`identity`, `linear`) / `--decoding` (`clipped`, `linear`) |
+| `POPULATION` | `islands` | Population sub-command: `islands` or `steady_state` |
+| `N_ISLANDS` / `MAX_ISLAND_SIZE` | `25` / `5` | `--n_islands` / `--max_island_size` (`islands` only; `--islands_to_extinct` is fixed at 1) |
+| `TOPOLOGY` | `2d_mesh 5 5` | `--topology` and its arguments, as one quoted value (`islands` only) |
+| `MAX_POPULATION_SIZE` | `30` | `--max_population_size` (`steady_state` only) |
+| `USE_ONLY` | `rx ry rz p u crx cry crz cp rxx ryy rzz cx cy cz` | `--use_only` gates, as one quoted value |
+| `BASE_DIR` | `./exaqc_runs` | Directory the default `OUT_DIR` is created in |
+| `OUT_DIR` | `<BASE_DIR>/<dataset or env>_<topology>_i<n_islands>`, or `..._steady_state_p<max_population_size>` | `--out_dir` |
+| `TAG` | unset | Appended to the output directory as `_<TAG>` (letters, digits, `-` and `_`) |
+| `PYTHON` / `MPIEXEC` / `MPIEXEC_ARGS` | `python3` / `mpiexec` / `--oversubscribe` | Interpreter and launcher; clear `MPIEXEC_ARGS` for an MPI other than Open MPI |
+| `DRY_RUN` | unset | When set, print the command instead of running it |
+
+`--restart` defaults to `auto`, so running again into the same output directory
+continues that run; give a new run its own `TAG`.
+
+---
+
+## EXAQC: the evolutionary search
+
+[`src/evolution/exaqc.py`](./src/evolution/exaqc.py) owns genome *generation*. It holds the allowed gate
+set, the initial encoder/decoder, the hyperparameters stamped onto each genome,
+and the strategies controlling how children are produced.
+
+### How the search works
+
+Until its population(s) are full, EXAQC generates new genomes by mutating an initial empty
+seed genome. After that, each new child is produced by either crossover or mutation, chosen
+by the mutation and crossover rates:
+
+| Operator | Selected with | What it does |
+|---|---|---|
+| **Binary crossover** | `--binary_crossover_rate` | Recombines two parents |
+| **N-ary crossover** | `--n_ary_crossover_rate` | Recombines several parents (count from `--parent_strategy`) |
+| **Exponential crossover** | `--exponential_crossover_rate` | Splices two parents at a random circuit depth |
+| **Mutation** | whatever fraction remains | Applies `--mutation_strategy` mutations to one parent |
+
+Mutation itself picks from a weighted set of operators: adding a gate,
+reordering a gate, swapping which qubits a gate acts on, enabling or disabling a
+gate, cloning, and perturbing some or all gate weights. Only gates that have
+been validated for the chosen backend are ever added.  Rates at which these operations are selected can currently be specified by modifying EXAQC's mutate method.
+
+A child is rejected and regenerated if its inputs cannot reach its outputs
+through enabled gates, so every evaluated circuit is functionally connected.
+
+Every genome EXAQC generates is stamped with the `task` and the `task_target` it was
+evolved for, which is what lets [`refine_genome`](#refine_genome) reload a genome
+later for further training or other uses without external input.
+
+### Search command-line arguments
+
+These are shared by [`classification`](#classification), [`teacher`](#teacher)
+and [`reinforcement_learning`](#reinforcement_learning), because all three call
+`EXAQC.initialize_parser()`.
+
+| Argument | Default | Description |
+|---|---|---|
+| `--mutation_strategy`, `-ms` | *required* | How many mutations each child gets: `uniform <min> <max>` (integers, min ≥ 1) or `exponential <scale>` |
+| `--parent_strategy`, `-ps` | *required* | How many parents an n-ary crossover uses: `uniform <min> <max>` (integers, min ≥ 2) or `exponential <scale>` |
+| `--binary_crossover_rate` | `0.0` | Fraction of children made by two-parent crossover |
+| `--n_ary_crossover_rate` | `0.2` | Fraction of children made by multi-parent crossover |
+| `--exponential_crossover_rate` | `0.1` | Fraction of children made by depth-spliced crossover |
+| `--number_genomes` | `1000` | Total genomes to evaluate before stopping |
+| `--timing_report_every` | `1000` | Insertions between the MPI master's timing reports; `0` keeps only the final report |
+
+The three crossover rates must sum to at most `1.0`; the remainder is the
+mutation rate. With the defaults, 70% of children come from mutation.
+
+**Checking that the master keeps up.** Under MPI, one master process generates
+and inserts every genome, so with many workers or fast evaluations (e.g.
+`--epochs 0` / `--episodes 0`) it can become the bottleneck. Every
+`--timing_report_every` insertions, and once for the whole run at the end, the
+master logs an INFO line with its throughput, how much of its time was *busy*
+(generating, sending, deserializing and inserting genomes) versus *idle*
+(waiting for workers), the mean time of each of those steps, and the parts of an
+insertion (`population`, `archive` and `population_events`). A busy share near
+100% means workers are queueing on the master. Each worker logs its own split
+between waiting on the master and evaluating when the run ends, and every genome
+records how long its worker waited for it as `timing.request_wait_seconds`.
+
+### Circuit and genome arguments
+
+| Argument | Default | Description |
+|---|---|---|
+| `--target` | `pennylane` | Backend: [`pennylane`](https://docs.pennylane.ai/en/stable/) or [`qiskit`](https://quantum.cloud.ibm.com/docs/en/guides) |
+| `--use_only` | all gates | Restrict the search to only these gate method names (e.g. `cx ry rz`); a name the backend does not have is an error |
+| `--input_qubits` | *required* | Qubits the inputs are encoded onto |
+| `--output_qubits` | *required* | Qubits measured for the output |
+| `--quantum_input_mode`, `-qim` | `u3` | How classical values become circuit inputs: `u3`, `rx`, `ry`, `rz`, `basis`, `amplitude` |
+| `--quantum_output_mode`, `-qom` | `probs` | Readout: `probs` (2^output_qubits values) or `expval` (one Pauli-Z expectation per output qubit) |
+| `--encoding` | `linear` | Classical encoder: `identity`, `linear`, `cnn` |
+| `--decoding` | `linear` | Classical decoder: `linear`, `clipped` |
+| `--quantum_dropout` | off | Master switch for dropping gates during training |
+| `--quantum_dropout_type`, `-qdt` | `none` | `gate`, `rotation`, `entangling`, `qubit`, `innovation` |
+| `--quantum_dropout_rate`, `-qdr` | `0.0` | Dropout probability |
+
+The input mode determines how many values the circuit consumes: `rx`/`ry`/`rz`
+take one per input qubit, `u3` takes three, and `amplitude` takes up to
+2^input_qubits (it pads and normalises, so it packs many features into few
+qubits). `expval` is implemented only on the PennyLane backend.
+
+### Choosing search hyperparameters
+
+- **Start small.** Simulating a quantum circuit costs time exponential in qubit
+  count. 4–8 qubits is a practical range on a laptop; every extra qubit roughly
+  doubles the cost of every forward pass.
+- **`--input_qubits` with `amplitude` encoding.** Amplitude embedding fits `2^n`
+  features into `n` qubits, so 30-feature breast cancer data needs only 5–8
+  qubits. With `u3`/`ry` you need roughly one qubit per feature, so pair those
+  with a `linear` encoder that compresses first.
+- **`--output_qubits`.** For classification with `probs`, `2^output_qubits`
+  should be ≥ the number of classes; the decoder maps that vector onto class
+  scores. One or two output qubits is typical.
+- **Mutation vs. crossover.** Mutation-heavy settings (the defaults) explore
+  circuit *topologies*; raising the crossover rates exploits combinations of
+  parents that already work. `-ms uniform 1 3` is a good default: mostly small
+  edits, occasionally a bigger jump.
+- **`--number_genomes`** determines how long to run the search for. Current published results use 1000–2000.
+
+Background on the underlying ideas:
+[variational quantum circuits](https://pennylane.ai/qml/glossary/variational_circuit),
+[quantum embeddings](https://pennylane.ai/qml/glossary/quantum_embedding),
+[barren plateaus](https://pennylane.ai/qml/demos/tutorial_barren_plateaus) (why
+deep, wide circuits can become untrainable), and
+[neuroevolution](https://en.wikipedia.org/wiki/Neuroevolution).
+
+---
+
+## Population strategies
+
+The population strategy decides which genomes are kept and which become parents.
+It is chosen with a **sub-command**, which must come *after* the other
+arguments:
+
+```
+python3 -m src.examples.classification <options...> steady_state --max_population_size 30
+python3 -m src.examples.classification <options...> islands --n_islands 10 --max_island_size 10 --topology ring
+```
+
+### [`steady_state`](./src/evolution/steady_state_population.py)
+
+A single population sorted by fitness. A new genome is inserted if it is better
+than the worst member; once the population is full, the worst is dropped. There
+are no generations — insertion is continuous, which suits the asynchronous
+MPI master/worker design, since workers finish at different times.
+
+| Argument | Default | Description |
+|---|---|---|
+| `--max_population_size` | `30` | Genomes retained in the population |
+
+### [`islands`](./src/evolution/steady_state_islands.py)
+
+Several independent steady-state populations ("islands") are evolved in parallel.
+Islands mostly produce children from their own genomes, which preserves distinct solution
+lineages that would not survive in a single population. Periodically the worst islands
+suffer an **extinction event**: they are cleared and repopulated from the best
+island, spreading good genomes without overly collapsing diversity.
+
+| Argument | Default | Description |
+|---|---|---|
+| `--n_islands` | `10` | Number of islands |
+| `--max_island_size` | `10` | Genomes retained per island |
+| `--genomes_before_extinction` | `100` | Genomes inserted before the first extinction event |
+| `--genomes_for_next_extinction` | `200` | Genomes inserted between later extinction events |
+| `--islands_to_extinct` | `1` | Worst islands cleared and repopulated each event |
+| `--primary_parent` | `best` | Which parent leads a crossover: `best` (highest fitness first) or `island` (the target island's genome first) |
+| `--intra_island_crossover_rate` | `0.5` | Fraction of an island's children produced within that island |
+| `--topology` | `fully_connected` | Inter-island connection topology; one of the values described below |
+
+Islands exchange genomes only with the neighbors defined by their **connection
+[topology](./src/evolution/topology.py)** (`--topology`, `fully_connected` by
+default). A sparser topology preserves diversity (good genomes spread more
+slowly); a denser one converges faster. The available values are:
+
+| `--topology` value | Meaning |
+|---|---|
+| `fully_connected` | Every island is connected to every other (densest). |
+| `ring` | Each island is linked to the previous and next, wrapping around. |
+| `star` | The first island is a hub connected to all others; the rest connect only to the hub. |
+| `2d_mesh <x_dim> <y_dim>` | A grid; each island joined to its up/down/left/right neighbors (requires `x_dim * y_dim == n_islands`). |
+| `tree <n_children>` | An n-ary tree: each island linked to its parent and up to `n_children` children. |
+| `random <min_edges> <max_edges>` | A **directed** graph: a seed ring guarantees every island is reachable, then each island gets extra random out-edges for a total out-degree in `[min_edges, max_edges]`. |
+
+Multi-word values take their arguments as separate tokens — for example
+`--topology 2d_mesh 3 4` arranges 12 islands in a 3×4 grid.
+
+### Choosing a population strategy
+
+- **`steady_state` is the simpler default** and is what the published
+  classification and RL results use. A population of 30–50 works well.
+- **`islands` helps when the search converges prematurely** — many genomes with
+  near-identical fitness and structure. `--islands_to_extinct 0` disables
+  extinction entirely, giving fully independent parallel searches; raising it
+  increases how aggressively good material is shared.
+- **Total capacity is `n_islands × max_island_size`.** Keep that in the same
+  range as a steady-state population you would otherwise use.
+- **`--topology` trades diversity against spread.** A sparse topology like
+  `ring` keeps islands distinct and resists premature convergence, while a dense
+  `fully_connected` topology spreads strong genomes fastest; `2d_mesh`, `tree`,
+  `star` and `random` sit in between.
+
+Background: island models are a standard technique in
+[evolutionary algorithms](https://en.wikipedia.org/wiki/Evolutionary_algorithm)
+for maintaining population diversity.
+
+---
+
+## Trainers
+
+Once EXAQC generates a genome, a trainer trains it. Every trainer reads its
+hyperparameters from `genome.hyperparameters`, which are provided to the genome
+by EXAQC (with initial values specified by the entry point. This allows hyperparameters
+to potentially be evolved, and also studied at the end of a search to see which work best.
+
+### [`SupervisedTrainer`](./src/trainer/supervised_trainer.py)
+
+[`src/trainer/supervised_trainer.py`](./src/trainer/supervised_trainer.py). Used by both
+[`classification`](#classification) and [`teacher`](#teacher). It is task
+agnostic: it calls `genome.forward` over dataloaders and hands each batch's
+predictions and targets to the caller's loss function and metrics, passing
+targets through untouched. Classification supplies integer class labels with
+[cross-entropy](https://docs.pytorch.org/docs/stable/generated/torch.nn.CrossEntropyLoss.html);
+while teacher imitation supplies float target vectors with a distribution measure.
+
+Before training, the genome's inherited weights are evaluated as **epoch 0**.
+Only the validation history (`validation_epoch_metrics`) has an epoch 0, since
+nothing has been trained yet; training epochs are numbered `1` to `epochs`
+inclusive, so `training_epoch_metrics` starts at epoch 1. Training uses
+[Adam](https://docs.pytorch.org/docs/stable/generated/torch.optim.Adam.html),
+keeps the epoch with the lowest mean of training and validation loss, restores
+its weights at the end, and stops early after `improvement_cutoff` epochs
+without improvement. Epoch 0 competes too: if training never improves on the
+inherited weights they are kept, and `best_epoch` is `0`. With `--epochs 0` no
+training happens at all and every genome is scored on the weights it inherited.
+Epoch 0's training and validation metrics are also kept as
+`initial_training_metrics` and `initial_validation_metrics`, and the objective
+scores them like fitness into `initial_fitness`, so every genome records what
+training added on top of the weights it inherited.
+
+| Hyperparameter | Argument | Description |
+|---|---|---|
+| `epochs` | `--epochs` | Maximum training epochs per genome, after epoch 0; 0 scores the inherited weights only |
+| `learning_rate` | `--learning_rate`, `-lr` | Adam learning rate |
+| `weight_decay` | `--weight_decay` | Adam L2 regularisation |
+| `improvement_cutoff` | `--improvement_cutoff` | Epochs without validation improvement before stopping, 0 to disable |
+| `batch_size` | `--batch_size` | Samples per gradient step |
+
+### [Reinforcement-learning trainers](./src/trainer/reinforcement_trainer.py)
+
+[`src/trainer/reinforcement_trainer.py`](./src/trainer/reinforcement_trainer.py) provides the shared training scaffold — the
+environment abstraction, evaluation, best-weight snapshotting — and each
+algorithm subclasses it. Choose one with `--algo`.
+
+Terminology used throughout: a **step** is one interaction with the environment,
+an **episode** is a full rollout, and an **epoch** is one weight update.
+
+Before training, the genome's inherited weights are evaluated as **episode 0**
+of `evaluation_episode_metrics`. Training episodes are numbered `1` to
+`episodes` inclusive (so `training_episode_metrics` starts at episode 1), with
+an evaluation every `--log_every` episodes and after the last. The
+best-evaluated weights are restored at the end, and episode 0 competes too: if
+training never improves on the inherited weights they are kept, and
+`best_episode` is `0`. With `--episodes 0` no training happens at all and every
+genome is scored on the weights it inherited. The training returns in
+`best_training_metrics` (and so fitness's `train_return_mean`) are taken as of
+`best_episode` -- the weights kept -- not as of the last episode trained, whose
+weights are discarded; when the inherited weights are kept they are episode 0's
+returns. Episode 0's evaluation is also kept as `initial_validation_metrics`, and
+the objective scores it like fitness into `initial_fitness`.
+
+| `--algo` | Class | Continuous actions | Extra decoder outputs |
+|---|---|---|---|
+| `reinforce` | [`ReinforceTrainer`](./src/trainer/reinforce_trainer.py) | yes | 0 |
+| `actor_critic` / `a2c` | [`ActorCriticTrainer`](./src/trainer/actor_critic_trainer.py) | yes | 1 |
+| `ppo` | [`PPOTrainer`](./src/trainer/ppo_trainer.py) | yes | 1 |
+| `q_learning` | [`QLearningTrainer`](./src/trainer/q_learning_trainer.py) | no | 0 |
+| `sarsa` | [`QLearningTrainer`](./src/trainer/q_learning_trainer.py) (on-policy target) | no | 0 |
+
+Advantage methods need a state value, and they get it from one **extra decoder
+output** rather than a separate head — so the value function is part of the
+genome and is evolved and serialized along with the policy. Because those
+outputs must be unconstrained, use `--decoding linear` (not `clipped`) with
+`actor_critic`, `a2c` and `ppo`.
+
+**On a continuous environment, prefer `--decoding linear` for every algorithm,
+including `reinforce`.** A continuous policy reads `2 * n_actions` outputs — the
+per-dimension action mean *and* its log-standard-deviation. `--decoding clipped`
+passes circuit outputs through unchanged, so with `-qom probs` (which are
+non-negative) both halves are forced non-negative: the action mean can never go
+below `0` on a `[-1, 1]` action space, and `log_std >= 0` pins the sampled
+action noise at `sigma >= 1`. Measured on Walker2d, `clipped` yields means in
+`[0.00, 1.00]` and `sigma` in `[1.00, 1.44]`, where `linear` yields means in
+`[-0.27, 0.22]` and `sigma` in `[0.85, 1.17]`. Greedy evaluation (the default)
+hides the second half of this from fitness, because it reads only the mean and
+discards `log_std`, but training still samples with that noise — see
+[`--eval_policy`](#evaluation-regime---eval_policy).
+
+Shared arguments: `--episodes`, `--eval_episodes`, `--eval_policy`,
+`--max_steps`, `--gamma`, `--learning_rate`, `--entropy_coef`, `--log_every`,
+`--improvement_cutoff`, `--ema_alpha`, `--training_seed`, `--eval_seed`.
+
+##### Training and evaluation seeds (`--training_seed` and `--eval_seed`)
+
+Training and evaluation episodes are seeded from **separate** bases, held in
+ranges that cannot overlap — otherwise a genome could be scored on an episode
+it had just trained on, which flatters it. Each trainer declares the seed range
+its training consumes (`training_seed_span`), and the evaluation range is kept
+clear of it.
+
+| | `--training_seed` (training) | `--eval_seed` (evaluation) |
+|---|---|---|
+| unset (default) | each genome draws its own, so genomes do not all train on the same episodes | each genome draws its own, so each is scored on its own episodes |
+| set | every genome trains on the same episodes | every genome is scored on the **same** episodes, with the same sampling noise |
+
+The evaluation seed determines an evaluation completely: evaluation episode `i`
+resets from `eval_seed + i`, and under a stochastic policy (see
+[`--eval_policy`](#evaluation-regime---eval_policy)) samples its actions from a
+generator seeded with the same value rather than from the training generator.
+So a genome re-evaluated with the `evaluation_seed` its metadata records scores
+the same again, genomes sharing a pinned `--eval_seed` differ only in their
+policies, and evaluating never changes the random numbers training draws.
+
+Setting `--eval_seed` is worth considering when you care about *ranking*
+genomes against each other. With it unset, each genome is scored on its own
+draw of episodes, so a search that keeps the best of many thousands partly
+selects for a lucky draw; pinning it gives every genome the same episodes
+(common random numbers) at the cost of tuning the population to that one set.
+
+If `--eval_seed` is set and `--training_seed` is not, the training seed is moved out of
+the way rather than the evaluation seed, so every genome keeps facing the same
+evaluation episodes. Pinning **both** into overlapping ranges is a
+configuration error and is rejected.
+
+##### Evaluation regime (`--eval_policy`)
+
+A genome's fitness is the return it achieves during evaluation, and
+`--eval_policy` decides **which policy** that measures. Training always explores:
+the policy-gradient trainers sample their actions and the value-based ones act
+ε-greedily. Evaluation, by default, takes the deterministic action instead.
+
+| `--eval_policy` | Evaluation uses |
+|---|---|
+| `greedy` (default) | the deterministic action: argmax over logits (or Q-values), or the distribution mean |
+| `stochastic` | an action sampled from the policy (`reinforce`, `actor_critic`, `a2c`, `ppo` only) |
+| `both` | both regimes; `greedy` drives fitness, and both means are recorded |
+
+Greedy is the default for every algorithm. It follows the common convention for
+evaluating a trained policy: Stable-Baselines3's `evaluate_policy` and
+`EvalCallback` default to deterministic actions, and the RL Zoo evaluates
+deterministically everywhere except Atari and MiniGrid. It also suits an
+evolutionary search. A stochastic score adds the policy's own sampling noise to
+fitness. It also penalizes a genome for the exploration noise (`log_std`) that its
+training, and its offspring's, relies on.
+
+`q_learning` and `sarsa` accept only `greedy`. Their outputs are Q-values, not a
+policy distribution, so sampling from them would score a policy they never learn.
+Asking for `stochastic` or `both` with them is rejected at startup.
+
+Two consequences worth knowing:
+
+- **Fitness under different regimes is not comparable.** The regime each genome
+  was scored under is recorded in its `fitness` as `eval_policy`, and under
+  `--eval_policy both` the two regimes' means are recorded as
+  `eval_greedy_return_mean` / `eval_stochastic_return_mean`.
+- **A stochastic evaluation is noisier than a greedy one**, since the policy's
+  own sampling adds variance on top of the environment's. `--eval_episodes`
+  (default `10`) buys down that noise, and `--improvement_cutoff` — measured in
+  episodes, so patience is `improvement_cutoff / log_every` evaluations — can
+  stop a genome early on an unlucky evaluation if it is set too tight.
+
+#### [REINFORCE](./src/trainer/reinforce_trainer.py)
+
+Monte-Carlo policy gradient: run one episode, compute discounted returns, take
+one gradient step. Simplest and highest variance.
+
+| Argument | Default | Description |
+|---|---|---|
+| `--baseline` | `mean` | `mean` subtracts the batch-mean return to reduce variance; `none` disables it |
+
+#### [Actor-critic (a2c)](./src/trainer/actor_critic_trainer.py)
+
+Adds a learned state-value baseline read from the extra decoder output, which
+lowers variance relative to REINFORCE.
+
+| Argument | Default | Description |
+|---|---|---|
+| `--value_coef` | `0.5` | Weight on the value loss relative to the policy loss |
+
+#### [PPO](./src/trainer/ppo_trainer.py)
+
+[Proximal Policy Optimization](https://arxiv.org/abs/1707.06347). The only
+algorithm whose outer iteration spans several episodes: it collects a rollout,
+computes [GAE](https://arxiv.org/abs/1506.02438) advantages, then performs many
+minibatch updates under a clipped objective.
+
+| Argument | Default | Description |
+|---|---|---|
+| `--rollout_steps` | `512` | Environment steps collected per rollout |
+| `--ppo_passes` | `4` | Passes over each rollout (PPO papers call these "epochs") |
+| `--ppo_minibatch` | `128` | Transitions per weight update |
+| `--ppo_clip` | `0.2` | Probability-ratio clip range |
+| `--gae_lambda` | `0.95` | GAE bias/variance trade-off |
+
+#### [Q-learning and SARSA](./src/trainer/q_learning_trainer.py)
+
+Semi-gradient temporal-difference learning that treats the circuit's outputs as
+action values `Q(s, ·)`, updating at *every environment step*. Actions are
+chosen ε-greedily. `q_learning` bootstraps off-policy (`max_a' Q`), `sarsa`
+on-policy (the ε-greedy action actually taken). Both enumerate actions, so they
+are **discrete-only** and refuse continuous environments.
+
+| Argument | Default | Description |
+|---|---|---|
+| `--epsilon` | `0.2` | Initial exploration probability |
+| `--epsilon_min` | `0.05` | Floor for exploration |
+| `--epsilon_decay` | `0.995` | Per-episode multiplicative decay |
+
+### Choosing trainer hyperparameters
+
+- **Circuit simulation dominates the cost.** `episodes × max_steps` is the
+  number of forward passes per genome, and that is multiplied by
+  `--number_genomes`. Start with `--episodes 60 --max_steps 500` and shrink if a
+  run is too slow.
+- **Learning rate.** Quantum gate parameters are angles, so they tolerate larger
+  steps than deep classical nets: `1e-2` is the RL default, while supervised
+  classification and teacher default to `5e-3`. If loss oscillates, lower it; if
+  nothing moves, raise it.
+- **`--gamma`** near `0.99` suits long-horizon control; lower it (`0.9`–`0.95`)
+  for short episodes.
+- **`--entropy_coef`** above `0` (try `0.01`) if the policy collapses to one
+  action early.
+- **`--improvement_cutoff`** is the biggest time saver: it abandons genomes that
+  have stopped improving so the search spends its budget elsewhere.
+- **Algorithm choice.** `reinforce` is the simplest baseline; `ppo` is usually
+  the most sample-efficient and is the best first choice for continuous control;
+  `q_learning`/`sarsa` suit small discrete environments like FrozenLake.
+
+Background: [Spinning Up in Deep RL](https://spinningup.openai.com/en/latest/)
+is an excellent primer on these algorithms and their hyperparameters, and
+[Gymnasium's documentation](https://gymnasium.farama.org/) describes each
+environment's reward scale and episode length.
+
+---
+
+## Run outputs (GenomeArchive)
+
+[`src/utils/genome_archive.py`](./src/utils/genome_archive.py) owns everything a
+search writes to disk. A search can evaluate tens of thousands of genomes, and
+writing several files for each one overwhelms the metadata servers of shared
+cluster file systems, so every evaluated genome is stored in a **single SQLite
+database**, `genomes.sqlar`, instead. The search draws no images at all:
+architecture diagrams and training plots are drawn on demand by the
+[`exaqc_dashboard`](#exaqc_dashboard) web page, and the best genomes are found
+there (or by querying the archive) rather than rewritten as files whenever the
+search improves.
+
+### Run output arguments
+
+These are shared by [`classification`](#classification), [`teacher`](#teacher)
+and [`reinforcement_learning`](#reinforcement_learning), because all three call
+`GenomeArchive.initialize_parser()`.
+
+| Argument | Default | Description |
+|---|---|---|
+| `--out_dir` | `artifacts` | Directory the run's outputs are written into |
+| `--shared_file_system` | off | Use SQLite settings that are safe on a shared network file system (NFS, Lustre, GPFS): a persistent rollback journal instead of write-ahead logging |
+| `--save_run_log` | off | Also write the run's log to `run.log` in `--out_dir`, at `--logging_level` |
+| `--restart` | `auto` | Whether to continue the run already in `--out_dir`: `auto` continues a run when there is one and starts a new one otherwise, `require` fails when there is nothing to continue, `never` always starts a new run and refuses to write into a directory that already holds one |
+| `--overwrite_archive` | off | Discard the run already in `--out_dir` and start a new one in its place |
+| `--force_restart` | off | Restart even when this command's arguments differ from the ones the run recorded, continuing it as it was configured |
+
+Pass `--shared_file_system` when `--out_dir` is on a cluster's shared file
+system. [Write-ahead logging](https://sqlite.org/wal.html), the default, does not
+work over network file systems, but on a local disk it lets the viewer read a run
+without ever delaying the search's writes.
+
+### Restarting a run
+
+A run that was stopped, canceled or crashed is continued from its archive, which
+records everything the search needs: the arguments it was started with, every
+genome it evaluated, which of them the population held, and the highest gate
+innovation number it handed out. This is the default, so **re-running the same
+command continues the run**, and raising `--number_genomes` extends it:
+
+```
+python3 -m src.examples.teacher --teacher half_adder --input_qubits 2 --output_qubits 2 \
+    -ms uniform 1 3 -ps uniform 2 5 --out_dir ./artifacts/half_adder \
+    --number_genomes 5000 islands --n_islands 20 --max_island_size 5
+```
+
+`--number_genomes` is the **total** for the run, so a restart evaluates however
+many it has left: a run stopped after 1,200 of 5,000 genomes evaluates 1,800 more,
+and re-running a finished run does nothing. Because the default `auto` starts a
+new run when there is nothing to continue, that one command serves as both the
+first submission and every requeue of a cluster job. Pass `--restart require` to
+fail instead of starting a new run, which catches a mistyped `--out_dir`.
+
+The archive is authoritative: a restart rebuilds the search from the arguments
+the run recorded, so genome numbering, gate innovation numbers, the population,
+each island's members, connections and status, and the best genomes all continue
+rather than starting over: an island an extinction event emptied keeps
+repopulating from its best neighbor, and one that never filled keeps
+initializing. Only `--number_genomes` and the flags saying where and how
+this process runs (`--out_dir`, `--shared_file_system`, `--device`,
+`--logging_level`, `--timing_report_every`) may differ; any other changed argument is refused, naming
+what differs, unless `--force_restart` says to continue the run as it was
+configured. The random number generators' state is not recorded, so a restarted
+run continues the search rather than reproducing the run that would have
+happened.
+
+To start over instead of continuing, pass `--overwrite_archive`, which discards
+the run in `--out_dir` -- its archive and best-genome files -- and starts a new
+one in its place; it takes precedence over the default offer to continue. Pass
+`--restart never` to refuse to touch a directory that already holds a run at all.
+Runs written before archives recorded their arguments and gate innovation numbers,
+or before they recorded per-genome timing (archive format 6), cannot be
+restarted; they are still listed, browsed and charted as before. A format-6 run can
+be restarted: its archive gains the format-7 columns, which its earlier genomes
+leave empty. Format 7 also changed reinforcement learning's `train_return_mean`
+to be taken at the best episode, so a restarted format-6 RL run mixes the two
+definitions in its fitness.
+
+### What a run directory holds
+
+However many genomes a run evaluates, its directory holds the same files:
+
+| File | Contents |
+|---|---|
+| `genomes.sqlar` | Every evaluated genome's JSON, plus a summary and parent links for each (for sorting and tracing ancestry), how the population changed after every insertion, for an MPI run where the master's time went (every 100 insertions), and what produced the run: its command line, the arguments it was started with (so it can be [restarted](#restarting-a-run)), each restart since, its git commit, host and library versions, and for an island search how its islands are connected |
+| `run.log` | The run's log, written only when `--save_run_log` is passed, at `--logging_level` (a search logs a line per gate below its default level, so a debug-level log of a long run grows to many gigabytes) |
+| `annotations.sqlite` | Notes and tags on the run and its genomes, written only by the [dashboard](#exaqc_dashboard) or the [MCP interface](#exaqc_mcp) when started with `--allow_annotations` (a search never creates it, and nothing writes annotations into `genomes.sqlar`) |
+
+Every evaluated genome is recorded, including those discarded as duplicates of a
+better genome. Genome 1, the empty seed circuit every initial genome is mutated
+from, is not: it is never evaluated, so it has no fitness and does not
+count towards `--number_genomes` (the viewer labels it as the seed wherever it
+appears as a parent).
+
+Runs no longer write `best_fitness.*` / `best_target_metric.*` files beside the
+archive. The best genomes are shown in the dashboard (which can download any
+genome's JSON), or found with a query and loaded by number:
+
+```
+sqlite3 ./artifacts/iris/genomes.sqlar "select genome_number, loss from genomes order by loss limit 1"
+sqlite3 ./artifacts/iris/genomes.sqlar "select genome_number, target_metric from genomes order by target_metric desc limit 1"
+```
+
+### Working with a run's archive
+
+`genomes.sqlar` uses the standard
+[SQLite Archive](https://sqlite.org/sqlar.html) format, so the stock `sqlite3`
+shell can list it and extract the genomes as files. The extracted
+`all_genomes/genome_<n>.json` files are the same files older runs wrote:
+
+```
+sqlite3 ./artifacts/iris/genomes.sqlar -Atv
+sqlite3 ./artifacts/iris/genomes.sqlar -Ax
+```
+
+The single-genome tools ([`refine_genome`](#refine_genome), [`evaluate`](#evaluate)
+and [`visualize_rl`](#visualize_rl)) take a genome either as a JSON file
+(`--genome_json`) or straight from an archive (`--archive <run directory or
+genomes.sqlar> --genome_number <n>`), and the analysis scripts read archives as
+well as the `all_genomes/` directories of older runs.
+
+An archive is also an ordinary database, so a run can be queried directly. Each
+genome's `loss` and `target_metric` are indexed columns generated from its stored
+fitness, which keeps ranking queries fast however long the run is (query those
+columns rather than `json_extract(fitness, '$.loss')`, which cannot use the
+index), and `saved_at` is indexed too, so a run's latest write is a lookup:
+
+```
+sqlite3 ./artifacts/iris/genomes.sqlar "select genome_number, loss from genomes order by loss limit 5"
+sqlite3 ./artifacts/iris/genomes.sqlar "select step, added, removed from population_events"
+```
+
+The search's progress is not stored as a fixed set of statistics. `population_events`
+records only which genomes entered and left the population at each insertion, so the
+population at any step is everything added up to it minus everything removed. Every
+population statistic is then recomputed from the genomes themselves, which is what
+lets progress be charted against any metric a run recorded -- a loss, a return, a
+fidelity, a gate count -- rather than only the handful a search would have had to
+choose in advance, while it was still running. Each genome's summary row also carries `n_cnot` and `n_rot`
+(its circuit complexity once decomposed); three records of every per-epoch or
+per-episode metric it recorded, keyed `<series>.<metric>`: `initial_metrics` (step 0,
+the inherited weights before training), `best_metrics` (its `best_epoch` or
+`best_episode`, the weights it keeps and its fitness describes -- what the dashboard
+charts and sorts by) and `last_metrics` (the last step trained, whose weights are
+discarded when training stopped improving); `initial_fitness` (the fitness its
+inherited weights had), with `initial_loss`, `initial_target_metric` and
+`target_gain` (`target_metric - initial_target_metric`: what training added) as
+columns; and when and where it was evaluated:
+`generated_at_insertion` (how many genomes had been inserted when it was created, so
+`insertion - generated_at_insertion` is how many insertions happened while it was
+being evaluated), `evaluation_seconds`, `evaluated_host` and `evaluated_rank`, and
+how long it spent being processed: `request_wait_seconds` (how long its worker
+waited for it, under MPI), `generation_seconds` (how long the search took to
+generate it) and `turnaround_seconds` (from being generated to being inserted, on
+the search's own clock, so it includes evaluation, transfer and time queued for
+the master). Archives written before these three columns (format 6) lack them,
+and the dashboard shows their runs as having no timing recorded. Archives written
+before format 7 instead have a `final_metrics` column (the last-step record) and
+none of the metric projections or initial fitness: they read as unrecorded, so such
+a run offers no training metrics to chart. Reopening an older archive to continue its
+run (`--restart`) adds the missing columns, which its earlier genomes leave empty;
+[`backfill_archive`](#backfill_archive) fills them in from the genomes' stored JSON. A
+discarded genome's row gives its `discard_reason`: `worse_than_population`,
+`duplicate_of_better` or `generated_before_repopulation`. The genome's JSON holds
+the rest -- `timing` (when it was generated, when its evaluation started and
+finished, and when it was inserted, plus under MPI `request_wait_seconds`: how
+long its worker waited for it), `evaluated_by` (rank, host and process id),
+for island searches the `target_island_status` it was generated under (a
+`repopulating` island draws its parents from its best neighbor), and the genome a discarded
+genome `lost_to`. [`exaqc_mcp`](#exaqc_mcp) exposes the
+same queries to an agent.
+
+An MPI run's archive also has a `master_timing` table: one row per 100 insertions
+(and one for the final partial interval), keyed by the insertion count ending it,
+with its `wall_seconds`, how many `genomes` it inserted, and as JSON the seconds and
+count of each of the master's `phases` (`idle`, `generate`, `send`, `deserialize`,
+`insert`) and `insert_parts` (`population`, `archive`, `population_events`, and
+in runs from before the search stopped writing best-genome files, `best_files`)
+-- the same breakdown the master logs every
+`--timing_report_every` insertions:
+
+```
+sqlite3 ./artifacts/iris/genomes.sqlar "select step, wall_seconds, genomes, json_extract(phases, '$.idle.seconds') from master_timing"
+```
+
+---
+
+## [`Examples`](./src/examples)
+
+All entry points live in [`src/examples/`](./src/examples). The three evolutionary ones
+(`classification`, `teacher`, `reinforcement_learning`) share the search,
+population and [run output](#run-output-arguments) arguments described above; the
+rest are single-genome tools, the run viewer and its MCP interface, and the
+archive backfill.
+
+Common to the evolutionary entry points:
+
+| Argument | Default | Description |
+|---|---|---|
+| `--device` | `cpu` | PyTorch device |
+| `--seed` | `0` | Random seed (`classification` and `teacher`); `reinforcement_learning` seeds training and evaluation separately with `--training_seed` and `--eval_seed` instead |
+| `--logging_level` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
+
+### [`classification`](./src/examples/classification.py)
+
+Evolves hybrid circuits to classify tabular or image datasets.
+
+```
+mpiexec -n 12 python3 -m src.examples.classification \
+    --dataset iris --input_qubits 4 --output_qubits 2 --batch_size 3 \
+    --number_genomes 1000 \
+    -ms uniform 1 3 -ps uniform 5 5 \
+    --binary_crossover_rate 0.1 --n_ary_crossover_rate 0.1 --exponential_crossover_rate 0.1 \
+    -qim u3 -qom probs --encoding linear --decoding linear \
+    --out_dir ./artifacts/iris \
+    steady_state --max_population_size 30
+```
+
+**Datasets.** Tabular: `iris`, `wine`, `breast_cancer` (loaded via
+[scikit-learn](https://scikit-learn.org/stable/datasets/toy_dataset.html)) and
+`seeds` ([UCI](https://archive.ics.uci.edu/dataset/236/seeds)). Image:
+`mnist`, `fashion_mnist`, `cifar10` (via
+[torchvision](https://docs.pytorch.org/vision/stable/datasets.html)).
+
+| Argument | Default | Description |
+|---|---|---|
+| `--dataset` | *required* | One of the datasets above |
+| `--epochs` | `30` | Training epochs per genome, after the epoch-0 evaluation of its inherited weights; 0 scores them only |
+| `--learning_rate`, `-lr` | `5e-3` | Adam learning rate |
+| `--weight_decay` | `0.0` | Adam L2 regularisation |
+| `--improvement_cutoff` | `3` | Epochs without validation improvement before stopping, 0 to disable |
+| `--batch_size` | `5` | Samples per gradient step |
+| `--validation_batch_size` | = `--batch_size` | Validation batch size |
+| `--validation_fraction` | `0.1` | Held-out fraction when no fixed split exists |
+| `--normalization` | `minmax` | `none`, `zscore`, `minmax` |
+| `--training_samples` / `--validation_samples` | all | Cap the splits for quick runs |
+| `--data_dir` | `data` | Where datasets are stored |
+| `--download_dataset` | on | Download image datasets if missing |
+| `--num_workers` / `--pin_memory` | `0` / off | Dataloader settings |
+| `--encoder_config` | `configs` | JSON file of encoder options |
+| `--cnn_channels` | `[16, 32]` | Channels for the two CNN encoder conv layers |
+| `--cnn_pooled_size` | `4` | Spatial size the CNN pools down to |
+| `--cnn_dropout` | `0.0` | Dropout inside the CNN encoder |
+
+**Guidance.** Image datasets need `--encoding cnn`, which convolves and pools
+before the circuit; tabular data must *not* use it. `--encoding identity` passes
+features straight through, so the feature count must equal the circuit's input
+width — pair it with `-qim amplitude`, which absorbs many features into few
+qubits. `--decoding clipped` normalises circuit outputs into class scores and
+suits `probs`. Fitness records `loss` and `target_metric` (mean class accuracy).
+
+**Script.** [`scripts/run_classification.sh`](./scripts/run_classification.sh)
+runs the non-vision datasets locally, configured by the
+[shared variables](#local-run-scripts) and these. It fixes
+`-ms uniform 1 3 -ps uniform 2 5` and crossover rates of `0.0` (binary), `0.2`
+(n-ary) and `0.1` (exponential).
+
+| Variable | Default | Description |
+|---|---|---|
+| `DATASET` | `iris` | `--dataset`: `breast_cancer`, `iris`, `seeds` or `wine` |
+| `NUMBER_GENOMES` | `1000` | `--number_genomes` |
+| `EPOCHS` | `30` | `--epochs` |
+| `IMPROVEMENT_CUTOFF` | `3` | `--improvement_cutoff` |
+| `BATCH_SIZE` | `3` | `--batch_size` |
+
+### [`teacher`](./src/examples/teacher.py)
+
+Evolves **purely quantum** circuits to reproduce the outputs of a known
+reference ("teacher") circuit. There is nothing classical to learn, so genomes
+carry no encoder or decoder and there are no `--encoding`/`--decoding` options.
+The dataset is generated: random input angles are drawn and the teacher's
+outputs become the targets.
+
+```
+mpiexec -n 12 python3 -m src.examples.teacher \
+    --teacher half_adder --input_qubits 2 --output_qubits 2 \
+    --number_genomes 1000 --loss fidelity --epochs 30 --batch_size 8 \
+    -ms uniform 1 3 -ps uniform 5 5 \
+    --binary_crossover_rate 0.1 --n_ary_crossover_rate 0.1 --exponential_crossover_rate 0.1 \
+    -qim ry -qom probs \
+    --out_dir ./artifacts/half_adder \
+    steady_state --max_population_size 30
+```
+
+**Teachers.** `identity`, `x_out4`, `bell_out`, `copy_in_to_out`,
+`parity012_to_out4`, `input_controlled_bell`, `2layer_out_block`, `grover`,
+`half_adder`. Each is itself a circuit genome, so it runs on either backend, and
+each reports clearly if the requested wires cannot express it.
+
+Input wires are the first `--input_qubits` wires and readout wires are the
+`--output_qubits` wires after them, so a teacher spans
+`--input_qubits + --output_qubits` wires and the two sets never overlap.
+
+| Argument | Default | Description |
+|---|---|---|
+| `--teacher` | *required* | Reference circuit to imitate |
+| `--loss` | `fidelity` | `fidelity`, `angle`, `kl`, `mse` |
+| `--quantum_input_mode`, `-qim` | `ry` | `rx`, `ry`, `rz` (one value per input wire) |
+| `--n_training_samples` | `64` | Generated training samples |
+| `--n_validation_samples` | `64` | Generated validation samples |
+| `--batch_size` | `5` | Samples per gradient step |
+| `--epochs` | `30` | Training epochs per genome, after the epoch-0 evaluation of its inherited weights; 0 scores them only |
+| `--learning_rate`, `-lr` | `5e-3` | Adam learning rate |
+| `--improvement_cutoff` | `3` | Epochs without validation improvement before stopping, 0 to disable |
+
+**Losses.** All four are reported every epoch regardless of which is optimized,
+so runs stay comparable.
+
+| Loss | Range | Meaning |
+|---|---|---|
+| `fidelity` | 0–1, higher better | Classical ([Bhattacharyya](https://en.wikipedia.org/wiki/Bhattacharyya_distance)) overlap of the distributions; optimized as `1 − fidelity` |
+| `angle` | 0–π/2, lower better | [Bures angle](https://en.wikipedia.org/wiki/Bures_metric), `arccos(√fidelity)` — a true distance |
+| `kl` | ≥ 0, lower better | [KL divergence](https://en.wikipedia.org/wiki/Kullback%E2%80%93Leibler_divergence) from target to prediction |
+| `mse` | ≥ 0, lower better | Mean squared error; makes no distribution assumption |
+
+`fidelity`, `angle` and `kl` compare probability distributions and therefore
+require `-qom probs`. `mse` also works with `-qom expval`.
+
+**Guidance.** Start with `bell_out` or `copy_in_to_out` to confirm a setup —
+they are shallow and reachable in a few gates. `grover` is limited to 2 or 3
+total wires, because a wider multi-controlled Z would need a gate the search is
+not allowed to use. `fidelity` is the most forgiving objective; `kl` punishes
+missing probability mass hardest and can dominate the reported scale early on.
+
+### [`reinforcement_learning`](./src/examples/reinforcement_learning.py)
+
+Evolves hybrid circuits as control policies for
+[Gymnasium](https://gymnasium.farama.org/) environments.
+
+```
+mpiexec -n 12 python3 -m src.examples.reinforcement_learning \
+    --env cartpole --algo reinforce \
+    --input_qubits 4 --output_qubits 2 --episodes 100 --number_genomes 1000 \
+    --mutation_strategy uniform 1 3 --parent_strategy uniform 5 5 \
+    --binary_crossover_rate 0.1 --n_ary_crossover_rate 0.1 --exponential_crossover_rate 0.1 \
+    -qim u3 -qom probs --encoding linear --decoding linear \
+    --out_dir ./artifacts/cartpole \
+    steady_state --max_population_size 50
+```
+
+**Environments.**
+
+| `--env` | Gymnasium id | Actions |
+|---|---|---|
+| `cartpole` | [CartPole-v1](https://gymnasium.farama.org/environments/classic_control/cart_pole/) | discrete |
+| `acrobot` | [Acrobot-v1](https://gymnasium.farama.org/environments/classic_control/acrobot/) | discrete |
+| `mountaincar` | [MountainCar-v0](https://gymnasium.farama.org/environments/classic_control/mountain_car/) | discrete |
+| `frozenlake` | [FrozenLake-v1](https://gymnasium.farama.org/environments/toy_text/frozen_lake/) | discrete |
+| `mountaincar_continuous` | [MountainCarContinuous-v0](https://gymnasium.farama.org/environments/classic_control/mountain_car_continuous/) | continuous |
+| `pendulum` | [Pendulum-v1](https://gymnasium.farama.org/environments/classic_control/pendulum/) | continuous |
+| `hopper` | [Hopper-v5](https://gymnasium.farama.org/environments/mujoco/hopper/) | continuous |
+| `walker2d` | [Walker2d-v5](https://gymnasium.farama.org/environments/mujoco/walker2d/) | continuous |
+| `halfcheetah` | [HalfCheetah-v5](https://gymnasium.farama.org/environments/mujoco/half_cheetah/) | continuous |
+| `ant` | [Ant-v5](https://gymnasium.farama.org/environments/mujoco/ant/) | continuous |
+| `humanoid` | [Humanoid-v5](https://gymnasium.farama.org/environments/mujoco/humanoid/) | continuous |
+
+The MuJoCo environments require `gymnasium[mujoco]` (see the
+[MuJoCo docs](https://mujoco.readthedocs.io/en/stable/)). Continuous
+environments work only with `reinforce`, `actor_critic`/`a2c` and `ppo`.
+
+| Argument | Default | Description |
+|---|---|---|
+| `--env` | *required* | Environment above |
+| `--algo` | *required* | `reinforce`, `actor_critic`, `a2c`, `ppo`, `q_learning`, `sarsa` |
+| `--number_genomes` | `1000` | Genomes to evaluate |
+| `--input_qubits` | *required* | Input qubits |
+| `--output_qubits` | *required* | Readout qubits. Must be wide enough to carry the policy's outputs — at least `ceil(log2(n_policy_outputs))`, where a discrete policy needs one output per action and a continuous one two per action dimension |
+| `--episodes` | `60` | Training episodes per genome, after the episode-0 evaluation of its inherited weights; 0 scores them only |
+| `--eval_episodes` | `10` | Episodes used to score a genome |
+| `--eval_policy` | `greedy` | Action-selection regime evaluation scores under: `greedy`, `stochastic` or `both` (`stochastic`/`both` need a policy-gradient `--algo`) |
+| `--eval_seed` | random per genome | Base seed for evaluation episodes and their action sampling, kept disjoint from the training seeds; set it to score every genome on the same episodes with the same sampling noise |
+| `--forward_reward_weight` | the environment's own | MuJoCo: weight on forward progress (`reward += weight * dx/dt`) |
+| `--ctrl_cost_weight` | the environment's own | MuJoCo: weight on the control cost (`reward -= weight * sum(a^2)`) |
+| `--healthy_reward` | the environment's own | MuJoCo: per-step bonus for staying upright — the bonus itself, not a coefficient (not accepted by `halfcheetah`) |
+| `--contact_cost_weight` | the environment's own | MuJoCo: weight on the contact-force cost (`ant` and `humanoid` only) |
+| `--terminate_when_unhealthy` / `--no-terminate_when_unhealthy` | the environment's own | MuJoCo: whether a fall ends the episode (not accepted by `halfcheetah`) |
+| `--reset_noise_scale` | the environment's own | MuJoCo: scale of the random initial-state perturbation at reset |
+| `--max_steps` | `500` | Step cap per episode |
+| `--log_every` | `10` | Evaluate and log every N episodes |
+| `--improvement_cutoff` | `30` | Episodes without an improved evaluation before stopping, 0 to disable |
+| `--ema_alpha` | `0.05` | Smoothing for the reported training return |
+| `--train_vs_validation_bias`, `-tvb` | `0.1` | Weight of the training return in fitness: `loss = -(tvb × training return + (1 − tvb) × evaluation return)` |
+| `--training_seed` | random | Base seed for a genome's training episodes, PyTorch and NumPy. By default each genome draws its own (recorded as `training_seed` in its metadata), so genomes are not all trained on the same episodes; give a seed to train every genome on the same ones |
+| `--map_name` / `--is_slippery` | `4x4` / off | FrozenLake only |
+
+Plus the per-algorithm arguments in [Trainers](#trainers).
+
+#### MuJoCo reward knobs
+
+The MuJoCo locomotion rewards are the sum of three terms, each exposed as a
+flag that defaults to the environment's own value — pass nothing and Gymnasium's
+defaults apply unchanged:
+
+| term | flag | Walker2d default |
+|---|---|---|
+| forward progress | `--forward_reward_weight` × `dx/dt` | `1.0` |
+| staying upright | `--healthy_reward` per step | `1.0` |
+| control effort | −`--ctrl_cost_weight` × `sum(a^2)` | `0.001` |
+
+Not every environment has every term, and the flags are checked against the
+chosen `--env` rather than silently ignored: `halfcheetah` cannot fall over, so
+it has no `--healthy_reward` or `--terminate_when_unhealthy`, and only `ant` and
+`humanoid` have `--contact_cost_weight`.
+
+**`--healthy_reward` is usually the one that matters**, because it is a flat
+per-step bonus rather than a coefficient. At the default of `1.0` with
+`--max_steps 1000`, a policy that merely stays upright for the whole episode
+banks 1000 — which can be far more than walking earns. A measured example: a
+Walker2d genome scoring 1067.9 scored 67.9 with `--healthy_reward 0.0`, so 94%
+of its fitness was the survival bonus and its actual forward progress over the
+8 simulated seconds was about half a metre. Lowering it (say `0.1`) or raising
+`--forward_reward_weight` rebalances the two.
+
+`--reset_noise_scale` is not a reward term but is exposed alongside them, since
+it sets how much the episodes a genome is evaluated on differ from one another.
+Raising it well past the default changes the task rather than the measurement:
+on Walker2d, going from `0.025` to `0.05` roughly halves the achievable return.
+
+A genome records the knobs it was evolved under, so `refine_genome` and
+`visualize_rl` rebuild the same environment rather than reverting to the
+defaults. Runs with different knobs are not comparable with one another.
+
+**Guidance.** The decoder must produce one output per action (plus one more for
+`actor_critic`/`a2c`/`ppo`), which the entry point sizes automatically from the
+environment — so use `--decoding linear` for those algorithms. `cartpole` is the
+fastest environment to sanity-check a configuration. Fitness records
+`train_return_mean`, `eval_return_mean`, `best_episode_return` and the
+`eval_policy` those evaluation returns were measured under (see
+[`--eval_policy`](#evaluation-regime---eval_policy); under `--eval_policy both`
+it also records `eval_greedy_return_mean` and `eval_stochastic_return_mean`).
+Genomes scored under different regimes are not comparable, so `eval_policy` is
+what tells you whether two runs can be put on the same axes. Genomes are
+ranked by `loss`, which weights the evaluation return (episodes on the
+best checkpoint) far above the smoothed training return by default: the training
+return is a short, noisy sample, so ranking mostly on it selects genomes that got
+lucky episodes rather than ones whose policies evaluate well.
+
+**Script.** [`scripts/run_rl.sh`](./scripts/run_rl.sh) runs a search locally,
+configured by the [shared variables](#local-run-scripts) and these. It is the
+local counterpart to the cluster job script `scripts/exaqc_rl_job.sh`, with the
+same fixed trainer settings: `--algo ppo --learning_rate 0.0005
+--rollout_steps 2048 --max_steps 1000 --entropy_coef 0.015 --eval_episodes 20
+--ema_alpha 0.1 -ms uniform 1 3 -ps uniform 2 5`.
+
+| Variable | Default | Description |
+|---|---|---|
+| `ENVIRONMENT` | `halfcheetah` | `--env` |
+| `NUMBER_GENOMES` | `2000` | `--number_genomes` |
+| `EPISODES` | `220` | `--episodes`; 0 scores inherited weights without training |
+| `IMPROVEMENT_CUTOFF` | `5` | `--improvement_cutoff`; 0 disables early stopping |
+| `LOG_EVERY` | `1` | `--log_every` |
+| `EVAL_SEED` | `50` | `--eval_seed`; set empty (`EVAL_SEED=`) to draw one per genome |
+
+### [`refine_genome`](./src/examples/refine_genome.py)
+
+Reloads one saved genome and trains it further — useful for giving the best
+genome of a search a longer run than the search could afford.
+
+```
+python3 -m src.examples.refine_genome --archive ./artifacts/iris --genome_number 11
+```
+
+Genomes are self-describing: EXAQC stamps the `task` and `task_target` onto
+every genome it generates, so nothing but where the genome is needs to be given.
+The stored hyperparameters are reused unchanged unless overridden.
+
+| Argument | Default | Description |
+|---|---|---|
+| `--genome_json` | *one of `--genome_json` / `--archive` is required* | A genome's JSON, e.g. downloaded from the dashboard |
+| `--archive` | *one of `--genome_json` / `--archive` is required* | A run's `genomes.sqlar`, or the run directory holding it |
+| `--genome_number` | — | Genome to load from `--archive` (required with it) |
+| `--set KEY=VALUE` | — | Override a stored hyperparameter; repeatable |
+| `--out_dir` | `artifacts` | Where the refined genome and diagram are written |
+| `--save_circuit` | on | Also write the architecture diagram |
+| `--save_training_plot` | off | Also write a training-history plot |
+| `--device` | `cpu` | PyTorch device |
+
+```
+python3 -m src.examples.refine_genome --archive ./artifacts/iris --genome_number 11 \
+    --out_dir ./refined --set epochs=200 --set learning_rate=0.01
+```
+
+Each override is coerced to the type the hyperparameter already had, and an
+unknown key is rejected rather than silently added. The refined genome is
+written back out as JSON, still self-describing, so it can be refined again.
+Genomes saved before task recording are refused with an explanatory message.
+
+### [`evaluate`](./src/examples/evaluate.py)
+
+Scores a saved classification genome on an image dataset's official test split
+(the search itself only ever sees training and validation data).
+
+```
+python3 -m src.examples.evaluate --archive ./artifacts/mnist --genome_number 42 --dataset mnist
+```
+
+| Argument | Default | Description |
+|---|---|---|
+| `--genome_json` | *one of `--genome_json` / `--archive` is required* | Genome JSON |
+| `--archive` | *one of `--genome_json` / `--archive` is required* | A run's `genomes.sqlar`, or the run directory holding it |
+| `--genome_number` | — | Genome to load from `--archive` (required with it) |
+| `--dataset` | *required* | `mnist`, `fashion_mnist`, `cifar10` |
+| `--data_dir` | `data` | Dataset location |
+| `--batch_size` | `32` | Evaluation batch size |
+| `--download_dataset` | on | Download if missing |
+
+### [`visualize_rl`](./src/examples/visualize_rl.py)
+
+Replays a trained RL genome in its environment so you can *watch* the evolved
+circuit control it, optionally saving an animated GIF. By default it replays the
+action-selection regime the genome was *scored* under, read back from the genome
+itself — rolling a stochastically scored genome greedily would show a policy
+that never produced its fitness.
+
+```
+python3 -m src.examples.visualize_rl --archive ./artifacts/cartpole --genome_number 42 \
+    --episodes 3 --output_file cartpole.gif
+```
+
+| Argument | Default | Description |
+|---|---|---|
+| `--genome_json` | *one of `--genome_json` / `--archive` is required* | A genome's JSON from the RL entry point, e.g. downloaded from the dashboard |
+| `--archive` | *one of `--genome_json` / `--archive` is required* | A run's `genomes.sqlar`, or the run directory holding it |
+| `--genome_number` | — | Genome to load from `--archive` (required with it) |
+| `--env` | from the genome | Override the environment |
+| `--episodes` | `3` | Episodes to play |
+| `--eval_policy` | `match` | Regime to roll out under: `match` replays the one the genome was scored under, or force `greedy` / `stochastic` |
+| `--max_steps` | from the genome, else `500` | Step cap |
+| `--seed` | random | Base environment seed |
+| `--output_file` | — | Save the rollout as a GIF instead of rendering to screen |
+| `--fps` | `30` | GIF frame rate |
+| `--map_name` / `--is_slippery` | `4x4` / off | FrozenLake only |
+
+### [`exaqc_dashboard`](./src/examples/exaqc_dashboard.py)
+
+Serves a local web dashboard for monitoring and browsing runs: every genome's
+fitness, its architecture diagram and training plot (drawn on demand), its
+ancestry, each run's search progress, how each operator's genomes were
+inserted, and comparisons between genomes and between groups of runs. It reads
+runs straight from their archives, so a run can be watched while its search is
+still going.
+
+```
+python3 -m src.examples.exaqc_dashboard --runs ./artifacts/iris
+python3 -m src.examples.exaqc_dashboard --directory ./artifacts --groups iris wine
+```
+
+Give the runs either as run output directories (`--runs`) or as a directory to
+watch (`--directory`), where every run below it, at any depth, is shown. Both
+are checked for new runs every few seconds: a run started while the dashboard is
+running appears on the run list as soon as it writes its `genomes.sqlar`,
+whether it is below the watched directory or one of the given run directories
+(which need not exist when the dashboard starts).
+
+Then open `http://127.0.0.1:8000/` in a browser. The page has:
+
+- **Runs**: every run found, with its task, genome count, best `loss` and
+  `target_metric`, how busy its MPI master was over the run (*Master busy*: the
+  share of its time spent generating, sending and inserting genomes rather than
+  waiting for workers; near 100% means workers queue on it), and whether it is
+  still being written.
+- **A run's page**: on the left, the run's search progress (the best, mean and
+  worst of a chosen metric across the population at each insertion; untick
+  *search progress* to hide it) above a chart of every genome, with genome number
+  running down it and a chosen metric across it, better values to the right
+  (so `loss` runs high to low and `target_metric` low to high). Neither chart is
+  limited to fitness: both pick from the run's fitness keys, its genomes' circuit
+  size and complexity (`n_enabled_gates`, `n_cnot`, `n_rot`) and any metric its
+  task recorded while training, so a classification run can be charted by
+  validation loss or mean class accuracy and a reinforcement-learning one by
+  episode return. Training and validation series stay separate. A task that
+  records a per-class breakdown contributes one entry per class per statistic,
+  which would bury the handful of metrics anyone charts, so the pickers offer the
+  shorter list until *all metrics* asks for the rest — nothing is hidden from a
+  query, only from the dropdown. Genomes are colored by
+  insert type, operator family or island, with a line joining the genomes that
+  improved the best value and every parent-to-child link in the run (links fade
+  as they crowd the chart, so runs of tens of thousands of genomes stay legible).
+  Coloring by island gives each island its own color only while there are no
+  more than seven; beyond that the chart colors around one *focus* island
+  instead (a run with fewer islands can choose to as well). The focus follows
+  the selected genome's island (the best genome's until one is selected) unless
+  an island is picked from the *focus* menu. Its genomes get one color, the
+  islands it draws parents from (its neighbors in `--topology`) a second, and
+  every other island is gray. The
+  **Progress** view emphasizes the best-so-far line and the **Genealogy** view the
+  links; either can highlight a genome's full lineage or hide genomes that had no
+  children. On the right, a sortable, filterable table of the genomes that loads
+  more genomes as you scroll (the chart's panel grows to match, with the chart
+  staying in view). Drag the divider between the chart and the table to widen one
+  and narrow the other (double-click it to go back to the default split); your
+  browser remembers the split. While a run is still being written the page checks for new
+  genomes every 5 seconds: they appear in the chart right away, and the table
+  counts them in a "new genomes · refresh" badge rather than reordering rows
+  under you. Selecting a genome (clicking it again, or clicking empty space
+  in the chart, clears the selection) opens its details above the
+  table: its diagram, training plot, fitness, gates,
+  parents, children, ancestry graph and ready-to-run `refine_genome` /
+  `visualize_rl` / `evaluate` commands, with a **Download JSON** button for the
+  genome itself. A **Metrics** tab lists whatever the genome recorded while
+  training, one table per series: per-epoch training and validation metrics for
+  classification and teacher genomes, per-episode training and evaluation
+  metrics for reinforcement learning. Nothing is hard-coded per task — nested
+  values such as a per-class accuracy breakdown are flattened into columns like
+  `mean_class_accuracy.mean`, and long histories show their first and last rows
+  with a toggle for the rest. A **Notes** tab shows the genome's tags and notes,
+  and a **Run notes** section at the foot of the run's header holds notes about
+  the run as a whole. Each shows whether it was written from the dashboard or by
+  an agent over MCP, by whom (if a name was given) and when. Notes are
+  append-only; a removed tag disappears from the chips but its history (who added
+  and removed it, and when) is kept. Adding either needs `--allow_annotations`;
+  without it they are shown read-only. An island search also has an **Island
+  topology** section: its islands laid out by `--topology` (a tree as a
+  hierarchy, a 2-D mesh as its grid, a star around its hub, a ring or fully
+  connected graph as a circle, and a random graph by a force-directed layout),
+  each shaded by its best value of the charted metric, with every connection as
+  wide as the number of genomes created on one of its islands from a parent on the
+  other. Rings mark the chart's focus island and its neighbors, and clicking an
+  island colors the chart around it. While a genome is selected (and *highlight
+  selected lineage* is on), arrows show where its ancestry crossed between
+  islands. A **Timing** section shows whether the MPI master kept up with its
+  workers: the whole run's genomes per second, the master's busy and idle shares
+  and the mean time of each of its steps and insertion parts, and the workers'
+  wait share and each genome's mean wait, evaluation, generation and turnaround
+  time, with charts of the same over the run (one point per 100 insertions). A
+  serial run shows only the per-genome times, and a run whose archive predates
+  timing shows "No timing recorded". Each genome's processing times are also
+  metrics like any other -- `request_wait_seconds`, `generation_seconds` and
+  `turnaround_seconds` sit beside `evaluation_seconds` in the chart pickers -- as
+  well as rows in its details and, with *timing columns* ticked, columns of the
+  genome table.
+- **Insertion rates**: for one run, one group (summed over its runs, then each
+  run on its own) or every group side by side, the share of each operator's
+  genomes that became a global best or a local best, were inserted or were
+  discarded, counted as `src.analysis.analyze_genome_generation` counts them
+  (a genome generated by several operators counts once for each), along with
+  the LaTeX table that script prints. It is linked from the run list, each run's
+  page and the run comparison.
+- **Compare genomes**: two genomes' diagrams, fitness, hyperparameters and gates
+  (matched by innovation number) side by side.
+- **Compare runs**: the mean and spread of each group's progress on a chosen
+  metric — `target_metric` unless the runs did not record it, then `loss` —
+  offering the same shorter metric list, and *all metrics* toggle, as a run's
+  page. Also a summary of each group's best genomes. A run records a step only
+  when its population changed, so runs are not aligned on the steps they happen
+  to share (which for long runs is almost none): every step is kept and each run
+  carries its last value forward, which is exact rather than interpolated -- a
+  step with no row is a step where that run's population did not change. Each run
+  counts only across its own lifetime, joining the average as it reaches a step
+  and dropping out past the last step it recorded, so a search still in progress
+  is never averaged in as though it had levelled off at an insertion it has not
+  reached.
+
+| Argument | Default | Description |
+|---|---|---|
+| `--runs` | one of `--runs` / `--directory` is required | Run output directories (or their `genomes.sqlar` files) to show; a directory need not exist yet |
+| `--directory` | one of `--runs` / `--directory` is required | A directory to watch: every run below it is shown, including runs started later |
+| `--groups` | — | Substrings grouping runs for comparison; a run joins every group whose substring appears in its path |
+| `--host` | `127.0.0.1` | Address to serve on |
+| `--port` | `8000` | Port to serve on (`0` picks a free port) |
+| `--open_browser` | off | Open the page in a web browser once it is running |
+| `--mcp` | on | Also serve the [MCP interface](#exaqc_mcp) at `/mcp`, so an agent can query the same runs over the same port (`--no-mcp` turns it off) |
+| `--allow_annotations` | off | Let the page and its MCP interface write notes and tags, kept in each run's `annotations.sqlite` beside its archive (the archive itself is never written) |
+| `--logging_level` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
+
+The dashboard has no login: with `--allow_annotations`, anyone who can reach its
+port can write notes and tags. Keep it on the default `--host 127.0.0.1` and
+reach it through an SSH tunnel (below) rather than serving it on a shared
+network; the dashboard warns when annotations are allowed on any other address.
+Writes must come from the dashboard's own page (or an MCP client), so another
+web site open in the same browser cannot post them.
+
+To view runs on a cluster, start the dashboard there and forward its port from your
+own machine, then open the same address locally:
+
+```
+ssh -L 8000:localhost:8000 <cluster login node>
+```
+
+The same tunnel carries the MCP endpoint, so an agent on your laptop can analyze
+runs on the cluster by pointing at `http://localhost:8000/mcp`.
+
+### [`exaqc_mcp`](./src/examples/exaqc_mcp.py)
+
+Serves the dashboard's analysis tools to an agent over the
+[Model Context Protocol](https://modelcontextprotocol.io), so a language model
+can query runs, compute statistics and assemble tables without a script being
+written for each question. It is the same tool layer the dashboard mounts at
+`/mcp`; this entry point runs it on standard input and output instead, for an
+agent running on the same machine as the archives.
+
+```
+python3 -m src.examples.exaqc_mcp --runs ./artifacts/iris
+python3 -m src.examples.exaqc_mcp --directory ./2026_ppsn_exaqc --groups iris wine
+```
+
+Archives are **never written**: they are opened read-only, so it is safe to point
+at a search that is still running. The one thing an agent can write is
+annotations — notes on a run or genome, and tags on a genome — and only when
+started with `--allow_annotations`. They go to each run's `annotations.sqlite`
+beside its archive (created on the first write), marked as written over MCP.
+
+The tools are `list_runs`, `describe_run`, `list_genomes`, `get_genome`,
+`genome_metrics`, `compare_genomes`, `genome_lineage`, `fitness_summary`,
+`training_gain_summary`, `operator_insertion_rates`, `progress_series`,
+`get_run_timing`, `gate_statistics`, `compare_runs`, `list_annotations`,
+`describe_schema`, `query_sql` and `export_query`, plus `add_note`, `tag_genome`
+and `untag_genome` under `--allow_annotations` (`list_annotations` shows removed
+tags when `include_removed` is set). The first sixteen answer
+common questions with typed arguments (`get_run_timing` reports whether a run's
+MPI master kept up with its workers, as a whole-run summary and series over the
+run, and says when a run's archive predates timing; `training_gain_summary`
+reports how much training changed a run's genomes -- the distribution of
+`target_gain`, the shares of genomes training improved or left unchanged, and both
+by quartile of the inherited weights' score, optionally grouped by `insert_type`,
+`island` or `generated_by` -- and needs an archive of format 7, or an older one
+brought up to date with [`backfill_archive`](#backfill_archive); `genome_metrics` returns a genome's
+recorded training history, each series keyed by its own epoch or episode column;
+`list_runs` leaves out each run's command line unless `include_command_line` is
+set, while `describe_run` always shows it); `query_sql` runs a single read-only
+`SELECT` against one run's archive, or against several runs rolled into one
+database, for questions the typed tools do not cover. A roll-up holds each run's
+`genomes`, `genome_parents`, `population_events`, `run_info` and `master_timing`
+(with the timing columns, metric projections and initial-fitness columns read as
+null for runs whose archives predate them), every table with
+a `run` column, and both kinds of query can read a `genome_operators` view with
+one row per operator that generated a genome, and the run's annotations as
+`notes` and `genome_tags` tables (a tag still applied has a null `removed_at`),
+so a query can, for example, pick out every genome tagged `promising`. A roll-up
+gathers only the tables and columns its statement reads, reading the runs
+concurrently, so naming the columns needed rather than `SELECT *` keeps it fast
+on large runs; a `query_sql` call, roll-up included, is stopped after 10 seconds
+(`export_query` after 60) with a hint on narrowing it. Results are capped (at most 200
+rows, series downsampled) and most carry a link into the dashboard showing the
+same view. `export_query` is the exception to the cap: it runs the same
+statements for a client collecting data to analyze itself, returning pages of up
+to 50,000 rows as CSV or JSON, each with the `next_offset` to request next.
+A run's `run_info` also records `operator_selection` -- the mutation weights,
+crossover rates and mutation/parent count strategies its search drew operators
+with -- so the operator rates its genomes show can be compared against what was
+configured (runs archived before this was added do not have it).
+
+| Argument | Default | Description |
+|---|---|---|
+| `--runs` | one of `--runs` / `--directory` is required | Run output directories (or their `genomes.sqlar` files) to serve |
+| `--directory` | one of `--runs` / `--directory` is required | A directory to watch: every run below it is served, including runs started later |
+| `--groups` | — | Substrings grouping runs for comparison, as in the analysis scripts |
+| `--dashboard_url` | `http://127.0.0.1:8000` | Base URL used for the dashboard links in results |
+| `--allow_annotations` | off | Offer the tools that write notes and tags, kept in each run's `annotations.sqlite` beside its archive (the archive itself is never written) |
+| `--logging_level` | `WARNING` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`; logs go to stderr, since stdout carries the protocol |
+
+To use it from Claude Code, register it as an MCP server running this command
+from the repository root:
+
+```
+claude mcp add exaqc -- python3 -m src.examples.exaqc_mcp --directory ./artifacts
+```
+
+### [`backfill_archive`](./src/examples/backfill_archive.py)
+
+Brings archives written before format 7 up to it, so older runs get the
+training-metric columns: `initial_metrics`, `best_metrics` and `last_metrics`, and
+`initial_fitness` with its generated `initial_loss`, `initial_target_metric` and
+`target_gain` (see [Working with a run's archive](#working-with-a-runs-archive)).
+Every genome's JSON is stored in the archive, so they are re-derived from it:
+
+```
+python3 -m src.examples.backfill_archive ./artifacts/walker2d_1 ./artifacts/walker2d_2 --output_dir ./backfilled
+```
+
+- The **metric projections** are computed for every genome of every task, exactly
+  as a current search records them.
+- **`initial_fitness`** is the genome's own recorded `initial_fitness` when it has
+  one. A reinforcement-learning genome without one is scored from its episode-0
+  evaluation (its inherited weights, before training; recorded by runs from
+  2026-09-30 on) with the search's own fitness formula, using the run's recorded
+  `--train_vs_validation_bias` (`0.1` when it recorded none). Classification and
+  teacher genomes never stored their epoch-0 *training* metrics, so theirs is
+  left empty rather than guessed.
+- Nothing else a run recorded is rewritten -- not its fitness, its
+  `format_version` or its old `final_metrics` column. What was done is recorded in
+  `run_info` as `backfilled_format_7`: when, the code's git commit, how many
+  genomes were updated, and how many initial fitnesses were recorded, derived or
+  unavailable. Running it again changes nothing.
+
+Writing is always explicit: exactly one of `--output_dir` and `--in_place` is
+required. Under `--output_dir` the original is only ever copied (with its journal,
+so a run stopped mid-write is recovered in the copy), never opened. A search
+records no end, so an archive whose latest genome was saved within
+`--idle_minutes` is refused as possibly still being written; one that saves
+genomes less often than that cannot be told apart from a finished run, so stop a
+search before backfilling its archive in place.
+
+| Argument | Default | Description |
+|---|---|---|
+| `archives` | *required* | Run output directories, or their `genomes.sqlar` files, to backfill |
+| `--output_dir` | one of `--output_dir` / `--in_place` is required | Copy each run's archive into `<output_dir>/<run directory name>/` and backfill the copy, leaving the original untouched; an existing copy is never overwritten |
+| `--in_place` | one of `--output_dir` / `--in_place` is required | Backfill the given archives themselves |
+| `--idle_minutes` | `10.0` | Refuse an archive whose latest genome was saved within this many minutes; `0` skips the check |
+| `--logging_level` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
+
+### [`classical_image_classification`](./src/examples/classical_image_classification.py)
+
+A **classical baseline**, with no quantum circuit and no evolution: it trains a
+standard image model so quantum results have something to be compared against.
+
+| Argument | Default | Description |
+|---|---|---|
+| `--dataset` | *required* | `mnist`, `fashion_mnist`, `cifar10` |
+| `--model` | *required* | `linear`, `mlp`, `cnn`, or a [torchvision](https://docs.pytorch.org/vision/stable/models.html) architecture (`resnet18`…`resnet152`, `densenet*`, `efficientnet*`, `mobilenet_v3_*`, `convnext_*`, `vgg*`, `regnet_y_*`) |
+| `--model_config` | — | JSON file of model options |
+| `--epochs` | `100` | Training epochs |
+| `--learning_rate` | `1e-3` | Adam learning rate |
+| `--batch_size` | `64` | Samples per gradient step |
+| `--validation_batch_size` | = `--batch_size` | Validation batch size |
+| `--data_dir` | `data` | Dataset location |
+| `--out_dir` | `artifacts/classical` | Where results are written |
+| `--num_workers` / `--pin_memory` | `0` / off | Dataloader settings |
+| `--seed` | `0` | Random seed |
+| `--device` | auto | PyTorch device (CUDA when available) |
+
+### [`reinforcement_learning_fixed`](./src/examples/reinforcement_learning_fixed.py)
+
+A variant of the RL entry point that trains a **fixed classical MLP**
+(`ClassicalModel`, two 64-unit `tanh` layers) instead of an evolved quantum
+circuit. It trains one model with the same RL trainers, and takes the same
+trainer arguments with the same defaults, so it serves as the classical
+control for RL experiments. It runs as a single process (no MPI).
+
+```
+python3 -m src.examples.reinforcement_learning_fixed --env cartpole --algo ppo --out_dir ./artifacts/cartpole_classical --output_file ./artifacts/cartpole_classical/rollout.gif
+```
+
+| Argument | Default | Description |
+|---|---|---|
+| `--env` | *required* | Environment, as for [`reinforcement_learning`](#reinforcement_learning) |
+| `--algo` | *required* | `reinforce`, `actor_critic`, `a2c`, `ppo`, `q_learning`, `sarsa` |
+| `--out_dir` | `artifacts` | Where `run.log` is written |
+| `--episodes` | `60` | Training episodes, after the episode-0 evaluation of the initial weights |
+| `--eval_episodes` | `10` | Episodes used to score the model |
+| `--eval_policy` | `greedy` | Action-selection regime evaluation scores under: `greedy`, `stochastic` or `both` (`stochastic`/`both` need a policy-gradient `--algo`) |
+| `--eval_seed` | random | Base seed for evaluation episodes, kept disjoint from the training seeds |
+| `--max_steps` | `500` | Step cap per episode |
+| `--log_every` | `10` | Evaluate and log every N episodes |
+| `--improvement_cutoff` | `30` | Episodes without an improved evaluation before stopping, 0 to disable |
+| `--ema_alpha` | `0.05` | Smoothing for the reported training return |
+| `--training_seed` | random | Base seed for training episodes, PyTorch and NumPy |
+| MuJoCo knobs | the environment's own | `--forward_reward_weight`, `--ctrl_cost_weight`, `--healthy_reward`, `--contact_cost_weight`, `--terminate_when_unhealthy`, `--reset_noise_scale`, as for [`reinforcement_learning`](#reinforcement_learning) |
+| `--map_name` / `--is_slippery` | `4x4` / off | FrozenLake only |
+| `--logging_level` | `INFO` | Terminal log level |
+| `--visualize_episodes` | `3` | Episodes to roll the trained model for when visualizing |
+| `--visualize_seed` | random | Base seed for the visualization episodes |
+| `--output_file` | — | Save the trained model's rollout to this GIF (headless) |
+| `--live` | off | Show the rollout in a live window; without it or `--output_file` nothing is visualized |
+| `--fps` | `30` | GIF frames per second |
+
+Plus the shared trainer arguments (`--gamma`, `--learning_rate`,
+`--entropy_coef`, ...) and the per-algorithm arguments in
+[Trainers](#trainers). The rollout uses the policy the model was scored under
+(`greedy` for `--eval_policy both`).
+
+---
+
+## Reproducing 2026 PPSN results
+
+The classification and reinforcement-learning experiments are reproduced by
+[`scripts/run_ppsn2026_classification.sh`](./scripts/run_ppsn2026_classification.sh)
+and [`scripts/run_ppsn2026_rl.sh`](./scripts/run_ppsn2026_rl.sh), which take the
+dataset or environment as their one argument and run it with exactly the
+experiment's settings. Both use amplitude encoding, the `probs` output mode with
+a `clipped` decoder, an identity encoder and a `steady_state` population (30
+genomes for classification, 50 for reinforcement learning, which trains with
+`reinforce`); the per-dataset qubit counts and per-environment trainer settings
+are in the scripts.
+
+Each call is one run. `TAG` names it by its index, so run `i` is written to
+`./2026_ppsn_exaqc/classification/<name>_i30_per_class_<i>` (`<name>` is
+`breast` for `breast_cancer`) or `./2026_ppsn_exaqc/rl/<env>_i50_per_class_<i>`;
+`BASE_DIR` (default `./2026_ppsn_exaqc`) moves both.
+The ten repeats of every experiment:
+
+```
+for dataset in iris seeds breast_cancer wine; do
+    for i in $(seq 1 10); do TAG=$i bash scripts/run_ppsn2026_classification.sh $dataset; done
+done
+
+for env in cartpole frozenlake walker2d mountaincar_continuous; do
+    for i in $(seq 1 10); do TAG=$i bash scripts/run_ppsn2026_rl.sh $env; done
+done
+```
+
+Only settings that leave the search unchanged can be set alongside: `N_PROCESSES`
+(default `12`), `BASE_DIR`, `OUT_DIR`, `PYTHON`, `MPIEXEC` and `MPIEXEC_ARGS`, as for the
+[local run scripts](#local-run-scripts). `DRY_RUN=1` prints the exact command a
+run would execute:
+
+```
+DRY_RUN=1 TAG=1 bash scripts/run_ppsn2026_classification.sh iris
+```
+
+Quantum teacher imitation:
+
+```
+sh scripts/run_teacher.sh 1 10 half_adder ./2026_ppsn_exaqc/teacher
+```
+
+The results can then be processed into the tables of mutation and crossover
+rates and statistics on the best found genomes:
+
+```
+python3 -m src.analysis.analyze_genome_generation --input_directories ./2026_ppsn_exaqc/classification/* --groups iris seeds wine breast_cancer --metric target_metric
+python3 -m src.analysis.analyze_genome_generation --input_directories ./2026_ppsn_exaqc/rl/* --groups cartpole frozenlake walker2d mountaincar_continuous --metric target_metric
+```
+
+The same groups can be explored in [`exaqc_dashboard`](#exaqc_dashboard), whose
+insertion-rate page shows the same tables:
+
+```
+python3 -m src.examples.exaqc_dashboard --directory ./2026_ppsn_exaqc/classification --groups iris seeds wine breast_cancer
+```
+
+---
+
+## Contributing
 
 ### Docstring Formatting
 

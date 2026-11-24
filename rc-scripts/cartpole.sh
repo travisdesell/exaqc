@@ -23,15 +23,10 @@ for i in $(seq 1 10); do
   --number_genomes 1000 \
   --input_qubits 4 \
   --output_qubits 2 \
-  --episodes 100 \
-  --mutation_strategy uniform 1 3 \
-  --out_dir artifacts/cartpole_reinforce/islands/runs/${i} \
-  islands \
-  --n_islands 5 \
-  --max_island_size 6 \
-  --islands_to_extinct 1 \
-  --genomes_before_extinction 50 \
-  --genomes_for_next_extinction 200
+  --episodes 80 \
+  --shared_file_system \
+  --out_dir artifacts/cartpole_reinforce/runs/${i}
+  echo "Completed run ${i}"
 done
 
 # mpiexec -n 4 python -m src.examples.pl_reinforce \

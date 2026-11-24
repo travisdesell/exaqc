@@ -1,33 +1,42 @@
 """Visualize a trained RL circuit genome acting in its target environment.
 
-Loads a circuit-genome JSON produced by ``src.examples.reinforcement_learning``
-(i.e. by ``CircuitGenome.to_dict``), rebuilds the quantum circuit, reconnects
-it to the Gymnasium environment it was trained on, and rolls the greedy policy
-so you can *watch* the evolved circuit control the environment.
+Loads a circuit genome produced by ``src.examples.reinforcement_learning`` --
+from a JSON file (i.e. one written by ``CircuitGenome.to_dict``, such as one
+downloaded from the dashboard), or from the run's ``genomes.sqlar`` archive by its genome
+number -- rebuilds the quantum circuit, reconnects it to the Gymnasium
+environment it was trained on, and rolls its policy so you can *watch* the
+evolved circuit control the environment.
 
-The environment the genome was designed for is recorded in the genome's
-``fitness["env_id"]`` (e.g. ``"CartPole-v1"``), so it is auto-detected from the
-JSON; ``--env`` can override it. The genome's own ``encoder``/``decoder`` and
-gate parameters are restored from the JSON, so the policy plays exactly as it
-was evolved.
+By default the rollout replays the action-selection regime the genome was
+*scored* under, recovered from the genome itself (``--eval_policy match``).
+That matters for a continuous environment, where the greedy action ignores the
+policy's learned log-standard-deviation entirely: rolling a stochastically
+scored genome greedily shows a policy that never produced its fitness. Pass
+``--eval_policy greedy`` or ``--eval_policy stochastic`` to override.
+
+The environment the genome was evolved for is recorded in the genome's
+``task_target`` (e.g. ``"cartpole"``, the friendly ``--env`` name stamped by
+:class:`~src.evolution.exaqc.EXAQC`), so it is auto-detected from the JSON;
+``--env`` can override it. The genome's own ``encoder``/``decoder`` and gate
+parameters are restored from the JSON, so the policy plays exactly as it was
+evolved.
 
 Two output modes:
 
 * **Live** (default): renders an interactive window as the policy plays --
-  ``python -m src.examples.visualize_rl path/to/genome.json``.
+  ``python -m src.examples.visualize_rl --genome_json path/to/genome.json``.
 * **Saved** (``--output_file PATH``): headless-friendly; writes an animated
   GIF of the rollout to ``PATH``.
 
 Example::
 
-    python -m src.examples.visualize_rl genome_368.json --episodes 3
-    python -m src.examples.visualize_rl genome_368.json --output_file rollout.gif
+    python -m src.examples.visualize_rl --genome_json genome_368.json --episodes 3
+    python -m src.examples.visualize_rl --archive ./artifacts/cartpole --genome_number 368 --output_file rollout.gif
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import random
 import sys
@@ -38,30 +47,48 @@ import gymnasium as gym
 from loguru import logger
 
 from src.circuits.circuit import CircuitGenome
-from src.examples.reinforcement_learning import ENV_IDS, make_environment
-from src.trainer.reinforcement_trainer import RLEnvironment, greedy_action
+from src.objectives.reinforcement_learning_objective import (
+    ENV_CHOICES,
+    make_environment,
+)
+from src.trainer.reinforcement_trainer import (
+    EVAL_POLICY_CHOICES,
+    RLEnvironment,
+    select_action,
+)
+from src.utils.genome_archive import (
+    add_genome_source_arguments,
+    check_genome_source_arguments,
+    load_genome_dict,
+)
 
-#: Maps a Gymnasium environment id back to the friendly ``--env`` name, derived
-#: by reversing ``src.examples.reinforcement_learning.ENV_IDS`` (the single
-#: source of truth). Covers every supported environment -- discrete and
-#: continuous alike -- so a genome trained on any of them can be auto-detected
-#: from its recorded ``fitness["env_id"]``.
-ENV_ID_TO_NAME: dict[str, str] = {env_id: name for name, env_id in ENV_IDS.items()}
 
+def load_genome(
+    json_path: str | None = None,
+    archive: str | None = None,
+    genome_number: int | None = None,
+) -> CircuitGenome:
+    """Loads and initializes a saved circuit genome.
 
-def load_genome(json_path: str) -> CircuitGenome:
-    """Loads and initializes a circuit genome from a saved JSON file.
+    Give either ``json_path``, or ``archive`` together with ``genome_number``.
 
     Args:
         json_path: Path to a genome JSON produced by ``CircuitGenome.to_dict``.
+        archive: A run's ``genomes.sqlar`` archive, or the run directory holding
+            it.
+        genome_number: The genome to load from ``archive``.
 
     Returns:
         The reconstructed :class:`CircuitGenome` with its ``hybrid_model``
         already initialized (ready for ``genome.forward``).
+
+    Raises:
+        ValueError: If the source is not given correctly or the archive holds no
+            such genome (see :func:`~src.utils.genome_archive.load_genome_dict`).
+        OSError: If the file or archive cannot be read.
     """
 
-    with open(json_path) as json_file:
-        serialized = json.load(json_file)
+    serialized = load_genome_dict(json_path, archive, genome_number)
 
     genome = CircuitGenome.from_dict(serialized)
     genome.initialize_model()
@@ -75,18 +102,19 @@ def resolve_environment(
     map_name: str = "4x4",
     is_slippery: bool = False,
 ) -> RLEnvironment:
-    """Rebuilds the :class:`RLEnvironment` the genome was designed for.
+    """Rebuilds the :class:`RLEnvironment` the genome was evolved for.
 
     The environment name is taken from ``env_name`` when given, otherwise
-    auto-detected from the genome's ``fitness["env_id"]``. The rebuilt
-    environment is validated against the genome's encoder so a mismatched
-    ``--env`` fails with a clear message rather than deep inside a forward
-    pass.
+    auto-detected from the genome's ``task_target`` -- the friendly ``--env``
+    name that :class:`~src.evolution.exaqc.EXAQC` stamps onto every genome. The
+    rebuilt environment is validated against the genome's encoder so a
+    mismatched ``--env`` fails with a clear message rather than deep inside a
+    forward pass.
 
     Args:
         genome: The loaded genome (used for auto-detection and validation).
         env_name: Friendly environment name (e.g. ``"cartpole"``), or ``None``
-            to auto-detect from the genome.
+            to auto-detect from the genome's ``task_target``.
         map_name: FrozenLake map (``"4x4"`` or ``"8x8"``); ignored otherwise.
         is_slippery: FrozenLake slipperiness; ignored otherwise.
 
@@ -94,27 +122,47 @@ def resolve_environment(
         A configured :class:`RLEnvironment`.
 
     Raises:
-        ValueError: If the environment cannot be determined, or the rebuilt
-            environment's observation size does not match the genome encoder.
+        ValueError: If the genome is not a reinforcement-learning genome, if the
+            environment cannot be determined, or if the rebuilt environment's
+            observation size does not match the genome encoder.
     """
 
-    if env_name is None:
-        env_id = (genome.fitness or {}).get("env_id")
-        if env_id is None:
-            raise ValueError(
-                "Could not determine the environment: the genome has no "
-                "fitness['env_id']. Pass --env explicitly."
-            )
-        if env_id not in ENV_ID_TO_NAME:
-            raise ValueError(
-                f"Genome was trained on env_id={env_id!r}, which has no known "
-                f"--env mapping (known: {sorted(ENV_ID_TO_NAME.values())}). "
-                "Pass --env explicitly."
-            )
-        env_name = ENV_ID_TO_NAME[env_id]
-        logger.info(f"auto-detected environment '{env_name}' (env_id={env_id})")
+    # Only reinforcement-learning genomes carry an environment to play in.
+    if genome.task is not None and genome.task != "reinforcement_learning":
+        raise ValueError(
+            f"visualize_rl only handles reinforcement-learning genomes, but this "
+            f"genome records task={genome.task!r}."
+        )
 
-    environment = make_environment(env_name, map_name=map_name, is_slippery=is_slippery)
+    if env_name is None:
+        # EXAQC stamps the friendly --env name onto every genome as its
+        # task_target, so the environment is recovered directly rather than
+        # reverse-mapped from a recorded Gymnasium id.
+        env_name = genome.task_target
+        if env_name is None:
+            raise ValueError(
+                "Could not determine the environment: the genome records no "
+                "task_target. Pass --env explicitly."
+            )
+        if env_name not in ENV_CHOICES:
+            raise ValueError(
+                f"Genome records task_target={env_name!r}, which is not a known "
+                f"--env (known: {sorted(ENV_CHOICES)}). Pass --env explicitly."
+            )
+        logger.info(
+            f"auto-detected environment '{env_name}' from the genome's task_target"
+        )
+
+    # A genome evolved under modified rewards has to be replayed under them
+    # too, or the returns reported here describe a different task than its
+    # recorded fitness does.
+    environment = make_environment(
+        env_name,
+        env_kwargs=(getattr(genome, "hyperparameters", {}) or {}).get("env_kwargs")
+        or None,
+        map_name=map_name,
+        is_slippery=is_slippery,
+    )
 
     # The genome's encoder expects exactly this many observation features; a
     # mismatch means the wrong environment was selected.
@@ -127,11 +175,10 @@ def resolve_environment(
             "trained on a different environment/configuration."
         )
 
-    recorded_env_id = (genome.fitness or {}).get("env_id")
-    if recorded_env_id is not None and recorded_env_id != environment.env_id:
+    if genome.task_target is not None and genome.task_target != env_name:
         logger.warning(
-            f"selected environment {environment.env_id} differs from the "
-            f"genome's recorded env_id {recorded_env_id}."
+            f"selected environment '{env_name}' differs from the genome's "
+            f"recorded task_target '{genome.task_target}'."
         )
 
     return environment
@@ -145,8 +192,9 @@ def play_episode(
     seed: int,
     max_steps: int,
     collect_frames: bool,
+    stochastic: bool,
 ) -> tuple[float, list[np.ndarray]]:
-    """Plays one greedy episode, optionally collecting rendered frames.
+    """Plays one episode, optionally collecting rendered frames.
 
     Args:
         genome: The initialized genome policy.
@@ -156,6 +204,9 @@ def play_episode(
         max_steps: Maximum number of steps to take.
         collect_frames: If True, append ``gym_env.render()`` frames (requires
             the env to have been created with ``render_mode="rgb_array"``).
+        stochastic: If True, sample actions from the policy; otherwise take
+            the greedy action. This must match the regime the genome was
+            scored under, or the rollout shown is not the rollout evaluated.
 
     Returns:
         A tuple ``(episode_return, frames)``; ``frames`` is empty unless
@@ -170,9 +221,9 @@ def play_episode(
         if collect_frames:
             frames.append(np.asarray(gym_env.render()))
 
-        # greedy_action returns the action already in the env's native format:
+        # select_action returns the action already in the env's native format:
         # an int for discrete spaces, a clipped float array for continuous ones.
-        action = greedy_action(genome, environment, observation)
+        action = select_action(genome, environment, observation, stochastic=stochastic)
         observation, reward, terminated, truncated, _ = gym_env.step(action)
         episode_return += float(reward)
 
@@ -193,8 +244,9 @@ def visualize(
     max_steps: int,
     seed: int,
     render_mode: str,
+    stochastic: bool,
 ) -> tuple[list[float], list[np.ndarray]]:
-    """Rolls the greedy policy for several episodes, rendering each one.
+    """Rolls the policy for several episodes, rendering each one.
 
     Args:
         genome: The initialized genome policy.
@@ -204,6 +256,8 @@ def visualize(
         seed: Base seed; episode ``i`` uses ``seed + i``.
         render_mode: ``"human"`` for a live window, or ``"rgb_array"`` to
             collect frames for saving.
+        stochastic: If True, sample actions from the policy rather than taking
+            the greedy action.
 
     Returns:
         A tuple ``(returns, frames)`` where ``returns`` holds each episode's
@@ -228,6 +282,7 @@ def visualize(
             seed=seed + episode,
             max_steps=max_steps,
             collect_frames=collect_frames,
+            stochastic=stochastic,
         )
         gym_env.close()
 
@@ -260,22 +315,83 @@ def save_gif(frames: list[np.ndarray], path: str, fps: int) -> None:
     logger.info(f"saved rollout animation ({len(frames)} frames) to {path}")
 
 
+def resolve_eval_policy(genome: CircuitGenome, requested: str) -> str:
+    """Decides which action-selection regime to replay a genome under.
+
+    A rollout shown under a different regime than the genome was scored under
+    is not the rollout that produced its fitness -- for a continuous
+    environment the greedy action ignores the policy's learned
+    log-standard-deviation entirely. ``"match"`` therefore recovers the regime
+    from the genome itself.
+
+    Args:
+        genome: The loaded genome. Its ``metadata`` records the regime its
+            fitness was actually measured under; its ``hyperparameters`` record
+            what was requested (which may be ``"both"``).
+        requested: The ``--eval_policy`` value; ``"match"`` to recover the
+            genome's own regime, or an explicit ``"greedy"``/``"stochastic"``.
+
+    Returns:
+        ``"greedy"`` or ``"stochastic"``. A genome that requested ``"both"``
+        replays greedily, the regime that drove its fitness; one that
+        recorded no regime at all also replays greedily, with a warning.
+    """
+
+    if requested != "match":
+        return requested
+
+    # metadata carries the regime the recorded fitness was measured under,
+    # which is exact; hyperparameters carry what was asked for, where "both"
+    # means the greedy regime drove fitness.
+    metadata = getattr(genome, "metadata", {}) or {}
+    hyperparameters = getattr(genome, "hyperparameters", {}) or {}
+    recorded = metadata.get("eval_policy") or hyperparameters.get("eval_policy")
+    if recorded in ("greedy", "stochastic"):
+        return recorded
+    if recorded == "both":
+        return "greedy"
+
+    logger.warning(
+        "genome records no eval_policy; rolling out greedily, which may not be "
+        "the policy it was scored under."
+    )
+    return "greedy"
+
+
 def main() -> None:
-    """Parses arguments, loads the genome, and visualizes it in its env."""
+    """Parses arguments, loads the genome, and visualizes it in its env.
+
+    Returns:
+        None. Plays the rollout in a live window, or saves it as a GIF when
+        ``--output_file`` is given.
+    """
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--genome_json",
-        type=str,
-        help="Path to a genome JSON produced by the RL example script.",
+    # --genome_json or --archive (with --genome_number) chooses the genome.
+    add_genome_source_arguments(
+        parser,
+        json_help="Path to a genome JSON produced by the RL example script.",
     )
     parser.add_argument(
         "--env",
-        choices=sorted(ENV_ID_TO_NAME.values()),
+        choices=sorted(ENV_CHOICES),
         default=None,
         help="Environment to evaluate in (default: auto-detected from the genome).",
     )
     parser.add_argument("--episodes", type=int, default=3, help="Episodes to play.")
+    parser.add_argument(
+        "--eval_policy",
+        choices=[
+            "match",
+            *(choice for choice in EVAL_POLICY_CHOICES if choice != "both"),
+        ],
+        default="match",
+        help=(
+            "Action-selection regime to roll out under. 'match' (the default) "
+            "replays the regime the genome was scored under, read back from "
+            "the genome itself; 'greedy' or 'stochastic' overrides it."
+        ),
+    )
     parser.add_argument(
         "--max_steps",
         type=int,
@@ -302,11 +418,15 @@ def main() -> None:
     parser.add_argument("--logging_level", type=str, default="INFO")
 
     args = parser.parse_args()
+    check_genome_source_arguments(parser, args)
 
     logger.remove()
     logger.add(sys.stdout, level=args.logging_level)
 
-    genome = load_genome(args.genome_json)
+    try:
+        genome = load_genome(args.genome_json, args.archive, args.genome_number)
+    except (OSError, ValueError) as error:
+        parser.error(str(error))
     logger.info(
         f"loaded genome {genome.genome_number} (target={genome.target}); "
         f"recorded fitness: {genome.fitness}"
@@ -328,6 +448,9 @@ def main() -> None:
     seed = args.seed if args.seed is not None else random.randrange(2**31)
     logger.info(f"using seed {seed}")
 
+    eval_policy = resolve_eval_policy(genome, args.eval_policy)
+    logger.info(f"rolling out under the {eval_policy!r} policy")
+
     render_mode = "rgb_array" if args.output_file is not None else "human"
 
     try:
@@ -338,6 +461,7 @@ def main() -> None:
             max_steps=max_steps,
             seed=seed,
             render_mode=render_mode,
+            stochastic=eval_policy == "stochastic",
         )
     except Exception:
         if render_mode == "human":

@@ -1,9 +1,10 @@
+import copy
 import json
 import pytest
 import torch
 
 from src.circuits.circuit import CircuitGenome
-from src.circuits.decoder import initialize_decoder
+from src.circuits.decoder import Decoder, LinearDecoder, initialize_decoder
 from src.circuits.encoder import initialize_encoder
 from src.circuits.registers import expand_registers
 
@@ -150,3 +151,68 @@ def test_json_round_trip_restores_tuple_qubits_and_initializes(target: str):
     restored.initialize_model()
     output = restored.forward(torch.zeros(restored.encoder.n_inputs))
     assert output.shape[-1] == restored.decoder.n_outputs
+
+
+@pytest.mark.parametrize("decoder_name", ["clipped", "linear"])
+@pytest.mark.parametrize("target", ["qiskit", "pennylane"])
+def test_from_dict_does_not_mutate_serialized_dict(target: str, decoder_name: str):
+    """``CircuitGenome.from_dict`` can be called repeatedly on the same dict.
+
+    Regression test for ``Decoder.from_dict`` popping ``state_dict`` out of the
+    caller's dict: the first load stripped the decoder weights, so a second
+    ``from_dict`` on the same dict raised ``AttributeError: 'NoneType' object
+    has no attribute 'items'``.
+
+    Args:
+        target: The circuit framework (``"qiskit"`` or ``"pennylane"``).
+        decoder_name: The decoder to serialize (``"clipped"`` has no weights,
+            ``"linear"`` carries a ``state_dict``).
+    """
+
+    genome, _ = build_classification_genome(
+        genome_number=4,
+        target=target,
+        complexity="shallow",
+        encoder_name="linear",
+        decoder_name=decoder_name,
+    )
+
+    serialized = json.loads(json.dumps(genome.to_dict()))
+    original = copy.deepcopy(serialized)
+
+    first = CircuitGenome.from_dict(serialized)
+    assert serialized == original
+
+    second = CircuitGenome.from_dict(serialized)
+    assert serialized == original
+
+    # Both loads must restore the same encoder and decoder weights as the source.
+    for restored in (first, second):
+        for source_stage, restored_stage in (
+            (genome.encoder, restored.encoder),
+            (genome.decoder, restored.decoder),
+        ):
+            if isinstance(source_stage, torch.nn.Module):
+                source_state = source_stage.state_dict()
+                restored_state = restored_stage.state_dict()
+                assert source_state.keys() == restored_state.keys()
+                for name, tensor in source_state.items():
+                    assert torch.allclose(tensor, restored_state[name])
+
+
+def test_decoder_from_dict_without_state_dict():
+    """A module decoder serialized without a ``state_dict`` still constructs.
+
+    ``Decoder.from_dict`` should skip loading weights (keeping the freshly
+    initialized ones) rather than dereferencing a missing ``state_dict``.
+    """
+
+    serialized = {"class": "LinearDecoder", "args": {"n_inputs": 4, "n_outputs": 2}}
+    original = copy.deepcopy(serialized)
+
+    decoder = Decoder.from_dict(serialized)
+
+    assert isinstance(decoder, LinearDecoder)
+    assert decoder.n_inputs == 4
+    assert decoder.n_outputs == 2
+    assert serialized == original
