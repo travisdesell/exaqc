@@ -316,8 +316,7 @@ def noise_hyperparameters_from_args(args: argparse.Namespace) -> dict[str, Any]:
         flag was given.
 
     Raises:
-        ValueError: If a noise flag is out of range, noise is requested with
-            ``--target qiskit``, the calibration file or chosen qubits cannot
+        ValueError: If a noise flag is out of range, the calibration file or chosen qubits cannot
             be used (see ``BaseNoiseModel.from_args``), or ``--noise_qubits``
             does not list exactly one chip qubit per circuit wire.
     """

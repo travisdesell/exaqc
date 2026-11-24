@@ -336,7 +336,16 @@ def test_main_builds_cnn_encoder_for_image_data(
         "input": 1,
     }
 
-    assert exaqc_call["hyperparameters"] == {
+    # Every genome also carries the noise_* settings (no noise here); those
+    # are covered by the noise tests, so only their absence of noise is checked.
+    hyperparameters = dict(exaqc_call["hyperparameters"])
+    assert hyperparameters.pop("noise_type") == "none"
+    hyperparameters = {
+        key: value
+        for key, value in hyperparameters.items()
+        if not key.startswith("noise_")
+    }
+    assert hyperparameters == {
         "epochs": 1,
         "learning_rate": pytest.approx(5e-3),
         "weight_decay": pytest.approx(0.0),
@@ -352,58 +361,6 @@ def test_main_builds_cnn_encoder_for_image_data(
     # run_evolution runs serially in the single-process test: build_exaqc builds
     # the (mocked) EXAQC and run_for is invoked with the genome budget.
     mocked_exaqc.return_value.run_for.assert_called_once_with(1)
-
-
-@pytest.mark.skip(
-    reason="No longer needed since linear encoder can used with image datasets"
-)
-def test_main_rejects_non_cnn_encoder_for_image_data(
-    image_loaders: tuple[DataLoader, DataLoader],
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
-) -> None:
-    """Image datasets must use CNN encoding."""
-
-    training_loader, validation_loader = image_loaders
-
-    monkeypatch.setattr(
-        classification,
-        "load_data",
-        MagicMock(
-            return_value=(
-                training_loader,
-                validation_loader,
-            )
-        ),
-    )
-
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "classification.py",
-            "--dataset",
-            "mnist",
-            "--out_dir",
-            str(tmp_path),
-            "--mutation_strategy",
-            "add_gate",
-            "--parent_strategy",
-            "uniform 2 3",
-            "--input_qubits",
-            "2",
-            "--output_qubits",
-            "1",
-            "--encoding",
-            "linear",
-            "steady_state",
-        ],
-    )
-
-    with pytest.raises(SystemExit) as error:
-        classification.main()
-
-    assert error.value.code == 2
 
 
 def test_main_rejects_cnn_encoder_for_tabular_data(

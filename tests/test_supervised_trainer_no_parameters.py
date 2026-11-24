@@ -117,24 +117,7 @@ def test_trainable_parameters_leave_out_disabled_gates(target: str) -> None:
     assert genome.count_trainable_parameters() == 0
 
 
-@pytest.mark.parametrize(
-    "target",
-    [
-        "pennylane",
-        pytest.param(
-            "qiskit",
-            marks=pytest.mark.xfail(
-                raises=ValueError,
-                strict=True,
-                reason=(
-                    "generate_qiskit_circuit leaves disabled gates' weights out of the "
-                    "circuit but still passes the full weight vector to SamplerQNN, so a "
-                    "qiskit genome with a disabled parameterized gate cannot be built"
-                ),
-            ),
-        ),
-    ],
-)
+@pytest.mark.parametrize("target", TARGETS)
 def test_a_genome_whose_parameterized_gates_are_all_disabled_is_only_evaluated(
     target: str,
 ) -> None:

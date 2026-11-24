@@ -66,6 +66,7 @@ classical layers train together with ordinary backpropagation and the standard P
   - [reinforcement_learning_fixed](#reinforcement_learning_fixed)
 - [Reproducing 2026 PPSN results](#reproducing-2026-ppsn-results)
 - [Contributing](#contributing)
+- [Citation](#citation)
 
 ---
 
@@ -874,12 +875,13 @@ runs the non-vision datasets locally, configured by the
 | `NOISE_CALIBRATION` / `NOISE_QUBITS` | unset | Chip noise: `--noise_calibration` / `--noise_qubits`, both together or none, and not with the synthetic variables |
 
 **Simulated noise.** By default circuits run on a perfect simulator. Any noise
-flag switches the PennyLane target to the `default.mixed` (density-matrix)
-simulator and adds a noise channel after every evolved gate while circuits are
-trained and scored; each genome records its noise settings as `noise_*`
-hyperparameters. Noise is only simulated with `--target pennylane`; asking for it
-with `--target qiskit` is an error. Noisy simulation is much slower, roughly the
-square of the noiseless cost.
+flag switches the circuits to a density-matrix simulator (`default.mixed` on
+`--target pennylane`, Qiskit Aer's `density_matrix` method with exact
+probabilities on `--target qiskit`) and adds a noise channel after every evolved
+gate while circuits are trained and scored; each genome records its noise
+settings as `noise_*` hyperparameters. Both targets add the same channels at the
+same points, so a genome scores the same under either. Noisy simulation is much
+slower, roughly the square of the noiseless cost.
 
 | Argument | Default | Description |
 |---|---|---|
@@ -1616,3 +1618,36 @@ We use Google format for docstrings. See https://www.sphinx-doc.org/en/master/us
 
 > If you use an editor like `PyCharm` you can enable auto doc string comments by going to
 > Settings -> Tools -> Python Integrated Tools -> Docstrings -> Select Google
+
+---
+
+## Citation
+
+If you use EXAQC in your work, please cite:
+
+- Kar, Devroop, Daniel Krutz, and Travis Desell. "Evolutionary design of
+  parameterized quantum circuits for classification and reinforcement learning
+  tasks." *International Conference on Parallel Problem Solving from Nature*.
+  Cham: Springer Nature Switzerland, 2026.
+- Kar, Devroop, Daniel Krutz, and Travis Desell. "Investigating quantum circuit
+  designs using neuro-evolution." *Proceedings of the Genetic and Evolutionary
+  Computation Conference Companion*. 2026.
+
+```bibtex
+@inproceedings{kar2026evolutionary,
+  title={Evolutionary design of parameterized quantum circuits for classification and reinforcement learning tasks},
+  author={Kar, Devroop and Krutz, Daniel and Desell, Travis},
+  booktitle={International Conference on Parallel Problem Solving from Nature},
+  pages={284--302},
+  year={2026},
+  organization={Springer}
+}
+
+@inproceedings{kar2026investigating,
+  title={Investigating quantum circuit designs using neuro-evolution},
+  author={Kar, Devroop and Krutz, Daniel and Desell, Travis},
+  booktitle={Proceedings of the Genetic and Evolutionary Computation Conference Companion},
+  pages={541--544},
+  year={2026}
+}
+```

@@ -317,7 +317,7 @@ class BaseNoiseModel(ABC):
         group = parser.add_argument_group(
             "noise",
             "Simulated hardware noise added while circuits are trained and scored "
-            "(PennyLane target only). Off unless --noise_type or "
+            "(PennyLane and Qiskit targets). Off unless --noise_type or "
             "--noise_calibration is given.",
         )
         group.add_argument(
@@ -461,8 +461,7 @@ class BaseNoiseModel(ABC):
 
         Args:
             args: Parsed arguments carrying the flags from
-                :meth:`initialize_parser`, and ``target`` if the parser also
-                has ``--target``.
+                :meth:`initialize_parser`.
 
         Returns:
             The configured noise model (``noise_type="none"`` when no noise
@@ -471,9 +470,7 @@ class BaseNoiseModel(ABC):
         Raises:
             ValueError: If a probability, ``--noise_gamma`` or
                 ``--noise_excited_state_population`` is outside 0 to 1, if a
-                time is not positive, if noise is requested with
-                ``--target qiskit``, whose circuit path has no noise hooks
-                (the noise would otherwise be silently ignored), if only one
+                time is not positive, if only one
                 of ``--noise_calibration`` and ``--noise_qubits`` is given,
                 if ``--noise_qubits`` is not a comma-separated list of
                 distinct non-negative integers, if ``--noise_type
@@ -563,11 +560,5 @@ class BaseNoiseModel(ABC):
                 raise ValueError(
                     f"noise {name} must be positive, got {getattr(model, name)}."
                 )
-
-        if model.is_noisy() and getattr(args, "target", "pennylane") == "qiskit":
-            raise ValueError(
-                "Noise is only simulated on the PennyLane target; use --target "
-                "pennylane, or drop the noise flags."
-            )
 
         return model

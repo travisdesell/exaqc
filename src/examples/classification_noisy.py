@@ -83,13 +83,6 @@ def build_noise_model(args) -> Optional[PennyLaneNoiseModel]:
         with open(path, "w") as f:
             json.dump(qiskit_noise.to_dict(), f, indent=2, default=make_json_safe)
 
-
-        # noise_model = PennyLaneNoiseModel.from_ibm_backend(
-        #     backend,
-        #     verbose=args.ibm_noise_verbose,
-        #     # decimal_places=args.ibm_noise_decimal_places,
-        # )
-
         noise_model = PennyLaneNoiseModel.from_ibm_backend(
             backend,
             noise_type=args.noise_type,
