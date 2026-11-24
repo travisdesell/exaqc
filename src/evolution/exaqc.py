@@ -1,8 +1,16 @@
+import argparse
 import random
+import sys
+import time
+import numpy as np
+
+from typing import Any
 
 from loguru import logger
 
 from src.circuits.circuit import CircuitGenome
+from src.circuits.decoder import Decoder
+from src.circuits.encoder import Encoder
 from src.circuits.gate_specifications import GateSpecifications
 from src.circuits.registers import expand_registers
 
@@ -15,40 +23,184 @@ from src.evolution.mutation import (
     add_gate_with_selection,
     disable_gate,
     enable_gate,
+    mutate_all_weights,
+    mutate_some_weights,
     reorder_gate,
     qubit_swap,
 )
-from src.evolution.objective import Objective
+from src.evolution.objective import Objective, evaluate_genome
 from src.evolution.population_strategy import PopulationStrategy
+from src.utils.genome_archive import GenomeArchive
+from src.utils.phase_timer import PhaseTimer
+
+#: How likely each mutation is to be chosen, as integer weights: a mutation is
+#: drawn uniformly from a list holding each name ``weight`` times, so ``add_gate``
+#: is picked 11/24 (~46%) of the time, ``enable_gate`` 1/24 (~4%) and the rest
+#: 2/24 (~8%) each. A drawn mutation that cannot modify the child is redrawn, so
+#: the operators a genome records follow these weights only approximately. The
+#: order is kept fixed so a seeded search draws the same mutations. Recorded in
+#: each archive's ``run_info`` as part of ``operator_selection``.
+MUTATION_WEIGHTS: dict[str, int] = {
+    "add_gate": 11,
+    "reorder_gate": 2,
+    "qubit_swap": 2,
+    "enable_gate": 1,
+    "disable_gate": 2,
+    "clone": 2,
+    "mutate_some_weights": 2,
+    "mutate_all_weights": 2,
+}
 
 
 class EXAQC:
+
+    @staticmethod
+    def initialize_parser(parser: argparse.ArgumentParser) -> None:
+        """Adds the search's command-line arguments to a parser.
+
+        Entry points call this so every script exposes the same evolutionary
+        search flags with the same defaults and help text, rather than
+        repeating them. Each argument corresponds to the like-named
+        :meth:`__init__` keyword (or, for ``--number_genomes``, the genome
+        budget passed to the driver) and is validated by
+        :meth:`validate_mutation_strategy` / :meth:`validate_parent_strategy`
+        once the search is constructed.
+
+        Args:
+            parser: The parser to add the search's arguments to.
+
+        Returns:
+            None. Mutates ``parser`` by adding ``--mutation_strategy``/``-ms``,
+            ``--parent_strategy``/``-ps``, ``--binary_crossover_rate``,
+            ``--n_ary_crossover_rate``, ``--exponential_crossover_rate``,
+            ``--number_genomes`` and ``--timing_report_every``. Where the run's
+            outputs are written
+            (``--out_dir``, ``--shared_file_system``) is added by
+            :meth:`GenomeArchive.initialize_parser`.
+        """
+
+        parser.add_argument(
+            "--mutation_strategy",
+            "-ms",
+            type=str,
+            nargs="+",
+            required=True,
+            help=(
+                "Distribution for the number of mutations applied to each new genome: "
+                "'uniform <min> <max>' (integers, min >= 1) or 'exponential <scale>' "
+                "(float)."
+            ),
+        )
+
+        parser.add_argument(
+            "--parent_strategy",
+            "-ps",
+            type=str,
+            nargs="+",
+            required=True,
+            help=(
+                "Distribution for the number of parents used to generate each new "
+                "genome: 'uniform <min> <max>' (integers, min >= 2) or "
+                "'exponential <scale>' (float)."
+            ),
+        )
+
+        parser.add_argument(
+            "--binary_crossover_rate",
+            type=float,
+            default=0.00,
+            help="Fraction of genomes generated via binary crossover once the population is initialized.",
+        )
+
+        parser.add_argument(
+            "--n_ary_crossover_rate",
+            type=float,
+            default=0.20,
+            help="Fraction of genomes generated via n-ary crossover once the population is initialized.",
+        )
+
+        parser.add_argument(
+            "--exponential_crossover_rate",
+            type=float,
+            default=0.10,
+            help="Fraction of genomes generated via exponential crossover once the population is initialized.",
+        )
+
+        parser.add_argument(
+            "--number_genomes",
+            type=int,
+            default=1000,
+            help="Total number of genomes to evolve and evaluate before stopping.",
+        )
+
+        parser.add_argument(
+            "--timing_report_every",
+            type=int,
+            default=1000,
+            help=(
+                "How often, in inserted genomes, the MPI master logs where its time went "
+                "(waiting on workers, generating, sending, deserializing and inserting "
+                "genomes) since its last report; a final report covers the whole run. "
+                "0 keeps only the final report."
+            ),
+        )
 
     def __init__(
         self,
         gate_specifications: GateSpecifications,
         population: PopulationStrategy,
         objective: Objective,
-        hyperparameters: dict[str, any],
-        input_qubits: list[tuple[str, int]] = None,
-        input_registers: dict[str, int] = None,
-        output_registers: dict[str, int] = None,
-        output_qubits: list[tuple[str, int]] = None,
-        target: str = "pennylane",
-    ):
+        initial_encoder: Encoder | None,
+        initial_decoder: Decoder | None,
+        hyperparameters: dict[str, Any],
+        mutation_strategy: list[str] | None = None,
+        parent_strategy: list[str] | None = None,
+        binary_crossover_rate: float = 0.00,
+        n_ary_crossover_rate: float = 0.20,
+        exponential_crossover_rate: float = 0.10,
+        input_qubits: list[tuple[str, int]] | None = None,
+        input_registers: dict[str, int] | None = None,
+        output_registers: dict[str, int] | None = None,
+        output_qubits: list[tuple[str, int]] | None = None,
+        task: str | None = None,
+        task_target: str | None = None,
+        archive: GenomeArchive | None = None,
+        restarting: bool = False,
+    ) -> None:
         """
         Creates an instance of Evolutionary Exploration of Augmenting Quantum Circuits given a
         particular population strategy, allowing the given gates (if specified).
 
-        args:
+        Args:
             gate_specifications: is an object containing the allowed gates specifications for the search
                 process, for either the pennylane or qiskit frameworks.
             population: is an instance of a subclass of the PopulationStrategy interface, utilized to get
                 parents for mutation or crossover and insert children back into the population.
             objective: a method which takes a CircuitGenome, evaluates it and sets it's fitness
                 value.
+            initial_encoder: the initial encoder to use when initializing genomes, which may be later mutated
+                or have crossover performed on when generating new children.
+            initial_decoder: the initial decoder to use when initializing genomes, which may be later mutated
+                or have crossover performed on when generating new children.
             hyperparameters: a dict specifying which hyperparameters to use in the training process, and if
                 this is an additional search space to search over.
+            mutation_strategy: specifies how many mutations should be performed if mutation is selected. current
+                options are 'uniform <min> <max>' which will select a number of mutations uniformly at random
+                between min and max, inclusive of both endpoints, where min should be at least 1; or
+                'exponential <scale>' which will select the number of mutations using an exponential distribution
+                with the given scale plus 1 to ensure at least 1 mutation happens.
+            parent_strategy: specifies how many parents should be used for an n-ary crossover operation. current
+                options are 'uniform <min> <max>' which will select a number of parents uniformly at random
+                between min and max, inclusive of both endpoints, where min should be at least 2; or
+                'exponential <scale>' which will select the number of parents using an exponential distribution
+                with the given scale plus 2 to ensure at least 2 parents.
+            binary_crossover_rate: what fraction of the time (once the population is initialized) a child is
+                generated via binary crossover of two parents.
+            n_ary_crossover_rate: what fraction of the time (once the population is initialized) a child is
+                generated via n-ary crossover of several parents.
+            exponential_crossover_rate: what fraction of the time (once the population is initialized) a child
+                is generated via exponential crossover of two parents. Whatever fraction remains after the three
+                crossover rates is used for mutation.
             input_registers: a dict of register names and sizes (the key is the qubit name, the value is its size). must
                 be specified if input_qubits is not specified.
             input_qubits: a list of qubit tuples (name, register_index) which would be the expanded form of the
@@ -59,15 +211,66 @@ class EXAQC:
             output_qubits: a list of qubit tuples (name, register_index) which would be the expanded form of the
                 output_registers. Must be specified if output_registers is not specified. If output_registers
                 and output_qubits are None, they are set to the input_registers/qubits.
-            target: qiskit or pennylane
+            task: which kind of problem is being solved -- one of 'classification',
+                'teacher' or 'reinforcement_learning'. Stamped onto every genome
+                this search generates so a saved genome records what it was
+                evolved for.
+            task_target: what the task is run against -- the dataset name, the
+                teacher circuit name, or the environment name. Also stamped onto
+                every generated genome. Named 'task_target' because 'target'
+                already names the quantum framework.
+            archive: the run's output archive (see :class:`GenomeArchive`), which
+                every inserted genome and the search history are written to.
+                When None nothing is written, e.g. in tests.
+            restarting: whether this search continues a run the archive already
+                holds (see :mod:`src.utils.restart`). A restart leaves what
+                that run recorded about itself -- its command line, start time
+                and configuration -- as it is, and records itself separately.
+
+        Returns:
+            None. Sets the search's configuration and state, including
+            ``insert_timer``, which accumulates how long each part of
+            :meth:`insert_genome` takes.
         """
 
         self.gate_specifications = gate_specifications
         self.population = population
         self.objective = objective
         self.hyperparameters = hyperparameters
-        self.target = target
+        # The quantum backend (qiskit/pennylane) is a property of the gate set,
+        # so it is taken from there rather than passed separately, and stamped
+        # onto every genome this search creates.
+        self.target = gate_specifications.target
+        self.task = task
+        self.task_target = task_target
         self.inserted_genomes = 0
+
+        # how long each part of insert_genome takes, for the MPI master's
+        # timing reports
+        self.insert_timer = PhaseTimer()
+
+        # Everything written to disk (evaluated genomes and the search history)
+        # goes through the archive.
+        self.archive = archive
+
+        # The best genome by fitness["target_metric"]; the population itself
+        # ranks genomes by its compare function.
+        self.target_metric_best_genome: CircuitGenome | None = None
+
+        self.initial_encoder = initial_encoder
+        self.initial_decoder = initial_decoder
+
+        # make sure the mutation count and parent count strategies are
+        # ones we currently support
+        self.validate_mutation_strategy(mutation_strategy)
+        self.validate_parent_strategy(parent_strategy)
+
+        self.mutation_strategy = mutation_strategy
+        self.parent_strategy = parent_strategy
+
+        self.binary_crossover_rate = binary_crossover_rate
+        self.n_ary_crossover_rate = n_ary_crossover_rate
+        self.exponential_crossover_rate = exponential_crossover_rate
 
         if input_registers is None and input_qubits is None:
             logger.critical(
@@ -87,6 +290,9 @@ class EXAQC:
             )
             exit(1)
 
+        logger.info(f"initial input qubits: {input_qubits}")
+        logger.info(f"initial output qubits: {output_qubits}")
+
         self.input_qubits: list[tuple[str, int]] = input_qubits
         if self.input_qubits is None:
             self.input_qubits = expand_registers(input_registers)
@@ -97,6 +303,9 @@ class EXAQC:
                 self.output_qubits = self.input_qubits.copy()
             else:
                 self.output_qubits = expand_registers(output_registers)
+
+        logger.info(f"input qubits: {self.input_qubits}")
+        logger.info(f"output qubits: {self.output_qubits}")
 
         logger.info("Starting EXAQC with the following allowed gates:")
         for gate in sorted(
@@ -118,6 +327,132 @@ class EXAQC:
         self.saved_epochs = 10
         self.initial_genome.hyperparameters = self.get_hyperparameters()
 
+        if self.archive is not None and not restarting:
+            self.archive.set_run_info(
+                task=self.task,
+                task_target=self.task_target,
+                target=self.target,
+                population_strategy=type(self.population).__name__,
+                command_line=" ".join(sys.argv),
+                start_time=time.time(),
+                # the empty circuit the initial genomes are mutated from; it is
+                # never evaluated, so it is never stored in the archive
+                seed_genome_number=self.initial_genome.genome_number,
+                # how operators were drawn, so the rates a run's genomes record
+                # can be compared against what the search was configured to do
+                operator_selection={
+                    "mutation_weights": dict(MUTATION_WEIGHTS),
+                    "crossover_rates": {
+                        "binary_crossover": self.binary_crossover_rate,
+                        "n_ary_crossover": self.n_ary_crossover_rate,
+                        "exponential_crossover": self.exponential_crossover_rate,
+                    },
+                    "mutation_strategy": list(self.mutation_strategy),
+                    "parent_strategy": list(self.parent_strategy),
+                },
+                # whatever the population strategy records about itself, such as
+                # how an island search's islands are connected
+                **self.population.run_info(),
+            )
+
+    def validate_mutation_strategy(self, mutation_strategy: list[str]):
+        """
+        Validates that the mutation count strategy provided on the command line is
+        correctly formatted and specifies. Will report an error and quit if not.
+        """
+
+        if mutation_strategy[0] == "uniform":
+            if len(mutation_strategy) != 3:
+                logger.error(
+                    "'uniform' mutation strategy requires two additional arguments, which are the "
+                    "min and max range of potential number of mutations, which need to be integers."
+                )
+                exit(1)
+
+            if not mutation_strategy[1].isdigit() or int(mutation_strategy[1]) < 1:
+                logger.error(
+                    "<min> value for uniform strategy must be an int and at least 1, but value "
+                    f"provided was {mutation_strategy[1]}"
+                )
+                exit(1)
+
+            if not mutation_strategy[1].isdigit() or (
+                int(mutation_strategy[1]) > int(mutation_strategy[2])
+            ):
+                logger.error(
+                    "<max> value for uniform strategy must be an int and at least the <min> value, "
+                    f"value provided was {mutation_strategy[1]}"
+                )
+                exit(1)
+
+        elif mutation_strategy[0] == "exponential":
+            if len(mutation_strategy) != 2:
+                logger.error(
+                    "'exponential' mutation strategy requires one additional argument, which is "
+                    "the scale for the exponential distribution, which needs to be a float."
+                )
+                exit(1)
+
+            try:
+                float(mutation_strategy[1])
+            except ValueError:
+                logger.error(
+                    f"'scale' value was {mutation_strategy[1]} was not a float."
+                )
+                exit(1)
+
+        else:
+            logger.error(f"Unknown mutation strategy was provided: {mutation_strategy}")
+            exit(1)
+
+    def validate_parent_strategy(self, parent_strategy: list[str]):
+        """
+        Validates that the parent count strategy provided on the command line is
+        correctly formatted and specifies. Will report an error and quit if not.
+        """
+
+        if parent_strategy[0] == "uniform":
+            if len(parent_strategy) != 3:
+                logger.error(
+                    "'uniform' parent strategy requires two additional arguments, which are the "
+                    "min and max range of potential number of parents, which need to be integers."
+                )
+                exit(1)
+
+            if not parent_strategy[1].isdigit() or int(parent_strategy[1]) < 2:
+                logger.error(
+                    "<min> value for uniform strategy must be an int and at least 2, but value "
+                    f"provided was {parent_strategy[1]}"
+                )
+                exit(1)
+
+            if not parent_strategy[1].isdigit() or (
+                int(parent_strategy[1]) > int(parent_strategy[2])
+            ):
+                logger.error(
+                    "<max> value for uniform strategy must be an int and at least the <min> value, "
+                    f"value provided was {parent_strategy[1]}"
+                )
+                exit(1)
+
+        elif parent_strategy[0] == "exponential":
+            if len(parent_strategy) != 2:
+                logger.error(
+                    "'exponential' parent strategy requires one additional argument, which is "
+                    "the scale for the exponential distribution, which needs to be a float."
+                )
+                exit(1)
+
+            try:
+                float(parent_strategy[1])
+            except ValueError:
+                logger.error(f"'scale' value was {parent_strategy[1]} was not a float.")
+                exit(1)
+
+        else:
+            logger.error(f"Unknown parent strategy was provided: {parent_strategy}")
+            exit(1)
+
     def get_hyperparameters(self):
         """
         Return:
@@ -137,12 +472,60 @@ class EXAQC:
         )
         hyperparameters["epochs"] = random.choice([5, 10, 15, 20, 25, 30, 35, 40])
         """
-        hyperparameters["learning_rate"] = 0.0010
+        # hyperparameters["learning_rate"] = 0.0010
         # hyperparameters["epochs"] = random.choice([5, 10])
-        hyperparameters["epochs"] = self.saved_epochs
+        # hyperparameters["epochs"] = self.saved_epochs
         # hyperparameters["epochs"] = 10
 
         return hyperparameters
+
+    def get_mutation_count(self) -> int:
+        """
+        Given the provided mutation strategy this will determine how many mutations
+        to perform for the current time mutation was selected.
+
+        Returns:
+            How many mutations to perform for the next child.
+        """
+
+        if self.mutation_strategy[0] == "uniform":
+            min_value = int(self.mutation_strategy[1])
+            max_value = int(self.mutation_strategy[2])
+            # inclusive of both endpoints: 'uniform 1 3' -> {1, 2, 3},
+            # 'uniform 5 5' -> {5}.
+            n_mutations = random.choice(range(min_value, max_value + 1))
+            logger.info(f"uniform mutation count generated: {n_mutations}")
+            return n_mutations
+
+        elif self.mutation_strategy[0] == "exponential":
+            scale = float(self.mutation_strategy[1])
+            n_mutations = min(round(np.random.exponential(scale=scale)) + 1, 10)
+            logger.info(f"exponential mutation count generated: {n_mutations}")
+            return n_mutations
+
+    def get_parent_count(self) -> int:
+        """
+        Given the provided parent strategy this will determine how many parents
+        are selected to perform n-ary crossover or other multi-parent operations
+
+        Returns:
+            How many parents to perform for the next child.
+        """
+
+        if self.parent_strategy[0] == "uniform":
+            min_value = int(self.parent_strategy[1])
+            max_value = int(self.parent_strategy[2])
+            # inclusive of both endpoints: 'uniform 2 4' -> {2, 3, 4},
+            # 'uniform 5 5' -> {5}.
+            n_parents = random.choice(range(min_value, max_value + 1))
+            logger.info(f"uniform parent count generated: {n_parents}")
+            return n_parents
+
+        elif self.parent_strategy[0] == "exponential":
+            scale = float(self.parent_strategy[1])
+            n_parents = min(round(np.random.exponential(scale=scale)) + 2, 10)
+            logger.info(f"exponential parent count generated: {n_parents}")
+            return n_parents
 
     def next_genome_number(self) -> int:
         """
@@ -155,29 +538,51 @@ class EXAQC:
         self.genome_number += 1
         return self.genome_number
 
+    def record_generation(self, child: CircuitGenome) -> CircuitGenome:
+        """Stamps a newly generated genome with when, in the search, it was created.
+
+        ``generated_at_insertion`` is how many genomes had been inserted when the
+        child was generated. Together with the insertion it is eventually
+        recorded at, it says how many insertions happened while the child was
+        being evaluated, and with the archive's population events what the
+        population it was generated from held.
+
+        Args:
+            child: The genome just generated.
+
+        Returns:
+            The same genome, with ``generated_at_insertion`` and
+            ``timing["generated_at"]`` (wall-clock seconds) set in its metadata.
+        """
+
+        child.metadata["generated_at_insertion"] = self.inserted_genomes
+        child.metadata.setdefault("timing", {})["generated_at"] = time.time()
+        return child
+
     def mutate(
-        self, parent: CircuitGenome, metadata: dict[str, any], n_mutations: int = 1
+        self, parent: CircuitGenome, metadata: dict[str, Any], n_mutations: int = 1
     ) -> CircuitGenome:
         """
         Takes a given parent genome, makes a copy of it (with a new genome number) and
-        then applies a random mutation to it.
+        then applies random mutations to it.
+
+        Each mutation is drawn according to :data:`MUTATION_WEIGHTS`; a draw that
+        does not modify the child is redrawn, and only mutations that modified it
+        are recorded in its ``generated_by`` metadata.
 
         Args:
             parent: is the genome to mutate
+            metadata: is the metadata dict the child takes (e.g. its target island);
+                ``parent_genomes`` and ``generated_by`` are set in it.
+            n_mutations: is how many successful mutations to apply.
 
         Returns:
             A mutated copy of the parent genome as a child.
         """
 
-        # mutation_options = ["add_gate", "disable_gate", "enable_gate", "reorder_gate"]
-        mutation_options = (
-            ["add_gate"] * 11  # 65%
-            + ["reorder_gate"] * 2  # 10%
-            + ["qubit_swap"] * 2  # 10%
-            + ["enable_gate"]  # 5%
-            + ["disable_gate"] * 2  # 10%
-            + ["clone"] * 2  # 10%
-        )
+        mutation_options = [
+            name for name, weight in MUTATION_WEIGHTS.items() for _ in range(weight)
+        ]
 
         # only use the gates with which do not still require some validation from us to
         # ensure compatability
@@ -230,6 +635,12 @@ class EXAQC:
                 case "qubit_swap":
                     modified = qubit_swap(child)
 
+                case "mutate_some_weights":
+                    modified = mutate_some_weights(child)
+
+                case "mutate_all_weights":
+                    modified = mutate_all_weights(child)
+
             if modified:
                 # track the mutation that actually modified the child
                 child.metadata["generated_by"].append(mutation)
@@ -239,9 +650,9 @@ class EXAQC:
 
     def generate_genome(
         self,
-        binary_crossover_rate: float = 0.10,
-        n_ary_crossover_rate: float = 0.10,
-        exponential_crossover_rate: float = 0.10,
+        binary_crossover_rate: float | None = None,
+        n_ary_crossover_rate: float | None = None,
+        exponential_crossover_rate: float | None = None,
         n_ary_parents: int = 5,
     ) -> CircuitGenome:
         """
@@ -249,19 +660,31 @@ class EXAQC:
 
         Args:
             binary_crossover_rate: what percentage of time to do binary crossover after
-                the population has been initialized.
+                the population has been initialized. Defaults to the rate configured on
+                this EXAQC instance (``self.binary_crossover_rate``) when ``None``.
             n_ary_crossover_rate: what percentage of the time to do n-ary crossover
-                after the population has been initialized.
+                after the population has been initialized. Defaults to the rate configured
+                on this EXAQC instance (``self.n_ary_crossover_rate``) when ``None``.
+            exponential_crossover_rate: what percentage of the time to do exponential
+                crossover after the population has been initialized. Defaults to the rate
+                configured on this EXAQC instance (``self.exponential_crossover_rate``)
+                when ``None``.
             n_ary_parents: how many parents to use for n-ary crossover
         Returns:
             A new child to evaluate for EXAQC.
         """
 
+        if binary_crossover_rate is None:
+            binary_crossover_rate = self.binary_crossover_rate
+        if n_ary_crossover_rate is None:
+            n_ary_crossover_rate = self.n_ary_crossover_rate
+        if exponential_crossover_rate is None:
+            exponential_crossover_rate = self.exponential_crossover_rate
+
         if self.population.is_initializing():
             # still need to populate the initial population
-            # mutation_count = random.choice([1, 2, 3, 4, 5, 6, 7, 8, 9])
-            mutation_count = random.choice([1, 2, 3])
-            # mutation_count = random.choice([1, 2, 3, 4])
+
+            mutation_count = self.get_mutation_count()
 
             # keep retrying until we have a valid child
             child = None
@@ -278,8 +701,26 @@ class EXAQC:
 
             child.genome_number = self.next_genome_number()
             child.hyperparameters = self.get_hyperparameters()
+            # record what this genome was evolved for, so it can be
+            # reloaded and refined later without being told
+            child.task = self.task
+            child.task_target = self.task_target
+            # A purely quantum search seeds no classical stages to copy.
+            child.encoder = (
+                self.initial_encoder.copy()
+                if self.initial_encoder is not None
+                else None
+            )
+            child.decoder = (
+                self.initial_decoder.copy()
+                if self.initial_decoder is not None
+                else None
+            )
+            logger.info(
+                f"set child encoder and decoder: {type(child.encoder)}, {type(child.decoder)}"
+            )
 
-            return child
+            return self.record_generation(child)
 
         else:
             # generate from the population as usual
@@ -313,6 +754,8 @@ class EXAQC:
                         continue
 
                 elif r < n_ary_cutoff:
+                    n_ary_parents = self.get_parent_count()
+                    logger.info(f"selected {n_ary_parents} parents for crossover")
                     parents, metadata = self.population.get_parents(n_ary_parents)
 
                     if parents is None:
@@ -347,14 +790,25 @@ class EXAQC:
                 else:
                     parent, metadata = self.population.get_parent()
 
-                    # mutation_count = random.choice([0, 1, 2, 3, 4])
-                    mutation_count = random.choice([1, 2, 3])
+                    if parent is None:
+                        # the target island is repopulating and none of its
+                        # neighbors hold a genome to mutate, so try another island
+                        continue
+
+                    mutation_count = self.get_mutation_count()
+
                     logger.info(
                         f"generating a child via {mutation_count + 1} mutations."
                     )
 
-                    metadata = {}
                     child = self.mutate(parent, metadata, mutation_count)
+                    # A purely quantum genome has no classical stages to copy.
+                    child.encoder = (
+                        parent.encoder.copy() if parent.encoder is not None else None
+                    )
+                    child.decoder = (
+                        parent.decoder.copy() if parent.decoder is not None else None
+                    )
 
                 if not child.is_valid():
                     logger.warning(
@@ -365,30 +819,152 @@ class EXAQC:
             # successfully generated a child
             child.genome_number = self.next_genome_number()
             child.hyperparameters = self.get_hyperparameters()
-            return child
+            # record what this genome was evolved for, so it can be
+            # reloaded and refined later without being told
+            child.task = self.task
+            child.task_target = self.task_target
 
-    def insert_genome(self, genome: CircuitGenome):
-        """
-        Trys to insert an evaluated genome into the population strategy.
+            # A child's classical stages must match how the search was seeded:
+            # a hybrid search (encoder/decoder given) must never drop a stage,
+            # and a purely quantum search (e.g. quantum-teacher imitation, which
+            # seeds neither) must never acquire one. Catching a mismatch here is
+            # much clearer than the failure it would cause later inside the
+            # child's forward pass.
+            if self.initial_encoder is None:
+                assert child.encoder is None
+            else:
+                assert child.encoder is not None
+
+            if self.initial_decoder is None:
+                assert child.decoder is None
+            else:
+                assert child.decoder is not None
+
+            return self.record_generation(child)
+
+    def insert_genome(self, genome: CircuitGenome) -> None:
+        """Inserts an evaluated genome into the population and records it.
+
+        This is the single insertion path for both serial and MPI runs. Once the
+        population strategy accepts the genome, it is written to the run's
+        archive and the change to the population is recorded. A genome a
+        population strategy declines to record (by returning False) is counted
+        but not archived; the built-in strategies record every genome, discarded
+        ones included. No other files are written: the best genomes are read from
+        the archive (by the dashboard, or a query) rather than rewritten as they
+        improve, which would cost the search an image render per new best.
 
         Args:
-            genome: is the evaluated genome to insert
+            genome: The evaluated genome to insert.
+
+        Returns:
+            None. Stamps the genome's ``timing["inserted_at"]``, updates the
+            population, ``inserted_genomes`` and ``target_metric_best_genome``,
+            writes to ``archive`` when one was given, and adds how long each
+            part took (``population``, ``archive``, ``population_events``) to
+            ``insert_timer``.
         """
-        self.population.insert_genome(genome, current_genome_number=self.genome_number)
+
+        # when the master took the genome back, on the master's clock
+        genome.metadata.setdefault("timing", {})["inserted_at"] = time.time()
+        with self.insert_timer.time("population"):
+            recorded = self.population.insert_genome(
+                genome, current_genome_number=self.genome_number
+            )
         self.inserted_genomes += 1
+
+        if recorded is False:
+            return
+
+        # tracked for the search's own "new best" log lines
+        self.update_target_metric_best(genome)
+
+        if self.archive is None:
+            return
+
+        with self.insert_timer.time("archive"):
+            self.archive.add_genome(
+                genome,
+                insertion=self.inserted_genomes,
+                island=genome.metadata.get("island_id"),
+            )
+
+        with self.insert_timer.time("population_events"):
+            self.archive.record_population(
+                step=self.inserted_genomes,
+                population=self.population.get_population(),
+            )
+
+    def update_target_metric_best(self, genome: CircuitGenome) -> bool:
+        """Tracks the best genome by ``fitness["target_metric"]``.
+
+        A genome becomes the new best when there is none yet, or when its
+        ``target_metric`` is at least as high as the current best's.
+
+        Args:
+            genome: A genome that has just been inserted.
+
+        Returns:
+            True if ``genome`` became the new best (and was stored in
+            ``target_metric_best_genome``), False otherwise.
+        """
+
+        best = self.target_metric_best_genome
+        fitness = genome.fitness or {}
+
+        if best is not None:
+            if "target_metric" not in fitness:
+                return False
+            best_value = (best.fitness or {}).get("target_metric", float("-inf"))
+            if best_value > fitness["target_metric"]:
+                return False
+
+        self.target_metric_best_genome = genome
+        logger.success(
+            f"[global insertion {self.inserted_genomes}] found new best genome "
+            f"{genome.genome_number} for target_metric with fitness: {genome.fitness}"
+        )
+        return True
+
+    def close(self) -> None:
+        """Finishes the search's output, closing the archive if there is one.
+
+        Returns:
+            None. Closes ``archive``.
+        """
+
+        if self.archive is not None:
+            self.archive.close()
 
     def run_for(
         self,
         number_genomes: int,
-    ):
+    ) -> None:
         """
-        Runs EXAQC until it has generated and evaluated the given number of genomes.
+        Runs EXAQC in this process until it has evaluated the given number of genomes.
+
+        Genomes are counted as they are evaluated, as the MPI master counts
+        them, so the seed genome the search starts from (which uses up genome
+        number 1 but is never evaluated) does not count towards the total.
 
         Args:
-            number_genomes: how many genomes to generate with EXAQC
+            number_genomes: how many genomes to generate, evaluate and insert.
+
+        Returns:
+            None. Evolves the population (and writes to the archive) in place.
         """
 
-        while self.genome_number < number_genomes:
+        for _ in range(number_genomes):
+            started = time.perf_counter()
             child = self.generate_genome()
-            self.objective(child)
-            self.population.insert_genome(child)
+            # recorded as the MPI master records it, so serial and distributed
+            # runs archive the same timing
+            child.metadata.setdefault("timing", {})["generation_seconds"] = (
+                time.perf_counter() - started
+            )
+            # records how long the evaluation took and where it ran, as a worker does
+            evaluate_genome(self.objective, child)
+            # use the same insertion path as the MPI master so serial and
+            # distributed runs behave identically (passes current_genome_number
+            # and updates the genome-insertion tracking).
+            self.insert_genome(child)

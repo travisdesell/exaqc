@@ -26,4 +26,5 @@ srun python -m src.examples.pl_reinforce \
   --max_steps 1000 \
   --input_qubits 6 \
   --output_qubits 4 \
+  --shared_file_system \
   --out_dir artifacts/walker2d/run/1

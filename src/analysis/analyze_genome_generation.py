@@ -1,26 +1,42 @@
+"""
+This generates tables for mutation and crossover insertion rates and was used
+for the 2026 PPSN paper and GPTP book chapter, e.g.:
+
+```
+python3 -m src.analysis.analyze_genome_generation \
+    --input_directories ~/Data/2026_gptp_exaqc/breast_norepop/breast_cancer_i* \
+    --groups i1_p64 i2_p32 i4_p16 i8_p8 i16_p4 i32_p2 i64_p1
+```
+
+"""
+
 from __future__ import annotations
 
 import argparse
 import numpy as np
-import json
 import sys
 
+import matplotlib.pyplot as plt
+
 from loguru import logger
-from pathlib import Path
 
 from src.circuits.circuit import CircuitGenome
+from src.utils.genome_archive import iter_run_genome_dicts
 
 
 def get_group_metrics(
-    input_directories: list[str], metric: str, group: str = None
-) -> (dict[str, dict[str, int]], dict[str, list[float]], int, int):
+    input_directories: list[str], metric: str, group: str | None = None
+) -> tuple[dict[str, dict[str, int]], dict[str, list[float]], int, int]:
     """
     Parses through the given input directories for runs with the 'group' flag and then
     generates the count statistics for mutation insertion rates. If the group flag is not
     provided then use all input directories.
 
+    Every genome a run saved is read, from the run's ``genomes.sqlar`` archive or,
+    for runs written before the archive existed, its ``all_genomes/`` directory.
+
     Args:
-        input_directories: the directories to look through
+        input_directories: the run directories to look through
         metric: the metric to track (e.g., test_acc, valid_acc)
         group: the string to glob for run directories to use in the metrics calculation if
             provided.
@@ -44,94 +60,101 @@ def get_group_metrics(
 
     overall_best_json = ""
 
-    for directory in args.input_directories:
+    for directory in input_directories:
         if group is not None:
             # skip the directory if it doesnt contain the search string
             if group not in directory:
                 continue
 
-        genome_directory = Path(directory + "/all_genomes/")
-        logger.info(f"parsing directory: {genome_directory}")
+        logger.info(f"parsing run directory: {directory}")
 
         best_metric = 0
         best_n_gates = 10000
         best_n_parameters = 10000
 
-        for genome_json in genome_directory.glob("*.json"):
+        for genome_json, genome in iter_run_genome_dicts(directory):
+            metric_value = genome["fitness"][metric]
+            n_gates = len(genome["gates"])
+            n_parameters = sum([len(gate["parameters"]) for gate in genome["gates"]])
 
-            with open(genome_json, "r") as file:
-                genome = json.load(file)
+            # logger.info(f"\tgenome: {genome_json} had metric '{metric}': {metric_value}")
 
-                metric_value = genome["fitness"][metric]
-                n_gates = len(genome["gates"])
-                n_parameters = sum(
-                    [len(gate["parameters"]) for gate in genome["gates"]]
+            if metric_value > best_metric:
+                logger.info(
+                    f"genome {genome_json} had NEW best metric {metric_value} with n "
+                    f"gates {n_gates} and n parameters {n_parameters}"
                 )
 
-                # logger.info(f"\tgenome: {genome_json} had metric '{metric}': {metric_value}")
+                best_metric = metric_value
+                best_n_gates = n_gates
+                best_n_parameters = n_parameters
 
-                if metric_value > best_metric:
+            if metric_value == best_metric:
+                if n_gates + n_parameters < best_n_gates + best_n_parameters:
                     logger.info(
-                        f"genome {genome_json} had NEW best metric {metric_value} with n "
+                        f"genome {genome_json} had SMALLER best metric {metric_value} with n "
                         f"gates {n_gates} and n parameters {n_parameters}"
                     )
-
-                    best_metric = metric_value
                     best_n_gates = n_gates
                     best_n_parameters = n_parameters
 
-                if metric_value == best_metric:
-                    if n_gates + n_parameters < best_n_gates + best_n_parameters:
-                        logger.info(
-                            f"genome {genome_json} had SMALLER best metric {metric_value} with n "
-                            f"gates {n_gates} and n parameters {n_parameters}"
-                        )
-                        best_n_gates = n_gates
-                        best_n_parameters = n_parameters
+            if metric_value > overall_best_metric:
+                logger.info(
+                    f"genome {genome_json} had NEW overall best metric {metric_value} with n "
+                    f"gates {n_gates} and n parameters {n_parameters}"
+                )
+                overall_best_json = genome_json
+                overall_best_metric = metric_value
 
-                if metric_value > overall_best_metric:
+                overall_best_n_gates = n_gates
+                overall_best_n_parameters = n_parameters
+
+            if metric_value == overall_best_metric:
+                if (
+                    n_gates + n_parameters
+                    < overall_best_n_gates + overall_best_n_parameters
+                ):
                     logger.info(
-                        f"genome {genome_json} had NEW overall best metric {metric_value} with n "
-                        f"gates {n_gates} and n parameters {n_parameters}"
+                        f"genome {genome_json} had SMALLER overall best metric {metric_value} "
+                        f"with n gates {n_gates} and n parameters {n_parameters}"
                     )
                     overall_best_json = genome_json
-                    overall_best_metric = metric_value
-
                     overall_best_n_gates = n_gates
                     overall_best_n_parameters = n_parameters
 
-                if metric_value == overall_best_metric:
-                    if (
-                        n_gates + n_parameters
-                        < overall_best_n_gates + overall_best_n_parameters
-                    ):
-                        logger.info(
-                            f"genome {genome_json} had SMALLER overall best metric {metric_value} "
-                            f"with n gates {n_gates} and n parameters {n_parameters}"
-                        )
-                        overall_best_json = genome_json
-                        overall_best_n_gates = n_gates
-                        overall_best_n_parameters = n_parameters
+                    circuit_genome = CircuitGenome.from_dict(genome)
+                    circuit_genome.save_circuit("analysis_smallest", "./")
 
-                        circuit_genome = CircuitGenome.from_dict(genome)
-                        circuit_genome.save_circuit("analysis_smallest", "./")
+            metadata = genome["metadata"]
+            insert_type = metadata["insert_type"]
 
-                metadata = genome["metadata"]
-                insert_type = metadata["insert_type"]
+            for gen_type in metadata["generated_by"]:
+                """
+                if gen_type == "n_ary_crossover":
+                    n_parents = len(metadata["parent_genomes"])
 
-                for gen_type in metadata["generated_by"]:
-                    if gen_type not in insert_counts:
-                        insert_counts[gen_type] = {}
+                    gen_type = f"{n_parents}-ary crossover"
 
-                    if "total" not in insert_counts[gen_type]:
-                        insert_counts[gen_type]["total"] = 1
-                    else:
-                        insert_counts[gen_type]["total"] += 1
+                if "crossover_type" in metadata.keys():
+                    gen_type = metadata["crossover_type"] + " " + gen_type
+                """
 
-                    if insert_type not in insert_counts[gen_type]:
-                        insert_counts[gen_type][insert_type] = 1
-                    else:
-                        insert_counts[gen_type][insert_type] += 1
+                if gen_type not in insert_counts:
+                    insert_counts[gen_type] = {}
+                    insert_counts[gen_type]["inserted"] = 0
+                    insert_counts[gen_type]["discarded"] = 0
+                    insert_counts[gen_type]["global_best"] = 0
+                    insert_counts[gen_type]["local_best"] = 0
+
+                if "total" not in insert_counts[gen_type]:
+                    insert_counts[gen_type]["total"] = 1
+                else:
+                    insert_counts[gen_type]["total"] += 1
+
+                if insert_type not in insert_counts[gen_type]:
+                    insert_counts[gen_type][insert_type] = 1
+                else:
+                    insert_counts[gen_type][insert_type] += 1
 
         best_metrics.append(best_metric)
         best_n_gates_list.append(best_n_gates)
@@ -185,8 +208,9 @@ def get_group_metrics(
 
 if __name__ == "__main__":
     """
-    This will parse all the provided input directories, reading all the genomes in the
-    `all_genomes` subdirectory to calculate statistics about which crossovers and
+    This will parse all the provided input directories, reading all the genomes each run
+    saved (its `genomes.sqlar` archive, or the `all_genomes` subdirectory of runs written
+    before the archive existed) to calculate statistics about which crossovers and
     mutations had the best results (i.e., global best, local best, inserted or discarded)
     during the evolution process.
 
@@ -240,6 +264,8 @@ if __name__ == "__main__":
         input_counts = get_group_metrics(args.input_directories, metric)
     else:
 
+        all_bests = {}
+
         group_counts = {}
         for group in args.groups:
             (
@@ -248,8 +274,10 @@ if __name__ == "__main__":
                 overall_best_n_gates,
                 overall_best_n_parameters,
             ) = get_group_metrics(args.input_directories, metric, group)
+
             print(f"insert counts for '{group}' were: {insert_counts}")
             group_counts[group] = insert_counts
+            all_bests[group] = best_lists
 
         # create the summary table
 
@@ -277,33 +305,67 @@ if __name__ == "__main__":
         print("\\toprule")
         print(" &")
         for group in args.groups:
-            print(f" & {{\\bf {group} }}", end="")
+            cleaned_group = group.replace("_", "\\_")
+            print(f" & {{\\bf {cleaned_group} }}", end="")
         print("\\\\")
         print("\\midrule")
 
-        for operator in operators:
+        for operator in sorted(operators):
             cleaned_operator = operator.replace("n_ary", "n-ary").replace("_", "\\\\")
             global_best_line = (
-                f"\\multirowcell{{3}}{{{cleaned_operator}}} & global best"
+                f"\\multirowcell{{4}}{{{cleaned_operator}}} & global best"
             )
+            local_best_line = "& local best"
             inserted_line = "& inserted"
             discarded_line = "& discarded"
 
             for group in args.groups:
-                total_count = float(group_counts[group][operator]["total"])
-                global_best_p = (
-                    group_counts[group][operator]["global_best"] / total_count
-                )
-                inserted_p = group_counts[group][operator]["inserted"] / total_count
-                discarded_p = group_counts[group][operator]["discarded"] / total_count
 
-                global_best_line += f" & {global_best_p:.3f}"
-                inserted_line += f" & {inserted_p:.3f}"
-                discarded_line += f" & {discarded_p:.3f}"
+                if operator in group_counts[group]:
+                    total_count = float(group_counts[group][operator]["total"])
+                    global_best_p = (
+                        group_counts[group][operator]["global_best"] / total_count
+                    )
+                    local_best_p = (
+                        group_counts[group][operator]["local_best"] / total_count
+                    )
+                    inserted_p = group_counts[group][operator]["inserted"] / total_count
+                    discarded_p = (
+                        group_counts[group][operator]["discarded"] / total_count
+                    )
+
+                    global_best_line += f" & {global_best_p:.3f}"
+                    local_best_line += f" & {local_best_p:.3f}"
+                    inserted_line += f" & {inserted_p:.3f}"
+                    discarded_line += f" & {discarded_p:.3f}"
+
+                else:
+                    global_best_line += " & -"
+                    local_best_line += " & -"
+                    inserted_line += " & -"
+                    discarded_line += " & -"
 
             print(f"{global_best_line} \\\\")
+            print(f"{local_best_line} \\\\")
             print(f"{inserted_line}\\\\")
             print(f"{discarded_line} \\\\")
             print("\\hline")
 
         print("\\end{tabular}")
+
+        group_points = []
+
+        print("\n\n")
+        print("all_best lists:")
+        for group in args.groups:
+            print(f"{group} -- {all_bests[group][args.metric]}")
+            group_points.append(all_bests[group][args.metric])
+
+        fig, ax = plt.subplots()
+        ax.set_ylabel("Accuracy (%)")
+
+        bplot = ax.boxplot(
+            group_points, patch_artist=True, tick_labels=args.groups  # fill with color
+        )  # will be used to label x-ticks
+
+        plt.show()

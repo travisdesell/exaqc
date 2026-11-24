@@ -3,9 +3,9 @@ from __future__ import annotations
 from loguru import logger
 
 from qiskit import QuantumCircuit, QuantumRegister
-from qiskit.circuit import Parameter as QiskitParameter
+from qiskit.circuit import ParameterVector
+
 import pennylane as qml
-import torch
 
 from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
@@ -33,6 +33,7 @@ class Gate:
         parameters: dict[str, float] = {},
         innovation_number: int = None,
         target: str = "qiskit",
+        enabled: bool = True,
     ):
         """
         Initializes a gate element in an evolved quantum circuit.
@@ -50,6 +51,8 @@ class Gate:
                 quantum circuit it appears in. if a value is not provided, a new innovation number will be generated
                 for the gate.
             target: denotes whether you are adding qiskit or pennylane gates
+            enabled: specifies if the gate is enabled for use or not. In the copy method this will preserve the
+                enabled status from the gate being copied.
         """
 
         assert (depth > 0.0) and (depth < 1.0)
@@ -76,7 +79,7 @@ class Gate:
 
         assert len(self.parameters) == len(self.specs.parameters)
 
-        self.enabled = True
+        self.enabled = enabled
 
     def get_input_circuit_indexes(self, circuit: CircuitGenome) -> list[int]:
         """
@@ -168,9 +171,8 @@ class Gate:
             parameters=serialized["parameters"],
             innovation_number=serialized["innovation_number"],
             target=serialized["target"],
+            enabled=serialized["enabled"],
         )
-
-        new_gate.enabled = serialized["enabled"]
 
         return new_gate
 
@@ -198,13 +200,15 @@ class Gate:
             parameters=self.parameters.copy(),
             innovation_number=innovation_number,
             target=self.target,
+            enabled=self.enabled,
         )
 
     def add_to_qiskit_circuit(
         self,
         register_dict: dict[tuple[str, int], QuantumRegister],
         circuit: QuantumCircuit,
-        parametric: bool = False,
+        weight_vector: ParameterVector,
+        offset: int,
     ):
         """
         Adds this gate to the qiskit QuantumCircuit using reflection
@@ -213,11 +217,9 @@ class Gate:
         Args:
             register_dict: is a dict of qubit tuples to the appropriate quantum register
             circuit: is the qiskit QuantumCircuit to add this gate to
-            parametric: if True, replace numeric parameter values with qiskit
-                Parameter symbols (cached on this Gate) so the resulting
-                QuantumCircuit can be used with autodiff via SamplerQNN /
-                EstimatorQNN. The float values stay in self.parameters and
-                are used as the initial values for the Parameters at bind time.
+            weight_vector: is the qiskit ParameterVector tracking all the weights of
+                the quantum circuit so it can be trained.
+            offset: is the starting offset to set parameters of this gate from
         """
 
         logger.debug(
@@ -232,6 +234,20 @@ class Gate:
 
         qubit_args = {}
 
+        # Bind to the weight vector we were handed, every time. These bindings
+        # must never be cached across circuit builds: each build creates a fresh
+        # ParameterVector, and qiskit Parameters compare by identity rather than
+        # by name, so reusing bindings from an earlier build would put stale
+        # Parameter objects in the circuit while the QNN is told about the new
+        # ones -- which fails with a confusing "Weight param weights[0] not
+        # present in circuit". Rebuilding here is what makes
+        # ``CircuitGenome.initialize_model`` safe to call more than once.
+        self.qiskit_parameters = {}
+
+        for name in self.parameters:
+            self.qiskit_parameters[name] = weight_vector[offset]
+            offset += 1
+
         for i, qubit in enumerate(self.qubits):
             qubit_name = qubit[0]
             qubit_index = qubit[1]
@@ -244,63 +260,13 @@ class Gate:
             # name
             qubit_args[argument_name] = register_dict[qubit]
 
-        if parametric and self.parameters:
-            param_args = self._get_qiskit_parameters()
-        else:
-            param_args = self.parameters
-
-        gate_method(**param_args, **qubit_args)
-
-    def _get_qiskit_parameters(self) -> dict[str, "QiskitParameter"]:
-        """Return a dict of qiskit.circuit.Parameter objects for this gate.
-
-        Allocated lazily and cached so the same Parameter objects are reused
-        across multiple builds of the same parametric circuit (e.g. when the
-        QNN is re-instantiated). The Parameter name encodes the gate's
-        innovation number to keep names unique across the genome.
-
-        Returns:
-            Dict mapping param name -> qiskit Parameter symbol.
-        """
-        cache = getattr(self, "_qiskit_parameter_cache", None)
-        if cache is None:
-            cache = {
-                pname: QiskitParameter(f"{self.innovation_number}:{pname}")
-                for pname in self.parameters.keys()
-            }
-            self._qiskit_parameter_cache = cache
-        return cache
-
-    def get_pennylane_wires(
-        self,
-        circuit_qubits: list[tuple[str, int]],
-    ) -> list[int]:
-        """Return the PennyLane wire indexes used by this gate.
-
-        Args:
-            circuit_qubits: Ordered list of all qubit tuples in the circuit.
-
-        Returns:
-            List of PennyLane wire indexes corresponding to the qubits acted on
-            by this gate.
-        """
-        if not self.enabled:
-            return []
-
-        spec = pennylane_gate_specifications[self.method_name]
-        n_qubits = getattr(spec, "n_qubits", len(self.qubits))
-
-        qubit_wires = []
-        for i in range(n_qubits):
-            qubit_wires.append(circuit_qubits.index(self.qubits[i]))
-
-        return qubit_wires
-    
+        gate_method(**self.qiskit_parameters, **qubit_args)
 
     def add_to_pennylane_circuit(
         self,
         circuit_qubits: list[tuple[str, int]],
-        params: dict[str, torch.Tensor] = None,
+        weights: list[float],
+        offset: int,
     ):
         """
         Adds this gate to a PennyLane circuit using the provided wire registers.
@@ -312,8 +278,9 @@ class Gate:
             circuit_qubits: the list of all qubits in the circuit so we can map the qubit names
                 to wire indexes (ints).
             registers: a dictionary mapping register names to PennyLane wires (lists of ints).
-            params: optional dictionary mapping "{innovation_number}:{param_name}" to
-                    trainable torch.Tensor values. If None, uses self.parameters values.
+            weights: the list of parameters to set the gate values from, this is in the ordering
+                provided by CircuitGenome.get_parameters_as_list()
+            offset: is the starting point to pull parameters from in the parameter list
         """
         if not self.enabled:
             # logger.debug(f"Gate {self.method_name} is disabled; skipping.")
@@ -327,6 +294,9 @@ class Gate:
         for i in range(n_qubits):
             qubit_wires.append(circuit_qubits.index(self.qubits[i]))
 
+        param_values = weights[offset : offset + len(self.parameters)]
+
+        """
         # Resolve parameters
         if params is not None:
             param_values = [
@@ -334,6 +304,7 @@ class Gate:
             ]
         else:
             param_values = list(self.parameters.values())
+        """
 
         pennylane_op_name = getattr(spec, "pennylane_op", None)
 

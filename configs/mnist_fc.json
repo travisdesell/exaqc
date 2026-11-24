@@ -1,0 +1,6 @@
+{
+    "conv_blocks": [],
+    "fully_connected_layers": [64],
+    "dropout": 0.2,
+    "output_activation": "tanh"
+  }

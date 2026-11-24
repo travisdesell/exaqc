@@ -26,4 +26,5 @@ srun python -m src.examples.pl_reinforce \
   --max_steps 1000 \
   --input_qubits 2 \
   --output_qubits 2 \
+  --shared_file_system \
   --out_dir artifacts/mountaincar_continuous/run/1

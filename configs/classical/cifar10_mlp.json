@@ -1,0 +1,8 @@
+{
+  "hidden_layers": [
+    512,
+    128
+  ],
+  "activation": "relu",
+  "dropout": 0.3
+}

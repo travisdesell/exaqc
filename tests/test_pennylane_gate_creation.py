@@ -5,6 +5,8 @@ import torch
 from src.circuits.circuit import CircuitGenome
 from src.circuits.registers import expand_registers
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
+from src.circuits.decoder import initialize_decoder
+from src.circuits.encoder import initialize_encoder
 
 
 @pytest.mark.parametrize("gate_method_name", list(pennylane_gate_specifications.keys()))
@@ -37,6 +39,23 @@ def test_gate_creation_pennylane(gate_method_name: str):
         target="pennylane",
     )
 
+    # set up default hyperparameters for output generation
+    qc.hyperparameters = {
+        "quantum_input_mode": "ry",
+        "quantum_output_mode": "probs",
+    }
+
+    # create a basic encoder and decoder
+    qc.encoder = initialize_encoder(
+        target="pennylane", encoding_str="linear", n_inputs=n_qubits, n_outputs=n_qubits
+    )
+    qc.decoder = initialize_decoder(
+        target="pennylane",
+        decoding_str="linear",
+        n_inputs=2**n_qubits,
+        n_outputs=n_qubits,
+    )
+
     # Build qubit tuples (always 0..n_qubits-1 for the register)
     qc_qubits = [("test", i) for i in range(n_qubits)]
     print(f"qc_qubits: {qc_qubits}")
@@ -59,29 +78,23 @@ def test_gate_creation_pennylane(gate_method_name: str):
     n_qubits = len(qc.qubits)
     input_bits = torch.zeros(n_qubits, dtype=torch.int64)
 
-    torch_params = {}
-    for gate in qc.gates:
-        for name, value in gate.parameters.items():
-            key = f"{gate.innovation_number}:{name}"
-            torch_params[key] = torch.tensor(value, dtype=torch.float64)
-
     # Generate PennyLane QNode
     try:
-        dev, qnode_fn = qc.generate_pennylane_circuit(measure_registers=False)
+        qc.initialize_model()
     except Exception as e:
         pytest.fail(f"Failed to generate PennyLane circuit for {gate_method_name}: {e}")
 
     # Run the QNode to ensure execution works
     try:
-        state = qnode_fn(input_bits, torch_params)
+        output = qc.forward(input_bits)
     except Exception as e:
         pytest.fail(f"Execution failed for gate {gate_method_name}: {e}")
 
-    # Basic sanity check for output state
-    assert state is not None
-    assert hasattr(state, "shape"), "Output state has no 'shape' attribute"
+    # Basic sanity check for output
+    assert output is not None
+    assert hasattr(output, "shape"), "Output has no 'shape' attribute"
 
     print(
         f"Gate {gate_method_name} executed successfully. "
-        f"Output state shape: {state.shape}"
+        f"Output output shape: {output.shape}"
     )

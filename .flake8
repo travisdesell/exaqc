@@ -1,4 +1,7 @@
 [flake8]
-max-line-length = 120
+max-line-length = 200
 ignore = E203,W503
-exclude = .venv
+# src/analysis/plot_gptp_histogram.py is parked: it is not reachable from any
+# entry point and runs all of its work at import time (no __main__ guard), so
+# it is left out of linting and formatting for now rather than being touched.
+exclude = .venv,src/analysis/plot_gptp_histogram.py
