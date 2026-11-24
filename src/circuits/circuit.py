@@ -24,8 +24,6 @@ from qiskit_machine_learning.connectors import TorchConnector
 
 from src.circuits.gate import Gate
 
-from src.noise import PennyLaneNoiseModel
-
 from src.circuits.decoder import DECODING_OPTIONS, Decoder
 from src.circuits.encoder import ENCODING_OPTIONS, Encoder
 from src.utils.draw_hybrid_model import draw_hybrid_model
