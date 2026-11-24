@@ -54,6 +54,8 @@ dependencies = [
     "qiskit_algorithms>=0.3,<0.4; sys_platform == 'darwin' and platform_machine == 'x86_64'",
     # qiskit-aer resolves to a compatible version on both stacks (unpinned).
     "qiskit-aer",
+    # IBM's client library, used to fetch a chip's calibration JSON;
+    # simulations read the stored files.
     "qiskit-ibm-runtime",
     "torch",
     "torchvision",

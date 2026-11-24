@@ -77,6 +77,16 @@ EVAL_SEED=${EVAL_SEED-50}
 #: The gates the search may use, as one quoted, space-separated value.
 USE_ONLY=${USE_ONLY:-rx ry rz p u crx cry crz cp rxx ryy rzz cx cy cz}
 
+#: Simulated noise (the --noise_* flags), off unless set: NOISE_CALIBRATION and
+#: NOISE_QUBITS for chip noise, or NOISE_TYPE with NOISE_P_1Q and NOISE_P_2Q for
+#: synthetic noise. Not part of the default OUT_DIR, so give each setting its
+#: own TAG.
+NOISE_CALIBRATION=${NOISE_CALIBRATION:-}
+NOISE_QUBITS=${NOISE_QUBITS:-}
+NOISE_TYPE=${NOISE_TYPE:-}
+NOISE_P_1Q=${NOISE_P_1Q:-}
+NOISE_P_2Q=${NOISE_P_2Q:-}
+
 #: Optional label appended to the output directory as _${TAG}, so runs that
 #: differ only in settings the directory name does not show stay apart. Letters,
 #: digits, - and _ only; unset adds nothing.
@@ -151,6 +161,15 @@ case "$TAG" in
     *[!A-Za-z0-9_-]*) die "TAG must contain only letters, digits, '-' and '_', but found: $TAG" ;;
 esac
 
+# The noise flags, passed on only when set; the entry point checks them at
+# start-up.
+NOISE_ARGUMENTS=()
+[ -z "$NOISE_CALIBRATION" ] || NOISE_ARGUMENTS+=(--noise_calibration "$NOISE_CALIBRATION")
+[ -z "$NOISE_QUBITS" ] || NOISE_ARGUMENTS+=(--noise_qubits "$NOISE_QUBITS")
+[ -z "$NOISE_TYPE" ] || NOISE_ARGUMENTS+=(--noise_type "$NOISE_TYPE")
+[ -z "$NOISE_P_1Q" ] || NOISE_ARGUMENTS+=(--noise_p_1q "$NOISE_P_1Q")
+[ -z "$NOISE_P_2Q" ] || NOISE_ARGUMENTS+=(--noise_p_2q "$NOISE_P_2Q")
+
 # The population sub-command and its arguments, and a default output directory
 # built from the settings that separate one experiment from another, joined with
 # underscores.
@@ -222,6 +241,7 @@ COMMAND=(
     --decoding "$DECODING"
     # --use_only takes any number of values, so another flag must follow it
     --use_only "${USE_ONLY_GATES[@]}"
+    ${NOISE_ARGUMENTS[@]+"${NOISE_ARGUMENTS[@]}"}
     --out_dir "$OUT_DIR"
     --improvement_cutoff "$IMPROVEMENT_CUTOFF"
     "${POPULATION_ARGUMENTS[@]}"

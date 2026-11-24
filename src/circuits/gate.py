@@ -11,9 +11,12 @@ from src.circuits.qiskit_gate_specifications import qiskit_gate_specifications
 from src.circuits.pennylane_gate_specifications import pennylane_gate_specifications
 from src.evolution.innovation import innovation_number_generator
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from torch import Tensor
+
     from src.circuits.circuit import CircuitGenome
 
 
@@ -262,37 +265,66 @@ class Gate:
 
         gate_method(**self.qiskit_parameters, **qubit_args)
 
+    def get_pennylane_wires(self, circuit_qubits: list[tuple[str, int]]) -> list[int]:
+        """Returns the PennyLane wire indexes this gate acts on.
+
+        Uses the same mapping as :meth:`add_to_pennylane_circuit`: each of the
+        gate's qubits is located in the circuit's full qubit list, and its
+        position there is its wire index. Noise models use this to place a
+        noise channel on exactly the wires a gate touched.
+
+        Args:
+            circuit_qubits: Every qubit in the circuit, in wire order, as
+                ``(register name, index)`` tuples.
+
+        Returns:
+            The wire index of each qubit the gate acts on, in the order the
+            gate specification lists them (e.g. control before target).
+
+        Raises:
+            ValueError: If one of the gate's qubits is not in ``circuit_qubits``.
+        """
+        spec = pennylane_gate_specifications[self.method_name]
+        n_qubits = getattr(spec, "n_qubits", len(self.qubits))
+        return [circuit_qubits.index(self.qubits[i]) for i in range(n_qubits)]
+
     def add_to_pennylane_circuit(
         self,
         circuit_qubits: list[tuple[str, int]],
-        weights: list[float],
+        weights: Tensor | Sequence[float],
         offset: int,
-    ):
-        """
-        Adds this gate to a PennyLane circuit using the provided wire registers.
+    ) -> None:
+        """Adds this gate to the PennyLane circuit currently being built.
 
         Handles native PennyLane gates, decompositions for unsupported gates,
-        multi-qubit / controlled gates, parametric gates, and adjoint (.adjoint) gates.
+        multi-qubit / controlled gates, parametric gates, and adjoint (.adjoint)
+        gates. It only has an effect inside a QNode, whose tape records the
+        operation; called elsewhere, the operation is created but not recorded.
 
         Args:
-            circuit_qubits: the list of all qubits in the circuit so we can map the qubit names
-                to wire indexes (ints).
-            registers: a dictionary mapping register names to PennyLane wires (lists of ints).
-            weights: the list of parameters to set the gate values from, this is in the ordering
-                provided by CircuitGenome.get_parameters_as_list()
-            offset: is the starting point to pull parameters from in the parameter list
+            circuit_qubits: Every qubit in the circuit, in wire order, so the
+                gate's qubit names can be mapped to wire indexes (see
+                :meth:`get_pennylane_wires`).
+            weights: The circuit's flat parameter vector, in the ordering
+                provided by ``CircuitGenome.get_parameters_as_list()``.
+            offset: The index in ``weights`` where this gate's parameters start.
+
+        Returns:
+            None. Appends the gate's operation(s) to the active PennyLane
+            circuit; does nothing if the gate is disabled.
+
+        Raises:
+            ValueError: If the gate has no native PennyLane operation and no
+                decomposition in ``src.circuits.pennylane_decompositions``.
+            Exception: Any error PennyLane raises while adding the operation
+                is logged and re-raised.
         """
         if not self.enabled:
             # logger.debug(f"Gate {self.method_name} is disabled; skipping.")
             return
 
         spec = pennylane_gate_specifications[self.method_name]
-        n_qubits = getattr(spec, "n_qubits", len(self.qubits))
-
-        # Build qubit wire list
-        qubit_wires = []
-        for i in range(n_qubits):
-            qubit_wires.append(circuit_qubits.index(self.qubits[i]))
+        qubit_wires = self.get_pennylane_wires(circuit_qubits)
 
         param_values = weights[offset : offset + len(self.parameters)]
 
