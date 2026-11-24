@@ -4,6 +4,7 @@ import argparse
 import bisect
 import os
 import json
+import warnings
 
 from typing import Any, Iterator, TypeVar
 import matplotlib.pyplot as plt
@@ -78,6 +79,78 @@ QUANTUM_OUTPUT_MODES = ["probs", "expval"]
 #: batch an identical output (and therefore wrong losses and gradients). Naming
 #: the register to match keeps the supported per-sample path.
 QISKIT_CLASSICAL_REGISTER_NAME = "meas"
+
+
+class _DensityMatrixTorchLayer(qml.qnn.TorchLayer):
+    """A ``TorchLayer`` whose QNode returns a density matrix, read out as probs/expval.
+
+    PennyLane 0.41 (the version pinned on Intel macOS) cannot measure
+    ``qml.probs`` or ``qml.expval`` on ``default.mixed`` for a batch of torch
+    inputs that require grad: it calls ``.numpy()`` on them and raises
+    "Can't call numpy() on Tensor that requires grad". That is every noisy
+    training step, since the inputs come from the encoder. ``qml.density_matrix``
+    is unaffected, so the QNode measures the output wires' density matrix and
+    this layer reads the same values off its diagonal, differentiably:
+
+    - ``probs``: the diagonal itself, the probability of each output bit
+      string (first output wire most significant, as ``qml.probs``).
+    - ``expval``: ``<Z_i> = sum_b p(b) (1 - 2 b_i)`` for each output wire.
+
+    The trainable weights stay the layer's own ``weights`` parameter, so the
+    state-dict keys match a plain ``TorchLayer``.
+    """
+
+    def __init__(
+        self,
+        qnode: qml.QNode,
+        weight_shapes: dict[str, tuple[int, ...]],
+        output_mode: str,
+        n_outputs: int,
+    ) -> None:
+        """Wraps a density-matrix QNode.
+
+        Args:
+            qnode: The QNode, returning ``qml.density_matrix`` of the output
+                wires.
+            weight_shapes: As for ``qml.qnn.TorchLayer``.
+            output_mode: ``"probs"`` or ``"expval"``, the values to return.
+            n_outputs: How many output wires the density matrix covers.
+
+        Raises:
+            ValueError: If ``output_mode`` is neither ``"probs"`` nor
+                ``"expval"``.
+        """
+        if output_mode not in ("probs", "expval"):
+            raise ValueError(f"Unknown quantum_output_mode={output_mode}")
+        super().__init__(qnode, weight_shapes)
+        self.output_mode = output_mode
+        # signs[b, i] = 1 - 2 * (bit i of b), first wire most significant
+        signs = [
+            [1.0 - 2.0 * ((b >> (n_outputs - 1 - i)) & 1) for i in range(n_outputs)]
+            for b in range(2**n_outputs)
+        ]
+        self.register_buffer("_z_signs", torch.tensor(signs), persistent=False)
+
+    def forward(self, inputs: Tensor) -> Tensor:
+        """Runs the circuit and reads probabilities or expectations off ρ.
+
+        Args:
+            inputs: The quantum-circuit inputs, ``[n_quantum_inputs]`` or
+                ``[batch_size, n_quantum_inputs]``.
+
+        Returns:
+            ``[..., 2**n_outputs]`` probabilities in ``probs`` mode, or
+            ``[..., n_outputs]`` Pauli-Z expectations in ``expval`` mode.
+        """
+        with warnings.catch_warnings():
+            # TorchLayer casts ρ to the (real) input dtype; only the
+            # off-diagonal imaginary parts are dropped, which are not used
+            warnings.filterwarnings("ignore", message="Casting complex values to real")
+            rho = super().forward(inputs)
+        probs = torch.diagonal(rho, dim1=-2, dim2=-1).real
+        if self.output_mode == "probs":
+            return probs
+        return probs @ self._z_signs.to(probs.dtype)
 
 
 class CircuitGenome:
@@ -1218,6 +1291,11 @@ class CircuitGenome:
         output_mode = self.hyperparameters["quantum_output_mode"]
         logger.info(f"output mode is: {output_mode}")
 
+        # On default.mixed, measure the density matrix and read probs/expval
+        # off its diagonal (_DensityMatrixTorchLayer): PennyLane 0.41's
+        # probs/expval there fail on batched inputs that require grad.
+        measure_density_matrix = device_name == "default.mixed"
+
         # Define the QNode function
         @qml.qnode(dev, interface="torch", diff_method="backprop")
         def qnode_fn(
@@ -1238,7 +1316,10 @@ class CircuitGenome:
             Returns:
                 The measurement: ``qml.probs`` over the output wires in
                 ``probs`` mode, or one ``qml.expval`` of Pauli-Z per output
-                wire in ``expval`` mode.
+                wire in ``expval`` mode; on ``default.mixed``, the output
+                wires' ``qml.density_matrix`` in either mode, which the
+                surrounding ``_DensityMatrixTorchLayer`` turns into the same
+                values.
 
             Raises:
                 ValueError: If the quantum input or output mode is unknown.
@@ -1308,6 +1389,10 @@ class CircuitGenome:
 
             noise_model.before_measurement(self.output_indexes)
 
+            if measure_density_matrix and output_mode in ("probs", "expval"):
+                # read out by _DensityMatrixTorchLayer (see its docstring)
+                return qml.density_matrix(wires=self.output_indexes)
+
             if output_mode == "probs":
                 return qml.probs(wires=self.output_indexes)
 
@@ -1326,7 +1411,12 @@ class CircuitGenome:
 
         weight_shapes = {"weights": (len(parameter_list),)}
 
-        self.torch_model = qml.qnn.TorchLayer(qnode_fn, weight_shapes)
+        if measure_density_matrix:
+            self.torch_model = _DensityMatrixTorchLayer(
+                qnode_fn, weight_shapes, output_mode, len(self.output_indexes)
+            )
+        else:
+            self.torch_model = qml.qnn.TorchLayer(qnode_fn, weight_shapes)
 
     def generate_qiskit_circuit(
         self, noise_model: QiskitNoiseModel | None = None
