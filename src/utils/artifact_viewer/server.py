@@ -22,9 +22,10 @@ import statistics
 import threading
 import time
 from collections import OrderedDict
-from concurrent.futures import Future, ProcessPoolExecutor
+from collections.abc import Callable, Iterator, Sequence
+from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypeVar
 
 from loguru import logger
 
@@ -50,6 +51,17 @@ MAX_ANCESTRY_DEPTH = 20
 #: Pages poll every few seconds, so this bounds how often the disk is searched.
 RESCAN_INTERVAL_SECONDS = 5.0
 
+#: How many archives a request reading several runs reads at once. In a large
+#: archive the ``genomes`` table's pages lie scattered among the stored genomes'
+#: blobs, so reading it is mostly waiting on the disk; concurrent readers overlap
+#: that waiting. Over ten 200k-genome (4 GB) archives, 16 readers rolled their
+#: genomes up about five times faster than one.
+READ_WORKERS = 16
+
+#: What :func:`read_concurrently` reads, and what each read returns.
+_Item = TypeVar("_Item")
+_Read = TypeVar("_Read")
+
 #: Directories never searched for runs: a legacy run's per-genome JSON files,
 #: which can number in the tens of thousands.
 _SKIPPED_DIRECTORIES = frozenset({"all_genomes"})
@@ -65,6 +77,240 @@ GATE_FIELDS = ("method_name", "qubits", "depth", "parameters", "enabled")
 #: population changed, so comparing long runs would otherwise return a point per
 #: insertion per run.
 MAX_COMPARISON_POINTS = 500
+
+#: The MPI master's idle phase, as ``master_timing`` records it; every other
+#: phase it records is time spent busy (see ``src.evolution.master_worker``).
+MASTER_IDLE_PHASE = "idle"
+
+#: How many insertions each point of a run's per-genome timing series covers
+#: when the run recorded no master intervals to align them with (a serial run).
+TIMING_INTERVAL_INSERTIONS = 100
+
+
+def _mean_ms(entry: dict[str, Any] | None) -> float | None:
+    """Converts a recorded phase's ``{seconds, count}`` into its mean in ms.
+
+    Args:
+        entry: A phase entry from a ``master_timing`` row, or ``None``.
+
+    Returns:
+        The mean duration in milliseconds, or ``None`` when it never occurred.
+    """
+
+    if not entry or not entry.get("count"):
+        return None
+    return 1000.0 * float(entry["seconds"]) / int(entry["count"])
+
+
+def _milliseconds(seconds: float | None) -> float | None:
+    """Converts seconds to milliseconds, passing ``None`` through.
+
+    Args:
+        seconds: A duration in seconds, or ``None``.
+
+    Returns:
+        The duration in milliseconds, or ``None``.
+    """
+
+    return None if seconds is None else 1000.0 * seconds
+
+
+def _master_shares(
+    wall_seconds: float, phases: dict[str, dict[str, Any]]
+) -> tuple[float | None, float | None]:
+    """Computes how much of an interval the master spent busy and idle.
+
+    Args:
+        wall_seconds: The interval's wall time.
+        phases: Its phases, as ``{phase: {seconds, count}}``.
+
+    Returns:
+        The busy and idle percentages of the wall time, or ``None`` for both
+        when the interval took no time.
+    """
+
+    if wall_seconds <= 0:
+        return None, None
+    idle = float((phases.get(MASTER_IDLE_PHASE) or {}).get("seconds", 0.0))
+    busy = sum(
+        float(entry.get("seconds", 0.0))
+        for phase, entry in phases.items()
+        if phase != MASTER_IDLE_PHASE
+    )
+    return 100.0 * busy / wall_seconds, 100.0 * idle / wall_seconds
+
+
+def _combined_phases(rows: list[dict[str, Any]], key: str) -> dict[str, dict[str, Any]]:
+    """Adds up one kind of phase breakdown across ``master_timing`` rows.
+
+    Args:
+        rows: The rows, as :meth:`GenomeArchive.master_timing` returns them.
+        key: ``"phases"`` or ``"insert_parts"``.
+
+    Returns:
+        ``{phase: {seconds, count}}`` totalled over the rows, phases in the
+        order first seen.
+    """
+
+    combined: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        for phase, entry in row[key].items():
+            total = combined.setdefault(phase, {"seconds": 0.0, "count": 0})
+            total["seconds"] += float(entry.get("seconds", 0.0))
+            total["count"] += int(entry.get("count", 0))
+    return combined
+
+
+def master_busy_percent(rows: list[dict[str, Any]]) -> float | None:
+    """Computes the master's busy percentage over a whole run.
+
+    Args:
+        rows: The run's ``master_timing`` rows.
+
+    Returns:
+        The share of the recorded wall time the master spent busy, as a
+        percentage, or ``None`` when the run recorded no master timing.
+    """
+
+    wall = sum(float(row["wall_seconds"]) for row in rows)
+    busy, _ = _master_shares(wall, _combined_phases(rows, "phases"))
+    return busy
+
+
+def timing_payload_from(reader: GenomeArchive) -> dict[str, Any]:
+    """Builds a run's timing series and whole-run summary from its archive.
+
+    The master series come from the ``master_timing`` rows an MPI run records;
+    the worker and per-genome series are computed from the genomes' timing
+    columns over the same intervals (or, for a serial run, over every
+    :data:`TIMING_INTERVAL_INSERTIONS` insertions).
+
+    Args:
+        reader: The run's archive, open for reading.
+
+    Returns:
+        ``recorded`` (whether the archive records timing at all -- archives
+        written before format 6 do not), ``master`` and ``workers`` (parallel
+        series keyed by ``step``, empty when there is nothing to show) and a
+        whole-run ``summary``.
+    """
+
+    empty: dict[str, Any] = {
+        "recorded": False,
+        "master": {},
+        "workers": {},
+        "summary": {},
+    }
+    if not reader.has_timing_columns():
+        return empty
+
+    rows = reader.master_timing()
+    last_insertion = reader.connection.execute(
+        "SELECT MAX(insertion) FROM genomes"
+    ).fetchone()[0]
+
+    if rows:
+        boundaries = [int(row["step"]) for row in rows]
+    elif last_insertion:
+        boundaries = list(
+            range(
+                TIMING_INTERVAL_INSERTIONS,
+                int(last_insertion),
+                TIMING_INTERVAL_INSERTIONS,
+            )
+        ) + [int(last_insertion)]
+    else:
+        boundaries = []
+
+    master: dict[str, Any] = {}
+    if rows:
+        phase_names = list(_combined_phases(rows, "phases"))
+        part_names = list(_combined_phases(rows, "insert_parts"))
+        shares = [_master_shares(row["wall_seconds"], row["phases"]) for row in rows]
+        master = {
+            "step": boundaries,
+            "genomes_per_second": [
+                (
+                    row["genomes"] / row["wall_seconds"]
+                    if row["wall_seconds"] > 0
+                    else None
+                )
+                for row in rows
+            ],
+            "busy_percent": [busy for busy, _ in shares],
+            "idle_percent": [idle for _, idle in shares],
+            "phase_ms": {
+                phase: [_mean_ms(row["phases"].get(phase)) for row in rows]
+                for phase in phase_names
+            },
+            "insert_part_ms": {
+                part: [_mean_ms(row["insert_parts"].get(part)) for row in rows]
+                for part in part_names
+            },
+        }
+
+    intervals = reader.worker_timing(boundaries)
+    workers: dict[str, Any] = {}
+    if intervals:
+        workers = {
+            "step": [interval["step"] for interval in intervals],
+            "wait_percent": [
+                (
+                    None
+                    if interval["wait_fraction"] is None
+                    else 100.0 * interval["wait_fraction"]
+                )
+                for interval in intervals
+            ],
+            **{
+                f"{column.removesuffix('_seconds')}_ms": [
+                    _milliseconds(interval[column]) for interval in intervals
+                ]
+                for column in (
+                    "request_wait_seconds",
+                    "evaluation_seconds",
+                    "generation_seconds",
+                    "turnaround_seconds",
+                )
+            },
+        }
+
+    summary: dict[str, Any] = {}
+    if rows:
+        wall = sum(float(row["wall_seconds"]) for row in rows)
+        phases = _combined_phases(rows, "phases")
+        busy, idle = _master_shares(wall, phases)
+        genomes = sum(int(row["genomes"]) for row in rows)
+        summary.update(
+            {
+                "master_wall_seconds": wall,
+                "genomes_per_second": genomes / wall if wall > 0 else None,
+                "busy_percent": busy,
+                "idle_percent": idle,
+                "phase_ms": {phase: _mean_ms(entry) for phase, entry in phases.items()},
+                "insert_part_ms": {
+                    part: _mean_ms(entry)
+                    for part, entry in _combined_phases(rows, "insert_parts").items()
+                },
+            }
+        )
+    if last_insertion:
+        (whole,) = reader.worker_timing([int(last_insertion)])
+        summary.update(
+            {
+                "wait_percent": (
+                    None
+                    if whole["wait_fraction"] is None
+                    else 100.0 * whole["wait_fraction"]
+                ),
+                "request_wait_ms": _milliseconds(whole["request_wait_seconds"]),
+                "evaluation_ms": _milliseconds(whole["evaluation_seconds"]),
+                "generation_ms": _milliseconds(whole["generation_seconds"]),
+                "turnaround_ms": _milliseconds(whole["turnaround_seconds"]),
+            }
+        )
+
+    return {"recorded": True, "master": master, "workers": workers, "summary": summary}
 
 
 def _aggregate_series(
@@ -269,6 +515,62 @@ class Run:
     directory: str
     archive_path: str
     groups: list[str] = field(default_factory=list)
+
+
+def read_concurrently(
+    items: Sequence[_Item], read: Callable[[_Item], _Read]
+) -> Iterator[_Read]:
+    """Reads several archives (or parts of them) at once, each on its own thread.
+
+    SQLite releases the interpreter lock while it reads, so the threads overlap
+    their waits on the disk (see :data:`READ_WORKERS`). Each read must open its
+    own connection.
+
+    Args:
+        items: What to read, such as runs.
+        read: Reads one item.
+
+    Returns:
+        An iterator over what ``read`` returned for each item, in the order of
+        ``items``, yielding each as soon as it and those before it are done.
+
+    Raises:
+        Exception: Whatever ``read`` raised, for the first item (in order) whose
+            read failed, once iteration reaches it.
+    """
+
+    if len(items) <= 1:
+        yield from (read(item) for item in items)
+        return
+    with ThreadPoolExecutor(max_workers=min(READ_WORKERS, len(items))) as pool:
+        yield from pool.map(read, items)
+
+
+def archive_version(path: str) -> tuple[int, ...] | None:
+    """Identifies the state of an archive's files, to tell when it has changed.
+
+    A search writing in WAL mode appends to ``genomes.sqlar-wal`` and only
+    copies the log into the archive now and then, so the log is part of the
+    archive's state.
+
+    Args:
+        path: The archive's path.
+
+    Returns:
+        The modification time (in nanoseconds) and size of the archive and of
+        its write-ahead log, if it has one; ``None`` if the archive is missing.
+    """
+
+    version: list[int] = []
+    for name in (path, f"{path}-wal"):
+        try:
+            status = os.stat(name)
+        except FileNotFoundError:
+            if name == path:
+                return None
+            continue
+        version += [status.st_mtime_ns, status.st_size]
+    return tuple(version)
 
 
 def find_archives(directory: str) -> list[str]:
@@ -906,6 +1208,10 @@ class ArtifactViewer:
         self.registry = registry
         self.renderer = renderer
         self.allow_annotations = allow_annotations
+        # what each archive's summary was read from, and the summary: a finished
+        # run's never changes, and reading it can scan its genomes
+        self._summaries: dict[str, tuple[tuple[int, ...], dict[str, Any]]] = {}
+        self._summaries_lock = threading.Lock()
 
     def run(self, index: int) -> Run:
         """Looks up a served run.
@@ -930,8 +1236,11 @@ class ArtifactViewer:
 
         Returns:
             The run's identity, recorded run information, genome count, latest
-            genome, last write time and best ``loss`` and ``target_metric``.
-            An unreadable archive is reported under ``error`` instead.
+            genome, last write time, best ``loss`` and ``target_metric``, and
+            ``master_busy_percent`` (the MPI master's busy share over the run,
+            ``None`` when it recorded no master timing). An unreadable archive
+            is reported under ``error`` instead. What is read from the archive
+            is kept until the archive changes (see :func:`archive_version`).
         """
 
         summary: dict[str, Any] = {
@@ -940,29 +1249,41 @@ class ArtifactViewer:
             "directory": run.directory,
             "groups": run.groups,
         }
+        version = archive_version(run.archive_path)
+        with self._summaries_lock:
+            cached = self._summaries.get(run.archive_path)
+        if version is not None and cached is not None and cached[0] == version:
+            summary.update(cached[1])
+            return summary
+
         try:
             with GenomeArchive.open_readonly(run.archive_path) as reader:
                 info = reader.run_info()
-                summary.update(
-                    {
-                        "task": info.get("task"),
-                        "task_target": info.get("task_target"),
-                        "target": info.get("target"),
-                        "population_strategy": info.get("population_strategy"),
-                        "command_line": info.get("command_line"),
-                        "start_time": info.get("start_time"),
-                        "genomes": reader.count(),
-                        "max_genome_number": reader.max_genome_number(),
-                        "last_saved_at": reader.last_saved_at(),
-                        "best_loss": reader.best_value("loss", higher_is_better=False),
-                        "best_target_metric": reader.best_value(
-                            "target_metric", higher_is_better=True
-                        ),
-                    }
-                )
+                read: dict[str, Any] = {
+                    "task": info.get("task"),
+                    "task_target": info.get("task_target"),
+                    "target": info.get("target"),
+                    "population_strategy": info.get("population_strategy"),
+                    "command_line": info.get("command_line"),
+                    "start_time": info.get("start_time"),
+                    "genomes": reader.count(),
+                    "max_genome_number": reader.max_genome_number(),
+                    "last_saved_at": reader.last_saved_at(),
+                    "best_loss": reader.best_value("loss", higher_is_better=False),
+                    "best_target_metric": reader.best_value(
+                        "target_metric", higher_is_better=True
+                    ),
+                    "master_busy_percent": master_busy_percent(reader.master_timing()),
+                }
         except sqlite3.DatabaseError as error:
             logger.warning("Could not read {}: {}", run.archive_path, error)
             summary["error"] = str(error)
+            return summary
+
+        if version is not None:
+            with self._summaries_lock:
+                self._summaries[run.archive_path] = (version, read)
+        summary.update(read)
         return summary
 
     def runs_payload(self) -> dict[str, Any]:
@@ -975,7 +1296,7 @@ class ArtifactViewer:
 
         self.registry.refresh()
         return {
-            "runs": [self._summary(run) for run in self.registry.runs],
+            "runs": list(read_concurrently(self.registry.runs, self._summary)),
             "groups": list(self.registry.groups),
             "source": self.registry.source(),
         }
@@ -1208,6 +1529,29 @@ class ArtifactViewer:
             "metrics": available,
             "primary_metrics": primary,
         }
+
+    def timing_payload(self, index: int) -> dict[str, Any]:
+        """Returns a run's master and worker timing (see :func:`timing_payload_from`).
+
+        Args:
+            index: The run's index.
+
+        Returns:
+            The timing series and summary; ``recorded`` is False, with nothing
+            else, for an archive written before runs recorded timing or one that
+            cannot be read.
+
+        Raises:
+            KeyError: If there is no such run.
+        """
+
+        run = self.run(index)
+        try:
+            with GenomeArchive.open_readonly(run.archive_path) as reader:
+                return timing_payload_from(reader)
+        except sqlite3.DatabaseError as error:
+            logger.warning("Could not read {}'s timing: {}", run.name, error)
+            return {"recorded": False, "master": {}, "workers": {}, "summary": {}}
 
     def operators_payload(self, index: int) -> dict[str, Any]:
         """Counts, per generating operator, how the genomes it made were inserted.
@@ -1728,26 +2072,40 @@ class ArtifactViewer:
             scope = {"kind": "all"}
             specs = self._comparison_entries()
 
+        def tally(run: Run) -> tuple[int, dict[str, dict[str, int]]] | str:
+            """Counts a run's genomes and its operators' insert types.
+
+            Args:
+                run: The run to read.
+
+            Returns:
+                The genome count and :meth:`GenomeArchive.operator_counts`, or
+                the error that kept the archive from being read.
+            """
+
+            try:
+                with GenomeArchive.open_readonly(run.archive_path) as reader:
+                    return reader.count(), reader.operator_counts()
+            except sqlite3.DatabaseError as error:
+                logger.warning("Could not read {}: {}", run.archive_path, error)
+                return str(error)
+
         # each run is read once, even when it appears in more than one column
-        read: dict[int, tuple[int, dict[str, dict[str, int]]] | None] = {}
-        errors: list[dict[str, Any]] = []
+        unique = list({run.index: run for _, _, runs in specs for run in runs}.values())
+        tallies = list(read_concurrently(unique, tally))
+        read = {run.index: entry for run, entry in zip(unique, tallies)}
+        errors: list[dict[str, Any]] = [
+            {"index": run.index, "name": run.name, "error": entry}
+            for run, entry in zip(unique, tallies)
+            if isinstance(entry, str)
+        ]
         columns: list[dict[str, Any]] = []
         for label, kind, runs in specs:
             genomes = 0
             counts: dict[str, dict[str, int]] = {}
             for run in runs:
-                if run.index not in read:
-                    try:
-                        with GenomeArchive.open_readonly(run.archive_path) as reader:
-                            read[run.index] = (reader.count(), reader.operator_counts())
-                    except sqlite3.DatabaseError as error:
-                        logger.warning("Could not read {}: {}", run.archive_path, error)
-                        errors.append(
-                            {"index": run.index, "name": run.name, "error": str(error)}
-                        )
-                        read[run.index] = None
                 entry = read[run.index]
-                if entry is None:
+                if isinstance(entry, str):
                     continue
                 genomes += entry[0]
                 for operator, outcomes in entry[1].items():

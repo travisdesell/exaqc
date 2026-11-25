@@ -199,7 +199,7 @@ def main() -> None:
 
     logger.remove()
     logger.add(sys.stdout, level=args.logging_level)
-    logger.add(run_dir / "run.log")
+    logger.add(run_dir / "run.log", level=args.logging_level)
 
     training_loader, validation_loader = get_image_dataloaders(
         args.dataset,

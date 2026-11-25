@@ -196,3 +196,44 @@ def test_island_insertion():
 
     p, metadata = population.get_parents(3)
     assert metadata["target_island_id"] == 0
+
+
+def test_island_restore_status() -> None:
+    """
+    Tests that a restored island takes the status the run gave it: full at its
+    maximum size, repopulating if an extinction event cleared it, and otherwise
+    initializing -- whether it is empty or partly filled.
+    """
+
+    def restored(n_genomes: int, cleared: bool) -> Island:
+        """
+        Restores an island of maximum size 3 holding ``n_genomes`` mock genomes.
+
+        Args:
+            n_genomes: how many genomes the island held when the run stopped.
+            cleared: whether an extinction event emptied the island during the run.
+
+        Returns:
+            The restored island.
+        """
+
+        island = Island(id=0, max_size=3, compare=compare)
+        genomes = [MockGenome(0.1 * i, i, {}) for i in range(n_genomes)]
+        island.restore(genomes, next_genome_number=50, cleared=cleared)
+        return island
+
+    for cleared in (False, True):
+        island = restored(3, cleared)
+        assert island.status == "full"
+        assert island.repopulation_genome_number == 0
+
+    for n_genomes in (0, 2):
+        island = restored(n_genomes, cleared=False)
+        assert island.status == "initializing"
+        assert island.is_initializing()
+        assert island.repopulation_genome_number == 0
+
+        island = restored(n_genomes, cleared=True)
+        assert island.status == "repopulating"
+        assert not island.is_initializing()
+        assert island.repopulation_genome_number == 50

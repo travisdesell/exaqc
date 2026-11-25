@@ -1,8 +1,8 @@
 """Visualize a trained RL circuit genome acting in its target environment.
 
 Loads a circuit genome produced by ``src.examples.reinforcement_learning`` --
-from a JSON file (i.e. one written by ``CircuitGenome.to_dict``, such as
-``best_fitness.json``), or from the run's ``genomes.sqlar`` archive by its genome
+from a JSON file (i.e. one written by ``CircuitGenome.to_dict``, such as one
+downloaded from the dashboard), or from the run's ``genomes.sqlar`` archive by its genome
 number -- rebuilds the quantum circuit, reconnects it to the Gymnasium
 environment it was trained on, and rolls its policy so you can *watch* the
 evolved circuit control the environment.
@@ -30,7 +30,7 @@ Two output modes:
 
 Example::
 
-    python -m src.examples.visualize_rl --genome_json best_fitness.json --episodes 3
+    python -m src.examples.visualize_rl --genome_json genome_368.json --episodes 3
     python -m src.examples.visualize_rl --archive ./artifacts/cartpole --genome_number 368 --output_file rollout.gif
 """
 
@@ -47,13 +47,15 @@ import gymnasium as gym
 from loguru import logger
 
 from src.circuits.circuit import CircuitGenome
-from src.examples.reinforcement_learning import ENV_CHOICES, make_environment
+from src.objectives.reinforcement_learning_objective import (
+    ENV_CHOICES,
+    make_environment,
+)
 from src.trainer.reinforcement_trainer import (
     EVAL_POLICY_CHOICES,
     RLEnvironment,
     select_action,
 )
-from src.trainer.rl_trainer_registry import TRAINER_REGISTRY
 from src.utils.genome_archive import (
     add_genome_source_arguments,
     check_genome_source_arguments,
@@ -325,38 +327,35 @@ def resolve_eval_policy(genome: CircuitGenome, requested: str) -> str:
     Args:
         genome: The loaded genome. Its ``metadata`` records the regime its
             fitness was actually measured under; its ``hyperparameters`` record
-            what was requested (which may be ``"both"``) and the ``algo`` that
-            trained it.
+            what was requested (which may be ``"both"``).
         requested: The ``--eval_policy`` value; ``"match"`` to recover the
             genome's own regime, or an explicit ``"greedy"``/``"stochastic"``.
 
     Returns:
-        ``"greedy"`` or ``"stochastic"``. A genome that recorded no regime (or
-        recorded ``"both"``, which scores under two) falls back to the natural
-        regime of the algorithm that trained it, and to ``"greedy"`` when that
-        is unknown too.
+        ``"greedy"`` or ``"stochastic"``. A genome that requested ``"both"``
+        replays greedily, the regime that drove its fitness; one that
+        recorded no regime at all also replays greedily, with a warning.
     """
 
     if requested != "match":
         return requested
 
     # metadata carries the regime the recorded fitness was measured under,
-    # which is exact; hyperparameters carry what was asked for, which may be
-    # "both" and so does not identify a single rollout policy.
+    # which is exact; hyperparameters carry what was asked for, where "both"
+    # means the greedy regime drove fitness.
     metadata = getattr(genome, "metadata", {}) or {}
     hyperparameters = getattr(genome, "hyperparameters", {}) or {}
     recorded = metadata.get("eval_policy") or hyperparameters.get("eval_policy")
     if recorded in ("greedy", "stochastic"):
         return recorded
-
-    trainer_class = TRAINER_REGISTRY.get(hyperparameters.get("algo", ""))
-    if trainer_class is None:
-        logger.warning(
-            "genome records no eval_policy and no known algo; rolling out "
-            "greedily, which may not be the policy it was scored under."
-        )
+    if recorded == "both":
         return "greedy"
-    return trainer_class.natural_eval_policy
+
+    logger.warning(
+        "genome records no eval_policy; rolling out greedily, which may not be "
+        "the policy it was scored under."
+    )
+    return "greedy"
 
 
 def main() -> None:
@@ -382,12 +381,15 @@ def main() -> None:
     parser.add_argument("--episodes", type=int, default=3, help="Episodes to play.")
     parser.add_argument(
         "--eval_policy",
-        choices=[choice for choice in EVAL_POLICY_CHOICES if choice != "both"],
+        choices=[
+            "match",
+            *(choice for choice in EVAL_POLICY_CHOICES if choice != "both"),
+        ],
         default="match",
         help=(
             "Action-selection regime to roll out under. 'match' (the default) "
             "replays the regime the genome was scored under, read back from "
-            "the genome's own hyperparameters."
+            "the genome itself; 'greedy' or 'stochastic' overrides it."
         ),
     )
     parser.add_argument(

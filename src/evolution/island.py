@@ -51,20 +51,26 @@ class Island:
         # with
         self.neighbors: list[Island] = []
 
-    def restore(self, genomes: list[CircuitGenome], next_genome_number: int) -> None:
+    def restore(
+        self, genomes: list[CircuitGenome], next_genome_number: int, cleared: bool
+    ) -> None:
         """Takes back the genomes this island held when a run stopped.
 
-        The island's status follows from what it holds: an island at its maximum
-        size is full, one holding fewer genomes is repopulating (it draws from
-        its best neighbor until it fills up), and an empty one is initializing.
-        A repopulating island discards genomes generated before it was
-        repopulated, so its repopulation number is set to the next genome the
-        restarted run will generate -- every genome already in the archive
-        predates the restart, and every new one will not.
+        The island's status is the one the run gave it: an island at its maximum
+        size is full; one that is not, but that an extinction event has cleared,
+        is repopulating (it draws from its best neighbor until it fills up); and
+        any other has never been full, so it is still initializing -- however
+        many genomes it holds, empty or not. A repopulating island discards
+        genomes generated before it was repopulated, so its repopulation number
+        is set to the next genome the restarted run will generate -- every
+        genome already in the archive predates the restart, and every new one
+        will not.
 
         Args:
             genomes: The genomes this island held, in any order.
             next_genome_number: The number the restarted run's next genome takes.
+            cleared: Whether an extinction event emptied this island during the
+                run (see :attr:`~src.utils.restart.RestartState.cleared_islands`).
 
         Returns:
             None. Restores ``population``, ``status``, ``insertions`` and
@@ -74,13 +80,13 @@ class Island:
         self.population = sorted(genomes, key=cmp_to_key(self.compare))
         self.insertions = len(self.population)
 
-        if not self.population:
-            self.status = "initializing"
-        elif len(self.population) >= self.max_size:
+        if len(self.population) >= self.max_size:
             self.status = "full"
-        else:
+        elif cleared:
             self.status = "repopulating"
             self.repopulation_genome_number = next_genome_number
+        else:
+            self.status = "initializing"
 
     def is_initializing(self) -> bool:
         """

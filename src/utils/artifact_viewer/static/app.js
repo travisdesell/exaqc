@@ -1179,8 +1179,11 @@
     };
   }
 
-  /** A line chart of several series over a shared x axis, with an optional band per series. */
-  function createLineChart(container, { xLabel, yLabel, x, series, height = 300 }) {
+  /**
+   * A line chart of several series over a shared x axis, with an optional band per series.
+   * `showPoints` marks every value, so a series recorded at only a few x values still shows.
+   */
+  function createLineChart(container, { xLabel, yLabel, x, series, height = 300, showPoints = false }) {
     const legend = h(
       "div",
       { class: "chart-legend" },
@@ -1194,7 +1197,7 @@
     const bands = [];
     for (const line of series) {
       data.push(line.values);
-      uplotSeries.push({ label: line.label, stroke: line.color, width: 2, points: { show: false }, spanGaps: true });
+      uplotSeries.push({ label: line.label, stroke: line.color, width: 2, points: { show: showPoints, size: 6, fill: line.color }, spanGaps: true });
       if (line.low && line.high) {
         const highIndex = data.push(line.high) - 1;
         uplotSeries.push({ label: `${line.label} high`, stroke: "transparent", width: 0, points: { show: false }, spanGaps: true });
@@ -1276,6 +1279,8 @@
           h("td", { class: "number", text: formatNumber(run.genomes) }),
           h("td", { class: "number" }, run.best_loss ? [formatNumber(run.best_loss.value), h("span", { class: "meta", text: ` #${run.best_loss.genome_number}` })] : "—"),
           h("td", { class: "number" }, run.best_target_metric ? [formatNumber(run.best_target_metric.value), h("span", { class: "meta", text: ` #${run.best_target_metric.genome_number}` })] : "—"),
+          // the MPI master's busy share over the run: near 100% means workers queue on it
+          h("td", { class: "number", title: isNumber(run.master_busy_percent) ? "Share of the MPI master's time spent generating, sending and inserting genomes" : "No master timing recorded" }, isNumber(run.master_busy_percent) ? `${run.master_busy_percent.toFixed(1)}%` : "—"),
           h("td", { text: formatAgo(run.last_saved_at), title: formatTime(run.last_saved_at) })
         )
       );
@@ -1295,8 +1300,8 @@
               h(
                 "tr",
                 {},
-                ["Run", "Groups", "Task", "Strategy", "Genomes", "Best loss", "Best target_metric", "Updated"].map((name, i) =>
-                  h("th", { class: i >= 4 && i <= 6 ? "number" : null, text: name })
+                ["Run", "Groups", "Task", "Strategy", "Genomes", "Best loss", "Best target_metric", "Master busy", "Updated"].map((name, i) =>
+                  h("th", { class: i >= 4 && i <= 7 ? "number" : null, text: name })
                 )
               )
             ),
@@ -1327,6 +1332,8 @@
     setBreadcrumbs([{ label: "Runs", href: "#/" }, { label: run.name }]);
 
     const keys = run.fitness_keys || [];
+    // archives written before runs recorded per-genome timing have no timing columns
+    const recordsTiming = (run.metrics || []).includes("turnaround_seconds");
     const islandCount = run.filter_options && run.filter_options.island ? run.filter_options.island.length : 0;
     const state = {
       mode: "progress",
@@ -1342,6 +1349,8 @@
       // (loss when the run recorded it) until something is chosen here
       historyMetric: null,
       showAllMetrics: false,
+      // whether the genome table shows each genome's processing times
+      showTimingColumns: false,
       sort: keys.includes("loss") ? "loss" : "genome_number",
       desc: !keys.includes("loss"),
       filters: { insert_type: "", generated_by: "", crossover_type: "", island: "" },
@@ -1432,6 +1441,10 @@
       run.island_topology && (run.island_topology.neighbors || []).length
         ? h("details", { class: "island-topology", ontoggle: () => renderTopology() }, h("summary", { text: `Island topology (${(run.island_topology.topology || []).join(" ")})` }), h("div"))
         : null;
+    // whether the MPI master kept up with its workers: loaded when opened, then refreshed as genomes arrive
+    const timingNode = h("details", { class: "run-timing", ontoggle: () => loadTiming() }, h("summary", { text: "Timing" }), h("div"));
+    let timingCharts = [];
+    let timingRequest = 0;
 
     function renderHeader() {
       const summary = state.summary;
@@ -1450,8 +1463,140 @@
         ),
         summary.command_line ? h("details", {}, h("summary", { text: "Command line" }), h("div", { class: "command" }, h("pre", { text: summary.command_line }), copyButton(summary.command_line))) : null,
         runNotesNode,
-        topologyNode
+        topologyNode,
+        timingNode
       );
+    }
+
+    /**
+     * Loads and draws the run's timing into the Timing section while it is open:
+     * a whole-run summary, then charts of the master's busy and idle shares with
+     * the workers' wait share, and of the time each master step and each
+     * genome's processing takes, over insertions.
+     */
+    async function loadTiming() {
+      if (!timingNode.open) return;
+      const request = ++timingRequest;
+      const body = timingNode.lastElementChild;
+      let payload;
+      try {
+        payload = await api(`/api/runs/${index}/timing`);
+      } catch (error) {
+        if (destroyed || request !== timingRequest) return;
+        setChildren(body, notice(`Could not load the timing: ${error.message}`, true));
+        return;
+      }
+      if (destroyed || request !== timingRequest) return;
+      for (const timingChart of timingCharts) timingChart.destroy();
+      timingCharts = [];
+
+      if (!payload.recorded) {
+        setChildren(body, notice("No timing recorded: this run's archive was written before runs recorded timing."));
+        return;
+      }
+      const summary = payload.summary || {};
+      const master = payload.master || {};
+      const workers = payload.workers || {};
+      const ms = (value) => (isNumber(value) ? `${formatNumber(value)} ms` : "—");
+      const percent = (value) => (isNumber(value) ? `${value.toFixed(1)}%` : "—");
+      const phaseList = (phases) =>
+        Object.entries(phases || {})
+          .map(([phase, value]) => `${label(phase)} ${ms(value)}`)
+          .join(", ") || "—";
+
+      const facts = [];
+      if (master.step) {
+        facts.push(
+          ["master throughput", isNumber(summary.genomes_per_second) ? `${formatNumber(summary.genomes_per_second)} genomes/s` : "—"],
+          ["master busy / idle", `${percent(summary.busy_percent)} / ${percent(summary.idle_percent)}`],
+          ["master steps (mean)", phaseList(summary.phase_ms)],
+          ["insertion parts (mean)", phaseList(summary.insert_part_ms)]
+        );
+      }
+      facts.push(
+        ["worker wait share", percent(summary.wait_percent)],
+        ["worker wait per genome", ms(summary.request_wait_ms)],
+        ["evaluation per genome", ms(summary.evaluation_ms)],
+        ["generation per genome", ms(summary.generation_ms)],
+        ["turnaround per genome", ms(summary.turnaround_ms)]
+      );
+
+      const children = [
+        master.step ? null : notice("No master timing recorded: a serial run, or an MPI run that has not reached 100 insertions yet."),
+        factsList(facts),
+      ];
+
+      const shareHost = h("div");
+      const stepHost = h("div");
+      const genomeHost = h("div");
+      if (master.step || workers.step) {
+        children.push(h("h3", { text: "Busy and waiting (% of time)" }), shareHost);
+      }
+      if (master.step) children.push(h("h3", { text: "Master steps (mean ms)" }), stepHost);
+      if (workers.step) children.push(h("h3", { text: "Genome processing (mean ms)" }), genomeHost);
+      setChildren(body, ...children);
+
+      // Each chart needs its own x axis: the master and worker series share the
+      // same intervals when the master recorded any, but a serial run has only
+      // the worker series.
+      if (master.step) {
+        timingCharts.push(
+          createLineChart(shareHost, {
+            xLabel: "Insertion",
+            yLabel: "% of time",
+            x: master.step,
+            series: [
+              { label: "master busy", color: slotColor(2), values: master.busy_percent },
+              { label: "master idle", color: slotColor(1), values: master.idle_percent },
+              { label: "worker waiting", color: slotColor(4), values: workers.wait_percent || [] },
+            ],
+            height: 200,
+            showPoints: true,
+          })
+        );
+        // idle is not a step (the chart above shows it as a share of time), which also keeps
+        // the steps within the palette's eight colors
+        const workSteps = Object.fromEntries(Object.entries(master.phase_ms || {}).filter(([phase]) => phase !== "idle"));
+        const steps = { ...workSteps, ...Object.fromEntries(Object.entries(master.insert_part_ms || {}).map(([part, values]) => [`insert: ${part}`, values])) };
+        timingCharts.push(
+          createLineChart(stepHost, {
+            xLabel: "Insertion",
+            yLabel: "ms",
+            x: master.step,
+            series: Object.entries(steps).map(([name, values], slot) => ({ label: label(name), color: slotColor((slot % 8) + 1), values })),
+            height: 220,
+            showPoints: true,
+          })
+        );
+      } else if (workers.step) {
+        timingCharts.push(
+          createLineChart(shareHost, {
+            xLabel: "Insertion",
+            yLabel: "% of time",
+            x: workers.step,
+            series: [{ label: "worker waiting", color: slotColor(4), values: workers.wait_percent }],
+            height: 200,
+            showPoints: true,
+          })
+        );
+      }
+      if (workers.step) {
+        timingCharts.push(
+          createLineChart(genomeHost, {
+            xLabel: "Insertion",
+            yLabel: "ms",
+            x: workers.step,
+            series: [
+              { label: "evaluation", color: slotColor(3), values: workers.evaluation_ms },
+              { label: "worker wait", color: slotColor(4), values: workers.request_wait_ms },
+              { label: "generation", color: slotColor(7), values: workers.generation_ms },
+              { label: "turnaround", color: slotColor(5), values: workers.turnaround_ms },
+            ],
+            height: 220,
+            showPoints: true,
+          })
+        );
+      }
     }
 
     function renderFilters() {
@@ -1769,6 +1914,14 @@
         ...(run.filter_options && run.filter_options.island && run.filter_options.island.length ? [{ key: "island", label: "island", number: true, cell: (row) => formatNumber(row.island) }] : []),
         { key: "n_enabled_gates", label: "gates", number: true, cell: (row) => `${row.n_enabled_gates}/${row.n_gates}` },
         { key: "n_parameters", label: "params", number: true, cell: (row) => formatNumber(row.n_parameters) },
+        ...(state.showTimingColumns && recordsTiming
+          ? [
+              { key: "evaluation_seconds", label: "eval s", number: true, cell: (row) => formatNumber(row.evaluation_seconds) },
+              { key: "request_wait_seconds", label: "wait ms", number: true, cell: (row) => formatNumber(isNumber(row.request_wait_seconds) ? row.request_wait_seconds * 1000 : null) },
+              { key: "generation_seconds", label: "gen ms", number: true, cell: (row) => formatNumber(isNumber(row.generation_seconds) ? row.generation_seconds * 1000 : null) },
+              { key: "turnaround_seconds", label: "turnaround s", number: true, cell: (row) => formatNumber(row.turnaround_seconds) },
+            ]
+          : []),
       ];
     }
 
@@ -1818,6 +1971,12 @@
     function renderTableToolbar() {
       setChildren(tableToolbar,
         h("h2", { text: "Genomes" }),
+        recordsTiming
+          ? checkbox("timing columns", state.showTimingColumns, (value) => {
+              state.showTimingColumns = value;
+              resetTable();
+            })
+          : null,
         h("span", { class: "spacer" }),
         state.newGenomes > 0
           ? h(
@@ -2513,6 +2672,16 @@
       }
       if (isNumber(timing.generated_at)) rows.push(["generated", formatTime(timing.generated_at)]);
       if (isNumber(timing.evaluation_seconds)) rows.push(["evaluation time", `${formatNumber(timing.evaluation_seconds)} s`]);
+      // how long the genome spent outside evaluation: being generated, waited for, and returned
+      if (isNumber(summary.generation_seconds)) rows.push(["generation time", `${formatNumber(summary.generation_seconds * 1000)} ms`]);
+      if (isNumber(summary.request_wait_seconds)) rows.push(["worker waited for it", `${formatNumber(summary.request_wait_seconds * 1000)} ms`]);
+      if (isNumber(summary.turnaround_seconds)) {
+        const overhead = isNumber(timing.evaluation_seconds) ? summary.turnaround_seconds - timing.evaluation_seconds : null;
+        rows.push([
+          "turnaround",
+          `${formatNumber(summary.turnaround_seconds)} s${overhead !== null ? ` (${formatNumber(overhead * 1000)} ms outside evaluation: transfer and the master's queue)` : ""}`,
+        ]);
+      }
       if (placement) {
         rows.push(["evaluated on", [placement.host, Number.isInteger(placement.rank) ? `rank ${placement.rank}` : null, Number.isInteger(placement.pid) ? `pid ${placement.pid}` : null].filter(Boolean).join(" · ")]);
       }
@@ -2733,6 +2902,7 @@
         renderTableToolbar();
         await loadChart();
         if (state.showHistory) loadHistory();
+        if (timingNode.open) loadTiming();
       }
     }
 
@@ -2762,6 +2932,7 @@
         historyObserver.disconnect();
         chart.destroy();
         if (historyChart) historyChart.destroy();
+        for (const timingChart of timingCharts) timingChart.destroy();
       },
     };
   }

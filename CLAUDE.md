@@ -1,5 +1,33 @@
 # EXAQC — code conventions
 
+## Every file change is reviewed and approved by the user (required)
+
+**All** changes to files in this repository -- source, tests, `README.md`,
+`CLAUDE.md`, `scripts/`, `pyproject.toml`, configuration, anything tracked or
+untracked -- must be shown to the user as a diff and approved by them **before**
+they are applied. This holds for every single edit, including edits that
+implement a plan the user has already approved: approving a plan approves the
+*direction*, not the individual diffs, and each diff still needs its own review.
+
+- Make every repo file change with the **Edit** or **Write** tool, whose approval
+  prompt shows the user the diff. Break large rewrites into several Edits rather
+  than going around the prompt.
+- **Never** modify repo files through Bash: no `sed -i`/`perl -i`, no Python or
+  heredoc scripts that rewrite files, no `>`/`>>` redirects or `tee` into repo
+  paths, no `cp`/`mv`/`rm` of repo files, and no file-changing `git` commands
+  (`checkout`, `restore`, `apply`, `reset`, `stash`, ...) without asking first.
+  Formatters that rewrite files (`black` without `--check`/`--diff`) count too:
+  ask before running them.
+- Scratch output belongs in the session scratchpad (or `/tmp`), never the repo.
+- If a change cannot go through Edit/Write, stop and ask the user, explaining
+  exactly what will change.
+
+This is enforced in `.claude/settings.local.json` (an `Edit(/**)` ask rule, a
+`PreToolUse` Bash hook `.claude/hooks/bash_repo_write_gate.py` that denies
+scripted edits and asks before other file operations, and an auto-mode
+`hard_deny` rule), but the rule applies even where that enforcement misses a
+case: do not look for ways around it.
+
 ## Type hints and docstrings (required)
 
 Any code you **add or modify** must be fully type-hinted and documented. When
@@ -61,11 +89,19 @@ documented there, and most are also wrapped by a script in
 [`scripts/`](scripts):
 
 - **Classification:** `python3 -m src.examples.classification`, wrapped by
-  `scripts/run_iris.sh`, `scripts/run_seeds.sh`, `scripts/run_breast_cancer.sh`,
-  and `scripts/run_wine.sh`.
+  `scripts/run_classification.sh` (a configurable local run) and
+  `scripts/run_ppsn2026_classification.sh` (the 2026 PPSN experiments).
 - **Reinforcement learning:** `python3 -m src.examples.reinforcement_learning`,
-  wrapped by `scripts/run_cartpole.sh`, `scripts/run_frozenlake.sh`,
-  `scripts/run_walker2d.sh`, and `scripts/run_mountaincar_continuous.sh`.
+  wrapped by `scripts/run_rl.sh` (a configurable local run),
+  `scripts/run_ppsn2026_rl.sh` (the 2026 PPSN experiments), and the Slurm pair
+  `scripts/submit_exaqc_rl_jobs.sh` / `scripts/exaqc_rl_job.sh`.
+
+  The `run_classification.sh` / `run_rl.sh` scripts take every setting as an
+  environment variable, documented in the README's "Local run scripts" section
+  and each entry point's **Script** table, so a new or changed variable needs a
+  row there. The `run_ppsn2026_*.sh` scripts reproduce published experiments:
+  keep the command they build fixed, and if a code change forces a change to it,
+  flag it per the sync section below.
 - **Quantum teacher imitation:** `python3 -m src.examples.teacher`, wrapped by
   `scripts/run_teacher.sh`. Unlike the other two this evolves *purely quantum*
   genomes (no encoder or decoder), so it has no `--encoding`/`--decoding`
@@ -100,6 +136,14 @@ documented there, and most are also wrapped by a script in
   the dashboard page and MCP. `query_sql` must stay read-only: it is guarded by
   a single-statement check *and* a SQLite authorizer, and sees annotations as
   copied `notes`/`genome_tags` tables rather than by attaching the sidecar.
+- **Archive backfill:** `python3 -m src.examples.backfill_archive`, which brings
+  archives written before format 7 up to it by filling the metric projections
+  and `initial_fitness` from each stored genome's JSON (logic in
+  `src.utils.archive_backfill`). It has no wrapper script and requires exactly
+  one of `--output_dir` (backfill a copy) and `--in_place`. It re-derives what
+  `GenomeArchive.add_genome` records, so a change to the summary columns or to
+  a task's fitness formula (the RL one is shared through
+  `reinforcement_learning_fitness`) must be reflected here too.
 - **Analysis:** `python3 -m src.analysis.analyze_genome_generation`.
 
 A search's outputs (`--out_dir`, `--shared_file_system`, `genomes.sqlar` and the
@@ -192,7 +236,7 @@ for a in m.build_parser()._actions: print(a.dest, a.default, a.choices)"
 ```
 
 `classification`, `teacher`, `reinforcement_learning`, `refine_genome`,
-`exaqc_dashboard`, `exaqc_mcp` and `classical_image_classification` expose `build_parser()`
+`exaqc_dashboard`, `exaqc_mcp`, `backfill_archive` and `classical_image_classification` expose `build_parser()`
 alongside a `main()`,
 which is the pattern to follow for any new entry point. The rest
 (`reinforcement_learning_fixed`, `evaluate`, `visualize_rl`) still build their

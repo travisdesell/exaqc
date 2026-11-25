@@ -430,6 +430,30 @@ def build_mcp_server(
 
     @server.tool(
         description=(
+            "Summarize how much training (backpropagation) changed a run's genomes: "
+            "the distribution of target_metric minus the score the inherited weights "
+            "had before training, the share of genomes it improved or left "
+            "unchanged, and both by quartile of the starting score; optionally "
+            "grouped by insert_type, island or generated_by. Needs an archive of "
+            "format 7 or later, or an older one brought up to date by "
+            "src.examples.backfill_archive."
+        )
+    )
+    def training_gain_summary(run: str, group_by: str | None = None) -> dict[str, Any]:
+        """Summarizes the gain from training.
+
+        Args:
+            run: A run index or name.
+            group_by: Optional grouping column.
+
+        Returns:
+            Overall, per-starting-score and per-group gain statistics.
+        """
+
+        return tools.training_gain_summary(run, group_by)
+
+    @server.tool(
+        description=(
             "Report how the genomes each operator generated were inserted (global best, "
             "local best, inserted, discarded), for a run or a group of runs."
         )
@@ -478,6 +502,27 @@ def build_mcp_server(
         """
 
         return tools.progress_series(run, metric, statistic, max_points)
+
+    @server.tool(
+        description=(
+            "Report whether a run's MPI master kept up with its workers: the master's "
+            "genomes per second and busy/idle percentages, the mean time of each "
+            "master phase and insertion part, and the workers' mean wait for a genome "
+            "and wait share, as a whole-run summary and as series over the run."
+        )
+    )
+    def get_run_timing(run: str, max_points: int = 200) -> dict[str, Any]:
+        """Returns a run's master and worker timing.
+
+        Args:
+            run: A run index or name.
+            max_points: The most points each series returns.
+
+        Returns:
+            The whole-run summary and the downsampled master and worker series.
+        """
+
+        return tools.get_run_timing(run, max_points)
 
     @server.tool(
         description="Summarize genome sizes across a run and which gate methods its best genomes use."

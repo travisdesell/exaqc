@@ -567,12 +567,12 @@ def test_the_run_list_picks_up_runs_started_later(tmp_path: Path) -> None:
 
 
 def test_a_run_page_survives_an_archive_it_cannot_fully_read(tmp_path: Path) -> None:
-    """An archive missing a column still opens, reporting what it could read.
+    """An archive with a column it cannot read still opens, reporting the rest.
 
-    A run written by an older version has no ``final_metrics`` column, so asking
-    what its genomes can be charted by fails. The page degrades to the rest of
-    what the archive holds rather than failing outright, since a single such run
-    under a watched directory would otherwise take its whole page down.
+    A genome whose ``best_metrics`` is not valid JSON makes asking what the run's
+    genomes can be charted by fail. The page degrades to the rest of what the
+    archive holds rather than failing outright, since a single such run under a
+    watched directory would otherwise take its whole page down.
 
     Args:
         tmp_path: pytest per-test temporary directory (auto-removed).
@@ -580,10 +580,13 @@ def test_a_run_page_survives_an_archive_it_cannot_fully_read(tmp_path: Path) -> 
 
     watched = tmp_path / "experiments"
     watched.mkdir()
-    build_run(watched / "older_run", standard_genomes()[:2])
+    build_run(watched / "damaged_run", standard_genomes()[:2])
 
-    connection = sqlite3.connect(watched / "older_run" / ARCHIVE_FILENAME)
-    connection.execute("ALTER TABLE genomes DROP COLUMN final_metrics")
+    connection = sqlite3.connect(watched / "damaged_run" / ARCHIVE_FILENAME)
+    connection.execute(
+        "UPDATE genomes SET best_metrics = 'not json' "
+        "WHERE genome_number = (SELECT MIN(genome_number) FROM genomes)"
+    )
     connection.commit()
     connection.close()
 
@@ -591,7 +594,7 @@ def test_a_run_page_survives_an_archive_it_cannot_fully_read(tmp_path: Path) -> 
         assert get(f"{url}/api/runs/0")[0] == 200
 
         payload = get_json(f"{url}/api/runs/0")
-        assert "final_metrics" in payload["error"]
+        assert "malformed JSON" in payload["error"]
         assert payload["metrics"] == []
         assert payload["primary_metrics"] == []
         # everything the archive could still answer comes through

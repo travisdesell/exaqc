@@ -31,6 +31,7 @@ from src.evolution.mutation import (
 from src.evolution.objective import Objective, evaluate_genome
 from src.evolution.population_strategy import PopulationStrategy
 from src.utils.genome_archive import GenomeArchive
+from src.utils.phase_timer import PhaseTimer
 
 #: How likely each mutation is to be chosen, as integer weights: a mutation is
 #: drawn uniformly from a list holding each name ``weight`` times, so ``add_gate``
@@ -71,8 +72,9 @@ class EXAQC:
         Returns:
             None. Mutates ``parser`` by adding ``--mutation_strategy``/``-ms``,
             ``--parent_strategy``/``-ps``, ``--binary_crossover_rate``,
-            ``--n_ary_crossover_rate``, ``--exponential_crossover_rate`` and
-            ``--number_genomes``. Where the run's outputs are written
+            ``--n_ary_crossover_rate``, ``--exponential_crossover_rate``,
+            ``--number_genomes`` and ``--timing_report_every``. Where the run's
+            outputs are written
             (``--out_dir``, ``--shared_file_system``) is added by
             :meth:`GenomeArchive.initialize_parser`.
         """
@@ -129,6 +131,18 @@ class EXAQC:
             type=int,
             default=1000,
             help="Total number of genomes to evolve and evaluate before stopping.",
+        )
+
+        parser.add_argument(
+            "--timing_report_every",
+            type=int,
+            default=1000,
+            help=(
+                "How often, in inserted genomes, the MPI master logs where its time went "
+                "(waiting on workers, generating, sending, deserializing and inserting "
+                "genomes) since its last report; a final report covers the whole run. "
+                "0 keeps only the final report."
+            ),
         )
 
     def __init__(
@@ -206,13 +220,17 @@ class EXAQC:
                 every generated genome. Named 'task_target' because 'target'
                 already names the quantum framework.
             archive: the run's output archive (see :class:`GenomeArchive`), which
-                every inserted genome, the current-best genome files and the
-                search history are written to. When None nothing is written,
-                e.g. in tests.
+                every inserted genome and the search history are written to.
+                When None nothing is written, e.g. in tests.
             restarting: whether this search continues a run the archive already
                 holds (see :mod:`src.utils.restart`). A restart leaves what
                 that run recorded about itself -- its command line, start time
                 and configuration -- as it is, and records itself separately.
+
+        Returns:
+            None. Sets the search's configuration and state, including
+            ``insert_timer``, which accumulates how long each part of
+            :meth:`insert_genome` takes.
         """
 
         self.gate_specifications = gate_specifications
@@ -227,8 +245,12 @@ class EXAQC:
         self.task_target = task_target
         self.inserted_genomes = 0
 
-        # Everything written to disk (evaluated genomes, current-best genome files
-        # and the search history) goes through the archive.
+        # how long each part of insert_genome takes, for the MPI master's
+        # timing reports
+        self.insert_timer = PhaseTimer()
+
+        # Everything written to disk (evaluated genomes and the search history)
+        # goes through the archive.
         self.archive = archive
 
         # The best genome by fitness["target_metric"]; the population itself
@@ -825,11 +847,12 @@ class EXAQC:
 
         This is the single insertion path for both serial and MPI runs. Once the
         population strategy accepts the genome, it is written to the run's
-        archive, the current-best genome files are rewritten if it improved the
-        best genome by fitness or by ``target_metric``, and the change to the
-        population is recorded. A genome a population strategy declines to record
-        (by returning False) is counted but not archived; the built-in strategies
-        record every genome, discarded ones included.
+        archive and the change to the population is recorded. A genome a
+        population strategy declines to record (by returning False) is counted
+        but not archived; the built-in strategies record every genome, discarded
+        ones included. No other files are written: the best genomes are read from
+        the archive (by the dashboard, or a query) rather than rewritten as they
+        improve, which would cost the search an image render per new best.
 
         Args:
             genome: The evaluated genome to insert.
@@ -837,44 +860,40 @@ class EXAQC:
         Returns:
             None. Stamps the genome's ``timing["inserted_at"]``, updates the
             population, ``inserted_genomes`` and ``target_metric_best_genome``,
-            and writes to ``archive`` when one was given.
+            writes to ``archive`` when one was given, and adds how long each
+            part took (``population``, ``archive``, ``population_events``) to
+            ``insert_timer``.
         """
 
         # when the master took the genome back, on the master's clock
         genome.metadata.setdefault("timing", {})["inserted_at"] = time.time()
-        previous_best = self.population.get_best_genome()
-        recorded = self.population.insert_genome(
-            genome, current_genome_number=self.genome_number
-        )
+        with self.insert_timer.time("population"):
+            recorded = self.population.insert_genome(
+                genome, current_genome_number=self.genome_number
+            )
         self.inserted_genomes += 1
 
         if recorded is False:
             return
 
-        new_target_metric_best = self.update_target_metric_best(genome)
+        # tracked for the search's own "new best" log lines
+        self.update_target_metric_best(genome)
 
         if self.archive is None:
             return
 
-        self.archive.add_genome(
-            genome,
-            insertion=self.inserted_genomes,
-            island=genome.metadata.get("island_id"),
-        )
+        with self.insert_timer.time("archive"):
+            self.archive.add_genome(
+                genome,
+                insertion=self.inserted_genomes,
+                island=genome.metadata.get("island_id"),
+            )
 
-        best = self.population.get_best_genome()
-        new_fitness_best = best is not None and (
-            previous_best is None or best.genome_number != previous_best.genome_number
-        )
-
-        if new_fitness_best:
-            self.archive.write_current_best(best, "fitness")
-        if new_target_metric_best:
-            self.archive.write_current_best(genome, "target_metric")
-
-        self.archive.record_population(
-            step=self.inserted_genomes, population=self.population.get_population()
-        )
+        with self.insert_timer.time("population_events"):
+            self.archive.record_population(
+                step=self.inserted_genomes,
+                population=self.population.get_population(),
+            )
 
     def update_target_metric_best(self, genome: CircuitGenome) -> bool:
         """Tracks the best genome by ``fitness["target_metric"]``.
@@ -936,7 +955,13 @@ class EXAQC:
         """
 
         for _ in range(number_genomes):
+            started = time.perf_counter()
             child = self.generate_genome()
+            # recorded as the MPI master records it, so serial and distributed
+            # runs archive the same timing
+            child.metadata.setdefault("timing", {})["generation_seconds"] = (
+                time.perf_counter() - started
+            )
             # records how long the evaluation took and where it ran, as a worker does
             evaluate_genome(self.objective, child)
             # use the same insertion path as the MPI master so serial and

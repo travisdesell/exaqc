@@ -26,9 +26,11 @@ from typing import Any
 import numpy as np
 
 import pytest
+import torch
 
 from src.circuits.circuit import CircuitGenome
-from src.examples.reinforcement_learning import (
+from src.examples.reinforcement_learning import build_parser
+from src.objectives.reinforcement_learning_objective import (
     CONTINUOUS_ENVS,
     ENV_IDS,
     MUJOCO_ENV_FLAGS,
@@ -36,7 +38,6 @@ from src.examples.reinforcement_learning import (
     environment_knob_kwargs,
     supported_env_knobs,
     ReinforcementLearningObjective,
-    build_parser,
     make_environment,
 )
 
@@ -136,11 +137,11 @@ def test_genomes_train_on_random_seeds_unless_one_is_fixed() -> None:
             decoder_name="linear",
             trainer=trainer,
         )
-        genome.hyperparameters["seed"] = seed
+        genome.hyperparameters["training_seed"] = seed
         trainer.train(genome, make_test_environment(observation_features))
         seeds.append(genome.metadata["training_seed"])
         # the drawn seed is recorded, not written back into the inherited hyperparameters
-        assert genome.hyperparameters["seed"] == seed
+        assert genome.hyperparameters["training_seed"] == seed
 
     assert all(isinstance(seed, int) for seed in seeds)
     assert seeds[0] != seeds[1]
@@ -152,7 +153,7 @@ def test_evaluation_seeds_never_overlap_training_seeds(trainer_name: str) -> Non
     """A genome is never scored on an episode it trained on.
 
     Training and evaluation seeds were once derived from the same base, and
-    PPO's ``seed + episode_index * SEED_BLOCK + episode`` put outer episode 1
+    PPO's ``training_seed + episode_index * SEED_BLOCK + episode`` put outer episode 1
     exactly on the evaluation seeds. The two ranges are now kept disjoint by
     construction, whatever the trainer.
 
@@ -164,7 +165,7 @@ def test_evaluation_seeds_never_overlap_training_seeds(trainer_name: str) -> Non
     for _ in range(25):
         genome = SimpleNamespace(
             hyperparameters={
-                "seed": None,
+                "training_seed": None,
                 "eval_seed": None,
                 "episodes": 100,
                 "rollout_steps": 2048,
@@ -202,7 +203,7 @@ def test_eval_seed_is_random_per_genome_unless_pinned() -> None:
         return trainer.resolve_hyperparameters(
             SimpleNamespace(
                 hyperparameters={
-                    "seed": None,
+                    "training_seed": None,
                     "eval_seed": eval_seed,
                     "episodes": 20,
                     "eval_episodes": 5,
@@ -216,7 +217,7 @@ def test_eval_seed_is_random_per_genome_unless_pinned() -> None:
     pinned = [resolve(4242) for _ in range(20)]
     assert {hp.eval_seed for hp in pinned} == {4242}
     # the per-genome training seeds are still independent of one another
-    assert len({hp.seed for hp in pinned}) == 20
+    assert len({hp.training_seed for hp in pinned}) == 20
 
 
 def test_pinned_seed_and_eval_seed_that_overlap_are_rejected() -> None:
@@ -229,7 +230,7 @@ def test_pinned_seed_and_eval_seed_that_overlap_are_rejected() -> None:
     trainer = build_trainer("ppo")
     genome = SimpleNamespace(
         hyperparameters={
-            "seed": 777,
+            "training_seed": 777,
             "eval_seed": 777,
             "episodes": 20,
             "eval_episodes": 5,
@@ -288,7 +289,10 @@ def test_parser_defaults_weight_evaluation_and_draw_random_seeds() -> None:
     defaults = {action.dest: action.default for action in build_parser()._actions}
 
     assert defaults["train_vs_validation_bias"] == 0.1
-    assert defaults["seed"] is None
+    assert defaults["training_seed"] is None
+    assert defaults["eval_seed"] is None
+    # the RL search has no ambiguous --seed: training and evaluation are seeded separately
+    assert "seed" not in defaults
     assert ReinforcementLearningObjective.__init__.__defaults__ == (0.1,)
 
 
@@ -336,7 +340,8 @@ def test_train_with_no_trainable_parameters_only_evaluates(target: str) -> None:
     With an ``IdentityEncoder``, a ``ClippedDecoder``, and no parametric
     gates, the genome's hybrid model has zero trainable parameters, so the
     trainer should take its evaluation-only path: no per-episode training
-    metrics, but best-metric summaries still recorded.
+    metrics, only the episode-0 (pre-training) evaluation, but best-metric
+    summaries still recorded.
 
     Args:
         target: Either ``"pennylane"`` or ``"qiskit"``.
@@ -357,6 +362,9 @@ def test_train_with_no_trainable_parameters_only_evaluates(target: str) -> None:
     trainer.train(genome, environment)
 
     assert genome.metadata["training_episode_metrics"] == []
+    assert [
+        entry["episode"] for entry in genome.metadata["evaluation_episode_metrics"]
+    ] == [0]
     assert genome.metadata["n_trainable_parameters"] == 0
     _assert_return_metrics(genome.metadata["best_training_metrics"])
     _assert_return_metrics(genome.metadata["best_validation_metrics"])
@@ -396,10 +404,13 @@ def test_training_return_mean_is_exponential_moving_average(monkeypatch) -> None
     exponential moving average ``ema = alpha * return + (1 - alpha) * ema``
     (seeded with the first return), not a plain arithmetic mean. ``alpha`` is
     read from the genome's ``ema_alpha`` hyperparameter. ``best_episode_return``
-    must still be the maximum raw return.
+    must still be the maximum raw return. Evaluations are scripted to improve
+    every time, so the best weights are the last episode's and the metrics taken
+    at the best episode cover every training episode.
 
     Args:
-        monkeypatch: pytest fixture used to script ``run_update``'s returns.
+        monkeypatch: pytest fixture used to script ``run_update``'s returns and
+            ``evaluate``'s improving return means.
     """
 
     trainer = build_trainer("reinforce")
@@ -422,9 +433,19 @@ def test_training_return_mean_is_exponential_moving_average(monkeypatch) -> None
     def scripted_update(genome_, environment_, optimizer_, episode_index_, hp_):
         return remaining.pop(0), {}
 
+    original_evaluate = trainer.evaluate
+    evaluation_count = iter(range(len(scripted_returns) + 1))
+
+    def improving_evaluate(genome_, environment_, hp_):
+        evaluation = original_evaluate(genome_, environment_, hp_)
+        evaluation["return_mean"] = float(next(evaluation_count))
+        return evaluation
+
     monkeypatch.setattr(trainer, "run_update", scripted_update)
+    monkeypatch.setattr(trainer, "evaluate", improving_evaluate)
 
     trainer.train(genome, environment)
+    assert genome.metadata["best_episode"] == len(scripted_returns)
 
     expected_ema = scripted_returns[0]
     for value in scripted_returns[1:]:
@@ -504,33 +525,113 @@ def test_evaluate_collapses_to_one_episode_only_when_greedy_and_deterministic(
     assert episode_count == (1 if collapses else hp.eval_episodes)
 
 
-def test_evaluate_match_resolves_per_trainer() -> None:
-    """``eval_policy="match"`` picks each algorithm's own objective's regime.
+@pytest.mark.parametrize("algo", (*TRAINER_NAMES, "sarsa"))
+def test_eval_policy_defaults_to_greedy(algo: str) -> None:
+    """Every trainer evaluates greedily unless told otherwise.
 
-    The policy-gradient trainers optimize the sampled policy, while the
-    value-based trainers learn a greedy target policy, so ``"match"`` must not
-    resolve to the same regime for both.
+    Both the command-line default and the fallback for a genome whose
+    hyperparameters carry no ``eval_policy`` must be greedy, whatever the
+    algorithm.
+
+    Args:
+        algo: The trainer algorithm name.
     """
 
-    assert build_trainer("reinforce").natural_eval_policy == "stochastic"
-    assert build_trainer("actor_critic").natural_eval_policy == "stochastic"
-    assert build_trainer("ppo").natural_eval_policy == "stochastic"
-    assert build_trainer("q_learning").natural_eval_policy == "greedy"
-    assert build_trainer("sarsa").natural_eval_policy == "greedy"
+    defaults = {action.dest: action.default for action in build_parser()._actions}
+    assert defaults["eval_policy"] == "greedy"
 
-    for algo, expected in (("ppo", "stochastic"), ("q_learning", "greedy")):
-        trainer = build_trainer(algo)
-        hp = SimpleNamespace(eval_policy="match")
-        assert trainer.resolve_eval_policy(hp) == expected
-        assert trainer.selected_eval_policy(hp) == expected
+    trainer = build_trainer(algo)
+    hp = trainer.resolve_hyperparameters(SimpleNamespace(hyperparameters={}))
+    assert hp.eval_policy == "greedy"
+    assert trainer.selected_eval_policy(hp.eval_policy) == "greedy"
 
-        # "both" scores under two regimes but reports the natural one as fitness
-        hp = SimpleNamespace(eval_policy="both")
-        assert trainer.resolve_eval_policy(hp) == "both"
-        assert trainer.selected_eval_policy(hp) == expected
+
+@pytest.mark.parametrize("algo", CONTINUOUS_TRAINER_NAMES)
+def test_policy_gradient_trainers_accept_every_regime(algo: str) -> None:
+    """Policy-gradient trainers can be scored stochastically or under both.
+
+    Args:
+        algo: The policy-gradient trainer algorithm name.
+    """
+
+    trainer = build_trainer(algo)
+    assert trainer.selected_eval_policy("stochastic") == "stochastic"
+    # "both" scores under two regimes but reports the greedy one as fitness
+    assert trainer.selected_eval_policy("both") == "greedy"
+
+
+@pytest.mark.parametrize("algo", ["q_learning", "sarsa"])
+def test_value_based_trainers_only_evaluate_greedily(algo: str) -> None:
+    """Value-based trainers reject any regime that samples actions.
+
+    Their outputs are Q-values, so sampling from a softmax over them would
+    score a policy they never learn.
+
+    Args:
+        algo: The value-based trainer algorithm name.
+    """
+
+    trainer = build_trainer(algo)
+    trainer.validate_eval_policy("greedy")
+    for eval_policy in ("stochastic", "both"):
+        with pytest.raises(ValueError, match="can only be evaluated greedily"):
+            trainer.validate_eval_policy(eval_policy)
+
+
+@pytest.mark.parametrize("eval_policy", ["match", "nope"])
+def test_unknown_eval_policy_is_rejected(eval_policy: str) -> None:
+    """Regimes outside ``EVAL_POLICY_CHOICES``, including the removed ``match``, raise.
+
+    Args:
+        eval_policy: An unsupported regime name.
+    """
 
     with pytest.raises(ValueError, match="Unknown eval_policy"):
-        build_trainer("ppo").resolve_eval_policy(SimpleNamespace(eval_policy="nope"))
+        build_trainer("ppo").validate_eval_policy(eval_policy)
+
+
+def test_evaluate_runs_without_autograd() -> None:
+    """Evaluation rollouts never record an autograd graph.
+
+    Evaluation does not update weights, so every forward pass it makes should
+    run with gradients disabled.
+    """
+
+    trainer = build_trainer("reinforce")
+    genome, observation_features = build_rl_genome(
+        genome_number=1,
+        target="pennylane",
+        complexity="minimal",
+        encoder_name="linear",
+        decoder_name="linear",
+        trainer=trainer,
+    )
+    genome.initialize_model()
+    hp = trainer.resolve_hyperparameters(genome)
+    environment = make_test_environment(observation_features)
+
+    grad_enabled: list[bool] = []
+    original_forward = genome.forward
+
+    def recording_forward(*args: Any, **kwargs: Any) -> Any:
+        """Records whether autograd is on, then runs the genome as usual.
+
+        Args:
+            *args: Positional arguments for the wrapped ``forward``.
+            **kwargs: Keyword arguments for the wrapped ``forward``.
+
+        Returns:
+            Whatever the wrapped ``forward`` returns.
+        """
+
+        grad_enabled.append(torch.is_grad_enabled())
+        return original_forward(*args, **kwargs)
+
+    genome.forward = recording_forward
+    trainer.evaluate(genome, environment, hp)
+
+    assert grad_enabled
+    assert not any(grad_enabled)
 
 
 # ---------------------------------------------------------------------------

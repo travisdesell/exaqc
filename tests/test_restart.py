@@ -294,18 +294,131 @@ def test_restarted_islands_keep_the_connections_the_run_used(tmp_path) -> None:
     for island in restored.islands:
         held = [genome.genome_number for genome in island.population]
         assert all(islands_of[number] == island.id for number in held)
-        if not held:
-            assert island.status == "initializing"
-        elif len(held) >= island.max_size:
+        # no extinction event ran, so an island that is not full has never been
+        # full and is still being filled from the seed genome
+        if len(held) >= island.max_size:
             assert island.status == "full"
         else:
-            # an island that is not full fills from its best neighbor, and must
-            # not discard the genomes the restarted run generates
-            assert island.status == "repopulating"
-            assert island.repopulation_genome_number == state.next_genome_number
+            assert island.status == "initializing"
 
     assert restored.insertions == state.inserted_genomes
     assert restored.global_best_genome.genome_number == state.best_genome.genome_number
+
+
+def test_an_island_emptied_by_extinction_keeps_repopulating_after_a_restart(
+    tmp_path,
+) -> None:
+    """A restart does not mistake an island an extinction event emptied for a new one.
+
+    During a run an extinction event clears a full island, which then refills
+    from its best neighbor. A restart that took the empty island to be still
+    initializing would make the whole search initialize again, mutating the
+    seed genome until that island filled -- wasting evaluations on children far
+    worse than the population's.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    run_dir = tmp_path / "extinction"
+    arguments = {
+        **ISLAND_ARGUMENTS,
+        "n_islands": 2,
+        "genomes_before_extinction": 2,
+        "genomes_for_next_extinction": 0,
+        "topology": ["fully_connected"],
+    }
+    population = SteadyStateIslands(
+        n_islands=2,
+        max_island_size=2,
+        compare=compare,
+        genomes_before_extinction=2,
+        genomes_for_next_extinction=0,
+        islands_to_extinct=1,
+    )
+
+    archive = GenomeArchive.create(str(run_dir), arguments=arguments)
+    try:
+        search = build_search(population, archive)
+        # stop the run straight after an extinction event has emptied an island
+        for _ in range(50):
+            search.run_for(1)
+            if not population.is_initializing() and any(
+                not island.population for island in population.islands
+            ):
+                break
+        else:
+            pytest.fail("no extinction event emptied an island")
+    finally:
+        archive.close()
+
+    emptied = [island.id for island in population.islands if not island.population]
+
+    state = restart.load(str(run_dir))
+    assert emptied and set(emptied) <= state.cleared_islands
+    restored = restored_population(state)
+    for island_id in emptied:
+        island = restored.islands[island_id]
+        assert island.status == "repopulating"
+        assert island.repopulation_genome_number == state.next_genome_number
+    assert not restored.is_initializing()
+
+    archive = GenomeArchive.create(str(run_dir), arguments=arguments)
+    try:
+        search = build_search(restored, archive, restarting=True)
+        restart.resume(search, state)
+        child = search.generate_genome()
+    finally:
+        archive.close()
+
+    # the child was bred for an island from the population, rather than being
+    # a mutation of the seed genome made to initialize one
+    assert "target_island_id" in child.metadata
+
+
+def test_islands_stopped_while_initializing_keep_initializing(tmp_path) -> None:
+    """A run stopped before its islands filled carries on filling them from the seed.
+
+    Islands are only bred from once they have all filled, so an island holding
+    a few genomes when the run stopped -- one that has never been full -- comes
+    back initializing, not repopulating from a neighbor.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    run_dir = tmp_path / "initializing"
+    population = SteadyStateIslands(
+        n_islands=4,
+        max_island_size=2,
+        compare=compare,
+        topology=["random", "1", "2"],
+    )
+    # five genomes over four islands of two: none can have filled them all
+    run_a_search(run_dir, population, ISLAND_ARGUMENTS, genomes=5)
+
+    state = restart.load(str(run_dir))
+    assert state.cleared_islands == set()
+    restored = restored_population(state)
+
+    assert restored.is_initializing()
+    assert any(
+        0 < len(island.population) < island.max_size for island in restored.islands
+    )
+    for island in restored.islands:
+        if len(island.population) < island.max_size:
+            assert island.status == "initializing"
+
+    archive = GenomeArchive.create(str(run_dir), arguments=ISLAND_ARGUMENTS)
+    try:
+        search = build_search(restored, archive, restarting=True)
+        restart.resume(search, state)
+        child = search.generate_genome()
+    finally:
+        archive.close()
+
+    # still initializing, so the child is a mutation of the seed genome
+    assert "target_island_id" not in child.metadata
 
 
 def test_an_archive_that_predates_restarts_says_so(tmp_path) -> None:

@@ -14,9 +14,10 @@ and traced through their ancestry without decompressing them.
 
 :class:`GenomeArchive` also owns the rest of a run's output directory: the
 command-line arguments that locate and configure it (``--out_dir`` and
-``--shared_file_system``), the current-best genome files that are overwritten
-whenever the search improves, and the record of how the population changed after
-every insertion.
+``--shared_file_system``), the record of how the population changed after every
+insertion, and, for an MPI run, where the master's time went. The archive is the
+run's only output: the best genomes are found by querying it (the dashboard does
+this) rather than rewritten as files whenever the search improves.
 """
 
 from __future__ import annotations
@@ -30,7 +31,6 @@ import re
 import sqlite3
 import subprocess
 import sys
-import tempfile
 import time
 import zlib
 from collections.abc import Callable, Iterator
@@ -42,6 +42,7 @@ from loguru import logger
 
 if TYPE_CHECKING:
     from src.circuits.circuit import CircuitGenome
+    from src.utils.phase_timer import PhaseTimer
 
 #: File name of the archive inside a run's output directory.
 ARCHIVE_FILENAME = "genomes.sqlar"
@@ -51,12 +52,74 @@ ARCHIVE_FILENAME = "genomes.sqlar"
 #: rather than listed.
 _METRIC_SERIES = re.compile(r"_(epoch|episode)_metrics$")
 
-#: Version of the archive layout, recorded in ``run_info``.
-ARCHIVE_FORMAT_VERSION = 5
+#: Version of the archive layout, recorded in ``run_info``. Version 6 added the
+#: per-genome timing columns (:data:`TIMING_COLUMNS`) and the ``master_timing``
+#: table. Version 7 replaced ``final_metrics`` with the training-metric
+#: projections and added the inherited weights' fitness
+#: (:data:`PROJECTION_COLUMNS` and :data:`INITIAL_FITNESS_COLUMNS`).
+ARCHIVE_FORMAT_VERSION = 7
 
-#: The kinds of current-best genome files kept in the output directory: the best
-#: genome by the search's own ranking and the best by ``fitness["target_metric"]``.
-BEST_KINDS = ("fitness", "target_metric")
+#: Per-genome timing summary columns, added in archive format 6: how long the
+#: evaluating worker waited for the genome, how long the master took to generate
+#: it, and how long it took from being generated to being taken back for
+#: insertion (both on the master's clock). Archives written before them lack
+#: these columns, which reads treat as "no timing recorded".
+TIMING_COLUMNS: tuple[str, ...] = (
+    "request_wait_seconds",
+    "generation_seconds",
+    "turnaround_seconds",
+)
+
+#: Training-metric summary columns, added in archive format 7. Each holds one
+#: record of every per-epoch or per-episode series a genome recorded, flattened
+#: and keyed ``<series>.<metric>``: ``initial_metrics`` the epoch- or episode-0
+#: evaluation of the weights it inherited, before any training;
+#: ``best_metrics`` the record at its ``best_epoch``/``best_episode`` -- the
+#: weights it keeps, which its fitness describes; and ``last_metrics`` the last
+#: record trained, which describes weights a genome that stopped improving has
+#: discarded. ``initial_fitness`` is the fitness the inherited weights would have
+#: had (``metadata["initial_fitness"]``).
+PROJECTION_COLUMNS: tuple[str, ...] = (
+    "initial_metrics",
+    "best_metrics",
+    "last_metrics",
+    "initial_fitness",
+)
+
+#: Generated columns read from ``initial_fitness`` (archive format 7): the
+#: inherited weights' ``loss`` and ``target_metric``, and ``target_gain`` -- how
+#: much training changed ``target_metric`` (higher is better for every task).
+INITIAL_FITNESS_COLUMNS: tuple[str, ...] = (
+    "initial_loss",
+    "initial_target_metric",
+    "target_gain",
+)
+
+#: Summary columns an archive written by an older version may lack. Reads treat
+#: a missing one as unrecorded (``NULL``) rather than failing, and reopening such
+#: an archive to continue its run adds them (see :data:`_ADDED_GENOME_COLUMNS`).
+OPTIONAL_COLUMNS: frozenset[str] = frozenset(
+    {*TIMING_COLUMNS, *PROJECTION_COLUMNS, *INITIAL_FITNESS_COLUMNS}
+)
+
+#: Columns of the ``master_timing`` table: one row per interval of the MPI
+#: master's loop (see :mod:`src.evolution.master_worker`), keyed by the
+#: insertion count at its end, with its wall time, how many genomes it inserted,
+#: and the ``{"seconds", "count"}`` of each loop phase and insertion part as JSON.
+MASTER_TIMING_FIELDS: tuple[str, ...] = (
+    "step",
+    "recorded_at",
+    "wall_seconds",
+    "genomes",
+    "phases",
+    "insert_parts",
+)
+
+#: The current-best genome files runs written before archive format 6 kept
+#: beside the archive (``best_<kind>.json``, ``.png`` and ``_training.png``).
+#: Searches no longer write them -- the best genomes are read from the archive --
+#: but discarding such a run with ``--overwrite_archive`` still removes them.
+_LEGACY_BEST_KINDS = ("fitness", "target_metric")
 
 #: How long (in seconds) a connection waits on a lock before SQLite reports
 #: ``database is locked``.
@@ -68,6 +131,11 @@ WRITE_RETRIES = 5
 #: Delay (in seconds) before the first retry of a locked write; it doubles on
 #: every further attempt.
 WRITE_RETRY_DELAY_SECONDS = 1.0
+
+#: Fitness keys the ``genomes`` table also holds as indexed generated columns.
+#: Reads of these keys name the column, so SQLite can use its index; extracting
+#: the same value from the fitness JSON would scan every genome instead.
+GENERATED_FITNESS_COLUMNS = ("loss", "target_metric")
 
 #: Summary-table columns a genome listing can be sorted on directly. Any other
 #: sort key is looked up in the genome's fitness.
@@ -89,6 +157,8 @@ SORTABLE_COLUMNS = frozenset(
         "evaluated_host",
         "evaluated_rank",
         "discard_reason",
+        *TIMING_COLUMNS,
+        *INITIAL_FITNESS_COLUMNS,
     }
 )
 
@@ -102,6 +172,8 @@ _NUMERIC_COLUMNS = (
     "n_cnot",
     "n_rot",
     "evaluation_seconds",
+    *TIMING_COLUMNS,
+    *INITIAL_FITNESS_COLUMNS,
 )
 
 #: Filters :meth:`GenomeArchive.list_genomes` understands.
@@ -121,7 +193,38 @@ _SUMMARY_COLUMNS = (
     "crossover_type, island, n_gates, n_enabled_gates, n_parameters, "
     "n_cnot, n_rot, max_innovation_number, generated_at_insertion, "
     "evaluation_seconds, evaluated_host, evaluated_rank, discard_reason, "
-    "final_metrics, fitness"
+    "initial_metrics, best_metrics, last_metrics, fitness, initial_fitness, "
+    "request_wait_seconds, generation_seconds, turnaround_seconds"
+)
+
+#: Definitions of the ``genomes`` columns added since archive format 5, so an
+#: archive written before them can be brought up to date when it is reopened to
+#: continue its run (its old rows read them as ``NULL``). Generated columns can
+#: only be added as ``VIRTUAL``, which is how :data:`_SCHEMA` declares them too.
+_ADDED_GENOME_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("request_wait_seconds", "request_wait_seconds REAL"),
+    ("generation_seconds", "generation_seconds REAL"),
+    ("turnaround_seconds", "turnaround_seconds REAL"),
+    ("initial_metrics", "initial_metrics TEXT"),
+    ("best_metrics", "best_metrics TEXT"),
+    ("last_metrics", "last_metrics TEXT"),
+    ("initial_fitness", "initial_fitness TEXT"),
+    (
+        "initial_loss",
+        "initial_loss REAL GENERATED ALWAYS AS "
+        "(json_extract(initial_fitness, '$.loss')) VIRTUAL",
+    ),
+    (
+        "initial_target_metric",
+        "initial_target_metric REAL GENERATED ALWAYS AS "
+        "(json_extract(initial_fitness, '$.target_metric')) VIRTUAL",
+    ),
+    (
+        "target_gain",
+        "target_gain REAL GENERATED ALWAYS AS "
+        "(json_extract(fitness, '$.target_metric') - "
+        "json_extract(initial_fitness, '$.target_metric')) VIRTUAL",
+    ),
 )
 
 _SCHEMA = """
@@ -151,11 +254,24 @@ CREATE TABLE IF NOT EXISTS genomes(
     evaluated_host TEXT,
     evaluated_rank INTEGER,
     discard_reason TEXT,
-    final_metrics TEXT,
+    initial_metrics TEXT,
+    best_metrics TEXT,
+    last_metrics TEXT,
     fitness TEXT,
+    initial_fitness TEXT,
+    request_wait_seconds REAL,
+    generation_seconds REAL,
+    turnaround_seconds REAL,
     loss REAL GENERATED ALWAYS AS (json_extract(fitness, '$.loss')) VIRTUAL,
     target_metric REAL GENERATED ALWAYS AS
-        (json_extract(fitness, '$.target_metric')) VIRTUAL
+        (json_extract(fitness, '$.target_metric')) VIRTUAL,
+    initial_loss REAL GENERATED ALWAYS AS
+        (json_extract(initial_fitness, '$.loss')) VIRTUAL,
+    initial_target_metric REAL GENERATED ALWAYS AS
+        (json_extract(initial_fitness, '$.target_metric')) VIRTUAL,
+    target_gain REAL GENERATED ALWAYS AS
+        (json_extract(fitness, '$.target_metric')
+         - json_extract(initial_fitness, '$.target_metric')) VIRTUAL
 );
 CREATE TABLE IF NOT EXISTS population_events(
     step INTEGER PRIMARY KEY,
@@ -173,15 +289,27 @@ CREATE TABLE IF NOT EXISTS run_info(
     key TEXT PRIMARY KEY,
     value TEXT
 );
+CREATE TABLE IF NOT EXISTS master_timing(
+    step INTEGER PRIMARY KEY,
+    recorded_at REAL,
+    wall_seconds REAL,
+    genomes INTEGER,
+    phases TEXT,
+    insert_parts TEXT
+);
 """
 
 
-def _index_fitness_columns(connection: sqlite3.Connection) -> None:
-    """Indexes the generated ``loss`` and ``target_metric`` columns.
+def _index_genome_columns(connection: sqlite3.Connection) -> None:
+    """Indexes the generated fitness columns and ``saved_at``.
 
-    Ranking a run by either key is by far the archive's most common query, so
-    both are generated from each genome's stored fitness and indexed rather than
-    extracted from JSON on every read.
+    Ranking a run by ``loss`` or ``target_metric`` is by far the archive's most
+    common query, so both are generated from each genome's stored fitness (see
+    :data:`GENERATED_FITNESS_COLUMNS`) and indexed rather than extracted from
+    JSON on every read. ``saved_at`` is indexed so a run's latest write -- which
+    the run list reads for every run on every load -- is a lookup rather than a
+    scan of the ``genomes`` table, whose pages lie scattered among the stored
+    genomes' blobs in a large archive.
 
     Args:
         connection: The archive's connection, open for writing.
@@ -190,10 +318,35 @@ def _index_fitness_columns(connection: sqlite3.Connection) -> None:
         None. Creates each column's index if it does not already exist.
     """
 
-    for column in ("loss", "target_metric"):
+    for column in (*GENERATED_FITNESS_COLUMNS, "saved_at"):
         connection.execute(
             f"CREATE INDEX IF NOT EXISTS genomes_{column} ON genomes({column})"
         )
+
+
+def _add_missing_genome_columns(connection: sqlite3.Connection) -> list[str]:
+    """Adds the ``genomes`` columns an archive written by an older version lacks.
+
+    ``CREATE TABLE IF NOT EXISTS`` leaves an existing table as it is, so without
+    this a run reopened to continue it (``--restart``) would fail on its first
+    insert of the current summary columns. Rows written before keep ``NULL`` in
+    the added columns, which reads already treat as unrecorded.
+
+    Args:
+        connection: The archive's connection, open for writing.
+
+    Returns:
+        The names of the columns added, in order; empty for an up-to-date
+        archive.
+    """
+
+    present = {row[1] for row in connection.execute("PRAGMA table_xinfo(genomes)")}
+    added = []
+    for name, definition in _ADDED_GENOME_COLUMNS:
+        if name not in present:
+            connection.execute(f"ALTER TABLE genomes ADD COLUMN {definition}")
+            added.append(name)
+    return added
 
 
 def _provenance() -> dict[str, Any]:
@@ -440,6 +593,42 @@ def _finite_or_none(value: Any) -> Any:
     return value
 
 
+def _seconds(value: Any) -> float | None:
+    """Reads a recorded duration, if it is a finite number.
+
+    Args:
+        value: A value from a genome's ``timing`` metadata.
+
+    Returns:
+        The value as a float, or ``None`` when it is missing or not finite.
+    """
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) else None
+
+
+def _turnaround_seconds(timing: dict[str, Any]) -> float | None:
+    """Computes how long a genome took from being generated to being inserted.
+
+    Both timestamps are taken on the search's own (master) clock, so their
+    difference is reliable even when the genome was evaluated on another host.
+
+    Args:
+        timing: The genome's ``timing`` metadata.
+
+    Returns:
+        ``inserted_at - generated_at`` in seconds, or ``None`` when either is
+        missing.
+    """
+
+    generated = _seconds(timing.get("generated_at"))
+    inserted = _seconds(timing.get("inserted_at"))
+    if generated is None or inserted is None:
+        return None
+    return inserted - generated
+
+
 def _flatten_numbers(record: dict[str, Any], prefix: str = "") -> dict[str, float]:
     """Flattens one metrics record to dotted paths holding numbers.
 
@@ -462,40 +651,76 @@ def _flatten_numbers(record: dict[str, Any], prefix: str = "") -> dict[str, floa
     return flattened
 
 
-def _final_metrics(metadata: dict[str, Any]) -> dict[str, float]:
-    """Extracts the last value of every metric a genome recorded while training.
+def _metric_projections(
+    metadata: dict[str, Any],
+) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+    """Extracts three records of every metric a genome recorded while training.
 
     What a genome records depends on its task, so nothing is assumed: every
     metadata entry named ``*_epoch_metrics`` or ``*_episode_metrics`` contributes
-    its final record, flattened and prefixed by the series it came from.
-    Recording these on the summary row keeps a run's task metrics queryable --
-    and plottable against -- without reopening every genome's JSON.
+    up to three of its records, flattened and prefixed by the series they came
+    from. Recording these on the summary row keeps a run's task metrics
+    queryable -- and plottable against -- without reopening every genome's JSON.
 
-    Args:
-        metadata: The genome's serialized metadata.
+    The three records differ because a genome keeps neither its first nor its
+    last weights in general: trainers evaluate the inherited weights at step 0,
+    keep training past the best step until improvement stalls, then restore the
+    best step's weights. So:
+
+    * the *initial* record is the series' step-0 record, when it has one (a
+      training series has none: nothing was trained before step 1);
+    * the *best* record is the one at the genome's ``best_epoch`` or
+      ``best_episode`` -- the weights it keeps, which its fitness describes;
+    * the *last* record is the series' final one, which for a genome that
+      stopped improving describes weights it has discarded.
 
     Each series' own step counter is left out: ``epoch`` and ``episode`` number
     the records rather than measuring anything, so summarizing them across a
     population would say nothing about the search.
 
+    Args:
+        metadata: The genome's serialized metadata.
+
     Returns:
-        Each metric's final recorded value, keyed by ``<series>.<metric>``;
-        empty when the genome recorded no series.
+        The initial, best and last projections, each keyed by
+        ``<series>.<metric>``; empty when the genome recorded no such record.
     """
 
-    final: dict[str, float] = {}
+    initial: dict[str, float] = {}
+    best: dict[str, float] = {}
+    last: dict[str, float] = {}
+
+    def flatten_record(
+        series: str, record: dict[str, Any], step_key: str
+    ) -> dict[str, float]:
+        """Flattens one record's metrics, prefixed by its series, minus its step."""
+        return {
+            f"{series}.{metric}": value
+            for metric, value in _flatten_numbers(record).items()
+            if metric != step_key
+        }
+
     for name, records in (metadata or {}).items():
         match = _METRIC_SERIES.search(name)
-        if not match or not isinstance(records, list):
-            continue
-        if not records or not isinstance(records[-1], dict):
+        if not match or not isinstance(records, list) or not records:
             continue
         step_key = match.group(1)
-        for metric, value in _flatten_numbers(records[-1]).items():
-            if metric == step_key:
-                continue
-            final[f"{name}.{metric}"] = value
-    return final
+
+        first = records[0]
+        if isinstance(first, dict) and first.get(step_key) == 0:
+            initial.update(flatten_record(name, first, step_key))
+
+        best_step = (metadata or {}).get(f"best_{step_key}")
+        if best_step is not None:
+            for record in records:
+                if isinstance(record, dict) and record.get(step_key) == best_step:
+                    best.update(flatten_record(name, record, step_key))
+                    break
+
+        if isinstance(records[-1], dict):
+            last.update(flatten_record(name, records[-1], step_key))
+
+    return initial, best, last
 
 
 def _encode_member(data: bytes) -> bytes:
@@ -526,48 +751,6 @@ def _decode_member(size: int, data: bytes) -> bytes:
     """
 
     return data if len(data) == size else zlib.decompress(data)
-
-
-def _default_file_mode() -> int:
-    """Returns the permissions a newly created file gets under the process umask.
-
-    Returns:
-        ``0o666`` with the current umask's bits cleared.
-    """
-
-    umask = os.umask(0)
-    os.umask(umask)
-    return 0o666 & ~umask
-
-
-def _atomic_write(path: str, data: bytes) -> None:
-    """Writes a file so readers never observe it partially written.
-
-    The bytes go to a temporary file in the same directory, which then replaces
-    ``path`` in one rename. The file gets the permissions a normally created file
-    would, so a run's outputs stay readable by collaborators on a shared system.
-
-    Args:
-        path: Destination file path.
-        data: Bytes to write.
-
-    Returns:
-        None. Creates or replaces ``path``.
-    """
-
-    descriptor, temporary_path = tempfile.mkstemp(
-        dir=os.path.dirname(path) or ".", prefix=".", suffix=".tmp"
-    )
-    try:
-        # mkstemp creates the file readable by its owner only
-        os.chmod(temporary_path, _default_file_mode())
-        with os.fdopen(descriptor, "wb") as temporary_file:
-            temporary_file.write(data)
-        os.replace(temporary_path, path)
-    except BaseException:
-        if os.path.exists(temporary_path):
-            os.remove(temporary_path)
-        raise
 
 
 def _chunks(values: list[int], size: int = 500) -> Iterator[list[int]]:
@@ -620,20 +803,23 @@ def _sort_expression(sort_key: str) -> tuple[str, list[Any]]:
             genomes' fitness dicts, or a recorded training metric.
 
     Returns:
-        The SQL expression and the parameters it binds.
+        The SQL expression and the parameters it binds. A fitness key held in
+        one of the :data:`GENERATED_FITNESS_COLUMNS` is read from that column,
+        so its index can be used.
 
     Raises:
         ValueError: If ``sort_key`` is none of those.
     """
 
-    if sort_key in SORTABLE_COLUMNS:
+    if sort_key in SORTABLE_COLUMNS or sort_key in GENERATED_FITNESS_COLUMNS:
         return sort_key, []
     if "." in sort_key:
         # Training metrics are always keyed ``<series>.<metric>``, so a dotted
-        # key can only be one of those. The path is quoted rather than spliced
-        # in bare, because the key's own dots would otherwise read as steps
-        # into the JSON.
-        return "json_extract(final_metrics, ?)", [f'$."{sort_key}"']
+        # key can only be one of those, read at the genome's best epoch or
+        # episode (the weights its fitness describes). The path is quoted rather
+        # than spliced in bare, because the key's own dots would otherwise read
+        # as steps into the JSON.
+        return "json_extract(best_metrics, ?)", [f'$."{sort_key}"']
     if re.fullmatch(r"[A-Za-z0-9_]+", sort_key):
         return "json_extract(fitness, ?)", [f"$.{sort_key}"]
     raise ValueError(f"Cannot sort genomes by {sort_key!r}.")
@@ -680,10 +866,11 @@ def _filter_clause(filters: dict[str, Any] | None) -> tuple[str, list[Any]]:
 
 
 def _discard_run(out_dir: str, archive_path: str) -> None:
-    """Removes a previous run's archive and best-genome files, to start over.
+    """Removes a previous run's archive, to start over.
 
     Only what a search wrote is removed: the archive (with any journal beside
-    it) and the current-best genome files. The run's log is left to be appended
+    it) and, for a run from before archive format 6, the current-best genome
+    files it kept beside it. The run's log is left to be appended
     to, and annotations someone recorded are left alone -- they are not the
     search's to delete -- but they name genomes the new run will not have, so
     finding them is worth reporting.
@@ -703,7 +890,7 @@ def _discard_run(out_dir: str, archive_path: str) -> None:
     for suffix in ("", "-wal", "-shm", "-journal"):
         _remove_if_exists(f"{archive_path}{suffix}")
 
-    for kind in BEST_KINDS:
+    for kind in _LEGACY_BEST_KINDS:
         prefix = os.path.join(out_dir, f"best_{kind}")
         for name in (f"{prefix}.json", f"{prefix}.png", f"{prefix}_training.png"):
             _remove_if_exists(name)
@@ -748,8 +935,14 @@ def _summary_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
         evaluated_host,
         evaluated_rank,
         discard_reason,
-        final_metrics,
+        initial_metrics,
+        best_metrics,
+        last_metrics,
         fitness,
+        initial_fitness,
+        request_wait_seconds,
+        generation_seconds,
+        turnaround_seconds,
     ) = row
 
     return {
@@ -771,13 +964,19 @@ def _summary_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
         "evaluated_host": evaluated_host,
         "evaluated_rank": evaluated_rank,
         "discard_reason": discard_reason,
-        "final_metrics": json.loads(final_metrics) if final_metrics else {},
+        "initial_metrics": json.loads(initial_metrics) if initial_metrics else {},
+        "best_metrics": json.loads(best_metrics) if best_metrics else {},
+        "last_metrics": json.loads(last_metrics) if last_metrics else {},
         "fitness": json.loads(fitness) if fitness else None,
+        "initial_fitness": json.loads(initial_fitness) if initial_fitness else None,
+        "request_wait_seconds": request_wait_seconds,
+        "generation_seconds": generation_seconds,
+        "turnaround_seconds": turnaround_seconds,
     }
 
 
 class GenomeArchive:
-    """A run's output directory: every evaluated genome, current bests and history.
+    """A run's output directory: every evaluated genome and the search's history.
 
     Open one for writing with :meth:`from_args` or :meth:`create` -- only on the
     serial run or the MPI master, so there is a single writer -- or for reading
@@ -813,8 +1012,7 @@ class GenomeArchive:
             default="artifacts",
             help=(
                 "Directory the run's outputs are written into: the genomes.sqlar archive of "
-                "every evaluated genome, the current best genome files, the search history "
-                "and the run log."
+                "every evaluated genome and the search history, and the run log."
             ),
         )
 
@@ -955,7 +1153,15 @@ class GenomeArchive:
         )
         connection.execute("PRAGMA synchronous=NORMAL")
         connection.executescript(_SCHEMA)
-        _index_fitness_columns(connection)
+        added_columns = _add_missing_genome_columns(connection)
+        if added_columns:
+            logger.info(
+                "added the summary columns {} to {}, which an older version wrote; "
+                "its earlier genomes leave them empty.",
+                ", ".join(added_columns),
+                path,
+            )
+        _index_genome_columns(connection)
 
         archive = cls(
             path,
@@ -1027,6 +1233,12 @@ class GenomeArchive:
             connection: The open SQLite connection to it.
             writable: Whether the archive was opened for writing.
             shared_file_system: Whether shared-file-system settings are in use.
+
+        Returns:
+            None. Sets the archive's path, connection and mode, and
+            ``genome_columns`` -- the ``genomes`` columns this archive has, so
+            reads of an archive written before a column existed (any of
+            :data:`OPTIONAL_COLUMNS`) see it as unrecorded rather than failing.
         """
 
         self.path = path
@@ -1036,6 +1248,59 @@ class GenomeArchive:
         self.shared_file_system = shared_file_system
         self._population_members: set[int] = set()
         self._closed = False
+        self.genome_columns: frozenset[str] = frozenset(
+            row[1] for row in connection.execute("PRAGMA table_xinfo(genomes)")
+        )
+
+    def has_timing_columns(self) -> bool:
+        """Reports whether this archive records per-genome timing columns.
+
+        Returns:
+            True for archives of format 6 or later, which have every one of
+            :data:`TIMING_COLUMNS`.
+        """
+
+        return all(column in self.genome_columns for column in TIMING_COLUMNS)
+
+    def _summary_select(self) -> str:
+        """Returns the summary columns to select, allowing for older archives.
+
+        Returns:
+            :data:`_SUMMARY_COLUMNS` with any optional column this archive lacks
+            (see :data:`OPTIONAL_COLUMNS`) selected as ``NULL`` instead, so rows
+            keep the same shape.
+        """
+
+        return ", ".join(
+            (
+                f"NULL AS {column}"
+                if column in OPTIONAL_COLUMNS and column not in self.genome_columns
+                else column
+            )
+            for column in (name.strip() for name in _SUMMARY_COLUMNS.split(","))
+        )
+
+    def _value_expression(self, key: str) -> tuple[str, list[Any]]:
+        """Builds the SQL expression reading a column, fitness key or metric.
+
+        Args:
+            key: A summary column, fitness key or recorded training metric (see
+                :func:`_sort_expression`).
+
+        Returns:
+            The SQL expression and its parameters; ``NULL`` for an optional
+            column (see :data:`OPTIONAL_COLUMNS`) this archive predates, and for
+            a training metric when it predates ``best_metrics``.
+
+        Raises:
+            ValueError: If ``key`` is not a valid key.
+        """
+
+        if key in OPTIONAL_COLUMNS and key not in self.genome_columns:
+            return "NULL", []
+        if "." in key and "best_metrics" not in self.genome_columns:
+            return "NULL", []
+        return _sort_expression(key)
 
     def __enter__(self) -> GenomeArchive:
         """Enters a ``with`` block.
@@ -1190,6 +1455,8 @@ class GenomeArchive:
 
         timing = metadata.get("timing") or {}
         placement = metadata.get("evaluated_by") or {}
+        initial_metrics, best_metrics, last_metrics = _metric_projections(metadata)
+        initial_fitness = metadata.get("initial_fitness")
 
         summary = (
             genome_number,
@@ -1219,8 +1486,18 @@ class GenomeArchive:
             placement.get("host"),
             placement.get("rank"),
             metadata.get("discard_reason"),
-            json.dumps(_finite_or_none(_final_metrics(metadata))),
+            json.dumps(_finite_or_none(initial_metrics)),
+            json.dumps(_finite_or_none(best_metrics)),
+            json.dumps(_finite_or_none(last_metrics)),
             json.dumps(_finite_or_none(serialized.get("fitness"))),
+            (
+                json.dumps(_finite_or_none(initial_fitness))
+                if initial_fitness is not None
+                else None
+            ),
+            _seconds(timing.get("request_wait_seconds")),
+            _seconds(timing.get("generation_seconds")),
+            _turnaround_seconds(timing),
         )
         parents = sorted(
             {int(parent) for parent in metadata.get("parent_genomes") or []}
@@ -1252,60 +1529,6 @@ class GenomeArchive:
             )
 
         return self._write(f"genome {genome_number}", store)
-
-    def write_current_best(self, genome: CircuitGenome, kind: str) -> None:
-        """Overwrites one set of current-best genome files in the output directory.
-
-        Writes ``best_<kind>.json`` (the serialized genome),
-        ``best_<kind>.png`` (its architecture diagram) and
-        ``best_<kind>_training.png`` (its training history). Each file is
-        replaced atomically, so it can be opened at any time during a run. An
-        image that cannot be drawn is removed rather than left showing an
-        earlier best.
-
-        Args:
-            genome: The new best genome.
-            kind: Which best it is, one of :data:`BEST_KINDS`.
-
-        Returns:
-            None. Replaces the files in ``out_dir``.
-
-        Raises:
-            RuntimeError: If the archive is read-only.
-            ValueError: If ``kind`` is not one of :data:`BEST_KINDS`.
-        """
-
-        self._require_writable()
-        if kind not in BEST_KINDS:
-            raise ValueError(
-                f"Unknown best genome kind {kind!r}; expected one of {BEST_KINDS}."
-            )
-
-        # Imported here so that reading an archive does not load the plotting and
-        # quantum-framework stacks.
-        from src.utils.genome_rendering import render_diagram_png, render_training_png
-
-        prefix = os.path.join(self.out_dir, f"best_{kind}")
-        serialized = json.dumps(genome.to_dict(), ensure_ascii=False, indent=4).encode(
-            "utf-8"
-        )
-        _atomic_write(f"{prefix}.json", serialized)
-
-        for path, image in (
-            (f"{prefix}.png", render_diagram_png(genome)),
-            (f"{prefix}_training.png", render_training_png(genome)),
-        ):
-            if image is None:
-                _remove_if_exists(path)
-            else:
-                _atomic_write(path, image)
-
-        logger.info(
-            "wrote current best ({}) genome {} to {}.*",
-            kind,
-            genome.genome_number,
-            prefix,
-        )
 
     def record_population(self, step: int, population: list[CircuitGenome]) -> None:
         """Records how the population changed at one insertion.
@@ -1356,6 +1579,62 @@ class GenomeArchive:
         if self._write(f"population step {step}", store):
             self._population_members = members
 
+    def record_master_timing(
+        self,
+        step: int,
+        wall_seconds: float,
+        genomes: int,
+        phases: PhaseTimer,
+        insert_parts: PhaseTimer,
+    ) -> None:
+        """Records where the MPI master's time went over one interval.
+
+        Args:
+            step: The search's insertion count at the end of the interval (so
+                rows continue, rather than restart, when a run is restarted).
+            wall_seconds: How long the interval took.
+            genomes: How many genomes the master inserted during it.
+            phases: The master loop's phases over the interval (``idle`` and the
+                busy phases).
+            insert_parts: The parts of insertion over the interval.
+
+        Returns:
+            None. Writes (or replaces) the ``master_timing`` row for ``step``.
+
+        Raises:
+            RuntimeError: If the archive is read-only.
+        """
+
+        self._require_writable()
+
+        def encode(timer: PhaseTimer) -> str:
+            """Serializes a timer's phases as ``{phase: {seconds, count}}``."""
+
+            return json.dumps(
+                {
+                    phase: {"seconds": seconds, "count": timer.counts.get(phase, 0)}
+                    for phase, seconds in timer.seconds.items()
+                }
+            )
+
+        def store(connection: sqlite3.Connection) -> None:
+            """Writes the interval's row."""
+
+            connection.execute(
+                f"INSERT OR REPLACE INTO master_timing({', '.join(MASTER_TIMING_FIELDS)}) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    int(step),
+                    time.time(),
+                    float(wall_seconds),
+                    int(genomes),
+                    encode(phases),
+                    encode(insert_parts),
+                ),
+            )
+
+        self._write(f"master timing at step {step}", store)
+
     def population_at(self, step: int | None = None) -> list[int]:
         """Reconstructs which genomes the population held at a step.
 
@@ -1379,18 +1658,21 @@ class GenomeArchive:
             members.update(json.loads(added or "[]"))
         return sorted(members)
 
-    def final_metric_keys(self) -> list[str]:
-        """Lists the training metrics genomes recorded a final value for.
+    def metric_keys(self) -> list[str]:
+        """Lists the training metrics genomes recorded at their best step.
 
         Returns:
-            Every key stored in the genomes' ``final_metrics``, sorted; empty
-            when no genome recorded a per-epoch or per-episode series.
+            Every key stored in the genomes' ``best_metrics``, sorted; empty
+            when no genome recorded a per-epoch or per-episode series, or when
+            the archive predates ``best_metrics`` (format 7).
         """
 
+        if "best_metrics" not in self.genome_columns:
+            return []
         return sorted(
             row[0]
             for row in self.connection.execute(
-                "SELECT DISTINCT metric.key FROM genomes, json_each(genomes.final_metrics) AS metric"
+                "SELECT DISTINCT metric.key FROM genomes, json_each(genomes.best_metrics) AS metric"
             )
         )
 
@@ -1399,10 +1681,28 @@ class GenomeArchive:
 
         Returns:
             The numeric summary columns, the genomes' fitness keys and their
-            recorded training metrics, in that order.
+            training metrics at their best step, in that order.
         """
 
-        return [*_NUMERIC_COLUMNS, *self.fitness_keys(), *self.final_metric_keys()]
+        return [
+            *self._numeric_columns(),
+            *self.fitness_keys(),
+            *self.metric_keys(),
+        ]
+
+    def _numeric_columns(self) -> list[str]:
+        """Lists the numeric summary columns this archive actually has.
+
+        Returns:
+            :data:`_NUMERIC_COLUMNS`, less any optional column (see
+            :data:`OPTIONAL_COLUMNS`) the archive was written before.
+        """
+
+        return [
+            column
+            for column in _NUMERIC_COLUMNS
+            if column not in OPTIONAL_COLUMNS or column in self.genome_columns
+        ]
 
     def primary_series_metrics(self) -> list[str]:
         """Lists the metrics worth offering ahead of the long tail.
@@ -1419,8 +1719,8 @@ class GenomeArchive:
             The subset of :meth:`series_metrics` to offer before the rest.
         """
 
-        primary = [*_NUMERIC_COLUMNS, *self.fitness_keys()]
-        for key in self.final_metric_keys():
+        primary = [*self._numeric_columns(), *self.fitness_keys()]
+        for key in self.metric_keys():
             _, _, leaf = key.partition(".")
             if "." not in leaf or (leaf.count(".") == 1 and leaf.endswith(".mean")):
                 primary.append(key)
@@ -1431,7 +1731,7 @@ class GenomeArchive:
 
         A metric is resolved in the order :meth:`series_metrics` lists: a numeric
         summary column, then a fitness key, then a training metric recorded in
-        ``final_metrics``. Fitness keys are checked before training metrics so a
+        ``best_metrics``. Fitness keys are checked before training metrics so a
         run that happens to record both under one name keeps its fitness meaning.
 
         Args:
@@ -1451,7 +1751,7 @@ class GenomeArchive:
         # empty series instead of saying so.
         if metric not in self.series_metrics():
             raise ValueError(f"{metric!r} was not recorded by this run's genomes.")
-        expression, parameters = _sort_expression(metric)
+        expression, parameters = self._value_expression(metric)
 
         return {
             int(number): float(value)
@@ -1521,6 +1821,103 @@ class GenomeArchive:
                 columns["worst"].append(None)
 
         return columns
+
+    def master_timing(self) -> list[dict[str, Any]]:
+        """Returns the MPI master's recorded timing intervals, in order.
+
+        Returns:
+            One dict per ``master_timing`` row, keyed by
+            :data:`MASTER_TIMING_FIELDS` with ``phases`` and ``insert_parts``
+            decoded to ``{phase: {"seconds", "count"}}``. Empty when the run
+            recorded none: a serial run, or an archive written before format 6.
+        """
+
+        exists = self.connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'master_timing'"
+        ).fetchone()
+        if exists is None:
+            return []
+
+        rows = self.connection.execute(
+            f"SELECT {', '.join(MASTER_TIMING_FIELDS)} FROM master_timing ORDER BY step"
+        ).fetchall()
+        return [
+            {
+                "step": step,
+                "recorded_at": recorded_at,
+                "wall_seconds": wall_seconds,
+                "genomes": genomes,
+                "phases": json.loads(phases or "{}"),
+                "insert_parts": json.loads(insert_parts or "{}"),
+            }
+            for step, recorded_at, wall_seconds, genomes, phases, insert_parts in rows
+        ]
+
+    def worker_timing(self, boundaries: list[int]) -> list[dict[str, Any]]:
+        """Summarizes per-genome timing over consecutive insertion intervals.
+
+        Interval ``i`` covers the genomes inserted after ``boundaries[i - 1]``
+        (after 0 for the first) up to and including ``boundaries[i]``, matching
+        the intervals of :meth:`master_timing`.
+
+        Args:
+            boundaries: Ascending insertion counts, each ending one interval.
+
+        Returns:
+            One dict per interval: ``genomes`` (how many fell in it), the mean
+            ``request_wait_seconds``, ``evaluation_seconds``,
+            ``generation_seconds`` and ``turnaround_seconds`` of those that
+            recorded each (``None`` when none did), and ``wait_fraction`` --
+            total request wait over total wait plus evaluation, for genomes that
+            recorded both -- the share of a worker's time spent waiting.
+        """
+
+        columns = (
+            "request_wait_seconds",
+            "evaluation_seconds",
+            "generation_seconds",
+            "turnaround_seconds",
+        )
+        expressions = [self._value_expression(column)[0] for column in columns]
+        rows = self.connection.execute(
+            f"SELECT insertion, {', '.join(expressions)} FROM genomes "
+            "WHERE insertion IS NOT NULL ORDER BY insertion"
+        ).fetchall()
+
+        intervals: list[dict[str, Any]] = []
+        position = 0
+        for boundary in boundaries:
+            totals = {column: 0.0 for column in columns}
+            counts = {column: 0 for column in columns}
+            waited = 0.0
+            evaluated = 0.0
+            genomes = 0
+            while position < len(rows) and rows[position][0] <= boundary:
+                values = dict(zip(columns, rows[position][1:]))
+                genomes += 1
+                for column, value in values.items():
+                    if isinstance(value, (int, float)):
+                        totals[column] += float(value)
+                        counts[column] += 1
+                wait = values["request_wait_seconds"]
+                evaluation = values["evaluation_seconds"]
+                if isinstance(wait, (int, float)) and isinstance(
+                    evaluation, (int, float)
+                ):
+                    waited += float(wait)
+                    evaluated += float(evaluation)
+                position += 1
+
+            interval: dict[str, Any] = {"step": boundary, "genomes": genomes}
+            for column in columns:
+                interval[column] = (
+                    totals[column] / counts[column] if counts[column] else None
+                )
+            interval["wait_fraction"] = (
+                waited / (waited + evaluated) if waited + evaluated > 0 else None
+            )
+            intervals.append(interval)
+        return intervals
 
     def set_run_info(self, **values: Any) -> None:
         """Records facts about the run, such as its task and command line.
@@ -1635,11 +2032,16 @@ class GenomeArchive:
             ValueError: If ``key`` is not a valid key.
         """
 
-        expression, parameters = _sort_expression(key)
+        # The best value is found first and then the lowest genome holding it:
+        # for an indexed column both are index lookups, where ordering by the
+        # value and then by ascending genome number cannot be read from the index
+        # when larger is better, and would scan every genome.
+        expression, parameters = self._value_expression(key)
         row = self.connection.execute(
-            f"SELECT genome_number, {expression} AS value FROM genomes WHERE {expression} IS NOT NULL "
-            f"ORDER BY value {'DESC' if higher_is_better else 'ASC'}, genome_number ASC LIMIT 1",
-            [*parameters, *parameters],
+            f"SELECT genome_number, {expression} FROM genomes WHERE {expression} = "
+            f"(SELECT {'MAX' if higher_is_better else 'MIN'}({expression}) FROM genomes) "
+            "ORDER BY genome_number LIMIT 1",
+            [*parameters, *parameters, *parameters],
         ).fetchone()
         return None if row is None else {"genome_number": row[0], "value": row[1]}
 
@@ -1686,7 +2088,7 @@ class GenomeArchive:
             ValueError: If ``y_key`` is not a valid key.
         """
 
-        expression, parameters = _sort_expression(y_key)
+        expression, parameters = self._value_expression(y_key)
         rows = self.connection.execute(
             f"SELECT genome_number, insertion, {expression}, insert_type, generated_by, crossover_type, island "
             "FROM genomes ORDER BY genome_number",
@@ -1749,7 +2151,7 @@ class GenomeArchive:
         summaries: dict[int, dict[str, Any]] = {}
         for chunk in _chunks(sorted(generations)):
             for row in self.connection.execute(
-                f"SELECT {_SUMMARY_COLUMNS} FROM genomes WHERE genome_number IN ({', '.join('?' * len(chunk))})",
+                f"SELECT {self._summary_select()} FROM genomes WHERE genome_number IN ({', '.join('?' * len(chunk))})",
                 chunk,
             ):
                 summary = _summary_from_row(row)
@@ -1871,12 +2273,12 @@ class GenomeArchive:
             ValueError: If the sort key or a filter is not supported.
         """
 
-        order_expression, order_parameters = _sort_expression(sort_key)
+        order_expression, order_parameters = self._value_expression(sort_key)
         where, where_parameters = _filter_clause(filters)
         direction = "DESC" if descending else "ASC"
 
         rows = self.connection.execute(
-            f"SELECT {_SUMMARY_COLUMNS} FROM genomes {where} "
+            f"SELECT {self._summary_select()} FROM genomes {where} "
             f"ORDER BY ({order_expression}) IS NULL, {order_expression} {direction}, genome_number ASC "
             "LIMIT ? OFFSET ?",
             [
@@ -1910,7 +2312,7 @@ class GenomeArchive:
         """
 
         row = self.connection.execute(
-            f"SELECT {_SUMMARY_COLUMNS} FROM genomes WHERE genome_number = ?",
+            f"SELECT {self._summary_select()} FROM genomes WHERE genome_number = ?",
             (int(genome_number),),
         ).fetchone()
         if row is None:

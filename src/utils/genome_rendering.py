@@ -1,8 +1,7 @@
 """Renders a genome's architecture diagram and training plot to PNG bytes.
 
-The search no longer draws an image for every genome it evaluates. Images are
-rendered only when they are needed -- for the current-best genome files, and on
-demand by the EXAQC dashboard -- from the same figure builders that
+The search never draws images while it runs. They are rendered only when they
+are needed -- on demand by the EXAQC dashboard -- from the same figure builders that
 :meth:`~src.circuits.circuit.CircuitGenome.save_circuit` uses, so every image
 looks the same wherever it was drawn.
 """
