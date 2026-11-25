@@ -2,7 +2,8 @@
 
 It inserts exactly the noise the PennyLane target does: every hook
 (:meth:`before_input_encoding`, :meth:`after_input_encoding`,
-:meth:`after_gate`, :meth:`before_measurement`) runs the PennyLane model's own
+:meth:`before_gate`, :meth:`after_gate`, :meth:`before_measurement`) runs the
+PennyLane model's own
 rule, captures the channels it would add, and appends each one to the Qiskit
 circuit as a Qiskit Aer ``QuantumError`` built from the same Kraus operators.
 Synthetic noise and calibrated chip noise therefore share one set of formulas
@@ -127,6 +128,21 @@ class QiskitNoiseModel(PennyLaneNoiseModel):
             :meth:`PennyLaneNoiseModel.after_input_encoding` adds.
         """
         self._emit(super().after_input_encoding, input_wires)
+
+    def before_gate(self, gate_wires: Sequence[int], gate: Gate | None = None) -> None:
+        """Appends the noise that comes just before one evolved gate.
+
+        Args:
+            gate_wires: The wires the gate acts on.
+            gate: The gate itself, which device-card noise uses to look up how
+                long its wires waited.
+
+        Returns:
+            None. Appends to the bound circuit what
+            :meth:`PennyLaneNoiseModel.before_gate` adds (device-card idle
+            noise, or nothing).
+        """
+        self._emit(super().before_gate, gate_wires, gate)
 
     def after_gate(self, gate_wires: Sequence[int], gate: Gate | None = None) -> None:
         """Appends the noise that follows one evolved gate.

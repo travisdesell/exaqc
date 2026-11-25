@@ -886,7 +886,7 @@ slower, roughly the square of the noiseless cost.
 
 | Argument | Default | Description |
 |---|---|---|
-| `--noise_type` | `none` | `none`, `depolarizing`, `bit_flip`, `phase_flip`, `amplitude_damping`, `phase_damping`, `thermal_relaxation`, `mixed`, `ibm_backend`. `ibm_backend` requires `--noise_calibration` and `--noise_qubits` |
+| `--noise_type` | `none` | `none`, `depolarizing`, `bit_flip`, `phase_flip`, `amplitude_damping`, `phase_damping`, `thermal_relaxation`, `mixed`, `ibm_backend`, `device_card`. `ibm_backend` requires `--noise_calibration` and `--noise_qubits`; `device_card` requires `--noise_device_card` (which sets it) |
 | `--noise_p` | `0.0` | Error probability for gates without a size-specific rate |
 | `--noise_p_1q` / `--noise_p_2q` | = `--noise_p` | Error probability after one-qubit / multi-qubit gates |
 | `--noise_gamma` | `0.0` | Strength of the damping and `mixed` noise types |
@@ -896,10 +896,29 @@ slower, roughly the square of the noiseless cost.
 | `--noise_after_encoding` | off | Also add the hand-set noise right after the input encoding. Chip noise (`--noise_calibration`) always adds it there |
 | `--noise_after_gates` | on | Add noise after each evolved gate (`--no-noise_after_gates` to disable) |
 | `--noise_before_measurement` | off | Also add the hand-set noise just before measurement. Chip noise (`--noise_calibration`) always adds each qubit's readout error there |
-| `--noise_calibration` | none | Gives each wire the rates and timings of its own physical qubit, read from a stored IBM calibration file written by [`collect_calibration`](#collect_calibration). Given as the file's path (`data/calibration/<chip>/<chip>_<date>.json`) or as `<chip>:<date>` (e.g. `ibm_fez:2026-11-06`), which uses that day's stored file or, if it is missing, fetches it once from IBM with the saved Qiskit account and stores it under that name; a failed fetch stops the run and prints the `collect_calibration` command to run by hand. Uses the calibrated `ibm_backend` channel; any other `--noise_type` is refused. Every genome records the file's path, chip, date and values. Requires `--noise_qubits` |
+| `--noise_calibration` | none | Gives each wire the rates and timings of its own physical qubit, read from a stored IBM calibration file written by [`collect_calibration`](#collect_calibration). Given as the file's path (`data/calibration/<chip>/<chip>_<date>.json`) or as `<chip>:<date>` (e.g. `ibm_fez:2026-11-06`), which uses that day's stored file or, if it is missing, fetches it once from IBM with the saved Qiskit account and stores it under that name; a failed fetch stops the run and prints the `collect_calibration` command to run by hand. Uses the calibrated `ibm_backend` channel; any other `--noise_type` is refused, except that with `--noise_device_card` only the chip's wiring (its coupling map) is used. Every genome records the file's path, chip, date and values. Requires `--noise_qubits` |
 | `--noise_qubits` | none | Comma-separated physical qubits of that file that wires 0, 1, ... map to (e.g. `10,11,12,13`); list exactly as many as each circuit has wires, the larger of `--input_qubits` and `--output_qubits`; consecutive qubits must be wired neighbours. Each genome is translated into the chip's own gates on these qubits, with moves where qubits are not wired together, and each gate is charged the noise of the chip gates it becomes. Requires `--noise_calibration` |
 | `--noise_transpile_level` | `2` | Chip noise: how hard Qiskit's translator shrinks each genome when turning it into the chip's gates (`0` to `3`). Use the same level as the real-chip run |
 | `--noise_transpile_seed` | `7` | Chip noise: seed for the translator's random choices, for repeatable runs |
+| `--noise_device_card` | none | Device-card noise: a card name from [`arch_aware/device_cards`](./arch_aware/device_cards) (`transmon_detuned_schrod`, `transmon_detuned_lindblad_markov`, `transmon_detuned_lindblad_nm`, `transmon_detuned_mixed`, `naive_closed`, `naive_depol`) or a card file's path. Sets `--noise_type device_card` (any other type is refused). Every pair of wires counts as wired unless `--noise_calibration` and `--noise_qubits` are also given, which then supply only that chip's wiring. Every genome records the card |
+| `--noise_idle` | on | Device-card noise: give waiting wires the card's idle channel (`--no-noise_idle` to disable) |
+
+**Device-card noise.** A device card (Dr. Vogt's optimal-control work; see the
+`DrVogt/noise-model` branch's `arch_aware/README.md`) records, for each gate of
+`h`, `x`, `cx` (and driven phase gates), the duration of its optimized control
+pulse and the Pauli-twirled error channel it leaves, under one open-system
+model (`schrod` closed, `lindblad_markov`, `lindblad_nm` non-Markovian, `mixed`)
+of a modelled transmon device; it also records the channel of a qubit that
+waits. With `--noise_device_card`, each genome is translated (as for chip
+noise) into the card's `h`, `x`, `cx` and a virtual, error-free `rz`, so `rx`
+becomes `h rz h`; each card gate gets its own channel from the card, and an
+as-soon-as-possible timeline of those gates gives each wire the card's idle
+channel for every wait, just before the gate it waited for and before
+measurement. Every qubit and wired pair gets the card's numbers (a device of
+identical copies). The card's `cx` entries are provisional (Dr. Vogt is
+rebuilding them), so results that depend on two-qubit gates are not final.
+[`classification_moo`](#classification_moo) can also optimize the card's
+predicted failure probability and duration.
 
 ### [`classification_moo`](./src/examples/classification_moo.py)
 

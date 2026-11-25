@@ -16,6 +16,7 @@ NoiseType = Literal[
     "thermal_relaxation",
     "mixed",
     "ibm_backend",
+    "device_card",
 ]
 
 
@@ -140,6 +141,15 @@ class BaseNoiseModel(ABC):
     transpile_level: int = 2
     transpile_seed: int = 7
 
+    # Device-card noise (``noise_type="device_card"``): the card in the compact
+    # form of ``src.noise.device_card.load_device_card`` (its gates' Pauli
+    # channels and durations, its idle channel, and which wires are wired),
+    # saved on each genome as ``noise_device_card``; ``None`` otherwise.
+    device_card: dict[str, Any] | None = None
+
+    # Device-card noise: whether waiting wires get the card's idle channel.
+    apply_idle: bool = True
+
     def is_noisy(self) -> bool:
         """Determine whether the model applies any non-trivial noise.
 
@@ -206,6 +216,8 @@ class BaseNoiseModel(ABC):
         - ``noise_per_qubit``, ``noise_chip``, ``noise_calibration_date``,
           ``noise_calibration`` (chip noise only; absent in older genomes,
           which then get None)
+        - ``noise_device_card``, ``noise_idle`` (device-card noise only;
+          absent in older genomes, which then get no card and idle on)
 
         Args:
             hp:
@@ -244,6 +256,8 @@ class BaseNoiseModel(ABC):
             chip_gates=copy.deepcopy(hp.get("noise_chip_gates", None)),
             transpile_level=int(hp.get("noise_transpile_level", 2)),
             transpile_seed=int(hp.get("noise_transpile_seed", 7)),
+            device_card=copy.deepcopy(hp.get("noise_device_card", None)),
+            apply_idle=_as_bool(hp.get("noise_idle", True)),
         )
 
     def to_hyperparameters(self) -> dict[str, Any]:
@@ -260,12 +274,14 @@ class BaseNoiseModel(ABC):
         path), so every genome records exactly which
         chip, day, qubits and values it was scored with, and the circuit
         builder, which rebuilds the model from these keys, gets them back.
+        Device-card noise likewise carries the card itself
+        (``noise_device_card``) and the idle switch (``noise_idle``).
 
         Returns:
             The ``noise_*`` hyperparameter dict describing this model; every
             value is a plain ``str``, ``float``, ``bool``, ``None``, or (for
-            ``noise_per_qubit``) a dict of lists and numbers, so it
-            serializes to JSON.
+            ``noise_per_qubit`` and ``noise_device_card``) a dict of lists and
+            numbers, so it serializes to JSON.
         """
         return {
             "noise_type": self.noise_type,
@@ -288,6 +304,8 @@ class BaseNoiseModel(ABC):
             "noise_chip_gates": copy.deepcopy(self.chip_gates),
             "noise_transpile_level": int(self.transpile_level),
             "noise_transpile_seed": int(self.transpile_seed),
+            "noise_device_card": copy.deepcopy(self.device_card),
+            "noise_idle": bool(self.apply_idle),
         }
 
     @staticmethod
@@ -448,16 +466,39 @@ class BaseNoiseModel(ABC):
             default=7,
             help="Chip noise: seed for the translator's random choices, for repeatable runs.",
         )
+        group.add_argument(
+            "--noise_device_card",
+            type=str,
+            default=None,
+            help=(
+                "Device-card noise (Dr. Vogt's optimal-control gate channels): a card name "
+                "from arch_aware/device_cards (e.g. transmon_detuned_mixed, naive_depol) or "
+                "a card file's path. Each gate is translated into the card's h, x, cx and "
+                "virtual rz and charged each card gate's own Pauli channel; waiting wires "
+                "get the card's idle channel. Every pair of wires counts as wired unless "
+                "--noise_calibration and --noise_qubits are also given, in which case only "
+                "that chip's wiring is used (its error rates are not). Sets --noise_type "
+                "device_card."
+            ),
+        )
+        group.add_argument(
+            "--noise_idle",
+            action=argparse.BooleanOptionalAction,
+            default=True,
+            help="Device-card noise: add the card's idle channel to wires while they wait.",
+        )
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> Self:
         """Builds a noise model from parsed noise flags.
 
-        Two sources, chosen by flag: the hand-set values, or one stored IBM
+        Three sources, chosen by flag: the hand-set values; one stored IBM
         calibration file when ``--noise_calibration`` and ``--noise_qubits``
         are given, read per qubit for the listed physical qubits
-        (:mod:`src.noise.chip_noise`). The three placement switches always
-        come from the flags.
+        (:mod:`src.noise.chip_noise`); or a device card with
+        ``--noise_device_card`` (:mod:`src.noise.device_card`), which takes
+        only the wiring from a calibration file given with it. The three
+        placement switches always come from the flags.
 
         Args:
             args: Parsed arguments carrying the flags from
@@ -479,6 +520,10 @@ class BaseNoiseModel(ABC):
                 also if the calibration file is missing or the chosen qubits
                 cannot be used
                 (:func:`src.noise.chip_noise.noise_hyperparameters_from_calibration`).
+                For device-card noise: if ``--noise_type device_card`` is given
+                without ``--noise_device_card``, ``--noise_device_card`` with
+                another noise type, or the card cannot be read
+                (:func:`src.noise.device_card.load_device_card`).
         """
         placement = {
             "noise_after_encoding": args.noise_after_encoding,
@@ -507,6 +552,40 @@ class BaseNoiseModel(ABC):
                 raise ValueError(
                     f"--noise_qubits must be distinct non-negative qubits, got {noise_qubits_text!r}."
                 )
+
+        noise_device_card = getattr(args, "noise_device_card", None)
+        if noise_device_card is None and args.noise_type == "device_card":
+            raise ValueError("--noise_type device_card needs --noise_device_card.")
+        if noise_device_card is not None:
+            if args.noise_type not in ("none", "device_card"):
+                raise ValueError(
+                    f"--noise_device_card only works with --noise_type device_card, got "
+                    f"{args.noise_type!r}; the card replaces the hand-set noise."
+                )
+            if (noise_calibration is None) != (physical_qubits is None):
+                raise ValueError(
+                    "with --noise_device_card, --noise_calibration and --noise_qubits "
+                    "go together (they set the wiring)."
+                )
+            from src.noise.device_card import load_device_card, wired_slot_pairs
+
+            card = load_device_card(noise_device_card)
+            hp = {"noise_type": "device_card", "noise_device_card": card}
+            if noise_calibration is not None:
+                from src.noise.calibration.backends import load_raw_calibration
+                from src.noise.chip_noise import resolve_calibration
+
+                path = resolve_calibration(noise_calibration)
+                raw = load_raw_calibration(path)
+                card["wired_pairs"] = wired_slot_pairs(raw, physical_qubits)
+                card["wiring"] = {
+                    "chip": raw["backend"]["name"],
+                    "calibration": str(path),
+                    "qubits": list(physical_qubits),
+                }
+            hp.update(placement)
+            hp["noise_idle"] = getattr(args, "noise_idle", True)
+            return cls.from_hyperparameters(hp)
 
         # The two noise modes must not mix: 'ibm_backend' takes its numbers
         # from a calibration file, every other type from the hand-set flags.

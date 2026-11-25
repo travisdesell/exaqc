@@ -1397,6 +1397,8 @@ class CircuitGenome:
                 # Structural enable/disable is controlled by evolution.
                 # Dropout is temporary and only affects this forward pass.
                 if gate.enabled and not self.is_gate_dropped(gate):
+                    # idle noise for the time its wires waited (device cards)
+                    noise_model.before_gate(gate.get_pennylane_wires(self.qubits), gate)
                     gate.add_to_pennylane_circuit(
                         self.qubits, weights=weights, offset=offset
                     )
@@ -1551,6 +1553,8 @@ class CircuitGenome:
             # Structural enable/disable is controlled by evolution.
             # Dropout is temporary and only affects this forward pass.
             if gate.enabled and not self.is_gate_dropped(gate):
+                # idle noise for the time its wires waited (device cards)
+                noise_model.before_gate(gate.get_pennylane_wires(self.qubits), gate)
                 gate.add_to_qiskit_circuit(
                     register_dict, circuit, self.weight_vector, offset
                 )

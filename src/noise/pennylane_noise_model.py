@@ -1,6 +1,6 @@
-"""The PennyLane noise model: the parts shared by both noise families.
+"""The PennyLane noise model: the parts shared by every noise family.
 
-The channels themselves live in two files, one per family:
+The channels themselves live in one file per family:
 
 - :mod:`src.noise.synthetic_channels`: hand-set values from the
   ``--noise_type`` flags, for parameter sweeps (depolarizing, bit flip, phase
@@ -8,9 +8,12 @@ The channels themselves live in two files, one per family:
 - :mod:`src.noise.chip_channels`: per-qubit values from one stored IBM
   calibration file, named with ``--noise_calibration`` and
   ``--noise_qubits`` (``from_calibration``, ``ibm_backend``, readout error).
+- :mod:`src.noise.device_card_channels`: per-gate channels and idle noise from
+  an optimal-control device card, named with ``--noise_device_card``
+  (``device_card``).
 
-This file joins them into :class:`PennyLaneNoiseModel` and holds what both
-use: the device choice, the dispatch from ``noise_type`` to a channel, and the
+This file joins them into :class:`PennyLaneNoiseModel` and holds what they
+share: the device choice, the dispatch from ``noise_type`` to a channel, and the
 hooks the circuit builder calls.
 """
 
@@ -20,14 +23,16 @@ import argparse
 from typing import TYPE_CHECKING, Any, Sequence
 
 from src.noise.chip_channels import ChipChannels
+from src.noise.device_card_channels import DeviceCardChannels
 from src.noise.synthetic_channels import SyntheticChannels
 
 if TYPE_CHECKING:
     from src.circuits.circuit import CircuitGenome
     from src.circuits.gate import Gate
+    from src.noise.compiled_schedule import ChipGate
 
 
-class PennyLaneNoiseModel(SyntheticChannels, ChipChannels):
+class PennyLaneNoiseModel(SyntheticChannels, ChipChannels, DeviceCardChannels):
     """PennyLane implementation of the backend-agnostic noise model.
 
     This class provides PennyLane-native quantum noise injection utilities.
@@ -44,8 +49,11 @@ class PennyLaneNoiseModel(SyntheticChannels, ChipChannels):
       gate errors (``ibm_backend``: thermal relaxation plus the depolarizing
       remainder, as Qiskit Aer builds them) and readout error, from one
       calibration file's per-qubit values.
+    - Device card (:class:`~src.noise.device_card_channels.DeviceCardChannels`):
+      each translated card gate's own Pauli channel, plus idle noise on
+      waiting wires (``device_card``).
 
-    The methods defined here are shared by both families.
+    The methods defined here are shared by every family.
 
     Notes:
         PennyLane noisy simulations generally require the
@@ -102,6 +110,9 @@ class PennyLaneNoiseModel(SyntheticChannels, ChipChannels):
         - ``ibm_backend`` (relaxation plus a depolarizing remainder matching
           the calibrated gate error, see :meth:`_apply_ibm_backend`)
 
+        ``device_card`` has no per-wire channel: its noise depends on the
+        gate, so it is added by the hooks from the genome's translation.
+
         Args:
             wires:
                 Single wire or collection of wires where the noise
@@ -113,10 +124,16 @@ class PennyLaneNoiseModel(SyntheticChannels, ChipChannels):
 
         Raises:
             ValueError:
-                If an unsupported noise type is specified.
+                If an unsupported noise type is specified, or the type is
+                ``device_card``.
         """
         if not self.is_noisy():
             return
+        if self.noise_type == "device_card":
+            raise ValueError(
+                "device_card noise depends on the gate; it is added by the hooks "
+                "from the genome's translation (begin_circuit), not per wire."
+            )
 
         wires = self._as_wires(wires)
 
@@ -162,6 +179,11 @@ class PennyLaneNoiseModel(SyntheticChannels, ChipChannels):
         ``--noise_after_encoding`` says, since on a chip the encoding gates
         are noisy like any other.
 
+        Device-card noise: always adds the card channels of the gates the
+        encoding was translated into (``u3``/``rx``/``ry``: two ``h`` per input
+        qubit; ``rz``: virtual, none), or one ``h`` worth per input qubit for
+        ``basis`` and ``amplitude``.
+
         Synthetic noise: when ``--noise_after_encoding`` is on (off by
         default), applies the configured channel once to the input wires;
         otherwise nothing.
@@ -182,6 +204,15 @@ class PennyLaneNoiseModel(SyntheticChannels, ChipChannels):
             None. Inserts the noise channel on the input wires into the QNode
             being built, or nothing when encoding noise is off.
         """
+        if self.noise_type == "device_card":
+            schedule = getattr(self, "_schedule", None)
+            if schedule is not None and schedule.encoding is not None:
+                for chip_gate in schedule.encoding:
+                    self._apply_card_gate(chip_gate)
+            else:
+                for w in input_wires:
+                    self._apply_card_gate_named("h", w)
+            return
         if self.noise_type == "ibm_backend":
             schedule = getattr(self, "_schedule", None)
             if schedule is not None and schedule.encoding is not None:
@@ -196,6 +227,32 @@ class PennyLaneNoiseModel(SyntheticChannels, ChipChannels):
         elif self.apply_after_input_encoding:
             self.apply_to_wires(input_wires)
 
+    def before_gate(self, gate_wires: Sequence[int], gate: Gate | None = None) -> None:
+        """Apply noise just before an evolved quantum gate runs.
+
+        Device-card noise only (with idle noise on): each wire this gate's card
+        gates act on gets the card's idle channel for as long as it waited
+        for them in the genome's as-soon-as-possible timeline
+        (:func:`src.noise.device_card.card_timeline`). Adding it here, on the
+        state the wire held while it waited, rather than all at the end, is
+        what makes the idle model right. Every other noise type adds nothing.
+
+        Args:
+            gate_wires: Wires associated with the evolved gate.
+            gate: The gate about to run; used to find its waits.
+
+        Returns:
+            None. Inserts the idle channels into the circuit being built, or
+            nothing.
+        """
+        if self.noise_type != "device_card" or gate is None:
+            return
+        timeline = getattr(self, "_card_timeline", None)
+        if timeline is None:
+            return
+        for wire, wait in sorted(timeline.idle_before.get(id(gate), {}).items()):
+            self._apply_idle(wire, wait)
+
     def after_gate(self, gate_wires: Sequence[int], gate: Gate | None = None) -> None:
         """Apply noise after an evolved quantum gate.
 
@@ -205,6 +262,9 @@ class PennyLaneNoiseModel(SyntheticChannels, ChipChannels):
         the qubit's ``sx`` error for ``sx`` or ``x``, the pair's ``cz`` error
         for ``cz``). So a ``cx`` between unwired qubits, or a three-qubit
         gate, is charged its real cost instead of stopping the run.
+
+        Device-card noise: the same, with each card gate's own Pauli channel
+        from the card (nothing for the virtual ``rz``).
 
         Otherwise (synthetic noise, or no translation): applies the
         configured channel once to the gate's wires.
@@ -224,9 +284,24 @@ class PennyLaneNoiseModel(SyntheticChannels, ChipChannels):
         schedule = getattr(self, "_schedule", None)
         if schedule is not None and gate is not None and id(gate) in schedule.per_gate:
             for chip_gate in schedule.per_gate[id(gate)]:
-                self._apply_chip_gate(chip_gate)
-        else:
+                self._apply_compiled_gate(chip_gate)
+        elif self.noise_type != "device_card":
             self.apply_to_wires(gate_wires)
+
+    def _apply_compiled_gate(self, chip_gate: ChipGate) -> None:
+        """Adds the noise of one gate of a genome's translation.
+
+        Args:
+            chip_gate: One translated gate.
+
+        Returns:
+            None. Inserts the card's channel for device-card noise, or the
+            chip's calibrated noise otherwise.
+        """
+        if self.noise_type == "device_card":
+            self._apply_card_gate(chip_gate)
+        else:
+            self._apply_chip_gate(chip_gate)
 
     def before_measurement(self, measurement_wires: Sequence[int]) -> None:
         """Apply noise immediately before measurement.
@@ -235,6 +310,10 @@ class PennyLaneNoiseModel(SyntheticChannels, ChipChannels):
         measured qubit's own readout error from the calibration file
         (:meth:`apply_readout_error`), whatever ``--noise_before_measurement``
         says, since a real chip always misreads at its measured rates.
+
+        Device-card noise (idle on): every wire gets the card's idle channel
+        for the time between its last gate and the end of the circuit. The
+        card has no readout error.
 
         Synthetic noise: when ``--noise_before_measurement`` is on (off by
         default), applies the configured channel once more on the measured
@@ -245,11 +324,17 @@ class PennyLaneNoiseModel(SyntheticChannels, ChipChannels):
                 Wires being measured.
 
         Returns:
-            None. Inserts the readout channels (chip noise) or the configured
-            channel (synthetic noise, switch on) on the measured wires into
-            the QNode being built, or nothing.
+            None. Inserts the readout channels (chip noise), the final idle
+            channels (device-card noise) or the configured channel
+            (synthetic noise, switch on) into the QNode being built, or
+            nothing.
         """
-        if self.noise_type == "ibm_backend":
+        if self.noise_type == "device_card":
+            timeline = getattr(self, "_card_timeline", None)
+            if timeline is not None:
+                for wire, wait in enumerate(timeline.idle_at_end):
+                    self._apply_idle(wire, wait)
+        elif self.noise_type == "ibm_backend":
             # read each wire out on the chip qubit its state ended on
             schedule = getattr(self, "_schedule", None)
             slots = (
@@ -269,15 +354,25 @@ class PennyLaneNoiseModel(SyntheticChannels, ChipChannels):
         genome into the chip's own gates on the chosen qubits
         (:func:`src.noise.compiled_schedule.compile_genome`) and keeps the
         result, which :meth:`after_gate` and :meth:`before_measurement` then
-        use. For synthetic noise and no noise it does nothing.
+        use. For device-card noise it translates the genome into the card's
+        gates on the card's wiring and schedules them
+        (:meth:`_translate_for_card`), for :meth:`before_gate`,
+        :meth:`after_gate` and :meth:`before_measurement`. For synthetic noise
+        and no noise it does nothing.
 
         Args:
             genome: The genome whose circuit is being built.
 
         Returns:
-            None. Sets ``self._schedule`` (the translation, or ``None``).
+            None. Sets ``self._schedule`` (the translation, or ``None``) and
+            ``self._card_timeline`` (device-card noise's timeline, or
+            ``None``).
         """
         self._schedule = None
+        self._card_timeline = None
+        if self.noise_type == "device_card":
+            self._schedule, self._card_timeline = self._translate_for_card(genome)
+            return
         if self.noise_type != "ibm_backend" or self.per_qubit is None:
             return
         from src.noise.compiled_schedule import compile_genome

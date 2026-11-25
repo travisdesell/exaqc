@@ -36,7 +36,8 @@ class ChipGate:
     """One gate the chip really runs.
 
     Attributes:
-        name: ``"sx"``, ``"x"``, ``"rz"`` or ``"cz"``.
+        name: ``"sx"``, ``"x"``, ``"rz"`` or ``"cz"`` on an IBM chip;
+            ``"h"``, ``"x"``, ``"rz"`` or ``"cx"`` for a device card.
         slots: Which chosen chip qubits it runs on, as positions in
             ``--noise_qubits`` (0 is the first listed qubit).
         wires: Which genome wires' states sit on those qubits when it runs.
@@ -115,7 +116,8 @@ def _swap_in_chip_gates(chip_gates: list[str]) -> list[tuple[str, list[int]]]:
 
     Returns:
         Each chip gate as ``(name, slots)``, with slots 0 and 1 standing for
-        the two qubits being swapped (3 ``cz`` plus one-qubit gates).
+        the two qubits being swapped (3 two-qubit gates, ``cz`` on an IBM
+        chip or ``cx`` for a device card, plus one-qubit gates).
     """
     from qiskit import QuantumCircuit, transpile
     from qiskit.transpiler import CouplingMap
@@ -268,8 +270,11 @@ def compile_genome(
         )
 
     swap_pieces = _swap_in_chip_gates(chip_gates)
-    if sum(name == "cz" for name, _ in swap_pieces) != 3:
-        raise ValueError(f"a SWAP should take 3 cz on this chip, got {swap_pieces}.")
+    # three two-qubit gates: cz on IBM chips, cx for a device card
+    if sum(len(slots) == 2 for _, slots in swap_pieces) != 3:
+        raise ValueError(
+            f"a SWAP should take 3 two-qubit gates on this chip, got {swap_pieces}."
+        )
     where = list(range(len(genome.qubits)))  # where[slot] = wire whose state is there
 
     def to_chip_gates(group: list) -> list[ChipGate]:
