@@ -46,8 +46,9 @@ import numpy as np
 if TYPE_CHECKING:
     from src.noise.compiled_schedule import ChipGate, CompiledSchedule
 
-#: Where the device cards live, relative to the repository root.
-DEVICE_CARD_DIR = Path(__file__).resolve().parents[2] / "arch_aware" / "device_cards"
+#: Where the device cards live: ``device_cards/`` at the repository root
+#: (copied unchanged from ``arch_aware/device_cards`` on ``DrVogt/noise-model``).
+DEVICE_CARD_DIR = Path(__file__).resolve().parents[2] / "device_cards"
 
 #: The gates genomes are translated into for device-card noise. ``rz`` is a
 #: virtual frame change (no pulse, no error, no time), as on real transmon
@@ -74,7 +75,7 @@ def resolve_device_card(spec: str) -> Path:
 
     Args:
         spec: A card name such as ``transmon_detuned_mixed`` (looked up as
-            ``arch_aware/device_cards/device_card_<name>.json``), a file name
+            ``device_cards/device_card_<name>.json``), a file name
             in that folder, or a path to a card file.
 
     Returns:

@@ -1,0 +1,151 @@
+{
+  "architecture": "naive_closed",
+  "model": "naive_closed",
+  "model_label": "no noise (gate count only)",
+  "method": "none",
+  "derived_from": "durations and average rates of device_card_transmon_mixed",
+  "conventions": {
+    "purpose": "control experiment: the noise model a search would use WITHOUT an open-system device simulation",
+    "p_1q": 0.0,
+    "p_2q": 0.0,
+    "idle": "absent by construction (a naive model charges nothing for idling)"
+  },
+  "gates": {
+    "h": {
+      "T_ns": 50.0,
+      "wires": 1,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {}
+    },
+    "x": {
+      "T_ns": 50.0,
+      "wires": 1,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {}
+    },
+    "z": {
+      "T_ns": 50.0,
+      "wires": 1,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {}
+    },
+    "s": {
+      "T_ns": 50.0,
+      "wires": 1,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {}
+    },
+    "t": {
+      "T_ns": 50.0,
+      "wires": 1,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {}
+    },
+    "cx": {
+      "T_ns": 200.0,
+      "wires": 2,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "II": 1.0,
+        "IX": 0.0,
+        "IY": 0.0,
+        "IZ": 0.0,
+        "XI": 0.0,
+        "XX": 0.0,
+        "XY": 0.0,
+        "XZ": 0.0,
+        "YI": 0.0,
+        "YX": 0.0,
+        "YY": 0.0,
+        "YZ": 0.0,
+        "ZI": 0.0,
+        "ZX": 0.0,
+        "ZY": 0.0,
+        "ZZ": 0.0
+      },
+      "ptm_error_diag": {}
+    },
+    "sdg": {
+      "T_ns": 50.0,
+      "wires": 1,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {},
+      "alias_of": "s"
+    },
+    "tdg": {
+      "T_ns": 50.0,
+      "wires": 1,
+      "infidelity": 0.0,
+      "leakage": 0.0,
+      "process_infidelity": 0.0,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 1.0,
+        "X": 0.0,
+        "Y": 0.0,
+        "Z": 0.0
+      },
+      "ptm_error_diag": {},
+      "alias_of": "t"
+    }
+  },
+  "idle": {},
+  "sources": {}
+}

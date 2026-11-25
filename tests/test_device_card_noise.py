@@ -1,7 +1,7 @@
 """Tests for device-card noise (Dr. Vogt's optimal-control gate channels).
 
 A small hand-written card stands in for the real ones in
-``arch_aware/device_cards``, so the numbers below are easy to check by hand and
+``device_cards/``, so the numbers below are easy to check by hand and
 the tests do not depend on which cards are checked in.
 """
 

@@ -472,7 +472,7 @@ class BaseNoiseModel(ABC):
             default=None,
             help=(
                 "Device-card noise (Dr. Vogt's optimal-control gate channels): a card name "
-                "from arch_aware/device_cards (e.g. transmon_detuned_mixed, naive_depol) or "
+                "from device_cards/ (e.g. transmon_detuned_mixed, naive_depol) or "
                 "a card file's path. Each gate is translated into the card's h, x, cx and "
                 "virtual rz and charged each card gate's own Pauli channel; waiting wires "
                 "get the card's idle channel. Every pair of wires counts as wired unless "

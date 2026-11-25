@@ -1,0 +1,151 @@
+{
+  "architecture": "naive_depolarizing",
+  "model": "naive_depolarizing",
+  "model_label": "uniform depolarizing, idle free",
+  "method": "none",
+  "derived_from": "durations and average rates of device_card_transmon_mixed",
+  "conventions": {
+    "purpose": "control experiment: the noise model a search would use WITHOUT an open-system device simulation",
+    "p_1q": 0.00037936689410107417,
+    "p_2q": 0.0045052473564990425,
+    "idle": "absent by construction (a naive model charges nothing for idling)"
+  },
+  "gates": {
+    "h": {
+      "T_ns": 50.0,
+      "wires": 1,
+      "infidelity": 0.00037936689410107417,
+      "leakage": 0.0,
+      "process_infidelity": 0.00037936689410107417,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 0.9996206331058989,
+        "X": 0.00012645563136702472,
+        "Y": 0.00012645563136702472,
+        "Z": 0.00012645563136702472
+      },
+      "ptm_error_diag": {}
+    },
+    "x": {
+      "T_ns": 50.0,
+      "wires": 1,
+      "infidelity": 0.00037936689410107417,
+      "leakage": 0.0,
+      "process_infidelity": 0.00037936689410107417,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 0.9996206331058989,
+        "X": 0.00012645563136702472,
+        "Y": 0.00012645563136702472,
+        "Z": 0.00012645563136702472
+      },
+      "ptm_error_diag": {}
+    },
+    "z": {
+      "T_ns": 50.0,
+      "wires": 1,
+      "infidelity": 0.00037936689410107417,
+      "leakage": 0.0,
+      "process_infidelity": 0.00037936689410107417,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 0.9996206331058989,
+        "X": 0.00012645563136702472,
+        "Y": 0.00012645563136702472,
+        "Z": 0.00012645563136702472
+      },
+      "ptm_error_diag": {}
+    },
+    "s": {
+      "T_ns": 50.0,
+      "wires": 1,
+      "infidelity": 0.00037936689410107417,
+      "leakage": 0.0,
+      "process_infidelity": 0.00037936689410107417,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 0.9996206331058989,
+        "X": 0.00012645563136702472,
+        "Y": 0.00012645563136702472,
+        "Z": 0.00012645563136702472
+      },
+      "ptm_error_diag": {}
+    },
+    "t": {
+      "T_ns": 50.0,
+      "wires": 1,
+      "infidelity": 0.00037936689410107417,
+      "leakage": 0.0,
+      "process_infidelity": 0.00037936689410107417,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 0.9996206331058989,
+        "X": 0.00012645563136702472,
+        "Y": 0.00012645563136702472,
+        "Z": 0.00012645563136702472
+      },
+      "ptm_error_diag": {}
+    },
+    "cx": {
+      "T_ns": 200.0,
+      "wires": 2,
+      "infidelity": 0.0045052473564990425,
+      "leakage": 0.0,
+      "process_infidelity": 0.0045052473564990425,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "II": 0.995494752643501,
+        "IX": 0.00030034982376660283,
+        "IY": 0.00030034982376660283,
+        "IZ": 0.00030034982376660283,
+        "XI": 0.00030034982376660283,
+        "XX": 0.00030034982376660283,
+        "XY": 0.00030034982376660283,
+        "XZ": 0.00030034982376660283,
+        "YI": 0.00030034982376660283,
+        "YX": 0.00030034982376660283,
+        "YY": 0.00030034982376660283,
+        "YZ": 0.00030034982376660283,
+        "ZI": 0.00030034982376660283,
+        "ZX": 0.00030034982376660283,
+        "ZY": 0.00030034982376660283,
+        "ZZ": 0.00030034982376660283
+      },
+      "ptm_error_diag": {}
+    },
+    "sdg": {
+      "T_ns": 50.0,
+      "wires": 1,
+      "infidelity": 0.00037936689410107417,
+      "leakage": 0.0,
+      "process_infidelity": 0.00037936689410107417,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 0.9996206331058989,
+        "X": 0.00012645563136702472,
+        "Y": 0.00012645563136702472,
+        "Z": 0.00012645563136702472
+      },
+      "ptm_error_diag": {},
+      "alias_of": "s"
+    },
+    "tdg": {
+      "T_ns": 50.0,
+      "wires": 1,
+      "infidelity": 0.00037936689410107417,
+      "leakage": 0.0,
+      "process_infidelity": 0.00037936689410107417,
+      "trace_loss": 0.0,
+      "pauli_error": {
+        "I": 0.9996206331058989,
+        "X": 0.00012645563136702472,
+        "Y": 0.00012645563136702472,
+        "Z": 0.00012645563136702472
+      },
+      "ptm_error_diag": {},
+      "alias_of": "t"
+    }
+  },
+  "idle": {},
+  "sources": {}
+}
