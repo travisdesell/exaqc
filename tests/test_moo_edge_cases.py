@@ -1,9 +1,10 @@
-"""Important edge cases for ``src.evolution.moo`` (excluding NSGA-III).
+"""Important edge cases for ``src.evolution.moo``.
 
 These tests target subtle failure modes rather than happy-path coverage:
 objective-spec validation, non-finite / weighted objectives, Pareto front
-structure, NSGA-II crowding and truncation, duplicate-topology handling,
-parent selection, and multi-objective island topology / bookkeeping.
+structure, NSGA-II crowding and truncation, NSGA-III reference association,
+duplicate-topology handling, parent selection, archive recording, and
+multi-objective island topology / bookkeeping.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import math
 from typing import Any
 from unittest.mock import MagicMock
 
+import numpy as np
 import pytest
 
 from src.evolution.moo.islands import (
@@ -19,6 +21,7 @@ from src.evolution.moo.islands import (
     MultiObjectiveSteadyStateIslands,
 )
 from src.evolution.moo.nsga2 import NSGA2
+from src.evolution.moo.nsga3 import NSGA3
 from src.evolution.moo.objective_spec import ObjectiveSpec
 from src.evolution.moo.pareto import (
     assign_pareto_ranks,
@@ -27,6 +30,8 @@ from src.evolution.moo.pareto import (
     objective_vector,
     validate_genome_fitness,
 )
+from src.evolution.steady_state_islands import island_compare
+from src.utils.restart import RestartState
 
 LOSS = ObjectiveSpec(name="loss", sign=1.0)
 ACCURACY = ObjectiveSpec(name="accuracy", sign=-1.0)
@@ -82,10 +87,30 @@ def _make_nsga2(max_population_size: int = 4, seed: int = 0) -> NSGA2:
         max_population_size=max_population_size,
         objectives=OBJECTIVES,
         tournament_size=2,
-        out_dir="unused",
-        profiler=MagicMock(),
-        save_all_genomes=False,
-        save_pareto_front=False,
+        seed=seed,
+    )
+
+
+def _make_nsga3(
+    max_population_size: int = 4,
+    seed: int = 0,
+    reference_divisions: int = 4,
+) -> NSGA3:
+    """Create an NSGA-III population.
+
+    Args:
+        max_population_size: Maximum retained population size.
+        seed: RNG seed for niching and tournament selection.
+        reference_divisions: Das-Dennis simplex divisions.
+
+    Returns:
+        Configured ``NSGA3`` instance.
+    """
+    return NSGA3(
+        max_population_size=max_population_size,
+        objectives=OBJECTIVES,
+        tournament_size=2,
+        reference_divisions=reference_divisions,
         seed=seed,
     )
 
@@ -97,13 +122,7 @@ def _island_kwargs() -> dict[str, Any]:
         Keyword arguments for ``MultiObjectiveIsland`` / island strategy
         population construction with saving disabled.
     """
-    return {
-        "out_dir": "unused",
-        "profiler": MagicMock(),
-        "save_all_genomes": False,
-        "save_pareto_front": False,
-        "seed": 0,
-    }
+    return {"seed": 0}
 
 
 # ---------------------------------------------------------------------------
@@ -400,20 +419,12 @@ def test_nsga2_constructor_rejects_invalid_sizes() -> None:
         NSGA2(
             max_population_size=0,
             objectives=OBJECTIVES,
-            out_dir="unused",
-            profiler=MagicMock(),
-            save_all_genomes=False,
-            save_pareto_front=False,
         )
 
     with pytest.raises(ValueError, match="at least two objectives"):
         NSGA2(
             max_population_size=2,
             objectives=[LOSS],
-            out_dir="unused",
-            profiler=MagicMock(),
-            save_all_genomes=False,
-            save_pareto_front=False,
         )
 
     with pytest.raises(ValueError, match="tournament_size"):
@@ -421,10 +432,6 @@ def test_nsga2_constructor_rejects_invalid_sizes() -> None:
             max_population_size=2,
             objectives=OBJECTIVES,
             tournament_size=1,
-            out_dir="unused",
-            profiler=MagicMock(),
-            save_all_genomes=False,
-            save_pareto_front=False,
         )
 
 
@@ -511,7 +518,7 @@ def test_moo_island_discards_stale_genomes_after_repopulation() -> None:
     )
     assert island.insert_genome(global_best) is True
     island.strategy.insert_genome.assert_called_once_with(global_best)
-    assert global_best.metadata["insert_type"] == "inserted"
+    assert global_best.metadata["insert_type"] == "global_best"
 
 
 def test_moo_island_repopulate_clears_population_and_marks_status() -> None:
@@ -550,8 +557,6 @@ def test_moo_islands_preserve_topology_neighbors_after_replacement() -> None:
         max_island_size=3,
         tournament_size=2,
         topology=["ring"],
-        out_dir="unused",
-        profiler=MagicMock(),
         population_kwargs=_island_kwargs(),
     )
 
@@ -574,8 +579,6 @@ def test_moo_island_compare_uses_dominance_then_first_objective() -> None:
         max_island_size=2,
         tournament_size=2,
         topology=["fully_connected"],
-        out_dir="unused",
-        profiler=MagicMock(),
         population_kwargs=_island_kwargs(),
     )
 
@@ -617,3 +620,233 @@ def test_moo_island_marks_full_after_reaching_capacity() -> None:
     )
     assert island.status == "full"
     assert not island.is_initializing()
+
+
+# ---------------------------------------------------------------------------
+# Recording, ordering, and restore
+# ---------------------------------------------------------------------------
+
+
+def test_nsga2_get_population_orders_by_rank_then_crowding() -> None:
+    """Population snapshots list extremes before interior points of a front."""
+    nsga2 = _make_nsga2(max_population_size=3)
+    # Minimization vectors (loss, -accuracy): (0, 0), (0.5, -0.5), (1, -1).
+    # All three are non-dominated; the endpoints get infinite crowding.
+    for genome in (
+        _MockGenome(1, {"loss": 0.0, "accuracy": 0.0}, topology_id="a"),
+        _MockGenome(2, {"loss": 0.5, "accuracy": 0.5}, topology_id="b"),
+        _MockGenome(3, {"loss": 1.0, "accuracy": 1.0}, topology_id="c"),
+    ):
+        assert nsga2.insert_genome(genome) is True
+
+    assert [genome.genome_number for genome in nsga2.get_population()] == [1, 3, 2]
+
+
+def test_nsga2_restore_refills_population_and_ranks() -> None:
+    """A restored population holds the stopped run's genomes, with ranks set."""
+    nsga2 = _make_nsga2()
+    held = [
+        _MockGenome(1, {"loss": 0.1, "accuracy": 0.4}),
+        _MockGenome(4, {"loss": 0.4, "accuracy": 0.9}),
+    ]
+    nsga2.restore(
+        RestartState(
+            archive_path="unused",
+            arguments={},
+            run_info={},
+            population=held,
+            inserted_genomes=7,
+        )
+    )
+
+    assert nsga2.insertions == 7
+    assert {genome.genome_number for genome in nsga2.population} == {1, 4}
+    assert all(genome.metadata.get("pareto_rank") == 0 for genome in nsga2.population)
+
+
+def test_nsga2_truncation_is_recorded() -> None:
+    """A genome that loses truncation is discarded, but still recorded."""
+    nsga2 = _make_nsga2(max_population_size=1)
+    kept = _MockGenome(1, {"loss": 0.1, "accuracy": 0.9}, topology_id="a")
+    assert nsga2.insert_genome(kept) is True
+
+    worse = _MockGenome(2, {"loss": 0.9, "accuracy": 0.1}, topology_id="b")
+    assert nsga2.insert_genome(worse) is True
+    assert worse.metadata["insert_type"] == "discarded"
+    assert worse.metadata["discard_reason"] == "worse_than_population"
+    assert worse.metadata["lost_to"] == 1
+    assert [genome.genome_number for genome in nsga2.population] == [1]
+
+
+def test_nsga2_dominated_duplicate_is_not_recorded() -> None:
+    """A worse duplicate is rejected and must not be recorded as evaluated."""
+    nsga2 = _make_nsga2()
+    existing = _MockGenome(
+        genome_number=1,
+        fitness={"loss": 0.2, "accuracy": 0.8},
+        topology_id="shared",
+    )
+    nsga2.population = [existing]
+
+    dominated = _MockGenome(
+        genome_number=2,
+        fitness={"loss": 0.4, "accuracy": 0.6},
+        topology_id="shared",
+    )
+    assert nsga2.insert_genome(dominated) is False
+    assert dominated.metadata["discard_reason"] == "duplicate_of_better"
+    assert dominated.metadata["lost_to"] == 1
+    assert [genome.genome_number for genome in nsga2.population] == [1]
+
+
+# ---------------------------------------------------------------------------
+# NSGA-III
+# ---------------------------------------------------------------------------
+
+
+def test_nsga3_reference_directions_lie_on_the_simplex() -> None:
+    """Das-Dennis directions sum to one and match the simplex count."""
+    two_objective = NSGA3._generate_reference_directions(2, 4)
+    assert len(two_objective) == 5
+    assert np.allclose(two_objective.sum(axis=1), 1.0)
+
+    three_objective = NSGA3._generate_reference_directions(3, 4)
+    # C(divisions + n_objectives - 1, n_objectives - 1) = C(6, 2).
+    assert len(three_objective) == 15
+    assert np.allclose(three_objective.sum(axis=1), 1.0)
+
+
+def test_nsga3_keeps_non_dominated_front() -> None:
+    """A dominated genome does not displace a full non-dominated front."""
+    nsga3 = _make_nsga3(max_population_size=2, reference_divisions=1)
+    assert nsga3.insert_genome(
+        _MockGenome(1, {"loss": 0.1, "accuracy": 0.2}, topology_id="a")
+    )
+    assert nsga3.insert_genome(
+        _MockGenome(2, {"loss": 0.5, "accuracy": 0.9}, topology_id="b")
+    )
+
+    dominated = _MockGenome(3, {"loss": 0.9, "accuracy": 0.1}, topology_id="c")
+    assert nsga3.insert_genome(dominated) is True
+    assert dominated.metadata["discard_reason"] == "worse_than_population"
+    assert {genome.genome_number for genome in nsga3.population} == {1, 2}
+
+
+def test_nsga3_niching_fills_an_empty_reference_first() -> None:
+    """An empty reference direction is filled before a crowded one."""
+    nsga3 = _make_nsga3()
+    occupied = _MockGenome(1, {"loss": 0.1, "accuracy": 0.1})
+    occupied.metadata["reference_index"] = 0
+    crowded = _MockGenome(2, {"loss": 0.2, "accuracy": 0.2})
+    crowded.metadata["reference_index"] = 0
+    crowded.metadata["reference_distance"] = 0.01
+    empty_niche = _MockGenome(3, {"loss": 0.3, "accuracy": 0.3})
+    empty_niche.metadata["reference_index"] = 1
+    empty_niche.metadata["reference_distance"] = 5.0
+
+    selected = nsga3._niching_selection(
+        survivors=[occupied],
+        candidates=[crowded, empty_niche],
+        n_select=1,
+    )
+
+    assert selected == [empty_niche]
+
+
+def test_nsga3_later_front_does_not_change_splitting_survivors() -> None:
+    """An outlier on a later front must not change who survives the split."""
+    without_outlier = _make_nsga3(max_population_size=2, seed=0, reference_divisions=1)
+    with_outlier = _make_nsga3(max_population_size=2, seed=0, reference_divisions=1)
+
+    front = [
+        _MockGenome(1, {"loss": 0.0, "accuracy": 0.0}, topology_id="a"),
+        _MockGenome(2, {"loss": 1.0, "accuracy": 1.0}, topology_id="b"),
+        _MockGenome(3, {"loss": 0.5, "accuracy": 0.5}, topology_id="c"),
+    ]
+    outlier = _MockGenome(4, {"loss": 1000.0, "accuracy": 0.0}, topology_id="d")
+
+    kept_without = {
+        genome.genome_number
+        for genome in without_outlier._environmental_selection(front, 2)
+    }
+    kept_with = {
+        genome.genome_number
+        for genome in with_outlier._environmental_selection(front + [outlier], 2)
+    }
+
+    assert outlier.genome_number not in kept_with
+    assert kept_with == kept_without
+
+
+def test_nsga3_nonfinite_fitness_does_not_produce_nan_distance() -> None:
+    """Non-finite objectives must not make reference distances NaN."""
+    nsga3 = _make_nsga3(max_population_size=3)
+    population = [
+        _MockGenome(1, {"loss": float("nan"), "accuracy": 0.2}),
+        _MockGenome(2, {"loss": 0.4, "accuracy": float("inf")}),
+        _MockGenome(3, {"loss": 0.1, "accuracy": 0.9}),
+    ]
+
+    nsga3._associate_reference_directions(population)
+
+    for genome in population:
+        distance = genome.metadata["reference_distance"]
+        assert math.isfinite(distance)
+
+
+def test_moo_island_extinction_uses_representative_not_slot_zero() -> None:
+    """Extinction ranks an island by its representative, not population[0]."""
+    strategy = MultiObjectiveSteadyStateIslands(
+        population_class=NSGA2,
+        objectives=OBJECTIVES,
+        n_islands=2,
+        max_island_size=2,
+        tournament_size=2,
+        topology=["fully_connected"],
+        population_kwargs=_island_kwargs(),
+    )
+    worse = _MockGenome(1, {"loss": 0.9, "accuracy": 0.1}, topology_id="a")
+    best = _MockGenome(2, {"loss": 0.1, "accuracy": 0.9}, topology_id="b")
+    middle = _MockGenome(3, {"loss": 0.5, "accuracy": 0.5}, topology_id="c")
+
+    # Slot 0 is the dominated genome. The representative is the one that
+    # Pareto-dominates both it and the other island's genome.
+    strategy.islands[0].population = [worse, best]
+    strategy.islands[1].population = [middle]
+
+    assert island_compare(strategy.islands[0], strategy.islands[1]) < 0
+
+
+def test_moo_island_restore_keeps_a_cleared_island_repopulating() -> None:
+    """A cleared empty island stays repopulating after a restart."""
+    strategy = MultiObjectiveSteadyStateIslands(
+        population_class=NSGA2,
+        objectives=OBJECTIVES,
+        n_islands=2,
+        max_island_size=3,
+        tournament_size=2,
+        topology=["ring"],
+        population_kwargs=_island_kwargs(),
+    )
+    held = _MockGenome(4, {"loss": 0.2, "accuracy": 0.8})
+    held.metadata["island_id"] = 1
+
+    strategy.restore(
+        RestartState(
+            archive_path="unused",
+            arguments={},
+            run_info={"island_topology": {"neighbors": [[1], [0]]}},
+            population=[held],
+            inserted_genomes=10,
+            next_genome_number=50,
+            cleared_islands={0},
+        )
+    )
+
+    assert strategy.islands[0].status == "repopulating"
+    assert strategy.islands[0].repopulation_genome_number == 50
+    assert strategy.islands[0].population == []
+    assert strategy.islands[1].status == "initializing"
+    assert [genome.genome_number for genome in strategy.islands[1].population] == [4]
+    assert strategy.insertions == 10
+    assert {neighbor.id for neighbor in strategy.islands[0].neighbors} == {1}

@@ -429,20 +429,181 @@ def default_comparison_metric(available: list[str]) -> str | None:
     return available[0] if available else None
 
 
-def higher_is_better(key: str) -> bool:
+def objective_specs(arguments: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Reads the objectives a multi-objective run recorded.
+
+    A classification MOO run stores them as ``NAME:SIGN`` strings, where
+    ``SIGN`` is ``1`` to minimize and ``-1`` to maximize.
+
+    Args:
+        arguments: The run's recorded command-line arguments, or ``None``.
+
+    Returns:
+        One dict per objective, with ``name``, ``sign`` and ``direction``
+        (``"minimize"`` or ``"maximize"``). Empty when the run recorded none.
+    """
+
+    raw = (arguments or {}).get("objectives") or []
+    if not isinstance(raw, list):
+        return []
+
+    specs: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, str) or ":" not in item:
+            continue
+        name, _, sign_text = item.partition(":")
+        name = name.strip()
+        try:
+            sign = float(sign_text)
+        except ValueError:
+            continue
+        if not name or sign not in (-1.0, 1.0):
+            continue
+        specs.append(
+            {
+                "name": name,
+                "sign": sign,
+                "direction": "maximize" if sign < 0.0 else "minimize",
+            }
+        )
+    return specs
+
+
+def higher_is_better(
+    key: str, objectives: Sequence[dict[str, Any]] | None = None
+) -> bool:
     """Decides which direction of a fitness key is an improvement.
 
-    Loss-like keys (the value every task's population is ranked by) are
-    minimized; accuracies, fidelities and returns are maximized.
+    An objective the run declared uses its sign. Otherwise loss-like keys are
+    minimized and accuracies, fidelities and returns are maximized.
 
     Args:
         key: A fitness key.
+        objectives: Objectives from :func:`objective_specs`, when the run
+            recorded them.
 
     Returns:
-        False for keys containing ``loss``, True otherwise.
+        True when a larger value is better.
     """
 
+    for objective in objectives or []:
+        if objective.get("name") == key:
+            return float(objective.get("sign", 1.0)) < 0.0
     return "loss" not in key.lower()
+
+
+def pareto_front(
+    genomes: Sequence[tuple[int, dict[str, Any]]],
+    objectives: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Returns the non-dominated genomes under a run's objectives.
+
+    Each objective is turned into a minimization value with its sign. A genome
+    is kept when no other genome is at least as good on every objective and
+    strictly better on one. Non-finite values count as the worst minimization
+    value. Equal objective vectors are both kept.
+
+    Args:
+        genomes: ``(genome number, fitness dict)`` pairs.
+        objectives: Objectives from :func:`objective_specs`.
+
+    Returns:
+        The front, each entry ``genome_number`` and the objective ``fitness``
+        values, ordered by the first objective's minimization value and then
+        genome number. Empty when there are no objectives.
+    """
+
+    if not objectives or not genomes:
+        return []
+
+    names = [str(objective["name"]) for objective in objectives]
+
+    def minimization(fitness: dict[str, Any]) -> list[float]:
+        """Turns one fitness dict into minimization values.
+
+        Args:
+            fitness: The genome's fitness.
+
+        Returns:
+            One minimization value per objective.
+        """
+
+        values: list[float] = []
+        for objective in objectives:
+            raw = fitness.get(str(objective["name"]))
+            if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+                values.append(math.inf)
+                continue
+            numeric = float(raw)
+            if not math.isfinite(numeric):
+                values.append(math.inf)
+                continue
+            values.append(float(objective["sign"]) * numeric)
+        return values
+
+    vectors = [
+        (int(number), minimization(fitness if isinstance(fitness, dict) else {}))
+        for number, fitness in genomes
+    ]
+    front: list[tuple[int, list[float]]] = []
+    for index, (number, left) in enumerate(vectors):
+        dominated = False
+        for other, (_, right) in enumerate(vectors):
+            if other == index:
+                continue
+            no_worse = all(
+                candidate <= current for candidate, current in zip(right, left)
+            )
+            strictly_better = any(
+                candidate < current for candidate, current in zip(right, left)
+            )
+            if no_worse and strictly_better:
+                dominated = True
+                break
+        if not dominated:
+            front.append((number, left))
+
+    front.sort(key=lambda item: (*item[1], item[0]))
+    fitness_by_number = {
+        int(number): fitness if isinstance(fitness, dict) else {}
+        for number, fitness in genomes
+    }
+    return [
+        {
+            "genome_number": number,
+            "fitness": {name: fitness_by_number[number].get(name) for name in names},
+        }
+        for number, _ in front
+    ]
+
+
+def pareto_front_from(
+    reader: GenomeArchive,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Reads a run's objectives and the non-dominated genomes they define.
+
+    Args:
+        reader: The run's archive, opened for reading.
+
+    Returns:
+        The objective specs and the Pareto front. Both are empty when the run
+        did not record objectives.
+    """
+
+    objectives = objective_specs(reader.run_info().get("arguments"))
+    if not objectives:
+        return [], []
+
+    genomes: list[tuple[int, dict[str, Any]]] = []
+    for number, fitness_json in reader.connection.execute(
+        "SELECT genome_number, fitness FROM genomes"
+    ):
+        try:
+            fitness = json.loads(fitness_json) if isinstance(fitness_json, str) else {}
+        except json.JSONDecodeError:
+            fitness = {}
+        genomes.append((int(number), fitness if isinstance(fitness, dict) else {}))
+    return objectives, pareto_front(genomes, objectives)
 
 
 def json_safe(value: Any) -> Any:
@@ -1313,9 +1474,10 @@ class ArtifactViewer:
             the values they can be filtered by, the ``unarchived_parents``
             (parents of stored genomes that are not stored themselves, i.e. the
             seed genome), the ``island_topology`` an island search recorded
-            (``None`` otherwise), and whether it recorded a search history. An archive
-            that cannot be read fully is reported under ``error``, with those
-            fields empty.
+            (``None`` otherwise), the ``objectives`` a multi-objective run
+            recorded and the ``pareto_front`` they define (both empty otherwise),
+            and whether it recorded a search history. An archive that cannot be
+            read fully is reported under ``error``, with those fields empty.
 
         Raises:
             KeyError: If there is no such run.
@@ -1331,6 +1493,8 @@ class ArtifactViewer:
                 "filter_options": {},
                 "unarchived_parents": [],
                 "island_topology": None,
+                "objectives": [],
+                "pareto_front": [],
             }
         )
         try:
@@ -1341,6 +1505,9 @@ class ArtifactViewer:
                 payload["filter_options"] = reader.filter_options()
                 payload["unarchived_parents"] = reader.unarchived_parents()
                 payload["island_topology"] = reader.run_info().get("island_topology")
+                objectives, front = pareto_front_from(reader)
+                payload["objectives"] = objectives
+                payload["pareto_front"] = front
         except sqlite3.DatabaseError as error:
             # An archive the viewer cannot read in full still lists and browses:
             # the run page falls back to what its summary holds rather than
@@ -1516,8 +1683,9 @@ class ArtifactViewer:
                     raise ValueError(
                         f"{chosen!r} was not recorded; available: {', '.join(available)}."
                     )
+                objectives = objective_specs(reader.run_info().get("arguments"))
                 columns = reader.population_series(
-                    chosen, higher_is_better=higher_is_better(chosen)
+                    chosen, higher_is_better=higher_is_better(chosen, objectives)
                 )
         except sqlite3.DatabaseError as error:
             logger.warning("Could not read {}'s search progress: {}", run.name, error)
@@ -1959,9 +2127,11 @@ class ArtifactViewer:
                     continue
                 try:
                     with GenomeArchive.open_readonly(run.archive_path) as reader:
+                        objectives = objective_specs(reader.run_info().get("arguments"))
                         series.append(
                             reader.population_series(
-                                charted, higher_is_better=higher_is_better(charted)
+                                charted,
+                                higher_is_better=higher_is_better(charted, objectives),
                             )
                         )
                 except sqlite3.DatabaseError as error:

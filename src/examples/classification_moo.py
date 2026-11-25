@@ -25,6 +25,7 @@ Examples:
             --output_qubits 2 \
             --number_genomes 500 \
             --objectives mean_class_accuracy:-1 n_parameters:1 \
+            --out_dir ./artifacts/iris_nsga2 \
             -ms uniform 1 3 \
             -ps uniform 2 3 \
             nsga2 \
@@ -38,6 +39,7 @@ Examples:
             --output_qubits 2 \
             --number_genomes 1000 \
             --objectives mean_class_accuracy:-1 n_parameters:1 \
+            --out_dir ./artifacts/iris_nsga2_islands \
             -ms uniform 1 3 \
             -ps uniform 2 3 \
             nsga2_islands \
@@ -70,6 +72,7 @@ from src.datasets.classification_loaders import (
 )
 from src.evolution.exaqc import EXAQC
 from src.evolution.master_worker import run_evolution
+from src.evolution.population_strategy import PopulationStrategy
 from src.evolution.moo.islands import (
     MultiObjectiveSteadyStateIslands,
 )
@@ -80,6 +83,8 @@ from src.evolution.objective import Objective
 from src.metrics.mean_class_accuracy import MeanClassAccuracy
 from src.metrics.metric import Metric
 from src.trainer.supervised_trainer import SupervisedTrainer
+from src.utils import restart
+from src.utils.genome_archive import GenomeArchive
 
 STRUCTURAL_OBJECTIVES = {
     "n_parameters",
@@ -91,8 +96,9 @@ class MultiObjectiveClassificationObjective(Objective):
     """Classification objective for multi-objective evolution.
 
     The classification model is trained using ``SupervisedTrainer``.
-    Fitness values are then constructed dynamically from the objectives
-    selected by the user.
+    Fitness always records ``loss`` and ``target_metric``. The objectives
+    selected by the user are recorded as well and are the ones Pareto
+    ranking uses.
 
     Metric-based objectives are read from the trainer's best training and
     validation metrics. Structural objectives are calculated directly from
@@ -193,11 +199,17 @@ class MultiObjectiveClassificationObjective(Objective):
     ) -> None:
         """Train a genome and assign its multi-objective fitness.
 
-        Only objectives explicitly selected by the user are stored in
-        ``genome.fitness``.
+        ``loss`` and ``target_metric`` are always stored, matching the
+        single-objective classification objective. The objectives selected
+        for Pareto ranking are stored as well. ``metadata["initial_fitness"]``
+        holds the same keys for the inherited weights, before any training.
 
         Args:
             genome: Genome to train and evaluate.
+
+        Returns:
+            None. Sets ``genome.fitness`` and, when the trainer recorded the
+            inherited-weight metrics, ``genome.metadata["initial_fitness"]``.
 
         Raises:
             ValueError: If an unsupported objective is encountered.
@@ -205,22 +217,60 @@ class MultiObjectiveClassificationObjective(Objective):
         self.trainer.train(genome)
 
         training = genome.metadata["best_training_metrics"]
-
         validation = genome.metadata["best_validation_metrics"]
+        genome.fitness = self._fitness_from_metrics(genome, training, validation)
+
+        initial_training = genome.metadata.get("initial_training_metrics")
+        initial_validation = genome.metadata.get("initial_validation_metrics")
+        if initial_training is not None and initial_validation is not None:
+            genome.metadata["initial_fitness"] = self._fitness_from_metrics(
+                genome,
+                initial_training,
+                initial_validation,
+            )
+
+    def _fitness_from_metrics(
+        self,
+        genome: CircuitGenome,
+        training: dict[str, Any],
+        validation: dict[str, Any],
+    ) -> dict[str, float]:
+        """Build the fitness dictionary for one pair of metric snapshots.
+
+        ``loss`` and ``target_metric`` use the same means as the
+        single-objective classification objective. Declared objectives are
+        recorded too. Pareto ranking uses only those objectives.
+
+        Args:
+            genome: Genome whose structure supplies ``n_gates`` and
+                ``n_parameters``.
+            training: Training metrics for this snapshot.
+            validation: Validation metrics for this snapshot.
+
+        Returns:
+            Fitness values keyed by name.
+
+        Raises:
+            ValueError: If an objective name is not supported.
+        """
+        fitness: dict[str, float] = {
+            "loss": (float(training["loss"]) + float(validation["loss"])) / 2.0,
+            "target_metric": (
+                float(training["mean_class_accuracy"]["mean"])
+                + float(validation["mean_class_accuracy"]["mean"])
+            )
+            / 2.0,
+        }
 
         enabled_gates = [gate for gate in genome.gates if gate.enabled]
-
-        fitness: dict[str, float] = {}
 
         for objective in self.objectives:
             name = objective.name
 
-            if name == "loss":
-                fitness[name] = (
-                    float(training["loss"]) + float(validation["loss"])
-                ) / 2.0
+            if name in ("loss", "target_metric"):
+                continue
 
-            elif name == "n_parameters":
+            if name == "n_parameters":
                 fitness[name] = float(
                     sum(len(gate.parameters) for gate in enabled_gates)
                 )
@@ -238,7 +288,7 @@ class MultiObjectiveClassificationObjective(Objective):
             else:
                 raise ValueError(f"Unsupported MOO objective '{name}'.")
 
-        genome.fitness = fitness
+        return fitness
 
 
 def add_population_arguments(
@@ -253,12 +303,14 @@ def add_population_arguments(
         "--max_population_size",
         type=int,
         default=30,
+        help="Maximum number of genomes retained in the population.",
     )
 
     parser.add_argument(
         "--tournament_size",
         type=int,
         default=2,
+        help="Number of candidates sampled in each parent tournament.",
     )
 
 
@@ -274,42 +326,52 @@ def add_island_arguments(
         "--n_islands",
         type=int,
         default=10,
+        help="Number of islands.",
     )
 
     parser.add_argument(
         "--max_island_size",
         type=int,
         default=10,
+        help="Maximum number of genomes retained on each island.",
     )
 
     parser.add_argument(
         "--tournament_size",
         type=int,
         default=2,
+        help="Number of candidates sampled in each parent tournament.",
     )
 
     parser.add_argument(
         "--intra_island_crossover_rate",
         type=float,
         default=0.5,
+        help="Fraction of an island's children produced within that island.",
     )
 
     parser.add_argument(
         "--genomes_before_extinction",
         type=int,
         default=50,
+        help="Genomes inserted before the first island extinction event.",
     )
 
     parser.add_argument(
         "--genomes_for_next_extinction",
         type=int,
         default=200,
+        help=(
+            "Genomes that must be inserted into an island before it can be "
+            "repopulated again."
+        ),
     )
 
     parser.add_argument(
         "--islands_to_extinct",
         type=int,
         default=2,
+        help="Number of worst islands cleared and repopulated at each extinction event.",
     )
 
     parser.add_argument(
@@ -320,6 +382,10 @@ def add_island_arguments(
             "island",
         ],
         default="best",
+        help=(
+            "How the primary crossover parent is chosen: 'best' (preferred "
+            "parent first) or 'island' (the target island's genome first)."
+        ),
     )
 
     parser.add_argument(
@@ -358,6 +424,7 @@ def build_parser() -> argparse.ArgumentParser:
     # classification.py). PopulationStrategy.initialize_parser is not used
     # because MOO exposes its own NSGA / island sub-commands.
     EXAQC.initialize_parser(parser)
+    GenomeArchive.initialize_parser(parser)
     SupervisedTrainer.initialize_parser(parser)
     GateSpecifications.initialize_parser(parser)
     CircuitGenome.initialize_parser(parser)
@@ -535,6 +602,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--reference_divisions",
         type=int,
         default=8,
+        help="Divisions of the Das-Dennis simplex used to build reference directions.",
     )
 
     nsga2_islands = populations.add_parser(
@@ -555,6 +623,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--reference_divisions",
         type=int,
         default=8,
+        help="Divisions of the Das-Dennis simplex used to build reference directions.",
     )
 
     return parser
@@ -748,7 +817,7 @@ def build_objectives(
 def build_population(
     args: argparse.Namespace,
     objectives: list[ObjectiveSpec],
-):
+) -> PopulationStrategy:
     """Construct the requested MOO population strategy.
 
     Args:
@@ -766,7 +835,6 @@ def build_population(
             max_population_size=(args.max_population_size),
             objectives=objectives,
             tournament_size=(args.tournament_size),
-            out_dir=args.out_dir,
             seed=args.seed,
         )
 
@@ -776,7 +844,6 @@ def build_population(
             objectives=objectives,
             tournament_size=(args.tournament_size),
             reference_divisions=(args.reference_divisions),
-            out_dir=args.out_dir,
             seed=args.seed,
         )
 
@@ -793,11 +860,7 @@ def build_population(
             islands_to_extinct=(args.islands_to_extinct),
             primary_parent=(args.primary_parent),
             topology=args.topology,
-            out_dir=args.out_dir,
-            save_training_plot=(args.save_training_plot),
-            population_kwargs={
-                "out_dir": args.out_dir,
-            },
+            population_kwargs={"seed": args.seed},
         )
 
     if args.population_strategy == "nsga3_islands":
@@ -813,10 +876,8 @@ def build_population(
             islands_to_extinct=(args.islands_to_extinct),
             primary_parent=(args.primary_parent),
             topology=args.topology,
-            out_dir=args.out_dir,
-            save_training_plot=(args.save_training_plot),
             population_kwargs={
-                "out_dir": args.out_dir,
+                "seed": args.seed,
                 "reference_divisions": (args.reference_divisions),
             },
         )
@@ -829,6 +890,11 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
+    # Decided before anything is built, and on every rank: a restarted run takes
+    # its configuration from the run it continues, so the objective a worker
+    # evaluates with matches the search the master restores.
+    args, restart_state, run_for = restart.prepare(args, parser.error)
+
     logger.remove()
 
     logger.add(
@@ -836,12 +902,14 @@ def main() -> None:
         level=args.logging_level,
     )
 
-    logger.add(
-        os.path.join(
-            args.out_dir,
-            "run.log",
+    if args.save_run_log:
+        logger.add(
+            os.path.join(
+                args.out_dir,
+                "run.log",
+            ),
+            level=args.logging_level,
         )
-    )
 
     device = (
         args.device
@@ -959,6 +1027,8 @@ def main() -> None:
             args,
             objectives,
         )
+        if restart_state is not None:
+            population.restore(restart_state)
 
         hyperparameters = {
             "epochs": args.epochs,
@@ -973,9 +1043,10 @@ def main() -> None:
             "quantum_dropout_rate": (args.quantum_dropout_rate),
         }
 
-        return EXAQC(
+        search = EXAQC(
             gate_specifications=(GateSpecifications.from_args(args)),
             population=population,
+            archive=GenomeArchive.from_args(args, restarting=restart_state is not None),
             objective=objective,
             initial_encoder=(initial_encoder),
             initial_decoder=(initial_decoder),
@@ -993,12 +1064,19 @@ def main() -> None:
             },
             task="classification",
             task_target=args.dataset,
+            restarting=restart_state is not None,
         )
+
+        if restart_state is not None:
+            restart.resume(search, restart_state, args)
+
+        return search
 
     run_evolution(
         objective=objective,
         build_exaqc=build_exaqc,
-        run_for=args.number_genomes,
+        run_for=run_for,
+        timing_report_every=args.timing_report_every,
     )
 
 

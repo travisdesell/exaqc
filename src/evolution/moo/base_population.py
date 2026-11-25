@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import os
 import random
 
 from abc import abstractmethod
 from collections.abc import Sequence
-from typing import Optional
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -17,8 +16,10 @@ from src.evolution.moo.pareto import (
     genome_dominates,
     validate_genome_fitness,
 )
-from src.evolution.population_strategy import PopulationStrategy
-from src.utils.profiler import EXAQCProfiler
+from src.evolution.population_strategy import PopulationStrategy, mark_discarded
+
+if TYPE_CHECKING:
+    from src.utils.restart import RestartState
 
 
 class MultiObjectivePopulationBase(PopulationStrategy):
@@ -31,18 +32,15 @@ class MultiObjectivePopulationBase(PopulationStrategy):
     selection, diversity metadata, tournament comparison, and representative
     Pareto-front selection.
 
+    Evaluated genomes are recorded by the search's archive. This class only
+    decides which genomes stay in the population.
+
     Args:
         max_population_size: Maximum number of genomes retained.
         objectives: Objective specifications used during optimization.
         tournament_size: Number of candidates sampled during parent
             tournament selection.
-        out_dir: Directory used for saved artifacts.
-        profiler: Optional EXAQC profiler. A profiler is created when this
-            argument is ``None``.
         seed: Random seed used by parent selection.
-        save_all_genomes: Whether every evaluated genome should be saved.
-        save_pareto_front: Whether Pareto-front genomes should be saved when
-            front membership changes.
 
     Raises:
         ValueError: If ``max_population_size`` is not positive.
@@ -55,11 +53,7 @@ class MultiObjectivePopulationBase(PopulationStrategy):
         max_population_size: int,
         objectives: Sequence[ObjectiveSpec],
         tournament_size: int = 2,
-        out_dir: str = "artifacts",
-        profiler: Optional[EXAQCProfiler] = None,
         seed: int = 0,
-        save_all_genomes: bool = True,
-        save_pareto_front: bool = True,
     ) -> None:
         """Initialize a multi-objective population."""
         if max_population_size <= 0:
@@ -67,7 +61,7 @@ class MultiObjectivePopulationBase(PopulationStrategy):
 
         if len(objectives) < 2:
             raise ValueError(
-                "Multi-objective optimization requires at least " "two objectives."
+                "Multi-objective optimization requires at least two objectives."
             )
 
         if tournament_size < 2:
@@ -79,26 +73,11 @@ class MultiObjectivePopulationBase(PopulationStrategy):
 
         self.tournament_size = int(tournament_size)
 
-        self.out_dir = out_dir
-
-        self.save_all_genomes = bool(save_all_genomes)
-
-        self.save_pareto_front_enabled = bool(save_pareto_front)
-
         self.population: list[CircuitGenome] = []
 
         self.insertions = 0
 
         self.rng = random.Random(seed)
-
-        self.profiler = profiler
-
-        if self.profiler is None:
-            self.profiler = EXAQCProfiler(
-                out_dir=out_dir,
-            )
-
-        self._last_pareto_signature: tuple[int, ...] = ()
 
     def is_initializing(self) -> bool:
         """Determine whether the initial population is still being filled.
@@ -108,6 +87,41 @@ class MultiObjectivePopulationBase(PopulationStrategy):
             maximum size.
         """
         return len(self.population) < self.max_population_size
+
+    def restore(self, state: "RestartState") -> None:
+        """Takes back the population a stopped run held, so its search continues.
+
+        Args:
+            state: The stopped run's state (see :mod:`src.utils.restart`).
+
+        Returns:
+            None. Refills ``population`` with the run's genomes and restores
+            the insertion count. Pareto ranks are recomputed.
+        """
+        self.population = list(state.population)
+        self.insertions = state.inserted_genomes
+        self._refresh_selection_metadata()
+
+        logger.info(
+            "restored a {} population of {} genomes after {} insertions",
+            self.algorithm_name,
+            len(self.population),
+            self.insertions,
+        )
+
+    def get_population(self) -> list[CircuitGenome]:
+        """Returns the genomes in the population, best first.
+
+        Order is Pareto rank, then the algorithm's diversity key, then genome
+        number. A multi-objective population has no single scalar best, so the
+        first genome is the representative the same ordering would pick.
+
+        Returns:
+            A new list of the population's genomes. Modifying it does not
+            affect the strategy.
+        """
+        self._refresh_selection_metadata()
+        return sorted(self.population, key=self._parent_sort_key)
 
     def get_pareto_front(
         self,
@@ -130,7 +144,7 @@ class MultiObjectivePopulationBase(PopulationStrategy):
 
     def get_best_genome(
         self,
-    ) -> Optional[CircuitGenome]:
+    ) -> CircuitGenome | None:
         """Return a representative genome from the Pareto front.
 
         A multi-objective population does not have a mathematically unique
@@ -153,8 +167,8 @@ class MultiObjectivePopulationBase(PopulationStrategy):
         self,
         **kwargs,
     ) -> tuple[
-        Optional[CircuitGenome],
-        Optional[dict[str, object]],
+        CircuitGenome | None,
+        dict[str, object] | None,
     ]:
         """Select a single parent using tournament selection.
 
@@ -185,8 +199,8 @@ class MultiObjectivePopulationBase(PopulationStrategy):
         n_parents: int = 2,
         **kwargs,
     ) -> tuple[
-        Optional[list[CircuitGenome]],
-        Optional[dict[str, object]],
+        list[CircuitGenome] | None,
+        dict[str, object] | None,
     ]:
         """Select multiple unique parents using tournament selection.
 
@@ -234,7 +248,7 @@ class MultiObjectivePopulationBase(PopulationStrategy):
     def insert_genome(
         self,
         genome: CircuitGenome,
-        **kwargs,
+        **kwargs: Any,
     ) -> bool:
         """Insert an evaluated genome into the population.
 
@@ -242,12 +256,20 @@ class MultiObjectivePopulationBase(PopulationStrategy):
         The concrete multi-objective algorithm then performs environmental
         selection to retain at most ``max_population_size`` genomes.
 
+        A genome that loses environmental selection is still recorded: the
+        search archives it as discarded. A genome that repeats a topology a
+        better genome already holds is not recorded.
+
         Args:
             genome: Evaluated genome to insert.
-            **kwargs: Additional population metadata.
+            **kwargs: Additional population metadata. Accepted for
+                compatibility with :class:`PopulationStrategy`.
 
         Returns:
-            ``True`` if the genome survives environmental selection.
+            ``True`` if the genome should be recorded as evaluated, whether it
+            was kept or discarded from a full population. ``False`` if it is a
+            duplicate of a better genome already held and should not be
+            recorded.
         """
         validate_genome_fitness(
             genome,
@@ -259,13 +281,12 @@ class MultiObjectivePopulationBase(PopulationStrategy):
         duplicate_result = self._handle_duplicate(genome)
 
         if duplicate_result is False:
-            genome.metadata["insert_type"] = "discarded_duplicate"
-
-            self._record_and_save(
+            mark_discarded(
                 genome,
-                survived=False,
+                "duplicate_of_better",
+                self._dominating_duplicate(genome),
             )
-
+            self._log_population_state(genome, survived=False)
             return False
 
         combined_population = self.population + [genome]
@@ -283,24 +304,62 @@ class MultiObjectivePopulationBase(PopulationStrategy):
 
         self._refresh_selection_metadata()
 
-        genome.metadata["insert_type"] = "inserted" if survived else "discarded"
-
-        self._record_and_save(
-            genome,
-            survived,
-        )
+        if survived:
+            if genome.metadata.get("insert_type") != "global_best":
+                genome.metadata["insert_type"] = "inserted"
+        else:
+            mark_discarded(
+                genome,
+                "worse_than_population",
+                self._worst_kept_number(survivors),
+            )
 
         self._log_population_state(
             genome,
             survived,
         )
 
-        return survived
+        return True
+
+    def _dominating_duplicate(self, genome: CircuitGenome) -> int | None:
+        """Return the genome number of a better duplicate still in the population.
+
+        Args:
+            genome: Candidate that was rejected as a dominated duplicate.
+
+        Returns:
+            The number of the population member that Pareto-dominates
+            ``genome`` and has the same enabled gates, or ``None`` when no
+            such member remains.
+        """
+        for existing in self.population:
+            if existing.has_same_gates(genome) and genome_dominates(
+                existing,
+                genome,
+                self.objectives,
+            ):
+                return existing.genome_number
+        return None
+
+    def _worst_kept_number(self, survivors: Sequence[CircuitGenome]) -> int | None:
+        """Return the genome number of the worst survivor.
+
+        Args:
+            survivors: Genomes environmental selection kept.
+
+        Returns:
+            The number of the survivor that sorts last by the parent key, or
+            ``None`` when ``survivors`` is empty.
+        """
+        if not survivors:
+            return None
+        worst = max(survivors, key=self._parent_sort_key)
+        return worst.genome_number
 
     def _handle_duplicate(
         self,
         genome: CircuitGenome,
-    ) -> Optional[bool]:
+    ) -> bool | None:
         """Handle a genome with an existing matching topology.
 
         Matching topology is determined using
@@ -403,76 +462,6 @@ class MultiObjectivePopulationBase(PopulationStrategy):
             )
 
         return winner
-
-    def _record_and_save(
-        self,
-        genome: CircuitGenome,
-        survived: bool,
-    ) -> None:
-        """Record profiling data and save population artifacts.
-
-        Args:
-            genome: Genome that was just evaluated.
-            survived: Whether the genome survived environmental selection.
-        """
-        if self.profiler is not None:
-            self.profiler.record(
-                step=self.insertions,
-                population=self.population,
-            )
-
-        if self.out_dir is None:
-            return
-
-        if self.save_all_genomes:
-            genome.save_circuit(
-                insert_type=("genome_inserted" if survived else "genome_discarded"),
-                out_dir=os.path.join(
-                    self.out_dir,
-                    "all_genomes",
-                ),
-            )
-
-        if self.save_pareto_front_enabled:
-            self._save_pareto_front_if_changed()
-
-        if self.profiler is not None:
-            self.profiler.plot_single_run()
-
-    def _save_pareto_front_if_changed(
-        self,
-    ) -> None:
-        """Save the Pareto front when its membership changes."""
-        pareto_front = self.get_pareto_front()
-
-        signature = tuple(sorted(genome.genome_number for genome in pareto_front))
-
-        if signature == self._last_pareto_signature:
-            return
-
-        self._last_pareto_signature = signature
-
-        pareto_directory = os.path.join(
-            self.out_dir,
-            "pareto_front",
-        )
-
-        os.makedirs(
-            pareto_directory,
-            exist_ok=True,
-        )
-
-        logger.success(
-            f"[{self.algorithm_name}] "
-            "Pareto front updated with "
-            f"{len(pareto_front)} genomes."
-        )
-
-        for index, genome in enumerate(pareto_front):
-            genome.save_circuit(
-                insert_type=(f"pareto_{index}"),
-                out_dir=pareto_directory,
-            )
 
     def _log_population_state(
         self,

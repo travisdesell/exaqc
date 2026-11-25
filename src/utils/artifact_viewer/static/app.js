@@ -338,8 +338,19 @@
     return typeof value === "number" && Number.isFinite(value);
   }
 
-  /** Whether smaller values of a fitness key are better (loss-like keys). */
+  /** Objective name to "minimize" or "maximize" for the run page on screen. */
+  let objectiveDirections = new Map();
+
+  /**
+   * Whether smaller values of a fitness key are better.
+   *
+   * A multi-objective run's declared objectives use their recorded direction.
+   * Otherwise loss-like keys are minimized and everything else is maximized.
+   */
   function lowerIsBetter(key) {
+    const direction = objectiveDirections.get(key);
+    if (direction === "minimize") return true;
+    if (direction === "maximize") return false;
     return /loss/i.test(key);
   }
 
@@ -1329,6 +1340,9 @@
 
   async function showRunPage(index, initialGenome) {
     const run = await api(`/api/runs/${index}`);
+    objectiveDirections = new Map(
+      (run.objectives || []).map((objective) => [objective.name, objective.direction])
+    );
     setBreadcrumbs([{ label: "Runs", href: "#/" }, { label: run.name }]);
 
     const keys = run.fitness_keys || [];
@@ -1443,11 +1457,49 @@
         : null;
     // whether the MPI master kept up with its workers: loaded when opened, then refreshed as genomes arrive
     const timingNode = h("details", { class: "run-timing", ontoggle: () => loadTiming() }, h("summary", { text: "Timing" }), h("div"));
+    const paretoNode = (run.objectives || []).length
+      ? h("details", { class: "pareto-front", open: true }, h("summary", { text: "Pareto front" }), h("div"))
+      : null;
+
+    /**
+     * Fills the Pareto front section from the run currently shown.
+     *
+     * The section stays the same element across refreshes, so whether it is
+     * open survives polling. It lists every genome no other genome dominates
+     * on the run's recorded objectives.
+     */
+    function renderPareto() {
+      if (!paretoNode) return;
+      const objectives = state.summary.objectives || [];
+      const front = state.summary.pareto_front || [];
+      paretoNode.firstElementChild.textContent = `Pareto front (${front.length})`;
+      const body = paretoNode.lastElementChild;
+      if (!front.length) {
+        setChildren(body, notice("No evaluated genome is on the Pareto front yet."));
+        return;
+      }
+      setChildren(
+        body,
+        h("div", { class: "table-wrap" },
+          h("table", {},
+            h("thead", {}, h("tr", {},
+              h("th", { class: "number", text: "genome" }),
+              ...objectives.map((objective) => h("th", { class: "number", text: `${objective.name} (${objective.direction})` }))
+            )),
+            h("tbody", {}, front.map((row) => h("tr", {},
+              h("td", { class: "number" }, h("a", { href: genomeHref(index, row.genome_number), text: row.genome_number })),
+              ...objectives.map((objective) => h("td", { class: "number", text: formatNumber((row.fitness || {})[objective.name]) }))
+            )))
+          )
+        )
+      );
+    }
     let timingCharts = [];
     let timingRequest = 0;
 
     function renderHeader() {
       const summary = state.summary;
+      renderPareto();
       setChildren(headerNode,
         h("h1", {}, h("span", { class: isLive(summary) ? "live-dot" : "live-dot idle", title: isLive(summary) ? "Still being written" : "Idle" }), run.name),
         h(
@@ -1463,6 +1515,7 @@
         ),
         summary.command_line ? h("details", {}, h("summary", { text: "Command line" }), h("div", { class: "command" }, h("pre", { text: summary.command_line }), copyButton(summary.command_line))) : null,
         runNotesNode,
+        paretoNode,
         topologyNode,
         timingNode
       );
@@ -2685,6 +2738,10 @@
       if (placement) {
         rows.push(["evaluated on", [placement.host, Number.isInteger(placement.rank) ? `rank ${placement.rank}` : null, Number.isInteger(placement.pid) ? `pid ${placement.pid}` : null].filter(Boolean).join(" · ")]);
       }
+      if (Number.isInteger(metadata.pareto_rank)) rows.push(["pareto rank", String(metadata.pareto_rank)]);
+      if (typeof metadata.crowding_distance === "number") rows.push(["crowding distance", formatNumber(metadata.crowding_distance)]);
+      if (Number.isInteger(metadata.reference_index)) rows.push(["reference direction", String(metadata.reference_index)]);
+      if (typeof metadata.reference_distance === "number") rows.push(["reference distance", formatNumber(metadata.reference_distance)]);
       if (metadata.discard_reason) {
         rows.push([
           "discard reason",
@@ -2926,6 +2983,7 @@
       select: selectGenome,
       destroy() {
         destroyed = true;
+        objectiveDirections = new Map();
         clearInterval(timer);
         rowObserver.disconnect();
         columnResizer.destroy();

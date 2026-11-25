@@ -53,6 +53,7 @@ classical layers train together with ordinary backpropagation and the standard P
   - [Working with a run's archive](#working-with-a-runs-archive)
 - [Examples](#examples)
   - [classification](#classification)
+  - [classification_moo](#classification_moo)
   - [teacher](#teacher)
   - [reinforcement_learning](#reinforcement_learning)
   - [refine_genome](#refine_genome)
@@ -794,11 +795,13 @@ sqlite3 ./artifacts/iris/genomes.sqlar "select step, wall_seconds, genomes, json
 
 ## [`Examples`](./src/examples)
 
-All entry points live in [`src/examples/`](./src/examples). The three evolutionary ones
+All entry points live in [`src/examples/`](./src/examples). The evolutionary ones
 (`classification`, `teacher`, `reinforcement_learning`) share the search,
-population and [run output](#run-output-arguments) arguments described above; the
-rest are single-genome tools, the run viewer and its MCP interface, and the
-archive backfill.
+population and [run output](#run-output-arguments) arguments described above.
+`classification_moo` shares the search, trainer, circuit and run-output
+arguments, and uses its own NSGA population sub-commands instead of
+`steady_state` / `islands`. The rest are single-genome tools, the run viewer
+and its MCP interface, and the archive backfill.
 
 Common to the evolutionary entry points:
 
@@ -869,6 +872,64 @@ runs the non-vision datasets locally, configured by the
 | `EPOCHS` | `30` | `--epochs` |
 | `IMPROVEMENT_CUTOFF` | `3` | `--improvement_cutoff` |
 | `BATCH_SIZE` | `3` | `--batch_size` |
+
+### [`classification_moo`](./src/examples/classification_moo.py)
+
+Evolves the same hybrid classifiers as [`classification`](#classification), but
+keeps a Pareto front with NSGA-II or NSGA-III instead of ranking genomes by one
+fitness. Every objective is minimized internally; pass `NAME:-1` to maximize
+and `NAME:1` to minimize. `loss` and `target_metric` (mean class accuracy) are
+always stored for the archive. Pareto ranking uses only the objectives named
+with `--objectives`.
+
+```
+python3 -m src.examples.classification_moo \
+    --dataset iris --input_qubits 4 --output_qubits 2 --batch_size 3 \
+    --number_genomes 20 --epochs 1 \
+    --objectives mean_class_accuracy:-1 n_parameters:1 \
+    -ms uniform 1 1 -ps uniform 2 2 \
+    --out_dir ./artifacts/iris_nsga2 \
+    nsga2 --max_population_size 4
+```
+
+Dataset, training, circuit and [run output](#run-output-arguments) flags are
+the same as [`classification`](#classification). The population is a required
+sub-command and must come after the other arguments.
+
+| Argument | Default | Description |
+|---|---|---|
+| `--objectives` | *required* | One or more `NAME:SIGN` objectives. `SIGN` is `-1` to maximize or `1` to minimize. Names are trainer metrics (such as `mean_class_accuracy`), `loss`, `n_parameters`, or `n_gates` |
+
+**`nsga2`** — one NSGA-II population.
+
+| Argument | Default | Description |
+|---|---|---|
+| `--max_population_size` | `30` | Genomes retained in the population |
+| `--tournament_size` | `2` | Candidates sampled in each parent tournament |
+
+**`nsga3`** — one NSGA-III population. Same arguments as `nsga2`, plus:
+
+| Argument | Default | Description |
+|---|---|---|
+| `--reference_divisions` | `8` | Divisions of the Das-Dennis simplex used to build reference directions |
+
+**`nsga2_islands`** — NSGA-II inside each island of the steady-state island model.
+Topology values are the same as [`islands`](#islands).
+
+| Argument | Default | Description |
+|---|---|---|
+| `--n_islands` | `10` | Number of islands |
+| `--max_island_size` | `10` | Genomes retained per island |
+| `--tournament_size` | `2` | Candidates sampled in each parent tournament |
+| `--intra_island_crossover_rate` | `0.5` | Fraction of an island's children produced within that island |
+| `--genomes_before_extinction` | `50` | Genomes inserted before the first extinction event |
+| `--genomes_for_next_extinction` | `200` | Genomes that must be inserted into an island before it can be repopulated again |
+| `--islands_to_extinct` | `2` | Worst islands cleared and repopulated each event |
+| `--primary_parent` | `best` | `best` (preferred parent first) or `island` (the target island's genome first) |
+| `--topology` | `fully_connected` | Inter-island connection topology; same values as [`islands`](#islands) |
+
+**`nsga3_islands`** — NSGA-III inside each island. Same arguments as
+`nsga2_islands`, plus `--reference_divisions` (default `8`).
 
 ### [`teacher`](./src/examples/teacher.py)
 
@@ -1170,7 +1231,9 @@ Then open `http://127.0.0.1:8000/` in a browser. The page has:
   worst of a chosen metric across the population at each insertion; untick
   *search progress* to hide it) above a chart of every genome, with genome number
   running down it and a chosen metric across it, better values to the right
-  (so `loss` runs high to low and `target_metric` low to high). Neither chart is
+  (so `loss` runs high to low and `target_metric` low to high). A
+  multi-objective run's `--objectives` signs set that direction for those keys,
+  so a minimized `n_parameters` also runs high to low. Neither chart is
   limited to fitness: both pick from the run's fitness keys, its genomes' circuit
   size and complexity (`n_enabled_gates`, `n_cnot`, `n_rot`) and any metric its
   task recorded while training, so a classification run can be charted by
@@ -1216,7 +1279,11 @@ Then open `http://127.0.0.1:8000/` in a browser. The page has:
   an agent over MCP, by whom (if a name was given) and when. Notes are
   append-only; a removed tag disappears from the chips but its history (who added
   and removed it, and when) is kept. Adding either needs `--allow_annotations`;
-  without it they are shown read-only. An island search also has an **Island
+  without it they are shown read-only. A multi-objective run also has a
+  **Pareto front** section listing the genomes no other genome dominates on the
+  recorded objectives, each linked to that genome; selecting one shows the
+  Pareto rank, crowding distance and NSGA-III reference direction it had when
+  it was inserted. An island search also has an **Island
   topology** section: its islands laid out by `--topology` (a tree as a
   hierarchy, a 2-D mesh as its grid, a star around its hub, a ring or fully
   connected graph as a circle, and a random graph by a force-directed layout),

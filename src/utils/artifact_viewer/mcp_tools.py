@@ -53,6 +53,7 @@ from src.utils.artifact_viewer.server import (
     Run,
     RunRegistry,
     higher_is_better,
+    objective_specs,
     read_concurrently,
 )
 from src.utils.genome_archive import (
@@ -1408,7 +1409,10 @@ class DashboardTools:
                         "SELECT json_extract(fitness, ?) FROM genomes", (f"$.{key}",)
                     )
                 ]
-            best = reader.best_value(key, higher_is_better=higher_is_better(key))
+            objectives = objective_specs(reader.run_info().get("arguments"))
+            best = reader.best_value(
+                key, higher_is_better=higher_is_better(key, objectives)
+            )
 
         grouped: dict[Any, list[float]] = {}
         for group, value in rows:
@@ -1878,8 +1882,6 @@ class DashboardTools:
                 "be compared at once; select fewer."
             )
 
-        better_is_higher = higher_is_better(key)
-
         def compared(run: Run) -> dict[str, Any]:
             """Reads one run's size and its best genome by ``key``.
 
@@ -1891,7 +1893,10 @@ class DashboardTools:
             """
 
             with GenomeArchive.open_readonly(run.archive_path) as reader:
-                best = reader.best_value(key, higher_is_better=better_is_higher)
+                objectives = objective_specs(reader.run_info().get("arguments"))
+                best = reader.best_value(
+                    key, higher_is_better=higher_is_better(key, objectives)
+                )
                 return {
                     "run": run.name,
                     "index": run.index,

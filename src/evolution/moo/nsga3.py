@@ -243,6 +243,41 @@ class NSGA3(MultiObjectivePopulationBase):
 
         return intercepts
 
+    def _finite_objective_matrix(
+        self,
+        values: np.ndarray,
+    ) -> np.ndarray:
+        """Replace non-finite minimization values so normalization stays finite.
+
+        Non-finite entries are poor minimization values. A column that is
+        entirely non-finite becomes zeros. Otherwise each non-finite entry is
+        replaced by that column's worst finite value, so ``inf - inf`` cannot
+        become NaN and a failed evaluation cannot stretch the intercepts.
+
+        Args:
+            values: Transformed minimization objective matrix.
+
+        Returns:
+            A copy containing only finite values.
+        """
+        finite_values = np.array(values, dtype=np.float64, copy=True)
+
+        if finite_values.size == 0:
+            return finite_values
+
+        for column_index in range(finite_values.shape[1]):
+            column = finite_values[:, column_index]
+            finite_mask = np.isfinite(column)
+
+            if not np.any(finite_mask):
+                finite_values[:, column_index] = 0.0
+                continue
+
+            worst = float(np.max(column[finite_mask]))
+            column[~finite_mask] = worst
+
+        return finite_values
+
     def _normalize_objectives(
         self,
         values: np.ndarray,
@@ -257,6 +292,8 @@ class NSGA3(MultiObjectivePopulationBase):
         """
         if values.size == 0:
             return values
+
+        values = self._finite_objective_matrix(values)
 
         ideal_point = np.min(
             values,
@@ -313,6 +350,10 @@ class NSGA3(MultiObjectivePopulationBase):
 
             projection_lengths = unit_directions @ point
 
+            # A negative projection lies behind the direction. Clamping it
+            # keeps perpendicular distance from treating that direction as close.
+            projection_lengths = np.maximum(projection_lengths, 0.0)
+
             projected_points = projection_lengths[:, np.newaxis] * unit_directions
 
             distances = np.linalg.norm(
@@ -348,8 +389,9 @@ class NSGA3(MultiObjectivePopulationBase):
         """Perform NSGA-III environmental selection.
 
         Complete Pareto fronts are accepted until the next complete front
-        would exceed the requested population size. Reference-direction
-        niching is then used to select the remaining genomes.
+        would exceed the requested population size. Reference directions are
+        associated on those fronts plus the splitting front, and niching
+        selects the remaining genomes.
 
         Args:
             population: Candidate population.
@@ -365,29 +407,40 @@ class NSGA3(MultiObjectivePopulationBase):
             self.objectives,
         )
 
-        self._associate_reference_directions(population)
-
-        survivors: list[CircuitGenome] = []
-
-        splitting_front: list[CircuitGenome] = []
+        # Normalize on the fronts selection actually considers (every front
+        # that fits, plus the one that must be split). Later fronts would
+        # otherwise stretch the intercepts and flatten the front being niched.
+        accepted: list[list[int]] = []
+        splitting: list[int] | None = None
+        accepted_count = 0
 
         for front in fronts:
-            candidates = [population[index] for index in front]
-
-            if len(survivors) + len(candidates) <= population_size:
-                survivors.extend(candidates)
-
+            if accepted_count + len(front) <= population_size:
+                accepted.append(front)
+                accepted_count += len(front)
                 continue
 
-            splitting_front = candidates
+            splitting = front
             break
+
+        considered = [index for front in accepted for index in front]
+        if splitting is not None:
+            considered.extend(splitting)
+
+        self._associate_reference_directions(
+            [population[index] for index in considered]
+        )
+
+        survivors: list[CircuitGenome] = [
+            population[index] for front in accepted for index in front
+        ]
 
         remaining = population_size - len(survivors)
 
-        if remaining > 0 and splitting_front:
+        if remaining > 0 and splitting is not None:
             selected = self._niching_selection(
                 survivors=survivors,
-                candidates=(splitting_front),
+                candidates=[population[index] for index in splitting],
                 n_select=remaining,
             )
 

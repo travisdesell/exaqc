@@ -36,7 +36,10 @@ from src.utils.artifact_viewer.server import (
     assign_groups,
     compare_gates,
     find_archives,
+    higher_is_better,
     insertion_rates_latex,
+    objective_specs,
+    pareto_front,
 )
 from src.utils.genome_archive import ARCHIVE_FILENAME, GenomeArchive
 
@@ -1181,6 +1184,101 @@ def test_static_files_are_served_safely(viewer_url: str) -> None:
     assert get(f"{viewer_url}/static/../server.py")[0] == 404
     assert get(f"{viewer_url}/static/%2e%2e/server.py")[0] == 404
     assert get(f"{viewer_url}/nowhere")[0] == 404
+
+
+def test_moo_run_reports_objectives_and_its_pareto_front(tmp_path) -> None:
+    """A multi-objective run names its objectives and the non-dominated genomes.
+
+    A run without objectives keeps the usual directions: loss is minimized and
+    everything else is maximized, and it reports an empty front.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    specs = objective_specs(
+        {"objectives": ["mean_class_accuracy:-1", "n_parameters:1", "bad"]}
+    )
+    assert [spec["name"] for spec in specs] == ["mean_class_accuracy", "n_parameters"]
+    assert higher_is_better("n_parameters", specs) is False
+    assert higher_is_better("mean_class_accuracy", specs) is True
+    assert higher_is_better("loss") is False
+    assert higher_is_better("target_metric") is True
+
+    genomes = []
+    for number, loss, accuracy, parameters in (
+        (1, 0.2, 0.9, 10),
+        (2, 0.5, 0.4, 2),
+        (3, 0.8, 0.3, 12),
+    ):
+        genome = FakeGenome(number, loss, accuracy, [0], ["add_gate"])
+        genome.serialized["fitness"] = {
+            "loss": loss,
+            "target_metric": accuracy,
+            "mean_class_accuracy": accuracy,
+            "n_parameters": parameters,
+        }
+        genomes.append(genome)
+    genomes[0].serialized["metadata"]["pareto_rank"] = 0
+    genomes[0].serialized["metadata"]["crowding_distance"] = 0.5
+
+    front = pareto_front(
+        [(genome.genome_number, genome.serialized["fitness"]) for genome in genomes],
+        specs,
+    )
+    assert [row["genome_number"] for row in front] == [1, 2]
+
+    build_run(
+        tmp_path / "moo",
+        genomes,
+        run_info={
+            "arguments": {"objectives": ["mean_class_accuracy:-1", "n_parameters:1"]}
+        },
+    )
+    build_run(tmp_path / "steady", standard_genomes(), history=False)
+    minimized = []
+    for number, loss, accuracy in ((1, 0.2, 0.9), (2, 0.5, 0.4), (3, 0.8, 0.3)):
+        genome = FakeGenome(number, loss, accuracy, [0], ["add_gate"])
+        minimized.append(genome)
+    build_run(
+        tmp_path / "minimize_target",
+        minimized,
+        run_info={"arguments": {"objectives": ["target_metric:1"]}},
+    )
+    registry = RunRegistry(
+        run_directories=[
+            str(tmp_path / "moo"),
+            str(tmp_path / "steady"),
+            str(tmp_path / "minimize_target"),
+        ]
+    )
+
+    with serving(registry) as url:
+        indexes = {
+            run["name"]: run["index"] for run in get_json(f"{url}/api/runs")["runs"]
+        }
+        payload = get_json(f"{url}/api/runs/{indexes['moo']}")
+        assert payload["objectives"] == [
+            {"name": "mean_class_accuracy", "sign": -1.0, "direction": "maximize"},
+            {"name": "n_parameters", "sign": 1.0, "direction": "minimize"},
+        ]
+        assert [row["genome_number"] for row in payload["pareto_front"]] == [1, 2]
+        assert payload["pareto_front"][1]["fitness"]["n_parameters"] == 2
+
+        # target_metric is minimized on this run, so the best at the last step
+        # is the smallest value rather than the largest.
+        history = get_json(
+            f"{url}/api/runs/{indexes['minimize_target']}/history?metric=target_metric"
+        )
+        assert history["columns"]["best"] == [0.9, 0.4, 0.3]
+
+        genome = get_json(f"{url}/api/runs/{indexes['moo']}/genomes/1")
+        assert genome["genome"]["metadata"]["pareto_rank"] == 0
+        assert genome["genome"]["metadata"]["crowding_distance"] == 0.5
+
+        steady = get_json(f"{url}/api/runs/{indexes['steady']}")
+        assert steady["objectives"] == []
+        assert steady["pareto_front"] == []
 
 
 def test_compare_gates_matches_by_innovation() -> None:

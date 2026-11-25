@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Type
+from collections.abc import Callable, Sequence
+from typing import Any, Type
 
 from loguru import logger
 
@@ -14,10 +14,12 @@ from src.evolution.moo.pareto import (
     genome_dominates,
     objective_vector,
 )
+from src.evolution.population_strategy import mark_discarded
 from src.evolution.steady_state_islands import (
     Island,
     SteadyStateIslands,
 )
+from src.evolution.topology import assign_topology
 
 
 class MultiObjectiveIsland(Island):
@@ -37,6 +39,8 @@ class MultiObjectiveIsland(Island):
             selection.
         population_kwargs: Additional arguments forwarded to the
             multi-objective population class.
+        compare: Total order used by island bookkeeping (extinction and the
+            best neighbor). Local survival stays Pareto-based.
     """
 
     def __init__(
@@ -46,17 +50,20 @@ class MultiObjectiveIsland(Island):
         population_class: Type[MultiObjectivePopulationBase],
         objectives: Sequence[ObjectiveSpec],
         tournament_size: int = 2,
-        population_kwargs: dict | None = None,
+        population_kwargs: dict[str, Any] | None = None,
+        compare: Callable[[CircuitGenome, CircuitGenome], int] | None = None,
     ) -> None:
         """Initialize a multi-objective island."""
         population_kwargs = population_kwargs or {}
 
         self.id = id
         self.max_size = max_size
+        self.compare = compare
 
         self.insertions = 0
         self.status = "initializing"
         self.repopulation_genome_number = 0
+        self.neighbors: list[Island] = []
 
         self.strategy = population_class(
             max_population_size=max_size,
@@ -85,6 +92,100 @@ class MultiObjectiveIsland(Island):
             value: New island population.
         """
         self.strategy.population = value
+
+    def restore(
+        self,
+        genomes: list[CircuitGenome],
+        next_genome_number: int,
+        cleared: bool,
+    ) -> None:
+        """Takes back the genomes this island held when a run stopped.
+
+        Status matches :meth:`Island.restore`: full at capacity, repopulating
+        when an extinction event cleared it, and initializing otherwise. The
+        genomes are not sorted by a scalar fitness, because survival on this
+        island is Pareto-based.
+
+        Args:
+            genomes: The genomes this island held, in any order.
+            next_genome_number: The number the restarted run's next genome takes.
+            cleared: Whether an extinction event emptied this island during the
+                run.
+
+        Returns:
+            None. Restores ``population``, ``status``, ``insertions`` and
+            ``repopulation_genome_number``.
+        """
+        self.population = list(genomes)
+        self.insertions = len(self.population)
+        self.strategy.insertions = len(self.population)
+
+        if len(self.population) >= self.max_size:
+            self.status = "full"
+        elif cleared:
+            self.status = "repopulating"
+            self.repopulation_genome_number = next_genome_number
+        else:
+            self.status = "initializing"
+
+        self.strategy._refresh_selection_metadata()
+
+    def best_neighbor(self) -> Island | None:
+        """Finds the neighboring island with the best representative genome.
+
+        The representative is the multi-objective strategy's best genome, not
+        whichever genome happens to sit at ``population[0]``.
+
+        Returns:
+            The neighboring island with the preferred representative, or
+            ``None`` if no neighbor holds a genome.
+
+        Raises:
+            RuntimeError: If this island was built without a compare function.
+        """
+        compare = self.compare
+        if compare is None:
+            raise RuntimeError(
+                f"Island {self.id} has no compare function, so it cannot rank neighbors."
+            )
+
+        best: Island | None = None
+        best_genome: CircuitGenome | None = None
+
+        for neighbor in self.neighbors:
+            candidate = self._representative(neighbor)
+            if candidate is None:
+                continue
+
+            if best is None or best_genome is None:
+                best = neighbor
+                best_genome = candidate
+            elif compare(candidate, best_genome) < 0:
+                best = neighbor
+                best_genome = candidate
+
+        return best
+
+    @staticmethod
+    def _representative(island: Island) -> CircuitGenome | None:
+        """Return the genome island bookkeeping should treat as best.
+
+        Args:
+            island: Island whose representative is needed.
+
+        Returns:
+            The strategy's representative genome when the island has one, the
+            first population member otherwise, or ``None`` when the island is
+            empty.
+        """
+        if not island.population:
+            return None
+
+        strategy = getattr(island, "strategy", None)
+        if strategy is not None:
+            return strategy.get_best_genome()
+
+        return island.population[0]
 
     def is_initializing(self) -> bool:
         """Return whether the island is still initializing.
@@ -150,7 +251,7 @@ class MultiObjectiveIsland(Island):
     def insert_genome(
         self,
         genome: CircuitGenome,
-        **kwargs,
+        **kwargs: Any,
     ) -> bool:
         """Insert a genome using local multi-objective selection.
 
@@ -162,7 +263,9 @@ class MultiObjectiveIsland(Island):
             **kwargs: Additional insertion arguments.
 
         Returns:
-            ``True`` if the genome survives local environmental selection.
+            ``True`` if the genome should be recorded as evaluated. ``False``
+            if it predates this island's repopulation, or if the local
+            strategy rejected it as a duplicate of a better genome.
         """
         if (
             "insert_type" not in genome.metadata
@@ -181,11 +284,11 @@ class MultiObjectiveIsland(Island):
                 f"{self.repopulation_genome_number}"
             )
 
-            genome.metadata["insert_type"] = "discarded"
+            mark_discarded(genome, "generated_before_repopulation")
 
             return False
 
-        survived = self.strategy.insert_genome(
+        recorded = self.strategy.insert_genome(
             genome,
             **kwargs,
         )
@@ -195,12 +298,10 @@ class MultiObjectiveIsland(Island):
         if len(self.population) >= self.max_size:
             self.status = "full"
 
-        if survived:
+        if genome.metadata.get("insert_type") not in ("discarded", "global_best"):
             genome.metadata["insert_type"] = "inserted"
-        else:
-            genome.metadata["insert_type"] = "discarded"
 
-        return survived
+        return recorded
 
 
 class MultiObjectiveSteadyStateIslands(SteadyStateIslands):
@@ -231,8 +332,8 @@ class MultiObjectiveSteadyStateIslands(SteadyStateIslands):
         n_islands: int,
         max_island_size: int,
         tournament_size: int = 2,
-        population_kwargs: dict | None = None,
-        **kwargs,
+        population_kwargs: dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize the multi-objective island strategy."""
         self.objectives = list(objectives)
@@ -250,8 +351,9 @@ class MultiObjectiveSteadyStateIslands(SteadyStateIslands):
             **kwargs,
         )
 
-        # Replace only the standard Island objects created by
-        # SteadyStateIslands. All higher-level island behavior remains.
+        # SteadyStateIslands builds scalar-fitness islands and wires their
+        # topology. Replace them with MOO islands, then apply that same
+        # topology: the replacement would otherwise drop every neighbor.
         self.islands = [
             MultiObjectiveIsland(
                 id=island_id,
@@ -259,6 +361,7 @@ class MultiObjectiveSteadyStateIslands(SteadyStateIslands):
                 population_class=population_class,
                 objectives=self.objectives,
                 tournament_size=tournament_size,
+                compare=self.compare,
                 population_kwargs={
                     **self.population_kwargs,
                     "seed": (
@@ -272,6 +375,7 @@ class MultiObjectiveSteadyStateIslands(SteadyStateIslands):
             )
             for island_id in range(n_islands)
         ]
+        assign_topology(self.islands, self.topology)
 
     def _compare_genomes(
         self,
