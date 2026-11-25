@@ -165,9 +165,9 @@ class PopulationStrategy(ABC):
                 max_population_size=args.max_population_size,
                 compare=compare,
                 species_threshold=args.species_threshold,
-                neat_c1=args.neat_c1,
-                neat_c2=args.neat_c2,
-                neat_c3=args.neat_c3,
+                c_s=args.c_s,
+                c_q=args.c_q,
+                c_c=args.c_c,
                 inter_species_parent_rate=args.inter_species_parent_rate,
             )
 

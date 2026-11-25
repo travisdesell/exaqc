@@ -1024,9 +1024,9 @@ def test_speciation_runs_show_species_and_each_parents_species(tmp_path) -> None
     speciation = {
         "max_population_size": 30,
         "species_threshold": 0.6,
-        "neat_c1": 1.0,
-        "neat_c2": 1.0,
-        "neat_c3": 0.0,
+        "c_s": 1.0,
+        "c_q": 1.0,
+        "c_c": 1.0,
         "inter_species_parent_rate": 0.1,
     }
     build_run(
@@ -1065,6 +1065,8 @@ def test_speciation_runs_show_species_and_each_parents_species(tmp_path) -> None
         assert b"speciesStatistics" in app_js
         assert b"species-flow" in app_js
         assert b"species-size-bar" in app_js
+        assert b"c_s " in app_js
+        assert b"neat_c1" in app_js
         status, _, app_css = get(f"{url}/static/app.css")
         assert status == 200
         assert b".species-summary" in app_css

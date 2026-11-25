@@ -36,6 +36,7 @@ from src.evolution.innovation import innovation_number_generator  # noqa: E402
 from src.evolution.population_strategy import PopulationStrategy  # noqa: E402
 from src.evolution.steady_state_islands import SteadyStateIslands  # noqa: E402
 from src.evolution.steady_state_population import SteadyStatePopulation  # noqa: E402
+from src.evolution.steady_state_speciation import SteadyStateSpeciation  # noqa: E402
 from src.utils.genome_archive import GenomeArchive  # noqa: E402
 
 #: The arguments a steady-state run records, as an entry point would.
@@ -66,9 +67,9 @@ SPECIATION_ARGUMENTS: dict[str, Any] = {
     "population_strategy": "steady_state_speciation",
     "max_population_size": 4,
     "species_threshold": 0.6,
-    "neat_c1": 1.0,
-    "neat_c2": 1.0,
-    "neat_c3": 0.0,
+    "c_s": 1.0,
+    "c_q": 1.0,
+    "c_c": 1.0,
     "inter_species_parent_rate": 0.1,
     "number_genomes": 6,
     "out_dir": "recorded/by/the/run",
@@ -524,3 +525,54 @@ def test_a_restart_records_itself_without_disturbing_the_run(tmp_path) -> None:
     restarts = recorded["restarts"]
     assert [entry["number_genomes"] for entry in restarts] == [99, 150]
     assert all(entry["from_insertion"] == state.inserted_genomes for entry in restarts)
+
+
+def test_an_excess_disjoint_speciation_archive_cannot_be_continued(tmp_path) -> None:
+    """A run recorded with ``neat_c*`` cannot continue under the new distance.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    run_dir = tmp_path / "old-speciation"
+    recorded = {
+        "population_strategy": "steady_state_speciation",
+        "max_population_size": 4,
+        "species_threshold": 0.6,
+        "neat_c1": 1.0,
+        "neat_c2": 1.0,
+        "neat_c3": 0.0,
+        "inter_species_parent_rate": 0.1,
+        "number_genomes": 2,
+        "out_dir": str(run_dir),
+    }
+    run_a_search(
+        run_dir,
+        SteadyStateSpeciation(max_population_size=4, compare=compare),
+        recorded,
+        genomes=1,
+    )
+
+    def fail(message: str) -> None:
+        """Stops ``prepare`` with ``message``.
+
+        Args:
+            message: The explanation ``prepare`` refused with.
+
+        Raises:
+            SystemExit: Always, carrying ``message``.
+        """
+
+        raise SystemExit(message)
+
+    with pytest.raises(SystemExit, match="excess/disjoint"):
+        restart.prepare(
+            Namespace(
+                out_dir=str(run_dir),
+                restart="require",
+                number_genomes=2,
+                overwrite_archive=False,
+                force_restart=True,
+            ),
+            fail,
+        )

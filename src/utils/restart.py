@@ -278,6 +278,39 @@ def _best_by(
     )
 
 
+def obsolete_speciation_distance(state: RestartState) -> str | None:
+    """Returns why a speciation archive cannot be continued, if it cannot.
+
+    Archives that recorded ``neat_c1``, ``neat_c2``, or ``neat_c3`` and not
+    ``c_s`` used the excess/disjoint distance. Continuing them would assign
+    later genomes with the three-component compatibility distance.
+
+    Args:
+        state: The stopped run's state.
+
+    Returns:
+        An error message when the archive uses the retired distance, otherwise
+        ``None``.
+    """
+
+    if state.arguments.get("population_strategy") != "steady_state_speciation":
+        return None
+    if "c_s" in state.arguments:
+        return None
+    retired = [
+        name for name in ("neat_c1", "neat_c2", "neat_c3") if name in state.arguments
+    ]
+    if not retired:
+        return None
+    listed = ", ".join(retired)
+    return (
+        "this run recorded the excess/disjoint speciation distance "
+        f"({listed}). That distance has been replaced by the three-component "
+        "compatibility distance (c_s, c_q, c_c), so the run cannot be continued. "
+        "Start a new run instead."
+    )
+
+
 def restart_arguments(
     state: RestartState, args: argparse.Namespace
 ) -> argparse.Namespace:
@@ -367,7 +400,8 @@ def prepare(
     Args:
         args: The arguments this invocation was given.
         fail: Called with an explanation when the run cannot start, and expected
-            not to return (``parser.error``).
+            not to return (``parser.error``). A speciation archive that recorded
+            the retired excess/disjoint coefficients is one such case.
 
     Returns:
         The arguments to run with (the continued run's, for a restart), the
@@ -406,6 +440,10 @@ def prepare(
         state = load(args.out_dir)
     except ValueError as error:
         fail(str(error))
+
+    obsolete = obsolete_speciation_distance(state)
+    if obsolete is not None:
+        fail(obsolete)
 
     differences = differing_arguments(state, args)
     if differences and not getattr(args, "force_restart", False):

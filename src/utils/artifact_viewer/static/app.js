@@ -2694,6 +2694,9 @@
               h("span", {}, "threshold ", h("b", { text: String(config.species_threshold) })),
               h("span", {}, "capacity ", h("b", { text: String(config.max_population_size) })),
               h("span", {}, "inter-species rate ", h("b", { text: String(config.inter_species_parent_rate) })),
+              config.c_s !== undefined ? h("span", {}, "c_s ", h("b", { text: String(config.c_s) })) : null,
+              config.c_q !== undefined ? h("span", {}, "c_q ", h("b", { text: String(config.c_q) })) : null,
+              config.c_c !== undefined ? h("span", {}, "c_c ", h("b", { text: String(config.c_c) })) : null,
               config.neat_c1 !== undefined ? h("span", {}, "c1 ", h("b", { text: String(config.neat_c1) })) : null,
               config.neat_c2 !== undefined ? h("span", {}, "c2 ", h("b", { text: String(config.neat_c2) })) : null,
               config.neat_c3 !== undefined ? h("span", {}, "c3 ", h("b", { text: String(config.neat_c3) })) : null

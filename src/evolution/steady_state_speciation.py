@@ -1,17 +1,18 @@
 """Speciation as a third EXAQC population strategy.
 
-Species membership is decided at insertion by structural distance on enabled
-gate innovation IDs (join iff distance is at most the threshold). Disabled
-gates are ignored by that distance. Species are examined in cyclic order from
-a rotating assignment cursor. Parents are drawn round-robin within species,
-with a small inter-species rate. Capacity is global. The matching-gene angle
-term is reserved for later investigation (``neat_c3`` must stay 0.0). This
-strategy does not subclass or modify islands.
+Species membership is decided at insertion by the three-component compatibility
+distance (join iff that distance is at most the threshold). The distance sums
+weighted structural, quantum-angle, and classical encoder/decoder terms.
+Disabled gates are ignored. Species are examined in cyclic order from a
+rotating assignment cursor. Parents are drawn round-robin within species, with
+a small inter-species rate. Capacity is global. This strategy does not
+subclass or modify islands.
 """
 
 from __future__ import annotations
 
 import argparse
+import math
 import random
 
 from collections.abc import Callable
@@ -21,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from src.circuits.circuit import CircuitGenome
-from src.evolution.historical_distance import historical_distance
+from src.evolution.compatibility_distance import compatibility_distance
 from src.evolution.population_strategy import PopulationStrategy, mark_discarded
 
 if TYPE_CHECKING:
@@ -78,25 +79,25 @@ class SteadyStateSpeciation(PopulationStrategy):
             "--species_threshold",
             type=float,
             default=0.6,
-            help="Join a species iff structural distance is at most this threshold.",
+            help="Join a species iff the compatibility distance is at most this threshold.",
         )
         parser.add_argument(
-            "--neat_c1",
+            "--c_s",
             type=float,
             default=1.0,
-            help="Coefficient on excess genes in the structural distance.",
+            help="Coefficient on the structural distance (unmatched enabled gate innovations).",
         )
         parser.add_argument(
-            "--neat_c2",
+            "--c_q",
             type=float,
             default=1.0,
-            help="Coefficient on disjoint genes in the structural distance.",
+            help="Coefficient on the quantum angular distance of matching enabled gates.",
         )
         parser.add_argument(
-            "--neat_c3",
+            "--c_c",
             type=float,
-            default=0.0,
-            help="Coefficient for the matching-gene angle term; reserved for later investigation (must be 0.0).",
+            default=1.0,
+            help="Coefficient on the classical encoder and decoder parameter distance.",
         )
         parser.add_argument(
             "--inter_species_parent_rate",
@@ -110,9 +111,9 @@ class SteadyStateSpeciation(PopulationStrategy):
         max_population_size: int,
         compare: Callable[[CircuitGenome, CircuitGenome], int],
         species_threshold: float = 0.6,
-        neat_c1: float = 1.0,
-        neat_c2: float = 1.0,
-        neat_c3: float = 0.0,
+        c_s: float = 1.0,
+        c_q: float = 1.0,
+        c_c: float = 1.0,
         inter_species_parent_rate: float = 0.1,
         rng_seed: int | None = None,
     ) -> None:
@@ -125,38 +126,45 @@ class SteadyStateSpeciation(PopulationStrategy):
             max_population_size: Maximum retained genomes across all species.
             compare: Ordering used for fitness (negative means the first genome
                 is better).
-            species_threshold: Join when structural distance is at most this value.
-            neat_c1: Excess-gene coefficient.
-            neat_c2: Disjoint-gene coefficient.
-            neat_c3: Angle-term coefficient; must be 0.0 until that term is investigated.
+            species_threshold: Join when the compatibility distance is at most
+                this value.
+            c_s: Coefficient on the structural distance.
+            c_q: Coefficient on the quantum angular distance.
+            c_c: Coefficient on the classical encoder and decoder distance.
             inter_species_parent_rate: Probability a multi-parent request mixes
                 species, when that path is eligible.
             rng_seed: Seed for shuffle and parent draws; ``None`` is unseeded.
 
         Raises:
             ValueError: If a constructor bound in the strategy contract is
-                violated (including a non-zero ``neat_c3``).
+                violated.
         """
 
-        if neat_c3 != 0.0:
-            raise ValueError(
-                "neat_c3 must be 0.0; the matching-gene angle term is reserved for later investigation"
-            )
         if max_population_size < 1:
             raise ValueError("max_population_size must be >= 1")
-        if species_threshold <= 0.0:
-            raise ValueError("species_threshold must be > 0")
-        if neat_c1 < 0.0 or neat_c2 < 0.0:
-            raise ValueError("neat_c1 and neat_c2 must be >= 0")
+        if not math.isfinite(species_threshold) or species_threshold <= 0.0:
+            raise ValueError("species_threshold must be a finite number > 0")
+        for name, coefficient in (
+            ("c_s", c_s),
+            ("c_q", c_q),
+            ("c_c", c_c),
+        ):
+            if (
+                isinstance(coefficient, bool)
+                or not isinstance(coefficient, (int, float))
+                or not math.isfinite(float(coefficient))
+                or float(coefficient) < 0.0
+            ):
+                raise ValueError(f"{name} must be a finite non-negative number")
         if not 0.0 <= inter_species_parent_rate <= 1.0:
             raise ValueError("inter_species_parent_rate must be in [0, 1]")
 
         self.max_population_size = max_population_size
         self.compare = compare
         self.species_threshold = species_threshold
-        self.neat_c1 = neat_c1
-        self.neat_c2 = neat_c2
-        self.neat_c3 = neat_c3
+        self.c_s = float(c_s)
+        self.c_q = float(c_q)
+        self.c_c = float(c_c)
         self.inter_species_parent_rate = inter_species_parent_rate
         self.rng = random.Random(rng_seed)
         self.insertions = 0
@@ -215,17 +223,16 @@ class SteadyStateSpeciation(PopulationStrategy):
 
         Returns:
             A ``speciation`` dict with the capacity, join threshold, distance
-            coefficients (including ``neat_c3``) and inter-species parent rate
-            used for the run.
+            coefficients and inter-species parent rate used for the run.
         """
 
         return {
             "speciation": {
                 "max_population_size": self.max_population_size,
                 "species_threshold": self.species_threshold,
-                "neat_c1": self.neat_c1,
-                "neat_c2": self.neat_c2,
-                "neat_c3": self.neat_c3,
+                "c_s": self.c_s,
+                "c_q": self.c_q,
+                "c_c": self.c_c,
                 "inter_species_parent_rate": self.inter_species_parent_rate,
             }
         }
@@ -515,16 +522,16 @@ class SteadyStateSpeciation(PopulationStrategy):
 
         if not self.species_list:
             return self._new_species(genome), "created", None
-        history = genome.get_historical_gate_innovations()
         count = len(self.species_list)
         start = self.assignment_species % count
         for offset in range(count):
             species = self.species_list[(start + offset) % count]
-            distance = historical_distance(
-                species.latest_genome.get_historical_gate_innovations(),
-                history,
-                self.neat_c1,
-                self.neat_c2,
+            distance = compatibility_distance(
+                species.latest_genome,
+                genome,
+                self.c_s,
+                self.c_q,
+                self.c_c,
             )
             if distance <= self.species_threshold:
                 species.genomes.append(genome)

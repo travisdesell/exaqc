@@ -107,6 +107,24 @@ class FakeGenome:
 
         return frozenset((gate, True) for gate in self.gates)
 
+    def enabled_gate_parameters(self) -> dict[int, list[float]]:
+        """Returns no quantum parameters.
+
+        Returns:
+            An empty mapping, so speciation distance is structural only.
+        """
+
+        return {}
+
+    def classical_parameters(self) -> list[float]:
+        """Returns no classical parameters.
+
+        Returns:
+            An empty list, so the classical term of the distance is zero.
+        """
+
+        return []
+
 
 def compare(genome1: Any, genome2: Any) -> float:
     """Orders genomes by ``fitness["loss"]``, lower first.
@@ -227,9 +245,9 @@ def test_speciation_config_is_recorded_when_the_search_starts() -> None:
     assert info["speciation"] == {
         "max_population_size": 12,
         "species_threshold": 0.4,
-        "neat_c1": 1.0,
-        "neat_c2": 1.0,
-        "neat_c3": 0.0,
+        "c_s": 1.0,
+        "c_q": 1.0,
+        "c_c": 1.0,
         "inter_species_parent_rate": 0.2,
     }
 

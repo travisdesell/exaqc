@@ -92,9 +92,9 @@ def speciation_args(**overrides: Any) -> Namespace:
         "population_strategy": "steady_state_speciation",
         "max_population_size": 8,
         "species_threshold": 0.6,
-        "neat_c1": 1.0,
-        "neat_c2": 1.0,
-        "neat_c3": 0.0,
+        "c_s": 1.0,
+        "c_q": 1.0,
+        "c_c": 1.0,
         "inter_species_parent_rate": 0.1,
     }
     values.update(overrides)
@@ -128,6 +128,9 @@ def test_from_args_builds_speciation_population() -> None:
     assert isinstance(population, SteadyStateSpeciation)
     assert population.max_population_size == 8
     assert population.species_threshold == 0.6
+    assert population.c_s == 1.0
+    assert population.c_q == 1.0
+    assert population.c_c == 1.0
     assert population.inter_species_parent_rate == 0.1
 
 

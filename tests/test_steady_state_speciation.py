@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 
 import pytest
 
@@ -67,6 +68,28 @@ class MockGenome:
         """
 
         return frozenset(zip(self.innovations, self.enabled))
+
+    def enabled_gate_parameters(self) -> dict[int, list[float]]:
+        """Returns no quantum parameters.
+
+        The mock exercises structure only, so the quantum term is zero.
+
+        Returns:
+            An empty mapping.
+        """
+
+        return {}
+
+    def classical_parameters(self) -> list[float]:
+        """Returns no classical parameters.
+
+        The mock has no encoder or decoder, so the classical term is zero.
+
+        Returns:
+            An empty list.
+        """
+
+        return []
 
 
 def compatible(
@@ -202,19 +225,16 @@ def test_disabled_gates_do_not_enter_distance() -> None:
 
 
 def test_assignment_joins_at_exact_threshold() -> None:
-    """A genome with distance exactly equal to the threshold joins (non-strict)."""
+    """A genome whose distance equals the threshold joins (non-strict)."""
 
-    pop = make_pop(species_threshold=0.5)
-    # H={1,2} vs H={1,2,3}: E=1, D=0, N=3 → δ=1/3 ≤ 0.5 → join
-    first = MockGenome(1, [1, 2], 0.4)
-    second = MockGenome(2, [1, 2, 3], 0.3)
-    pop.insert_genome(first)
-    pop.insert_genome(second)
+    # {1,2} vs {1,2,3}: one unmatched innovation, d_s = 1.
+    pop = make_pop(species_threshold=1.0)
+    pop.insert_genome(MockGenome(1, [1, 2], 0.4))
+    pop.insert_genome(MockGenome(2, [1, 2, 3], 0.3))
     assert len(pop.species_list) == 1
-    # Force δ = threshold: H={1} vs H={2} gives δ=2/1=2.0 > 0.5 → new
-    # For exact equality: histories of size 2 with one mismatch: {1,2} vs {1,3}
-    # M={2,3}, τ=3, E=0, D=2, N=2 → δ=1.0
-    pop2 = make_pop(species_threshold=1.0)
+
+    # {1,2} vs {1,3}: two unmatched innovations, d_s = sqrt(2).
+    pop2 = make_pop(species_threshold=math.sqrt(2.0))
     pop2.insert_genome(MockGenome(1, [1, 2], 0.4))
     pop2.insert_genome(MockGenome(2, [1, 3], 0.3))
     assert len(pop2.species_list) == 1
@@ -354,9 +374,9 @@ def test_run_info_records_speciation_config() -> None:
     assert info["speciation"] == {
         "max_population_size": 12,
         "species_threshold": 0.4,
-        "neat_c1": 1.0,
-        "neat_c2": 1.0,
-        "neat_c3": 0.0,
+        "c_s": 1.0,
+        "c_q": 1.0,
+        "c_c": 1.0,
         "inter_species_parent_rate": 0.2,
     }
 
@@ -525,11 +545,13 @@ def test_constructor_and_parser_bounds() -> None:
     args = parser.parse_args([])
     assert args.species_threshold == 0.6
     assert args.inter_species_parent_rate == 0.1
-    assert args.neat_c3 == 0.0
+    assert args.c_s == 1.0
+    assert args.c_q == 1.0
+    assert args.c_c == 1.0
     assert args.max_population_size == 30
 
-    with pytest.raises(ValueError, match="reserved for later investigation"):
-        make_pop(neat_c3=0.4)
+    with pytest.raises(ValueError, match="c_q"):
+        make_pop(c_q=-0.1)
     with pytest.raises(ValueError, match="max_population_size"):
         make_pop(max_population_size=0)
     with pytest.raises(ValueError, match="species_threshold"):

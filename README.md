@@ -351,18 +351,23 @@ Multi-word values take their arguments as separate tokens — for example
 
 ### [`steady_state_speciation`](./src/evolution/steady_state_speciation.py)
 
-A single population with global capacity, partitioned into **species** by
-structural distance on **enabled** gate innovation IDs (the same idea as
-NEAT-style speciation, except disabled gates do not enter the distance).
-A new genome joins the first compatible species or starts its own;
-parents are drawn round-robin within a species, with a small chance of
-inter-species crossover. Capacity is enforced globally (worst non-singleton
-members are preferred for eviction). Species membership is stored on each
-genome as `metadata["species_id"]`; the search archive indexes that as the
-summary `species` column (alongside `island` for island searches) so the
+A single population with global capacity, partitioned into **species** by the
+compatibility distance on an offspring and a species representative. That
+distance is `c_s * d_s + c_q * d_q + c_c * d_c`: `d_s` is the square root of
+the number of **enabled** gate innovations present in exactly one genome,
+`d_q` is the Euclidean length of the shortest `2π` angle differences on
+enabled gates both genomes carry, and `d_c` is the Euclidean distance between
+trainable encoder and decoder parameters (weights and biases). Disabled gates
+do not enter. A task with no trainable classical component has `d_c = 0`.
+A new genome joins the first compatible species (`distance ≤ --species_threshold`)
+or starts its own; parents are drawn round-robin within a species, with a
+small chance of inter-species crossover. Capacity is enforced globally (worst
+non-singleton members are preferred for eviction). Species membership is stored
+on each genome as `metadata["species_id"]`; the search archive indexes that as
+the summary `species` column (alongside `island` for island searches) so the
 dashboard and MCP can filter and color by species the same way they do for
 islands. The archive's `run_info` records a `speciation` object with
-`max_population_size`, `species_threshold`, `neat_c1`, `neat_c2`, `neat_c3`,
+`max_population_size`, `species_threshold`, `c_s`, `c_q`, `c_c`,
 and `inter_species_parent_rate`. Parent-selection metadata uses
 `crossover_type` values `mutation`, `intra`, and `inter` (islands instead use
 `intra-island` / `inter-island`). A local breast-cancer wrapper that exercises
@@ -372,10 +377,10 @@ this strategy is [`scripts/run_breast_cancer_local.sh`](scripts/run_breast_cance
 | Argument | Default | Description |
 |---|---|---|
 | `--max_population_size` | `30` | Genomes retained across all species |
-| `--species_threshold` | `0.6` | Join a species iff structural distance is at most this |
-| `--neat_c1` | `1.0` | Coefficient on excess genes in the structural distance |
-| `--neat_c2` | `1.0` | Coefficient on disjoint genes in the structural distance |
-| `--neat_c3` | `0.0` | Angle-term coefficient; must stay `0.0` (matching-gene angle term reserved for later investigation) |
+| `--species_threshold` | `0.6` | Join a species iff the compatibility distance is at most this |
+| `--c_s` | `1.0` | Coefficient on the structural distance |
+| `--c_q` | `1.0` | Coefficient on the quantum angular distance |
+| `--c_c` | `1.0` | Coefficient on the classical encoder and decoder distance |
 | `--inter_species_parent_rate` | `0.1` | Fraction of multi-parent requests that mix two species |
 
 ### Choosing a population strategy
