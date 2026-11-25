@@ -984,7 +984,44 @@ the archive's `n_gates` column, which also counts disabled gates. With a
 device card, `loss` is already the noisy loss, so `loss p_fail` trades accuracy
 under the card's noise against how often the circuit would fail on its device;
 `total_time_ns` makes a third objective for `nsga3`. There is no island variant
-or wrapper script yet.
+or local wrapper script yet.
+
+**Cluster script.** [`scripts/submit_exaqc_moo_jobs.sh`](./scripts/submit_exaqc_moo_jobs.sh)
+submits one Slurm job per run of [`scripts/exaqc_moo_job.sh`](./scripts/exaqc_moo_job.sh)
+(written for RIT's tigris partition: one 144-rank node, `spack load openmpi`,
+`python3.12`), each a noise-aware search on a UCI dataset with the 2026 PPSN
+qubit counts (`breast_cancer` 8/1, `iris` 4/2, `seeds` 6/2, `wine` 4/2). Each
+run's job, logs and archive share one name,
+`exaqc_moo_<tag>_<dataset>_<card>_<algorithm>_<run>`, and a resubmitted run
+continues its archive:
+
+```
+sh scripts/submit_exaqc_moo_jobs.sh 1 5 card breast_cancer
+DEVICE_CARD=none sh scripts/submit_exaqc_moo_jobs.sh 1 5 baseline breast_cancer
+ALGORITHM=nsga3 OBJECTIVES="loss:1 p_fail:1 total_time_ns:1" sh scripts/submit_exaqc_moo_jobs.sh 1 3 three_obj wine
+```
+
+| Variable | Default | Description |
+|---|---|---|
+| `DEVICE_CARD` | `transmon_detuned_lindblad_markov` | `--noise_device_card`; `none` runs noiselessly (a baseline). Part of the run name |
+| `ALGORITHM` | `nsga2` | Population sub-command, `nsga2` or `nsga3`. Part of the run name |
+| `OBJECTIVES` | `loss:1 p_fail:1` (`loss:1 n_enabled_gates:1` without a card) | `--objectives`, as one quoted value |
+| `NOISE_IDLE` | `1` | `--noise_idle` (`1`) or `--no-noise_idle` (`0`) |
+| `NOISE_CALIBRATION` / `NOISE_QUBITS` | unset | Chip wiring for the card (`--noise_calibration` / `--noise_qubits`) |
+| `INPUT_QUBITS` / `OUTPUT_QUBITS` | the dataset's PPSN values | `--input_qubits` / `--output_qubits` |
+| `QIM` / `QOM` / `ENCODING` / `DECODING` | `ry` / `probs` / `linear` / `linear` | `-qim` / `-qom` / `--encoding` / `--decoding` |
+| `MAX_POPULATION_SIZE` / `NUMBER_GENOMES` | `30` / `2000` | `--max_population_size` / `--number_genomes` |
+| `EPOCHS` / `IMPROVEMENT_CUTOFF` / `BATCH_SIZE` | `30` / `3` / `3` | Trainer settings |
+| `TRAINING_SAMPLES` / `VALIDATION_SAMPLES` | unset (all) | `--training_samples` / `--validation_samples`, the main knob for a quicker noisy run |
+| `N_TASKS` | `144` | MPI ranks on the one node (`--ntasks`) |
+| `TIME_LIMIT` / `ACCOUNT` | the job script's (`1-00:00:00` / `neuroevolution`) | Slurm `-t` / `-A` |
+| `LOG_DIR` / `ARCHIVE_DIR` / `VENV` | `~/logs/exaqc_moo` / `~/genome_archives` / `~/envs/exaqc` | Slurm logs, archives, and the venv the job activates |
+| `DRY_RUN` | unset | Print the `sbatch` commands (or, for the job script, the search command) instead of running them |
+
+Only the card, the algorithm and the tag change the run name, so give each
+other combination of settings its own tag. Noisy simulation at 8 qubits is slow
+(each density-matrix step works on a 256 × 256 matrix): try a short run with
+`NUMBER_GENOMES`, `EPOCHS` and `TRAINING_SAMPLES` lowered first.
 
 ### [`teacher`](./src/examples/teacher.py)
 
