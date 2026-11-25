@@ -415,6 +415,13 @@ def run_evolution(
     only on those ranks; the ``EXAQC`` it returns must wrap the same
     ``objective`` passed here.
 
+    Entry points call :func:`src.utils.restart.prepare` on every rank before
+    this. With more than one rank, this waits at an MPI barrier before the
+    master builds the search, so a slow worker cannot still be inside
+    ``prepare`` when the master creates the archive -- that race would make the
+    worker treat the new archive as a run to continue (or fail on an empty one)
+    while the master waited forever for a genome request.
+
     Args:
         objective: The objective used to evaluate genomes; needed by every worker
             rank (and by the ``EXAQC`` built for the serial/master run).
@@ -434,6 +441,10 @@ def run_evolution(
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
+
+    if size > 1:
+        # every rank has finished ``restart.prepare`` once it reaches here
+        comm.Barrier()
 
     if size > 1 and rank != 0:
         # worker rank: only the objective is needed to evaluate genomes

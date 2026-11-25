@@ -21,7 +21,9 @@ its number instead of training it, so a run takes seconds.
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -118,44 +120,67 @@ def _find_launcher() -> list[str] | str:
 def run_search(out_dir: Path, number_genomes: int) -> subprocess.CompletedProcess[str]:
     """Runs the driver under ``mpiexec``, continuing whatever is in ``out_dir``.
 
+    The launcher is started in its own session so a timeout can kill the whole
+    process group. Leaving orphaned MPI ranks behind is what turns one hung run
+    into a cascade of later timeouts on CI.
+
     Args:
         out_dir: The run's output directory.
         number_genomes: The total the run should end up having evaluated.
 
     Returns:
         The finished process, with its output captured.
+
+    Raises:
+        subprocess.TimeoutExpired: If the run exceeds :data:`TIMEOUT_SECONDS`.
     """
 
-    return subprocess.run(
-        [
-            *mpiexec_command(),
-            "-n",
-            str(RANKS),
-            sys.executable,
-            "-m",
-            "tests.mpi_restart_driver",
-            "--mutation_strategy",
-            "uniform",
-            "1",
-            "2",
-            "--parent_strategy",
-            "uniform",
-            "2",
-            "3",
-            # the strategy flags above take any number of values, so a flag that
-            # takes exactly one has to end the list before the sub-command
-            "--out_dir",
-            str(out_dir),
-            "--number_genomes",
-            str(number_genomes),
-            "steady_state",
-            "--max_population_size",
-            "4",
-        ],
-        capture_output=True,
+    command = [
+        *mpiexec_command(),
+        "-n",
+        str(RANKS),
+        sys.executable,
+        "-m",
+        "tests.mpi_restart_driver",
+        "--mutation_strategy",
+        "uniform",
+        "1",
+        "2",
+        "--parent_strategy",
+        "uniform",
+        "2",
+        "3",
+        # the strategy flags above take any number of values, so a flag that
+        # takes exactly one has to end the list before the sub-command
+        "--out_dir",
+        str(out_dir),
+        "--number_genomes",
+        str(number_genomes),
+        "steady_state",
+        "--max_population_size",
+        "4",
+    ]
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=TIMEOUT_SECONDS,
         cwd=Path(__file__).resolve().parent.parent,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as timed_out:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        stdout, stderr = process.communicate()
+        timed_out.stdout = stdout
+        timed_out.stderr = stderr
+        raise timed_out
+    return subprocess.CompletedProcess(
+        args=command, returncode=process.returncode, stdout=stdout, stderr=stderr
     )
 
 
