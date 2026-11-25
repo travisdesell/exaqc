@@ -36,8 +36,8 @@ from src.evolution.innovation import innovation_number_generator  # noqa: E402
 from src.evolution.population_strategy import PopulationStrategy  # noqa: E402
 from src.evolution.steady_state_islands import SteadyStateIslands  # noqa: E402
 from src.evolution.steady_state_population import SteadyStatePopulation  # noqa: E402
-from src.evolution.steady_state_speciation import SteadyStateSpeciation  # noqa: E402
 from src.utils.genome_archive import GenomeArchive  # noqa: E402
+from tests.test_genome_archive import FakeGenome  # noqa: E402
 
 #: The arguments a steady-state run records, as an entry point would.
 STEADY_STATE_ARGUMENTS: dict[str, Any] = {
@@ -530,6 +530,12 @@ def test_a_restart_records_itself_without_disturbing_the_run(tmp_path) -> None:
 def test_an_excess_disjoint_speciation_archive_cannot_be_continued(tmp_path) -> None:
     """A run recorded with ``neat_c*`` cannot continue under the new distance.
 
+    The archive is built by hand rather than by running a search: the restart
+    helpers' classification-shaped harness uses the same register for inputs and
+    outputs, so an empty circuit counts as valid and is sometimes archived with
+    no gate innovation numbers. ``load`` would then refuse for that reason
+    before the excess/disjoint check ran.
+
     Args:
         tmp_path: pytest per-test temporary directory (auto-removed).
     """
@@ -546,12 +552,20 @@ def test_an_excess_disjoint_speciation_archive_cannot_be_continued(tmp_path) -> 
         "number_genomes": 2,
         "out_dir": str(run_dir),
     }
-    run_a_search(
-        run_dir,
-        SteadyStateSpeciation(max_population_size=4, compare=compare),
-        recorded,
-        genomes=1,
-    )
+    archive = GenomeArchive.create(str(run_dir), arguments=recorded)
+    try:
+        # Empty fitness keeps loss/target_metric NULL so ``load`` never
+        # deserializes this stub through ``CircuitGenome.from_dict``.
+        archive.add_genome(
+            FakeGenome(
+                1,
+                fitness={},
+                gates=[{"innovation_number": 1, "enabled": True}],
+            ),
+            insertion=1,
+        )
+    finally:
+        archive.close()
 
     def fail(message: str) -> None:
         """Stops ``prepare`` with ``message``.
