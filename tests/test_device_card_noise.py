@@ -256,6 +256,54 @@ def test_chip_wiring_comes_from_the_coupling_map() -> None:
         wired_slot_pairs(raw, [7])
 
 
+def test_calibration_supplies_only_the_wiring(tmp_path: Path) -> None:
+    """With a calibration file, the card keeps its rates and takes the chip's wiring.
+
+    Uses the calibration packaged with Qiskit's offline ``FakeTorino``, saved
+    as a stored calibration file. Torino qubits 0-1-2 are a line, so wires 0
+    and 2 are not wired, and a gate between them needs routing moves.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    fake_provider = pytest.importorskip("qiskit_ibm_runtime.fake_provider")
+    from src.noise.calibration.backends import (
+        fetch_raw_calibration,
+        save_raw_calibration,
+    )
+
+    raw = fetch_raw_calibration(fake_provider.FakeTorino())
+    calibration = save_raw_calibration(raw, tmp_path / "calibration")
+    card = str(_write_card(tmp_path))
+
+    model = PennyLaneNoiseModel.from_args(
+        _parse(
+            [
+                "--noise_device_card",
+                card,
+                "--noise_calibration",
+                str(calibration),
+                "--noise_qubits",
+                "0,1,2",
+            ]
+        )
+    )
+
+    assert model.noise_type == "device_card"
+    assert model.per_qubit is None  # no chip rates
+    assert model.device_card["wired_pairs"] == [[0, 1], [1, 2]]
+    assert model.device_card["wiring"]["qubits"] == [0, 1, 2]
+    assert model.device_card["gates"]["cx"]["T_ns"] == 200.0
+
+    with pytest.raises(ValueError, match="go together"):
+        PennyLaneNoiseModel.from_args(
+            _parse(
+                ["--noise_device_card", card, "--noise_calibration", str(calibration)]
+            )
+        )
+
+
 def _card_settings(tmp_path: Path, **overrides: Any) -> dict[str, Any]:
     """Device-card ``noise_*`` genome settings for the unit card.
 
