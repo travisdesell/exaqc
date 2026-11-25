@@ -8,9 +8,13 @@ keeps a Pareto front over two or more objectives instead of a single ranking.
 Every genome's fitness holds the standard classification keys (``loss`` and
 ``target_metric``, the mean class accuracy) plus the structural keys
 ``n_enabled_gates`` (the number of enabled quantum gates) and ``n_parameters``
-(the number of parameters on those gates). Any of these can be chosen as an
-objective with ``--objectives NAME:SIGN``, where a sign of ``1`` minimizes and
-``-1`` maximizes. The default minimizes loss and the number of enabled gates.
+(the number of parameters on those gates). Under device-card noise
+(``--noise_device_card``) it also holds the card's simulation-free hardware
+keys ``p_fail`` (the chance that any gate or wait errs), ``total_time_ns`` (the
+circuit's duration) and ``n_entanglers`` (its ``cx`` count, routing included).
+Any of these can be chosen as an objective with ``--objectives NAME:SIGN``,
+where a sign of ``1`` minimizes and ``-1`` maximizes. The default minimizes
+loss and the number of enabled gates.
 
 Example::
 
@@ -34,6 +38,8 @@ from src.evolution.moo.nsga2 import NSGA2
 from src.evolution.moo.nsga3 import NSGA3
 from src.evolution.moo.objective_spec import ObjectiveSpec
 from src.examples import classification
+from src.noise.device_card import HARDWARE_OBJECTIVES
+from src.noise.pennylane_noise_model import PennyLaneNoiseModel
 from src.objectives.classification_objective import ClassificationObjective
 from src.utils.restart import RestartState
 
@@ -41,11 +47,14 @@ from src.utils.restart import RestartState
 STRUCTURAL_OBJECTIVES: tuple[str, ...] = ("n_enabled_gates", "n_parameters")
 
 #: Every fitness key a multi-objective classification genome records, and so
-#: every name ``--objectives`` accepts.
+#: every name ``--objectives`` accepts. The hardware objectives
+#: (:data:`~src.noise.device_card.HARDWARE_OBJECTIVES`) are recorded only
+#: under ``--noise_device_card``.
 AVAILABLE_OBJECTIVES: tuple[str, ...] = (
     "loss",
     "target_metric",
     *STRUCTURAL_OBJECTIVES,
+    *HARDWARE_OBJECTIVES,
 )
 
 #: The objectives used when ``--objectives`` is not given.
@@ -80,12 +89,34 @@ def structural_fitness(genome: CircuitGenome) -> dict[str, float]:
     }
 
 
+def hardware_fitness(genome: CircuitGenome) -> dict[str, float]:
+    """The device card's predicted cost of running a genome, when it has one.
+
+    Computed from the genome's translation into card gates, without any
+    simulation (see :func:`src.noise.device_card.hardware_metrics`).
+
+    Args:
+        genome: The genome, whose ``noise_*`` hyperparameters say whether it
+            runs under device-card noise.
+
+    Returns:
+        ``p_fail``, ``total_time_ns`` and ``n_entanglers`` under the genome's
+        card, or nothing when it has no device-card noise.
+    """
+
+    model = PennyLaneNoiseModel.from_hyperparameters(genome.hyperparameters)
+    if model.noise_type != "device_card":
+        return {}
+    return model.hardware_metrics(genome)
+
+
 class MultiObjectiveClassificationObjective(ClassificationObjective):
-    """Classification objective that also records the circuit's size.
+    """Classification objective that also records the circuit's size and cost.
 
     Trains and scores a genome exactly as :class:`ClassificationObjective`
-    does, then adds :func:`structural_fitness`'s keys, so the population can
-    trade accuracy off against circuit size.
+    does, then adds :func:`structural_fitness`'s keys, and under device-card
+    noise :func:`hardware_fitness`'s, so the population can trade accuracy off
+    against circuit size, predicted failure rate and duration.
     """
 
     def __call__(self, genome: CircuitGenome) -> None:
@@ -98,12 +129,13 @@ class MultiObjectiveClassificationObjective(ClassificationObjective):
             None. Sets ``genome.fitness`` (and
             ``genome.metadata["initial_fitness"]``, when the trainer recorded
             the inherited weights' metrics) to the classification fitness plus
-            ``n_enabled_gates`` and ``n_parameters``.
+            ``n_enabled_gates`` and ``n_parameters``, and under device-card
+            noise ``p_fail``, ``total_time_ns`` and ``n_entanglers``.
         """
 
         super().__call__(genome)
 
-        structure = structural_fitness(genome)
+        structure = {**structural_fitness(genome), **hardware_fitness(genome)}
         genome.fitness.update(structure)
         if genome.metadata.get("initial_fitness") is not None:
             genome.metadata["initial_fitness"].update(structure)
@@ -157,7 +189,8 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="NAME:SIGN",
         help=(
             "Objectives to optimize, as NAME:SIGN with sign 1 to minimize or -1 to "
-            f"maximize (a bare NAME minimizes). Names: {', '.join(AVAILABLE_OBJECTIVES)}. "
+            f"maximize (a bare NAME minimizes). Names: {', '.join(AVAILABLE_OBJECTIVES)} "
+            f"({', '.join(HARDWARE_OBJECTIVES)} need --noise_device_card). "
             "At least two are required. Like -ms and -ps, it takes every value up to "
             "the next flag, so do not put it directly before the nsga2/nsga3 sub-command."
         ),
@@ -254,9 +287,15 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
-        parse_objectives(args.objectives)
+        objectives = parse_objectives(args.objectives)
     except ValueError as error:
         parser.error(str(error))
+
+    needs_card = [o.name for o in objectives if o.name in HARDWARE_OBJECTIVES]
+    if needs_card and args.noise_device_card is None:
+        parser.error(
+            f"{', '.join(needs_card)} come from a device card; give --noise_device_card."
+        )
 
     classification.run(
         parser,

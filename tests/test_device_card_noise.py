@@ -339,3 +339,66 @@ def test_every_card_gate_is_charged(tmp_path: Path) -> None:
         wait > 1e-9 for wait in timeline.idle_at_end
     )
     assert len(queue.queue) == noisy_gates + waits
+
+
+def test_multi_objective_fitness_adds_hardware_keys(tmp_path: Path) -> None:
+    """classification_moo records the card's p_fail, duration and cx count.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    from src.examples.classification_moo import hardware_fitness, parse_objectives
+
+    noisy = _build_genome("pennylane", _card_settings(tmp_path))
+    metrics = hardware_fitness(noisy)
+
+    assert set(metrics) == {"p_fail", "total_time_ns", "n_entanglers"}
+    assert 0.0 < metrics["p_fail"] < 1.0
+    assert metrics["total_time_ns"] > 0.0
+    assert hardware_fitness(_build_genome("pennylane")) == {}
+
+    parsed = parse_objectives(["loss", "p_fail", "total_time_ns:1"])
+    assert [o.name for o in parsed] == ["loss", "p_fail", "total_time_ns"]
+
+
+def test_hardware_objectives_need_a_card(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Choosing p_fail without --noise_device_card stops before any work.
+
+    Args:
+        monkeypatch: Used to set the command line.
+    """
+
+    import sys
+
+    from src.examples import classification_moo
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "classification_moo",
+            "--dataset",
+            "iris",
+            "--input_qubits",
+            "4",
+            "--output_qubits",
+            "2",
+            "-ms",
+            "uniform",
+            "1",
+            "3",
+            "-ps",
+            "uniform",
+            "5",
+            "5",
+            "--objectives",
+            "loss",
+            "p_fail",
+            "--out_dir",
+            "unused",
+            "nsga2",
+        ],
+    )
+    with pytest.raises(SystemExit):
+        classification_moo.main()

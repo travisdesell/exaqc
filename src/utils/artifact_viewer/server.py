@@ -445,9 +445,22 @@ def higher_is_better(key: str) -> bool:
     return "loss" not in key.lower()
 
 
-#: Circuit-size keys, which a multi-objective search minimizes even though
-#: their names do not say ``loss`` (see :func:`pareto_higher_is_better`).
-SIZE_KEYS = frozenset({"n_gates", "n_enabled_gates", "n_parameters", "n_cnot", "n_rot"})
+#: Circuit-size and hardware-cost keys (the device card's ``p_fail``,
+#: ``total_time_ns`` and ``n_entanglers``), which a multi-objective search
+#: minimizes even though their names do not say ``loss`` (see
+#: :func:`pareto_higher_is_better`).
+SIZE_KEYS = frozenset(
+    {
+        "n_gates",
+        "n_enabled_gates",
+        "n_parameters",
+        "n_cnot",
+        "n_rot",
+        "p_fail",
+        "total_time_ns",
+        "n_entanglers",
+    }
+)
 
 
 def pareto_higher_is_better(key: str, objectives: Sequence[dict[str, Any]]) -> bool:

@@ -943,11 +943,28 @@ and run-output arguments), except that the population sub-command is `nsga2` or
 `target_metric` as in `classification`, plus `n_enabled_gates` (enabled quantum
 gates) and `n_parameters` (the parameters on those gates; encoder and decoder
 weights are not counted), so the archive, dashboard and `--restart` work as
-they do for a single-objective run.
+they do for a single-objective run. Under
+[device-card noise](#classification) (`--noise_device_card`) it also records
+three hardware keys computed from the card without simulating anything:
+`p_fail` (the chance that any card gate or wait errs, assuming independent
+errors), `total_time_ns` (the circuit's duration on the card's device) and
+`n_entanglers` (its `cx` count, routing moves included).
+
+```
+python3 -m src.examples.classification_moo \
+    --dataset iris --input_qubits 4 --output_qubits 2 --batch_size 3 \
+    --number_genomes 200 \
+    -ms uniform 1 3 -ps uniform 5 5 \
+    -qim u3 -qom probs --encoding linear --decoding linear \
+    --noise_device_card transmon_detuned_lindblad_markov \
+    --objectives loss:1 p_fail:1 \
+    --out_dir ./artifacts/iris_card_nsga2 \
+    nsga2 --max_population_size 30
+```
 
 | Argument | Default | Description |
 |---|---|---|
-| `--objectives` | `loss:1 n_enabled_gates:1` | Two or more of `loss`, `target_metric`, `n_enabled_gates`, `n_parameters` as `NAME:SIGN`; sign `1` minimizes, `-1` maximizes, a bare name minimizes. Like `-ms`/`-ps` it takes every value up to the next flag, so keep another flag between it and the sub-command |
+| `--objectives` | `loss:1 n_enabled_gates:1` | Two or more of `loss`, `target_metric`, `n_enabled_gates`, `n_parameters`, `p_fail`, `total_time_ns`, `n_entanglers` as `NAME:SIGN` (the last three need `--noise_device_card`); sign `1` minimizes, `-1` maximizes, a bare name minimizes. Like `-ms`/`-ps` it takes every value up to the next flag, so keep another flag between it and the sub-command |
 | `nsga2` / `nsga3` | *required* | Population sub-command |
 | `--max_population_size` | `30` | Genomes kept after each insertion (both sub-commands) |
 | `--tournament_size` | `2` | Genomes sampled per parent-selection tournament (both) |
@@ -963,8 +980,11 @@ treated as dominated by every other genome. The run's "best" genome (its
 *first* objective, and the objectives and algorithm are recorded in the
 archive's `run_info` under `multi_objective`, which the
 [dashboard](#exaqc_dashboard)'s **Pareto** view plots. Use `n_enabled_gates` rather than
-the archive's `n_gates` column, which also counts disabled gates. There is no
-island variant or wrapper script yet.
+the archive's `n_gates` column, which also counts disabled gates. With a
+device card, `loss` is already the noisy loss, so `loss p_fail` trades accuracy
+under the card's noise against how often the circuit would fail on its device;
+`total_time_ns` makes a third objective for `nsga3`. There is no island variant
+or wrapper script yet.
 
 ### [`teacher`](./src/examples/teacher.py)
 

@@ -20,6 +20,7 @@ from src.noise.device_card import (
     CardTimeline,
     all_pairs,
     card_timeline,
+    hardware_metrics,
     idle_pauli_probabilities,
     kraus_from_pauli_probabilities,
 )
@@ -66,6 +67,23 @@ class DeviceCardChannels(BaseNoiseModel):
             seed=self.transpile_seed,
         )
         return schedule, card_timeline(schedule, card, n_wires)
+
+    def hardware_metrics(self, genome: CircuitGenome) -> dict[str, float]:
+        """The card's simulation-free objectives for a genome.
+
+        Args:
+            genome: The genome to measure.
+
+        Returns:
+            ``p_fail``, ``total_time_ns`` and ``n_entanglers`` (see
+            :func:`src.noise.device_card.hardware_metrics`), from the same
+            translation and timeline the noise is added from.
+
+        Raises:
+            ValueError: If no card is loaded.
+        """
+        _, timeline = self._translate_for_card(genome)
+        return hardware_metrics(timeline, self._card())
 
     def _card(self) -> dict:
         """Returns the loaded card, or stops clearly.
