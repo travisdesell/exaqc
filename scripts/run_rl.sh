@@ -13,6 +13,7 @@
 #   USE_ONLY="rx ry rz cx cy cz" OUT_DIR=./exaqc_runs/rxyz_cxyz bash scripts/run_rl.sh
 #   BASE_DIR=~/Data/exaqc_runs bash scripts/run_rl.sh
 #   POPULATION=steady_state MAX_POPULATION_SIZE=50 bash scripts/run_rl.sh
+#   POPULATION=steady_state_speciation SPECIES_THRESHOLD=0.6 bash scripts/run_rl.sh
 #   TAG=run2 bash scripts/run_rl.sh
 #
 # The 2026 PPSN runs are reproduced by scripts/run_ppsn2026_rl.sh instead.
@@ -42,7 +43,7 @@ QOM=${QOM:-probs}
 ENCODING=${ENCODING:-linear}
 DECODING=${DECODING:-linear}
 
-#: The population strategy: islands or steady_state.
+#: The population strategy: islands, steady_state, or steady_state_speciation.
 POPULATION=${POPULATION:-islands}
 
 #: Islands, and genomes per island (POPULATION=islands).
@@ -54,8 +55,12 @@ MAX_ISLAND_SIZE=${MAX_ISLAND_SIZE:-5}
 #: src/evolution/topology.py validates the arguments.
 TOPOLOGY=${TOPOLOGY:-2d_mesh 5 5}
 
-#: Genomes the population keeps (POPULATION=steady_state).
+#: Genomes the population keeps (POPULATION=steady_state or
+#: steady_state_speciation).
 MAX_POPULATION_SIZE=${MAX_POPULATION_SIZE:-30}
+
+#: Compatibility-distance join threshold (POPULATION=steady_state_speciation).
+SPECIES_THRESHOLD=${SPECIES_THRESHOLD:-0.6}
 
 #: Training episodes per genome; 0 evaluates inherited weights without training.
 EPISODES=${EPISODES:-220}
@@ -128,7 +133,7 @@ require_choice QIM "$QIM" "u3 rx ry rz basis amplitude"
 require_choice QOM "$QOM" "probs expval"
 require_choice ENCODING "$ENCODING" "identity linear"
 require_choice DECODING "$DECODING" "clipped linear"
-require_choice POPULATION "$POPULATION" "islands steady_state"
+require_choice POPULATION "$POPULATION" "islands steady_state steady_state_speciation"
 require_whole_number EPISODES "$EPISODES"
 require_whole_number IMPROVEMENT_CUTOFF "$IMPROVEMENT_CUTOFF"
 require_positive LOG_EVERY "$LOG_EVERY"
@@ -176,6 +181,18 @@ if [ "$POPULATION" = islands ]; then
     )
     # e.g. ./exaqc_runs/walker2d_2d_mesh_4_5_i20
     DEFAULT_OUT_DIR=${BASE_DIR%/}/${ENVIRONMENT}_${TOPOLOGY_TAG}_i${N_ISLANDS}
+elif [ "$POPULATION" = steady_state_speciation ]; then
+    require_positive MAX_POPULATION_SIZE "$MAX_POPULATION_SIZE"
+    case "$SPECIES_THRESHOLD" in
+        '' | *[!0-9.]* | *.*.*) die "SPECIES_THRESHOLD must be a non-negative number, but found: $SPECIES_THRESHOLD" ;;
+    esac
+    POPULATION_ARGUMENTS=(
+        steady_state_speciation
+        --max_population_size "$MAX_POPULATION_SIZE"
+        --species_threshold "$SPECIES_THRESHOLD"
+    )
+    # e.g. ./exaqc_runs/walker2d_speciation_p30_t0.6
+    DEFAULT_OUT_DIR=${BASE_DIR%/}/${ENVIRONMENT}_speciation_p${MAX_POPULATION_SIZE}_t${SPECIES_THRESHOLD}
 else
     require_positive MAX_POPULATION_SIZE "$MAX_POPULATION_SIZE"
     POPULATION_ARGUMENTS=(steady_state --max_population_size "$MAX_POPULATION_SIZE")

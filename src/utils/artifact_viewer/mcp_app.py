@@ -444,7 +444,7 @@ def build_mcp_server(
             "the distribution of target_metric minus the score the inherited weights "
             "had before training, the share of genomes it improved or left "
             "unchanged, and both by quartile of the starting score; optionally "
-            "grouped by insert_type, island or generated_by. Needs an archive of "
+            "grouped by insert_type, island, species or generated_by. Needs an archive of "
             "format 7 or later, or an older one brought up to date by "
             "src.examples.backfill_archive."
         )

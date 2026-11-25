@@ -210,6 +210,7 @@ __marimo__/
 # Results
 plots/
 artifacts/
+exaqc_runs/
 outs/
 outputs/
 logs/

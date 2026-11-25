@@ -1095,6 +1095,24 @@ def test_speciation_runs_show_species_and_each_parents_species(tmp_path) -> None
         }
 
 
+def test_species_lookup_is_empty_without_the_column(tmp_path: Path) -> None:
+    """An archive written before the species column answers with no species.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    directory = Path(build_run(tmp_path / "old", standard_genomes(), history=False))
+    connection = sqlite3.connect(directory / ARCHIVE_FILENAME)
+    connection.execute("ALTER TABLE genomes DROP COLUMN species")
+    connection.commit()
+    connection.close()
+
+    with GenomeArchive.open_readonly(str(directory)) as reader:
+        assert "species" not in reader.genome_columns
+        assert reader.species_of([1, 2, 0]) == [None, None, None]
+
+
 def test_compare_two_genomes(viewer_url: str) -> None:
     """Two genomes are compared by fitness, hyperparameters and gates.
 

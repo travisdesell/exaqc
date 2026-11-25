@@ -142,35 +142,40 @@ linearly with the number of workers.
 
 ### Local run scripts
 
-[`scripts/run_classification.sh`](./scripts/run_classification.sh) and
+[`scripts/run_classification.sh`](./scripts/run_classification.sh),
+[`scripts/run_teacher.sh`](./scripts/run_teacher.sh) and
 [`scripts/run_rl.sh`](./scripts/run_rl.sh) run one search of
-[`classification`](#classification) or
+[`classification`](#classification), [`teacher`](#teacher) or
 [`reinforcement_learning`](#reinforcement_learning) on this machine through the
 local `mpiexec`. They take no arguments: every setting is an environment
 variable with a default, so a run changes only what it names:
 
 ```
 DATASET=wine POPULATION=steady_state bash scripts/run_classification.sh
+TEACHER=bell_out POPULATION=steady_state_speciation bash scripts/run_teacher.sh
 ENVIRONMENT=hopper TOPOLOGY="2d_mesh 4 5" N_ISLANDS=20 TAG=run2 bash scripts/run_rl.sh
 ```
 
-The variables both scripts share are below; each entry point's section lists its
-own. The 2026 PPSN experiments have scripts of their own (see
+The variables the scripts share are below; each entry point's section lists its
+own. Teacher has no encoder or decoder, so it ignores `ENCODING` / `DECODING`
+and restricts `QIM` to `rx` / `ry` / `rz`. The 2026 PPSN experiments have
+scripts of their own (see
 [Reproducing 2026 PPSN results](#reproducing-2026-ppsn-results)).
 
 | Variable | Default | Description |
 |---|---|---|
 | `N_PROCESSES` | `12` | MPI processes (`mpiexec -n`): one master plus the workers; at least 2 |
-| `INPUT_QUBITS` / `OUTPUT_QUBITS` | `5` / `5` | `--input_qubits` / `--output_qubits` |
-| `QIM` / `QOM` | `u3` / `probs` | `-qim` / `-qom` |
-| `ENCODING` / `DECODING` | `linear` / `linear` | `--encoding` (`identity`, `linear`) / `--decoding` (`clipped`, `linear`) |
-| `POPULATION` | `islands` | Population sub-command: `islands` or `steady_state` |
+| `INPUT_QUBITS` / `OUTPUT_QUBITS` | `5` / `5` (teacher: `2` / `2`) | `--input_qubits` / `--output_qubits` |
+| `QIM` / `QOM` | `u3` / `probs` (teacher: `ry` / `probs`) | `-qim` / `-qom` |
+| `ENCODING` / `DECODING` | `linear` / `linear` | `--encoding` (`identity`, `linear`) / `--decoding` (`clipped`, `linear`); classification and RL only |
+| `POPULATION` | `islands` | Population sub-command: `islands`, `steady_state` or `steady_state_speciation` |
 | `N_ISLANDS` / `MAX_ISLAND_SIZE` | `25` / `5` | `--n_islands` / `--max_island_size` (`islands` only; `--islands_to_extinct` is fixed at 1) |
 | `TOPOLOGY` | `2d_mesh 5 5` | `--topology` and its arguments, as one quoted value (`islands` only) |
-| `MAX_POPULATION_SIZE` | `30` | `--max_population_size` (`steady_state` only) |
+| `MAX_POPULATION_SIZE` | `30` | `--max_population_size` (`steady_state` and `steady_state_speciation`) |
+| `SPECIES_THRESHOLD` | `0.6` | `--species_threshold` (`steady_state_speciation` only) |
 | `USE_ONLY` | `rx ry rz p u crx cry crz cp rxx ryy rzz cx cy cz` | `--use_only` gates, as one quoted value |
 | `BASE_DIR` | `./exaqc_runs` | Directory the default `OUT_DIR` is created in |
-| `OUT_DIR` | `<BASE_DIR>/<dataset or env>_<topology>_i<n_islands>`, or `..._steady_state_p<max_population_size>` | `--out_dir` |
+| `OUT_DIR` | `<BASE_DIR>/<dataset, teacher or env>_<topology>_i<n_islands>`, `..._steady_state_p<max_population_size>`, or `..._speciation_p<max_population_size>_t<species_threshold>` | `--out_dir` |
 | `TAG` | unset | Appended to the output directory as `_<TAG>` (letters, digits, `-` and `_`) |
 | `PYTHON` / `MPIEXEC` / `MPIEXEC_ARGS` | `python3` / `mpiexec` / `--oversubscribe` | Interpreter and launcher; clear `MPIEXEC_ARGS` for an MPI other than Open MPI |
 | `DRY_RUN` | unset | When set, print the command instead of running it |
@@ -370,8 +375,10 @@ islands. The archive's `run_info` records a `speciation` object with
 `max_population_size`, `species_threshold`, `c_s`, `c_q`, `c_c`,
 and `inter_species_parent_rate`. Parent-selection metadata uses
 `crossover_type` values `mutation`, `intra`, and `inter` (islands instead use
-`intra-island` / `inter-island`). A local breast-cancer wrapper that exercises
-this strategy is [`scripts/run_breast_cancer_local.sh`](scripts/run_breast_cancer_local.sh)
+`intra-island` / `inter-island`). The local run scripts accept
+`POPULATION=steady_state_speciation` (with `SPECIES_THRESHOLD`); a breast-cancer
+wrapper that also exercises this strategy alongside the others is
+[`scripts/run_breast_cancer_local.sh`](scripts/run_breast_cancer_local.sh)
 (`GENOMES`, `POP_SIZE`, `SPECIES_THRESHOLD`).
 
 | Argument | Default | Description |
@@ -932,6 +939,21 @@ mpiexec -n 12 python3 -m src.examples.teacher \
     steady_state --max_population_size 30
 ```
 
+**Script.** [`scripts/run_teacher.sh`](./scripts/run_teacher.sh) runs a search
+locally, configured by the [shared variables](#local-run-scripts) and these. It
+fixes `-ms uniform 1 3 -ps uniform 5 5` and crossover rates of `0.1` (binary,
+n-ary and exponential).
+
+| Variable | Default | Description |
+|---|---|---|
+| `TEACHER` | `half_adder` | `--teacher` |
+| `LOSS` | `fidelity` | `--loss`: `fidelity`, `angle`, `kl` or `mse` |
+| `NUMBER_GENOMES` | `1000` | `--number_genomes` |
+| `EPOCHS` | `30` | `--epochs` |
+| `IMPROVEMENT_CUTOFF` | `3` | `--improvement_cutoff` |
+| `BATCH_SIZE` | `8` | `--batch_size` |
+| `N_TRAINING_SAMPLES` / `N_VALIDATION_SAMPLES` | `64` / `64` | `--n_training_samples` / `--n_validation_samples` |
+
 **Teachers.** `identity`, `x_out4`, `bell_out`, `copy_in_to_out`,
 `parity012_to_out4`, `input_controlled_bell`, `2layer_out_block`, `grover`,
 `half_adder`. Each is itself a circuit genome, so it runs on either backend, and
@@ -1272,7 +1294,15 @@ Then open `http://127.0.0.1:8000/` in a browser. The page has:
   other. Rings mark the chart's focus island and its neighbors, and clicking an
   island colors the chart around it. While a genome is selected (and *highlight
   selected lineage* is on), arrows show where its ancestry crossed between
-  islands. A **Timing** section shows whether the MPI master kept up with its
+  islands. A speciation run also has a **Species** section: the species laid
+  out in a circle, each node sized by how many genomes it holds and shaded by
+  its best value of the charted metric, with an edge for every genome created
+  in one species from a parent in another. The recorded `--species_threshold`,
+  capacity, inter-species parent rate and `c_s` / `c_q` / `c_c` sit under the
+  graph, then a table of each species' size and best genome. Clicking a species
+  colors the chart around it. While a genome is selected (and *highlight
+  selected lineage* is on), arrows show where its ancestry crossed between
+  species. A **Timing** section shows whether the MPI master kept up with its
   workers: the whole run's genomes per second, the master's busy and idle shares
   and the mean time of each of its steps and insertion parts, and the workers'
   wait share and each genome's mean wait, evaluation, generation and turnaround
@@ -1367,7 +1397,7 @@ run, and says when a run's archive predates timing; `training_gain_summary`
 reports how much training changed a run's genomes -- the distribution of
 `target_gain`, the shares of genomes training improved or left unchanged, and both
 by quartile of the inherited weights' score, optionally grouped by `insert_type`,
-`island` or `generated_by` -- and needs an archive of format 7, or an older one
+`island`, `species` or `generated_by` -- and needs an archive of format 7, or an older one
 brought up to date with [`backfill_archive`](#backfill_archive); `genome_metrics` returns a genome's
 recorded training history, each series keyed by its own epoch or episode column;
 `list_runs` leaves out each run's command line unless `include_command_line` is
@@ -1552,10 +1582,12 @@ run would execute:
 DRY_RUN=1 TAG=1 bash scripts/run_ppsn2026_classification.sh iris
 ```
 
-Quantum teacher imitation:
+Quantum teacher imitation (local script; there is no separate PPSN teacher
+wrapper):
 
 ```
-sh scripts/run_teacher.sh 1 10 half_adder ./2026_ppsn_exaqc/teacher
+BASE_DIR=./2026_ppsn_exaqc/teacher TEACHER=half_adder POPULATION=steady_state \
+    TAG=1 bash scripts/run_teacher.sh
 ```
 
 The results can then be processed into the tables of mutation and crossover

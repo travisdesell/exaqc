@@ -1484,8 +1484,8 @@ class DashboardTools:
 
         Args:
             run: A run index or name.
-            group_by: Optionally ``insert_type``, ``island`` or ``generated_by``,
-                to summarize each group separately.
+            group_by: Optionally ``insert_type``, ``island``, ``species`` or
+                ``generated_by``, to summarize each group separately.
 
         Returns:
             ``overall`` gain statistics with the shares of genomes training
@@ -1496,19 +1496,28 @@ class DashboardTools:
 
         Raises:
             KeyError: If there is no such run.
-            ValueError: If ``group_by`` is not a groupable column, or the run's
-                archive predates the inherited weights' fitness (format 7).
+            ValueError: If ``group_by`` is not a groupable column, the run's
+                archive predates the inherited weights' fitness (format 7), or
+                ``group_by`` is ``species`` on an archive with no species column.
         """
 
         resolved = self._resolve(run)
         if group_by is not None and group_by not in (
             "insert_type",
             "island",
+            "species",
             "generated_by",
         ):
-            raise ValueError("group_by must be insert_type, island or generated_by.")
+            raise ValueError(
+                "group_by must be insert_type, island, species or generated_by."
+            )
 
         with GenomeArchive.open_readonly(resolved.archive_path) as reader:
+            if group_by == "species" and "species" not in reader.genome_columns:
+                raise ValueError(
+                    f"{resolved.name} was written before archives recorded "
+                    "species, so its training gain cannot be grouped by species."
+                )
             if "target_gain" not in reader.genome_columns:
                 raise ValueError(
                     f"{resolved.name} was written before archives recorded the "

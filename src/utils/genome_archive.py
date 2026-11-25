@@ -2463,9 +2463,13 @@ class GenomeArchive:
 
         Returns:
             Each genome's species, in the order given: ``None`` for a genome
-            that is not stored (the seed genome) or was not evolved under
-            speciation.
+            that is not stored (the seed genome), was not evolved under
+            speciation, or belongs to an archive written before the ``species``
+            column existed.
         """
+
+        if "species" not in self.genome_columns:
+            return [None for _ in genome_numbers]
 
         species: dict[int, int | None] = {}
         for chunk in _chunks(sorted({int(number) for number in genome_numbers})):
