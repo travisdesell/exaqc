@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import argparse
 import math
 
 from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 
@@ -16,6 +18,11 @@ from src.evolution.moo.pareto import (
     assign_pareto_ranks,
     objective_vector,
 )
+
+#: Where a non-finite objective lands after normalization: far beyond every
+#: finite genome (which normalize to roughly [0, 1]), so it is never mistaken
+#: for one near the ideal point.
+NON_FINITE_NORMALIZED = 1.0e6
 
 
 class NSGA3(MultiObjectivePopulationBase):
@@ -29,7 +36,9 @@ class NSGA3(MultiObjectivePopulationBase):
 
     Args:
         reference_divisions: Number of divisions used to construct the
-            Das-Dennis reference-direction simplex.
+            Das-Dennis reference-direction simplex, or ``None`` to use the
+            most divisions whose reference directions do not outnumber the
+            population (see :meth:`default_reference_divisions`).
         *args: Positional arguments passed to
             ``MultiObjectivePopulationBase``.
         **kwargs: Keyword arguments passed to
@@ -40,20 +49,90 @@ class NSGA3(MultiObjectivePopulationBase):
         ValueError: If no reference directions can be generated.
     """
 
+    @staticmethod
+    def initialize_parser(parser: argparse.ArgumentParser) -> None:
+        """Adds NSGA-III's command-line arguments to a parser.
+
+        Args:
+            parser: The (sub-)parser to add the arguments to.
+
+        Returns:
+            None. Mutates ``parser`` by adding the shared multi-objective
+            population flags and ``--reference_divisions``.
+        """
+
+        MultiObjectivePopulationBase.initialize_parser(parser)
+        parser.add_argument(
+            "--reference_divisions",
+            type=int,
+            default=None,
+            help=(
+                "Divisions of the Das-Dennis reference-direction simplex. Defaults to the "
+                "most divisions whose reference directions do not outnumber "
+                "--max_population_size (max_population_size - 1 for two objectives)."
+            ),
+        )
+
+    @staticmethod
+    def default_reference_divisions(n_objectives: int, population_size: int) -> int:
+        """Chooses how finely to divide the reference simplex for a population.
+
+        NSGA-III works best with roughly one reference direction per
+        population member. A simplex with ``H`` divisions over ``M`` objectives
+        has ``C(H + M - 1, M - 1)`` directions, so this returns the largest
+        ``H`` whose direction count does not exceed the population size.
+
+        Args:
+            n_objectives: Number of optimization objectives.
+            population_size: Maximum number of genomes the population holds.
+
+        Returns:
+            The number of divisions, at least one.
+        """
+
+        divisions = 1
+        while (
+            math.comb(divisions + 1 + n_objectives - 1, n_objectives - 1)
+            <= population_size
+        ):
+            divisions += 1
+        return divisions
+
     def __init__(
         self,
-        *args,
-        reference_divisions: int = 4,
-        **kwargs,
+        *args: Any,
+        reference_divisions: int | None = None,
+        **kwargs: Any,
     ) -> None:
-        """Initialize an NSGA-III population."""
+        """Initialize an NSGA-III population.
+
+        Args:
+            *args: Positional arguments passed to
+                ``MultiObjectivePopulationBase``.
+            reference_divisions: Number of simplex divisions, or ``None`` for
+                :meth:`default_reference_divisions`.
+            **kwargs: Keyword arguments passed to
+                ``MultiObjectivePopulationBase``.
+
+        Returns:
+            None. Sets ``reference_divisions`` and ``reference_directions``.
+
+        Raises:
+            ValueError: If ``reference_divisions`` is not positive.
+            ValueError: If no reference directions can be generated.
+        """
         super().__init__(
             *args,
             **kwargs,
         )
 
+        if reference_divisions is None:
+            reference_divisions = self.default_reference_divisions(
+                len(self.objectives), self.max_population_size
+            )
+
         if reference_divisions <= 0:
-            raise ValueError("reference_divisions must be " "greater than zero.")
+            raise ValueError("reference_divisions must be greater than zero.")
 
         self.reference_divisions = int(reference_divisions)
 
@@ -73,6 +152,20 @@ class NSGA3(MultiObjectivePopulationBase):
             ``"nsga3"``.
         """
         return "nsga3"
+
+    def run_info(self) -> dict[str, Any]:
+        """Describes the strategy's configuration, for the run's archive.
+
+        Returns:
+            The shared multi-objective description (see
+            :meth:`MultiObjectivePopulationBase.run_info`) plus the number of
+            reference divisions and directions used.
+        """
+
+        info = super().run_info()
+        info["multi_objective"]["reference_divisions"] = self.reference_divisions
+        info["multi_objective"]["reference_directions"] = len(self.reference_directions)
+        return info
 
     @staticmethod
     def _generate_reference_directions(
@@ -101,6 +194,9 @@ class NSGA3(MultiObjectivePopulationBase):
                 remaining: Remaining divisions.
                 objective_index: Current objective dimension.
                 current: Partial integer direction.
+
+            Returns:
+                None. Appends each completed direction to ``directions``.
             """
             if objective_index == n_objectives - 1:
                 complete = current + [remaining]
@@ -249,32 +345,46 @@ class NSGA3(MultiObjectivePopulationBase):
     ) -> np.ndarray:
         """Normalize transformed objectives for reference association.
 
+        The ideal point, extreme points and intercepts are found from the
+        genomes whose objectives are all finite. A non-finite objective (a
+        genome whose training failed) is then placed far beyond every finite
+        genome, so it associates with a reference direction at a large
+        distance rather than looking ideal.
+
         Args:
             values: Transformed minimization objective matrix.
 
         Returns:
-            Normalized objective matrix.
+            Normalized objective matrix, with every entry finite.
         """
         if values.size == 0:
             return values
 
+        finite_rows = np.all(np.isfinite(values), axis=1)
+
+        if not np.any(finite_rows):
+            return np.full_like(values, NON_FINITE_NORMALIZED)
+
+        finite_values = values[finite_rows]
+
         ideal_point = np.min(
-            values,
+            finite_values,
             axis=0,
         )
 
-        shifted = values - ideal_point
+        shifted_finite = finite_values - ideal_point
 
-        extreme_points = self._find_extreme_points(shifted)
+        extreme_points = self._find_extreme_points(shifted_finite)
 
         intercepts = self._calculate_intercepts(
-            shifted,
+            shifted_finite,
             extreme_points,
         )
 
-        normalized = shifted / intercepts
+        with np.errstate(invalid="ignore", over="ignore"):
+            normalized = (values - ideal_point) / intercepts
 
-        normalized[~np.isfinite(normalized)] = 0.0
+        normalized[~np.isfinite(normalized)] = NON_FINITE_NORMALIZED
 
         return normalized
 
@@ -289,11 +399,17 @@ class NSGA3(MultiObjectivePopulationBase):
 
         Args:
             population: Population whose associations should be updated.
+
+        Returns:
+            None. Sets ``reference_index`` and ``reference_distance`` in each
+            genome's metadata.
         """
         if not population:
             return
 
         values = self._objective_matrix(population)
+
+        finite_rows = np.all(np.isfinite(values), axis=1)
 
         normalized_values = self._normalize_objectives(values)
 
@@ -324,12 +440,23 @@ class NSGA3(MultiObjectivePopulationBase):
 
             genome.metadata["reference_index"] = reference_index
 
-            genome.metadata["reference_distance"] = float(distances[reference_index])
+            # a genome with a non-finite objective is never close to a reference
+            genome.metadata["reference_distance"] = (
+                float(distances[reference_index])
+                if finite_rows[genome_index]
+                else math.inf
+            )
 
     def _refresh_selection_metadata(
         self,
     ) -> None:
-        """Refresh Pareto ranks and NSGA-III reference associations."""
+        """Refresh Pareto ranks and NSGA-III reference associations.
+
+        Returns:
+            None. Sets ``pareto_rank``, ``reference_index`` and
+            ``reference_distance`` in the metadata of every genome in
+            ``population``.
+        """
         if not self.population:
             return
 
@@ -533,41 +660,10 @@ class NSGA3(MultiObjectivePopulationBase):
 
         return left if left.genome_number <= right.genome_number else right
 
-    def _representative_genome(
-        self,
-    ) -> CircuitGenome:
-        """Return one representative Pareto-optimal genome.
-
-        The genome closest to its assigned reference direction is selected.
-
-        Returns:
-            Representative Pareto-optimal genome.
-
-        Raises:
-            RuntimeError: If the Pareto front is unexpectedly empty.
-        """
-        front = self.get_pareto_front()
-
-        if not front:
-            raise RuntimeError(
-                "Cannot choose a representative " "from an empty Pareto front."
-            )
-
-        return min(
-            front,
-            key=lambda genome: (
-                genome.metadata.get(
-                    "reference_distance",
-                    math.inf,
-                ),
-                genome.genome_number,
-            ),
-        )
-
     def _parent_sort_key(
         self,
         genome: CircuitGenome,
-    ) -> tuple:
+    ) -> tuple[float, float, int]:
         """Return NSGA-III ordering for crossover parents.
 
         Args:

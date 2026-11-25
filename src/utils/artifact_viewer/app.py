@@ -221,6 +221,24 @@ def create_app(viewer: ArtifactViewer, mcp_server: Any | None = None) -> Starlet
             )
         )
 
+    def api_pareto(request: Request) -> Response:
+        """Returns a run's genomes over two objectives (``x`` and ``y`` parameters).
+
+        Args:
+            request: The request, with optional ``x`` and ``y`` query keys.
+
+        Returns:
+            The JSON from :meth:`ArtifactViewer.pareto_payload`.
+        """
+        query = _query(request)
+        return _json(
+            viewer.pareto_payload(
+                request.path_params["run"],
+                query.get("x") or None,
+                query.get("y") or None,
+            )
+        )
+
     def api_timing(request: Request) -> Response:
         """Returns a run's master and worker timing."""
         return _json(viewer.timing_payload(request.path_params["run"]))
@@ -486,6 +504,7 @@ def create_app(viewer: ArtifactViewer, mcp_server: Any | None = None) -> Starlet
         Route("/api/runs/{run:int}/points", api_points),
         Route("/api/runs/{run:int}/genealogy", api_genealogy),
         Route("/api/runs/{run:int}/history", api_history),
+        Route("/api/runs/{run:int}/pareto", api_pareto),
         Route("/api/runs/{run:int}/timing", api_timing),
         Route("/api/runs/{run:int}/operators", api_operators),
         Route("/api/runs/{run:int}/compare", api_compare),

@@ -53,8 +53,11 @@ def objective_vector(
     """Return the transformed minimization objective vector for a genome.
 
     Raw values in ``genome.fitness`` are transformed according to each
-    objective's sign and weight. Non-finite objective values are converted
-    to positive infinity so that they behave as poor minimization values.
+    objective's sign and weight. A genome with any non-finite objective (for
+    example a NaN loss from failed training) gets positive infinity for
+    *every* objective, so every genome with finite objectives dominates it --
+    otherwise a failed genome with, say, the fewest gates would sit on the
+    Pareto front.
 
     Args:
         genome: Genome whose objectives should be extracted.
@@ -68,20 +71,18 @@ def objective_vector(
         objectives,
     )
 
-    values: list[float] = []
-
-    for objective in objectives:
-        value = objective.transform(genome.fitness[objective.name])
-
-        if not np.isfinite(value):
-            value = np.inf
-
-        values.append(value)
-
-    return np.asarray(
-        values,
+    values = np.asarray(
+        [
+            objective.transform(genome.fitness[objective.name])
+            for objective in objectives
+        ],
         dtype=np.float64,
     )
+
+    if not np.all(np.isfinite(values)):
+        values[:] = np.inf
+
+    return values
 
 
 def genome_dominates(

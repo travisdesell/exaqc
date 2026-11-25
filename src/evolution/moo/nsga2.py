@@ -39,7 +39,12 @@ class NSGA2(MultiObjectivePopulationBase):
     def _refresh_selection_metadata(
         self,
     ) -> None:
-        """Refresh Pareto ranks and crowding distances."""
+        """Refresh Pareto ranks and crowding distances.
+
+        Returns:
+            None. Sets ``pareto_rank`` and ``crowding_distance`` in the metadata
+            of every genome in ``population``.
+        """
         if not self.population:
             return
 
@@ -61,9 +66,18 @@ class NSGA2(MultiObjectivePopulationBase):
     ) -> None:
         """Calculate NSGA-II crowding distance for one Pareto front.
 
+        Boundary genomes of every objective get an infinite distance. An
+        objective whose range over the front is zero or not finite (a genome
+        whose training failed has an infinite objective) adds nothing to the
+        interior genomes' distances.
+
         Args:
             population: Population containing the front.
             front: Genome indexes belonging to the Pareto front.
+
+        Returns:
+            None. Sets ``crowding_distance`` in the metadata of each genome in
+            ``front``.
         """
         if not front:
             return
@@ -107,10 +121,7 @@ class NSGA2(MultiObjectivePopulationBase):
 
             objective_range = maximum - minimum
 
-            if math.isclose(
-                objective_range,
-                0.0,
-            ):
+            if not math.isfinite(objective_range) or objective_range == 0.0:
                 continue
 
             for position in range(
@@ -262,42 +273,10 @@ class NSGA2(MultiObjectivePopulationBase):
 
         return left if left.genome_number <= right.genome_number else right
 
-    def _representative_genome(
-        self,
-    ) -> CircuitGenome:
-        """Return one representative Pareto-optimal genome.
-
-        The Pareto-front genome with the largest crowding distance is used.
-        Genome number provides a deterministic tie breaker.
-
-        Returns:
-            Representative Pareto-optimal genome.
-
-        Raises:
-            RuntimeError: If the Pareto front is unexpectedly empty.
-        """
-        front = self.get_pareto_front()
-
-        if not front:
-            raise RuntimeError(
-                "Cannot choose a representative " "from an empty Pareto front."
-            )
-
-        return max(
-            front,
-            key=lambda genome: (
-                genome.metadata.get(
-                    "crowding_distance",
-                    0.0,
-                ),
-                -genome.genome_number,
-            ),
-        )
-
     def _parent_sort_key(
         self,
         genome: CircuitGenome,
-    ) -> tuple:
+    ) -> tuple[float, float, int]:
         """Return NSGA-II ordering for crossover parents.
 
         Args:

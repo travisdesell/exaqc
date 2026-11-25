@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import os
+import argparse
+import math
 import random
-
 from abc import abstractmethod
 from collections.abc import Sequence
-from typing import Optional
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -15,34 +15,37 @@ from src.circuits.circuit import CircuitGenome
 from src.evolution.moo.objective_spec import ObjectiveSpec
 from src.evolution.moo.pareto import (
     genome_dominates,
+    objective_vector,
     validate_genome_fitness,
 )
-from src.evolution.population_strategy import PopulationStrategy
-from src.utils.profiler import EXAQCProfiler
+from src.evolution.population_strategy import PopulationStrategy, mark_discarded
+
+if TYPE_CHECKING:
+    from src.utils.restart import RestartState
 
 
 class MultiObjectivePopulationBase(PopulationStrategy):
     """Base class for steady-state multi-objective populations.
 
     This class implements the EXAQC ``PopulationStrategy`` interface and
-    provides behavior shared by algorithms such as NSGA-II and NSGA-III.
+    provides behavior shared by algorithms such as NSGA-II and NSGA-III. Every
+    inserted genome is first combined with the current population and the
+    concrete algorithm's environmental selection then keeps at most
+    ``max_population_size`` of them, so the population is an (N + 1) -> N
+    steady-state version of the generational algorithm.
+
+    A population strategy only selects and ranks genomes: everything written to
+    disk goes through the run's :class:`~src.utils.genome_archive.GenomeArchive`.
 
     Subclasses are responsible only for algorithm-specific environmental
-    selection, diversity metadata, tournament comparison, and representative
-    Pareto-front selection.
+    selection, diversity metadata, and tournament comparison.
 
     Args:
         max_population_size: Maximum number of genomes retained.
         objectives: Objective specifications used during optimization.
         tournament_size: Number of candidates sampled during parent
             tournament selection.
-        out_dir: Directory used for saved artifacts.
-        profiler: Optional EXAQC profiler. A profiler is created when this
-            argument is ``None``.
         seed: Random seed used by parent selection.
-        save_all_genomes: Whether every evaluated genome should be saved.
-        save_pareto_front: Whether Pareto-front genomes should be saved when
-            front membership changes.
 
     Raises:
         ValueError: If ``max_population_size`` is not positive.
@@ -50,55 +53,124 @@ class MultiObjectivePopulationBase(PopulationStrategy):
         ValueError: If ``tournament_size`` is smaller than two.
     """
 
+    @staticmethod
+    def initialize_parser(parser: argparse.ArgumentParser) -> None:
+        """Adds the flags every multi-objective population shares to a parser.
+
+        Args:
+            parser: The (sub-)parser to add the arguments to.
+
+        Returns:
+            None. Mutates ``parser`` by adding ``--max_population_size`` and
+            ``--tournament_size``.
+        """
+
+        parser.add_argument(
+            "--max_population_size",
+            type=int,
+            default=30,
+            help="Maximum number of genomes retained in the multi-objective population.",
+        )
+        parser.add_argument(
+            "--tournament_size",
+            type=int,
+            default=2,
+            help="Number of genomes sampled for each parent-selection tournament.",
+        )
+
     def __init__(
         self,
         max_population_size: int,
         objectives: Sequence[ObjectiveSpec],
         tournament_size: int = 2,
-        out_dir: str = "artifacts",
-        profiler: Optional[EXAQCProfiler] = None,
         seed: int = 0,
-        save_all_genomes: bool = True,
-        save_pareto_front: bool = True,
     ) -> None:
-        """Initialize a multi-objective population."""
+        """Initialize a multi-objective population.
+
+        Args:
+            max_population_size: Maximum number of genomes retained.
+            objectives: Objective specifications used during optimization.
+            tournament_size: Number of candidates sampled during parent
+                tournament selection.
+            seed: Random seed used by parent selection.
+
+        Returns:
+            None. Sets the population's configuration, an empty
+            ``population`` and its random number generator.
+
+        Raises:
+            ValueError: If ``max_population_size`` is not positive.
+            ValueError: If fewer than two objectives are supplied.
+            ValueError: If ``tournament_size`` is smaller than two.
+        """
         if max_population_size <= 0:
             raise ValueError("max_population_size must be greater than zero.")
 
         if len(objectives) < 2:
             raise ValueError(
-                "Multi-objective optimization requires at least " "two objectives."
+                "Multi-objective optimization requires at least two objectives."
             )
 
         if tournament_size < 2:
             raise ValueError("tournament_size must be at least two.")
 
         self.max_population_size = int(max_population_size)
-
         self.objectives = list(objectives)
-
         self.tournament_size = int(tournament_size)
-
-        self.out_dir = out_dir
-
-        self.save_all_genomes = bool(save_all_genomes)
-
-        self.save_pareto_front_enabled = bool(save_pareto_front)
-
         self.population: list[CircuitGenome] = []
-
         self.insertions = 0
-
         self.rng = random.Random(seed)
-
-        self.profiler = profiler
-
-        if self.profiler is None:
-            self.profiler = EXAQCProfiler(
-                out_dir=out_dir,
-            )
-
         self._last_pareto_signature: tuple[int, ...] = ()
+
+    def run_info(self) -> dict[str, Any]:
+        """Describes the strategy's configuration, for the run's archive.
+
+        Returns:
+            The algorithm name and the objectives it optimizes (each with its
+            fitness key and whether it is minimized or maximized), so tools
+            reading the archive can draw the run's Pareto front.
+        """
+
+        return {
+            "multi_objective": {
+                "algorithm": self.algorithm_name,
+                "objectives": [
+                    {
+                        "name": objective.name,
+                        "sign": objective.sign,
+                        "direction": "minimize" if objective.sign > 0 else "maximize",
+                    }
+                    for objective in self.objectives
+                ],
+            }
+        }
+
+    def restore(self, state: "RestartState") -> None:
+        """Takes back the population a stopped run held, so its search continues.
+
+        Pareto ranks and the algorithm's diversity metadata are recomputed from
+        the restored genomes' fitness, so nothing beyond the genomes themselves
+        needs to have been recorded.
+
+        Args:
+            state: The stopped run's state (see :mod:`src.utils.restart`).
+
+        Returns:
+            None. Refills ``population`` with the run's genomes, restores the
+            insertion count and refreshes the selection metadata.
+        """
+
+        self.population = list(state.population)
+        self.insertions = state.inserted_genomes
+        self._refresh_selection_metadata()
+        self._last_pareto_signature = self._pareto_signature()
+
+        logger.info(
+            "restored a {} population of {} genomes after {} insertions",
+            self.algorithm_name,
+            len(self.population),
+            self.insertions,
+        )
 
     def is_initializing(self) -> bool:
         """Determine whether the initial population is still being filled.
@@ -109,9 +181,20 @@ class MultiObjectivePopulationBase(PopulationStrategy):
         """
         return len(self.population) < self.max_population_size
 
-    def get_pareto_front(
-        self,
-    ) -> list[CircuitGenome]:
+    def get_population(self) -> list[CircuitGenome]:
+        """Returns the genomes in the population, best first.
+
+        Genomes are ordered by Pareto rank, then by the algorithm's diversity
+        preference (see :meth:`_parent_sort_key`).
+
+        Returns:
+            A new list of the population's genomes.
+        """
+
+        self._refresh_selection_metadata()
+        return sorted(self.population, key=self._parent_sort_key)
+
+    def get_pareto_front(self) -> list[CircuitGenome]:
         """Return the current non-dominated Pareto front.
 
         Returns:
@@ -128,34 +211,28 @@ class MultiObjectivePopulationBase(PopulationStrategy):
             if genome.metadata.get("pareto_rank") == 0
         ]
 
-    def get_best_genome(
-        self,
-    ) -> Optional[CircuitGenome]:
+    def get_best_genome(self) -> CircuitGenome | None:
         """Return a representative genome from the Pareto front.
 
-        A multi-objective population does not have a mathematically unique
-        best genome. The concrete algorithm therefore selects a
-        representative Pareto-optimal genome for compatibility with EXAQC
-        code that expects ``get_best_genome``.
+        A multi-objective population has no unique best genome, so the Pareto
+        front genome with the best value of the *first* objective is used (for
+        example the lowest loss when the objectives are ``loss`` and
+        ``n_enabled_gates``). Genome number breaks ties.
 
         Returns:
-            Representative Pareto-optimal genome, or ``None`` when the
+            The representative Pareto-optimal genome, or ``None`` when the
             population is empty.
         """
-        if not self.population:
+        front = self.get_pareto_front()
+
+        if not front:
             return None
 
-        self._refresh_selection_metadata()
-
-        return self._representative_genome()
+        return min(front, key=self._primary_key)
 
     def get_parent(
-        self,
-        **kwargs,
-    ) -> tuple[
-        Optional[CircuitGenome],
-        Optional[dict[str, object]],
-    ]:
+        self, **kwargs: Any
+    ) -> tuple[CircuitGenome | None, dict[str, Any] | None]:
         """Select a single parent using tournament selection.
 
         Args:
@@ -174,20 +251,15 @@ class MultiObjectivePopulationBase(PopulationStrategy):
         parent = self._run_tournament(excluded_genome_numbers=set())
 
         metadata = {
-            "selection_algorithm": (self.algorithm_name),
-            "parent_pareto_rank": (parent.metadata.get("pareto_rank")),
+            "selection_algorithm": self.algorithm_name,
+            "parent_pareto_rank": parent.metadata.get("pareto_rank"),
         }
 
         return parent, metadata
 
     def get_parents(
-        self,
-        n_parents: int = 2,
-        **kwargs,
-    ) -> tuple[
-        Optional[list[CircuitGenome]],
-        Optional[dict[str, object]],
-    ]:
+        self, n_parents: int = 2, **kwargs: Any
+    ) -> tuple[list[CircuitGenome] | None, dict[str, Any] | None]:
         """Select multiple unique parents using tournament selection.
 
         Args:
@@ -195,8 +267,8 @@ class MultiObjectivePopulationBase(PopulationStrategy):
             **kwargs: Additional population-strategy arguments.
 
         Returns:
-            Selected parents and selection metadata. Returns ``(None, None)``
-            when there are insufficient genomes.
+            Selected parents (best first) and selection metadata. Returns
+            ``(None, None)`` when there are insufficient genomes.
 
         Raises:
             ValueError: If ``n_parents`` is not positive.
@@ -210,20 +282,17 @@ class MultiObjectivePopulationBase(PopulationStrategy):
         self._refresh_selection_metadata()
 
         parents: list[CircuitGenome] = []
-
         selected_numbers: set[int] = set()
 
         while len(parents) < n_parents:
-            parent = self._run_tournament(excluded_genome_numbers=(selected_numbers))
-
+            parent = self._run_tournament(excluded_genome_numbers=selected_numbers)
             parents.append(parent)
-
             selected_numbers.add(parent.genome_number)
 
         parents.sort(key=self._parent_sort_key)
 
         metadata = {
-            "selection_algorithm": (self.algorithm_name),
+            "selection_algorithm": self.algorithm_name,
             "parent_pareto_ranks": [
                 parent.metadata.get("pareto_rank") for parent in parents
             ],
@@ -231,138 +300,137 @@ class MultiObjectivePopulationBase(PopulationStrategy):
 
         return parents, metadata
 
-    def insert_genome(
-        self,
-        genome: CircuitGenome,
-        **kwargs,
-    ) -> bool:
+    def insert_genome(self, genome: CircuitGenome, **kwargs: Any) -> bool:
         """Insert an evaluated genome into the population.
 
-        The genome is temporarily combined with the current population.
-        The concrete multi-objective algorithm then performs environmental
-        selection to retain at most ``max_population_size`` genomes.
+        The genome is temporarily combined with the current population and the
+        concrete multi-objective algorithm then performs environmental
+        selection to retain at most ``max_population_size`` genomes. The
+        genome's ``insert_type`` metadata records the outcome: ``global_best``
+        when it becomes the representative genome (see
+        :meth:`get_best_genome`), ``inserted`` when it survives, or
+        ``discarded`` with a ``discard_reason`` (see
+        :func:`~src.evolution.population_strategy.mark_discarded`).
 
         Args:
             genome: Evaluated genome to insert.
             **kwargs: Additional population metadata.
 
         Returns:
-            ``True`` if the genome survives environmental selection.
+            True: every genome is recorded as evaluated, whether it was kept or
+            discarded.
+
+        Raises:
+            ValueError: If the genome has not been evaluated.
+            KeyError: If an objective is missing from the genome's fitness.
+            TypeError: If an objective value is not numeric.
         """
-        validate_genome_fitness(
-            genome,
-            self.objectives,
-        )
+        validate_genome_fitness(genome, self.objectives)
 
         self.insertions += 1
 
-        duplicate_result = self._handle_duplicate(genome)
+        duplicate = self._dominating_duplicate(genome)
+        if duplicate is not None:
+            mark_discarded(genome, "duplicate_of_better", duplicate.genome_number)
+            self._log_population_state(genome, survived=False)
+            return True
 
-        if duplicate_result is False:
-            genome.metadata["insert_type"] = "discarded_duplicate"
-
-            self._record_and_save(
-                genome,
-                survived=False,
-            )
-
-            return False
-
-        combined_population = self.population + [genome]
+        previous_best = self.get_best_genome()
 
         survivors = self._environmental_selection(
-            combined_population,
+            self.population + [genome],
             self.max_population_size,
         )
-
-        survived = any(
-            candidate.genome_number == genome.genome_number for candidate in survivors
-        )
+        survived = any(candidate is genome for candidate in survivors)
 
         self.population = survivors
-
         self._refresh_selection_metadata()
 
-        genome.metadata["insert_type"] = "inserted" if survived else "discarded"
+        if not survived:
+            # it lost to the population's least preferred survivor
+            worst = max(self.population, key=self._parent_sort_key)
+            mark_discarded(genome, "worse_than_population", worst.genome_number)
+        else:
+            genome.metadata["insert_type"] = "inserted"
+            best = self.get_best_genome()
+            if best is genome and best is not previous_best:
+                genome.metadata["insert_type"] = "global_best"
+                logger.success(
+                    f"[{self.algorithm_name} insertion {self.insertions}] genome "
+                    f"{genome.genome_number} is the new best Pareto front genome by "
+                    f"{self.objectives[0].name}: {genome.fitness}"
+                )
 
-        self._record_and_save(
-            genome,
-            survived,
-        )
+        self._log_front_if_changed()
+        self._log_population_state(genome, survived)
 
-        self._log_population_state(
-            genome,
-            survived,
-        )
+        return True
 
-        return survived
-
-    def _handle_duplicate(
-        self,
-        genome: CircuitGenome,
-    ) -> Optional[bool]:
-        """Handle a genome with an existing matching topology.
+    def _dominating_duplicate(self, genome: CircuitGenome) -> CircuitGenome | None:
+        """Resolve a genome whose enabled gates match one already held.
 
         Matching topology is determined using
-        ``CircuitGenome.has_same_gates``.
-
-        If the new genome dominates the existing duplicate, the existing
-        genome is removed. If the existing genome dominates the new genome,
-        the new genome is immediately discarded. If neither dominates the
-        other, both are allowed to participate in environmental selection.
+        ``CircuitGenome.has_same_gates``. If the new genome Pareto-dominates
+        the existing duplicate, the existing genome is removed so the new one
+        can take its place. If neither dominates the other, both take part in
+        environmental selection.
 
         Args:
             genome: Candidate genome.
 
         Returns:
-            ``True`` if an existing duplicate was removed, ``False`` if the
-            new genome should be discarded, or ``None`` if no decisive
-            duplicate relationship was found.
+            The held duplicate that Pareto-dominates ``genome`` (so ``genome``
+            should be discarded), or ``None`` when there is none.
         """
         for index, existing in enumerate(self.population):
             if not existing.has_same_gates(genome):
                 continue
 
-            if genome_dominates(
-                genome,
-                existing,
-                self.objectives,
-            ):
+            if genome_dominates(genome, existing, self.objectives):
                 logger.info(
-                    "Removing genome "
-                    f"{existing.genome_number} "
-                    "because duplicate genome "
-                    f"{genome.genome_number} "
-                    "Pareto-dominates it."
+                    f"removing genome {existing.genome_number} because duplicate "
+                    f"genome {genome.genome_number} Pareto-dominates it."
                 )
-
                 del self.population[index]
+                return None
 
-                return True
-
-            if genome_dominates(
-                existing,
-                genome,
-                self.objectives,
-            ):
+            if genome_dominates(existing, genome, self.objectives):
                 logger.info(
-                    "Discarding genome "
-                    f"{genome.genome_number} "
-                    "because duplicate genome "
-                    f"{existing.genome_number} "
-                    "Pareto-dominates it."
+                    f"discarding genome {genome.genome_number} because duplicate "
+                    f"genome {existing.genome_number} Pareto-dominates it."
                 )
-
-                return False
+                return existing
 
             return None
 
         return None
 
-    def _run_tournament(
-        self,
-        excluded_genome_numbers: set[int],
-    ) -> CircuitGenome:
+    def _primary_key(self, genome: CircuitGenome) -> tuple[float, int]:
+        """Orders genomes by their first objective, in minimization form.
+
+        Args:
+            genome: The genome to order.
+
+        Returns:
+            The genome's transformed first objective (non-finite values sort
+            last) and its genome number as a tie breaker.
+        """
+
+        value = float(objective_vector(genome, self.objectives)[0])
+        if not math.isfinite(value):
+            value = math.inf
+        return value, genome.genome_number
+
+    def _pareto_signature(self) -> tuple[int, ...]:
+        """Identifies the current Pareto front by its genome numbers.
+
+        Returns:
+            The sorted genome numbers of the Pareto front.
+        """
+
+        return tuple(sorted(genome.genome_number for genome in self.get_pareto_front()))
+
+    def _run_tournament(self, excluded_genome_numbers: set[int]) -> CircuitGenome:
         """Run one parent-selection tournament.
 
         Args:
@@ -382,124 +450,55 @@ class MultiObjectivePopulationBase(PopulationStrategy):
         ]
 
         if not available:
-            raise RuntimeError("No genomes are available for " "parent selection.")
+            raise RuntimeError("No genomes are available for parent selection.")
 
-        sample_size = min(
-            self.tournament_size,
-            len(available),
-        )
-
-        candidates = self.rng.sample(
-            available,
-            sample_size,
-        )
+        sample_size = min(self.tournament_size, len(available))
+        candidates = self.rng.sample(available, sample_size)
 
         winner = candidates[0]
-
         for candidate in candidates[1:]:
-            winner = self._tournament_winner(
-                winner,
-                candidate,
-            )
+            winner = self._tournament_winner(winner, candidate)
 
         return winner
 
-    def _record_and_save(
-        self,
-        genome: CircuitGenome,
-        survived: bool,
-    ) -> None:
-        """Record profiling data and save population artifacts.
+    def _log_front_if_changed(self) -> None:
+        """Logs the Pareto front whenever its membership changes.
 
-        Args:
-            genome: Genome that was just evaluated.
-            survived: Whether the genome survived environmental selection.
+        Returns:
+            None. Updates ``_last_pareto_signature``.
         """
-        if self.profiler is not None:
-            self.profiler.record(
-                step=self.insertions,
-                population=self.population,
-            )
-
-        if self.out_dir is None:
-            return
-
-        if self.save_all_genomes:
-            genome.save_circuit(
-                insert_type=("genome_inserted" if survived else "genome_discarded"),
-                out_dir=os.path.join(
-                    self.out_dir,
-                    "all_genomes",
-                ),
-            )
-
-        if self.save_pareto_front_enabled:
-            self._save_pareto_front_if_changed()
-
-        if self.profiler is not None:
-            self.profiler.plot_single_run()
-
-    def _save_pareto_front_if_changed(
-        self,
-    ) -> None:
-        """Save the Pareto front when its membership changes."""
-        pareto_front = self.get_pareto_front()
-
-        signature = tuple(sorted(genome.genome_number for genome in pareto_front))
+        signature = self._pareto_signature()
 
         if signature == self._last_pareto_signature:
             return
 
         self._last_pareto_signature = signature
 
-        pareto_directory = os.path.join(
-            self.out_dir,
-            "pareto_front",
-        )
-
-        os.makedirs(
-            pareto_directory,
-            exist_ok=True,
-        )
-
         logger.success(
-            f"[{self.algorithm_name}] "
-            "Pareto front updated with "
-            f"{len(pareto_front)} genomes."
+            f"[{self.algorithm_name}] Pareto front updated: {len(signature)} genomes "
+            f"{list(signature)}."
         )
 
-        for index, genome in enumerate(pareto_front):
-            genome.save_circuit(
-                insert_type=(f"pareto_{index}"),
-                out_dir=pareto_directory,
-            )
-
-    def _log_population_state(
-        self,
-        genome: CircuitGenome,
-        survived: bool,
-    ) -> None:
+    def _log_population_state(self, genome: CircuitGenome, survived: bool) -> None:
         """Log information about a population insertion.
 
         Args:
             genome: Genome that was evaluated.
             survived: Whether the genome survived selection.
+
+        Returns:
+            None.
         """
         objective_text = ", ".join(
-            (f"{objective.name}=" f"{genome.fitness[objective.name]}")
+            f"{objective.name}={genome.fitness[objective.name]}"
             for objective in self.objectives
         )
 
         logger.info(
-            f"[{self.algorithm_name} insertion "
-            f"{self.insertions}] "
-            f"genome={genome.genome_number}, "
-            f"survived={survived}, "
-            f"population_size="
-            f"{len(self.population)}, "
-            f"pareto_rank="
-            f"{genome.metadata.get('pareto_rank')}, "
-            f"{objective_text}"
+            f"[{self.algorithm_name} insertion {self.insertions}] "
+            f"genome={genome.genome_number}, survived={survived}, "
+            f"population_size={len(self.population)}, "
+            f"pareto_rank={genome.metadata.get('pareto_rank')}, {objective_text}"
         )
 
     @property
@@ -530,10 +529,12 @@ class MultiObjectivePopulationBase(PopulationStrategy):
         raise NotImplementedError
 
     @abstractmethod
-    def _refresh_selection_metadata(
-        self,
-    ) -> None:
-        """Refresh algorithm-specific ranking and diversity metadata."""
+    def _refresh_selection_metadata(self) -> None:
+        """Refresh algorithm-specific ranking and diversity metadata.
+
+        Returns:
+            None. Updates the metadata of every genome in ``population``.
+        """
         raise NotImplementedError
 
     @abstractmethod
@@ -554,27 +555,13 @@ class MultiObjectivePopulationBase(PopulationStrategy):
         raise NotImplementedError
 
     @abstractmethod
-    def _representative_genome(
-        self,
-    ) -> CircuitGenome:
-        """Return a representative Pareto-optimal genome.
-
-        Returns:
-            Representative genome.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    def _parent_sort_key(
-        self,
-        genome: CircuitGenome,
-    ) -> tuple:
+    def _parent_sort_key(self, genome: CircuitGenome) -> tuple[float, float, int]:
         """Return the ordering key for crossover parents.
 
         Args:
             genome: Parent genome.
 
         Returns:
-            Tuple used to sort parents.
+            Tuple used to sort parents, most preferred first.
         """
         raise NotImplementedError

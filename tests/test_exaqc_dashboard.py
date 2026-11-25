@@ -37,6 +37,7 @@ from src.utils.artifact_viewer.server import (
     compare_gates,
     find_archives,
     insertion_rates_latex,
+    pareto_front_mask,
 )
 from src.utils.genome_archive import ARCHIVE_FILENAME, GenomeArchive
 
@@ -1197,3 +1198,85 @@ def test_compare_gates_matches_by_innovation() -> None:
             "differences": {"enabled": [False, True]},
         }
     ]
+
+
+def test_pareto_front_mask() -> None:
+    """The mask marks non-dominated points, honoring directions, ties and gaps."""
+
+    xs = [0.1, 0.2, 0.3, 0.2, None, 0.5, float("nan")]
+    ys = [5.0, 3.0, 1.0, 4.0, 0.0, 1.0, 0.0]
+
+    # both minimized: 0.2/4 is dominated by 0.2/3, 0.5/1 by 0.3/1
+    assert pareto_front_mask(xs, ys, False, False) == [
+        True,
+        True,
+        True,
+        False,
+        False,
+        False,
+        False,
+    ]
+    # maximizing x makes the largest x win however large its y
+    assert pareto_front_mask(xs, ys, True, False)[5]
+    # equal points are on the front together
+    assert pareto_front_mask([1.0, 1.0, 2.0], [1.0, 1.0, 0.5], False, False) == [
+        True,
+        True,
+        True,
+    ]
+    # only members are considered
+    assert pareto_front_mask(
+        [0.1, 0.2], [1.0, 2.0], False, False, members=[False, True]
+    ) == [False, True]
+
+
+def test_pareto_chart_payload(tmp_path: Path) -> None:
+    """The Pareto endpoint uses a run's recorded objectives and marks both fronts.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    objectives = {
+        "algorithm": "nsga2",
+        "objectives": [
+            {"name": "loss", "sign": 1.0, "direction": "minimize"},
+            {"name": "n_enabled_gates", "sign": 1.0, "direction": "minimize"},
+        ],
+    }
+    build_run(
+        tmp_path / "moo", standard_genomes(), run_info={"multi_objective": objectives}
+    )
+    build_run(tmp_path / "steady", standard_genomes())
+    registry = RunRegistry(
+        run_directories=[str(tmp_path / "moo"), str(tmp_path / "steady")]
+    )
+
+    with serving(registry) as url:
+        indexes = {
+            run["name"]: run["index"] for run in get_json(f"{url}/api/runs")["runs"]
+        }
+        moo, steady = indexes["moo"], indexes["steady"]
+
+        assert get_json(f"{url}/api/runs/{moo}")["multi_objective"] == objectives
+        assert get_json(f"{url}/api/runs/{steady}")["multi_objective"] is None
+
+        # genomes 1-3 have 2 enabled gates and losses 0.5, 0.4, 0.3; genome 4 has one
+        # gate and loss 0.9, and the population holds genomes 1-3
+        pareto = get_json(f"{url}/api/runs/{moo}/pareto")
+        assert (pareto["x_key"], pareto["y_key"]) == ("loss", "n_enabled_gates")
+        assert not pareto["x_higher_is_better"] and not pareto["y_higher_is_better"]
+        points = pareto["points"]
+        assert points["genome_number"] == [1, 2, 3, 4]
+        assert points["y"] == [2, 2, 2, 1]
+        assert points["in_population"] == [True, True, True, False]
+        assert points["population_front"] == [False, False, True, False]
+        assert points["run_front"] == [False, False, True, True]
+
+        # any keys can be chosen; target_metric is maximized
+        custom = get_json(f"{url}/api/runs/{steady}/pareto?x=target_metric&y=loss")
+        assert custom["objectives"] == []
+        assert custom["x_higher_is_better"] and not custom["y_higher_is_better"]
+        assert custom["points"]["run_front"] == [False, False, True, False]
+
+        assert get(f"{url}/api/runs/{moo}/pareto?x=no%20such%20key")[0] == 400

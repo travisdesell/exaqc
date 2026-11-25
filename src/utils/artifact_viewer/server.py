@@ -445,6 +445,97 @@ def higher_is_better(key: str) -> bool:
     return "loss" not in key.lower()
 
 
+#: Circuit-size keys, which a multi-objective search minimizes even though
+#: their names do not say ``loss`` (see :func:`pareto_higher_is_better`).
+SIZE_KEYS = frozenset({"n_gates", "n_enabled_gates", "n_parameters", "n_cnot", "n_rot"})
+
+
+def pareto_higher_is_better(key: str, objectives: Sequence[dict[str, Any]]) -> bool:
+    """Decides which direction of a key a Pareto front prefers.
+
+    A run searched by NSGA-II or NSGA-III records the direction of each of its
+    objectives in ``run_info["multi_objective"]``, and that is used when it
+    names ``key``. Otherwise circuit sizes are minimized and every other key
+    follows :func:`higher_is_better`.
+
+    Args:
+        key: A fitness key or summary column.
+        objectives: The run's recorded objectives (each with ``name`` and
+            ``direction``), empty for a single-objective run.
+
+    Returns:
+        True when larger values of ``key`` are better.
+    """
+
+    for objective in objectives:
+        if objective.get("name") == key:
+            return objective.get("direction") == "maximize"
+    if key in SIZE_KEYS:
+        return False
+    return higher_is_better(key)
+
+
+def pareto_front_mask(
+    xs: Sequence[float | None],
+    ys: Sequence[float | None],
+    x_higher_is_better: bool,
+    y_higher_is_better: bool,
+    members: Sequence[bool] | None = None,
+) -> list[bool]:
+    """Marks the points on the Pareto front of two objectives.
+
+    A point is on the front when no other point is at least as good in both
+    objectives and better in one. Points missing a value, or with a non-finite
+    one, are never on it.
+
+    Args:
+        xs: Each point's first objective.
+        ys: Each point's second objective, in the same order.
+        x_higher_is_better: Whether larger ``xs`` are better.
+        y_higher_is_better: Whether larger ``ys`` are better.
+        members: When given, only points marked True are considered (the
+            front of that subset); the rest are never on it.
+
+    Returns:
+        One flag per point, True for those on the front.
+    """
+
+    def finite(value: float | None) -> bool:
+        """Reports whether a value can be compared.
+
+        Args:
+            value: The value to check.
+
+        Returns:
+            True for a finite number.
+        """
+        return isinstance(value, (int, float)) and math.isfinite(value)
+
+    candidates = [
+        (
+            -xs[i] if x_higher_is_better else xs[i],
+            -ys[i] if y_higher_is_better else ys[i],
+            i,
+        )
+        for i in range(len(xs))
+        if finite(xs[i]) and finite(ys[i]) and (members is None or members[i])
+    ]
+    # Sweep in increasing (minimized) x, then y: a point is on the front exactly
+    # when its y beats every y seen so far, since all of those have x at least as
+    # good. Equal points are on the front together.
+    candidates.sort()
+    mask = [False] * len(xs)
+    best_y = math.inf
+    previous: tuple[float, float] | None = None
+    previous_on_front = False
+    for x, y, i in candidates:
+        on_front = y < best_y or (previous_on_front and (x, y) == previous)
+        mask[i] = on_front
+        best_y = min(best_y, y)
+        previous, previous_on_front = (x, y), on_front
+    return mask
+
+
 def json_safe(value: Any) -> Any:
     """Converts a value into something ``json.dumps(allow_nan=False)`` accepts.
 
@@ -1313,7 +1404,9 @@ class ArtifactViewer:
             the values they can be filtered by, the ``unarchived_parents``
             (parents of stored genomes that are not stored themselves, i.e. the
             seed genome), the ``island_topology`` an island search recorded
-            (``None`` otherwise), and whether it recorded a search history. An archive
+            (``None`` otherwise), the ``multi_objective`` algorithm and
+            objectives an NSGA-II/NSGA-III search recorded (``None``
+            otherwise), and whether it recorded a search history. An archive
             that cannot be read fully is reported under ``error``, with those
             fields empty.
 
@@ -1331,16 +1424,19 @@ class ArtifactViewer:
                 "filter_options": {},
                 "unarchived_parents": [],
                 "island_topology": None,
+                "multi_objective": None,
             }
         )
         try:
             with GenomeArchive.open_readonly(run.archive_path) as reader:
+                info = reader.run_info()
                 payload["fitness_keys"] = reader.fitness_keys()
                 payload["metrics"] = reader.series_metrics()
                 payload["primary_metrics"] = reader.primary_series_metrics()
                 payload["filter_options"] = reader.filter_options()
                 payload["unarchived_parents"] = reader.unarchived_parents()
-                payload["island_topology"] = reader.run_info().get("island_topology")
+                payload["island_topology"] = info.get("island_topology")
+                payload["multi_objective"] = info.get("multi_objective")
         except sqlite3.DatabaseError as error:
             # An archive the viewer cannot read in full still lists and browses:
             # the run page falls back to what its summary holds rather than
@@ -1528,6 +1624,67 @@ class ArtifactViewer:
             "metric": chosen,
             "metrics": available,
             "primary_metrics": primary,
+        }
+
+    def pareto_payload(
+        self, index: int, x_key: str | None = None, y_key: str | None = None
+    ) -> dict[str, Any]:
+        """Returns every genome as a point of two objectives, with the Pareto fronts.
+
+        Args:
+            index: The run's index.
+            x_key: The fitness key or summary column across the chart; the
+                run's first recorded objective (``loss`` for a single-objective
+                run) when not given.
+            y_key: The key up the chart; the run's second recorded objective
+                (``n_enabled_gates`` otherwise) when not given.
+
+        Returns:
+            ``x_key`` and ``y_key``, whether larger values of each are better
+            (``x_higher_is_better``, ``y_higher_is_better``), the run's recorded
+            ``objectives`` (empty for a single-objective run), and ``points``:
+            parallel lists ``genome_number``, ``x``, ``y``, ``insert_type``,
+            ``in_population`` (whether the population held the genome after the
+            last recorded insertion), ``population_front`` (on the Pareto front
+            of the current population) and ``run_front`` (on the front of every
+            genome the run evaluated).
+
+        Raises:
+            KeyError: If there is no such run.
+            ValueError: If ``x_key`` or ``y_key`` is not a valid key.
+        """
+
+        with GenomeArchive.open_readonly(self.run(index).archive_path) as reader:
+            recorded = reader.run_info().get("multi_objective") or {}
+            objectives = list(recorded.get("objectives") or [])
+            names = [objective.get("name") for objective in objectives]
+            x_key = x_key or (names[0] if names else "loss")
+            y_key = y_key or (names[1] if len(names) > 1 else "n_enabled_gates")
+            xs = reader.points(x_key)
+            ys = reader.points(y_key)
+            population = set(reader.population_at())
+
+        x_higher = pareto_higher_is_better(x_key, objectives)
+        y_higher = pareto_higher_is_better(y_key, objectives)
+        numbers = xs["genome_number"]
+        in_population = [number in population for number in numbers]
+        return {
+            "x_key": x_key,
+            "y_key": y_key,
+            "x_higher_is_better": x_higher,
+            "y_higher_is_better": y_higher,
+            "objectives": objectives,
+            "points": {
+                "genome_number": numbers,
+                "x": xs["y"],
+                "y": ys["y"],
+                "insert_type": xs["insert_type"],
+                "in_population": in_population,
+                "population_front": pareto_front_mask(
+                    xs["y"], ys["y"], x_higher, y_higher, members=in_population
+                ),
+                "run_front": pareto_front_mask(xs["y"], ys["y"], x_higher, y_higher),
+            },
         }
 
     def timing_payload(self, index: int) -> dict[str, Any]:

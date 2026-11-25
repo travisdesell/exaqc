@@ -5,6 +5,7 @@ import os
 import sys
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import torch
@@ -24,14 +25,25 @@ from src.objectives.classification_objective import (
     load_data,
 )
 from src.utils import restart
+from src.utils.restart import RestartState
 from src.metrics.mean_class_accuracy import MeanClassAccuracy
 from src.metrics.metric import Metric
 from src.trainer.supervised_trainer import SupervisedTrainer
 from src.utils.genome_archive import GenomeArchive
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(
+    add_population_strategies: Callable[
+        [argparse.ArgumentParser], None
+    ] = PopulationStrategy.initialize_parser,
+) -> argparse.ArgumentParser:
     """Creates the classification command-line parser.
+
+    Args:
+        add_population_strategies: Adds the population-strategy sub-commands to
+            the parser. Defaults to the shared ``steady_state`` / ``islands``
+            sub-commands; ``src.examples.classification_moo`` passes its
+            multi-objective ones instead.
 
     Returns:
         Configured argument parser.
@@ -57,7 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # The choice of population strategy (and each strategy's own flags) is owned
     # by PopulationStrategy.
-    PopulationStrategy.initialize_parser(parser)
+    add_population_strategies(parser)
 
     # The supervised-training flags (epochs, learning rate, weight decay,
     # improvement cutoff, batch size) are owned by SupervisedTrainer so the
@@ -223,10 +235,58 @@ def load_encoder_config(
     return config
 
 
+def default_population(
+    args: argparse.Namespace, restart_state: RestartState | None
+) -> PopulationStrategy:
+    """Builds the shared single-objective population strategy for a run.
+
+    Args:
+        args: Parsed arguments carrying the population sub-command and flags.
+        restart_state: The stopped run being continued, or ``None`` for a new
+            run.
+
+    Returns:
+        The population strategy, restored from ``restart_state`` when given.
+    """
+
+    if restart_state is None:
+        return PopulationStrategy.from_args(args, compare)
+    return restart.restored_strategy(restart_state, args, compare)
+
+
 def main() -> None:
     """Runs a classification experiment."""
     parser = build_parser()
-    args = parser.parse_args()
+    run(parser, parser.parse_args())
+
+
+def run(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+    build_population: Callable[
+        [argparse.Namespace, RestartState | None], PopulationStrategy
+    ] = default_population,
+    objective_class: type[ClassificationObjective] = ClassificationObjective,
+) -> None:
+    """Runs a classification search from parsed arguments.
+
+    Shared by this entry point and ``src.examples.classification_moo``, which
+    differ only in the population strategy and the objective that scores each
+    genome.
+
+    Args:
+        parser: The parser ``args`` came from, used to report invalid
+            arguments.
+        args: The parsed command-line arguments.
+        build_population: Builds the run's population strategy from the
+            (possibly restarted) arguments and the restart state, if any.
+        objective_class: The objective trained and scored genomes with; its
+            constructor takes the same arguments as
+            :class:`ClassificationObjective`.
+
+    Returns:
+        None. Runs the search to completion (see :func:`run_evolution`).
+    """
 
     # Decided before anything is built, and on every rank: a restarted run takes
     # its configuration from the run it continues, so the objective a worker
@@ -259,7 +319,7 @@ def main() -> None:
     metrics: dict[str, Metric] = {
         "mean_class_accuracy": MeanClassAccuracy(training_loader.n_labels)
     }
-    objective = ClassificationObjective(
+    objective = objective_class(
         training_dataloader=training_loader,
         validation_dataloader=validation_loader,
         training_loss_function=torch.nn.CrossEntropyLoss(
@@ -349,11 +409,7 @@ def main() -> None:
         # The gate set and population strategy are built from `args` by their own
         # factories (which every entry point shares); only the task-specific
         # encoder/decoder, hyperparameters and register layout are computed here.
-        population = (
-            PopulationStrategy.from_args(args, compare)
-            if restart_state is None
-            else restart.restored_strategy(restart_state, args, compare)
-        )
+        population = build_population(args, restart_state)
 
         search = EXAQC(
             gate_specifications=GateSpecifications.from_args(args),

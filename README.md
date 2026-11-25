@@ -53,6 +53,7 @@ classical layers train together with ordinary backpropagation and the standard P
   - [Working with a run's archive](#working-with-a-runs-archive)
 - [Examples](#examples)
   - [classification](#classification)
+  - [classification_moo](#classification_moo)
   - [teacher](#teacher)
   - [reinforcement_learning](#reinforcement_learning)
   - [refine_genome](#refine_genome)
@@ -870,6 +871,52 @@ runs the non-vision datasets locally, configured by the
 | `IMPROVEMENT_CUTOFF` | `3` | `--improvement_cutoff` |
 | `BATCH_SIZE` | `3` | `--batch_size` |
 
+### [`classification_moo`](./src/examples/classification_moo.py)
+
+Runs the `classification` search with a multi-objective population: NSGA-II or
+NSGA-III keeps a Pareto front over two or more objectives (by default loss and
+the number of enabled gates) instead of ranking genomes by loss alone.
+
+```
+mpiexec -n 12 python3 -m src.examples.classification_moo \
+    --dataset iris --input_qubits 4 --output_qubits 2 --batch_size 3 \
+    --number_genomes 1000 \
+    -ms uniform 1 3 -ps uniform 5 5 \
+    -qim u3 -qom probs --encoding linear --decoding linear \
+    --objectives loss:1 n_enabled_gates:1 \
+    --out_dir ./artifacts/iris_nsga2 \
+    nsga2 --max_population_size 30
+```
+
+It takes every `classification` argument above (and the shared search, circuit
+and run-output arguments), except that the population sub-command is `nsga2` or
+`nsga3` rather than `steady_state` or `islands`. Fitness records `loss` and
+`target_metric` as in `classification`, plus `n_enabled_gates` (enabled quantum
+gates) and `n_parameters` (the parameters on those gates; encoder and decoder
+weights are not counted), so the archive, dashboard and `--restart` work as
+they do for a single-objective run.
+
+| Argument | Default | Description |
+|---|---|---|
+| `--objectives` | `loss:1 n_enabled_gates:1` | Two or more of `loss`, `target_metric`, `n_enabled_gates`, `n_parameters` as `NAME:SIGN`; sign `1` minimizes, `-1` maximizes, a bare name minimizes. Like `-ms`/`-ps` it takes every value up to the next flag, so keep another flag between it and the sub-command |
+| `nsga2` / `nsga3` | *required* | Population sub-command |
+| `--max_population_size` | `30` | Genomes kept after each insertion (both sub-commands) |
+| `--tournament_size` | `2` | Genomes sampled per parent-selection tournament (both) |
+| `--reference_divisions` | most divisions whose reference directions do not outnumber `--max_population_size` | `nsga3` only: Das-Dennis simplex divisions (`max_population_size - 1` for two objectives) |
+
+**Guidance.** Both algorithms are steady state: each evaluated genome joins the
+population and environmental selection drops one genome. NSGA-II prefers lower
+Pareto rank, then larger crowding distance; NSGA-III prefers lower rank, then
+fills the last front by reference-direction niching, and is meant for three or
+more objectives. A genome with any non-finite objective (failed training) is
+treated as dominated by every other genome. The run's "best" genome (its
+`global_best` insertions) is the Pareto-front genome with the best value of the
+*first* objective, and the objectives and algorithm are recorded in the
+archive's `run_info` under `multi_objective`, which the
+[dashboard](#exaqc_dashboard)'s **Pareto** view plots. Use `n_enabled_gates` rather than
+the archive's `n_gates` column, which also counts disabled gates. There is no
+island variant or wrapper script yet.
+
 ### [`teacher`](./src/examples/teacher.py)
 
 Evolves **purely quantum** circuits to reproduce the outputs of a known
@@ -1192,7 +1239,15 @@ Then open `http://127.0.0.1:8000/` in a browser. The page has:
   every other island is gray. The
   **Progress** view emphasizes the best-so-far line and the **Genealogy** view the
   links; either can highlight a genome's full lineage or hide genomes that had no
-  children. On the right, a sortable, filterable table of the genomes that loads
+  children. The **Pareto** view instead plots every genome against two
+  objectives -- by default the first two a
+  [`classification_moo`](#classification_moo) run recorded, otherwise `loss`
+  and `n_enabled_gates`, and any two keys can be picked -- with the genomes the
+  population holds drawn over the rest, the population's Pareto front joined by
+  a solid line and the front of every genome the run evaluated by a dashed one.
+  Circuit sizes are minimized; other keys follow the run's recorded objective
+  directions, or else are minimized when they name a loss and maximized
+  otherwise. On the right, a sortable, filterable table of the genomes that loads
   more genomes as you scroll (the chart's panel grows to match, with the chart
   staying in view). Drag the divider between the chart and the table to widen one
   and narrow the other (double-click it to go back to the default split); your

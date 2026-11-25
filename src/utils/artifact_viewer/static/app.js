@@ -1180,6 +1180,211 @@
   }
 
   /**
+   * Creates the run page's Pareto chart: every genome as a point of two
+   * objectives (`payload.x_key` across, `payload.y_key` up), the genomes the
+   * population holds drawn over the rest, and the Pareto fronts of the
+   * population (solid) and of every genome the run evaluated (dashed) joined
+   * by lines. Clicking a point calls `config.onSelect` with its genome number;
+   * clicking empty space calls `config.onClearSelection`.
+   */
+  function createParetoChart(container, config) {
+    const legend = h("div", { class: "chart-legend" });
+    const host = h("div", { class: "chart-host" });
+    const tooltip = h("div", { class: "chart-tooltip", hidden: true });
+    const empty = notice("");
+    empty.hidden = true;
+    setChildren(container, legend, host, empty);
+
+    let plot = null;
+    let model = null;
+    let selected = null;
+
+    /** Orders the plottable genomes by x (uPlot's x values must not decrease) and splits them into series. */
+    function buildModel(payload) {
+      const points = payload.points;
+      const order = [];
+      for (let i = 0; i < points.genome_number.length; i++) {
+        if (isNumber(points.x[i]) && isNumber(points.y[i])) order.push(i);
+      }
+      order.sort((a, b) => points.x[a] - points.x[b] || points.y[a] - points.y[b]);
+      const only = (keep) => order.map((i) => (keep(i) ? points.y[i] : null));
+      return {
+        payload,
+        order,
+        numbers: order.map((i) => points.genome_number[i]),
+        xs: order.map((i) => points.x[i]),
+        ys: order.map((i) => points.y[i]),
+        indexOf: new Map(order.map((i, k) => [points.genome_number[i], k])),
+        data: [
+          order.map((i) => points.x[i]),
+          only((i) => !points.in_population[i]),
+          only((i) => points.in_population[i] && !points.population_front[i]),
+          only((i) => points.run_front[i]),
+          only((i) => points.population_front[i]),
+        ],
+      };
+    }
+
+    /** The plotted point nearest the cursor, within the hit radius, or -1. */
+    function nearest(u, left, top) {
+      if (!model || left === null || left === undefined || left < 0 || top < 0) return -1;
+      let best = -1;
+      let bestDistance = HIT_RADIUS * HIT_RADIUS;
+      for (let k = 0; k < model.xs.length; k++) {
+        const dx = u.valToPos(model.xs[k], "x") - left;
+        const dy = u.valToPos(model.ys[k], "y") - top;
+        const distance = dx * dx + dy * dy;
+        if (distance <= bestDistance) {
+          bestDistance = distance;
+          best = k;
+        }
+      }
+      return best;
+    }
+
+    /** Rings the selected genome. */
+    function drawSelection(u) {
+      const k = model ? model.indexOf.get(selected) : undefined;
+      if (k === undefined) return;
+      const ctx = u.ctx;
+      ctx.save();
+      ctx.strokeStyle = token("--text-primary");
+      ctx.lineWidth = 2 * uPlot.pxRatio;
+      ctx.beginPath();
+      ctx.arc(u.valToPos(model.xs[k], "x", true), u.valToPos(model.ys[k], "y", true), 9 * uPlot.pxRatio, 0, 2 * Math.PI);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function updateTooltip(u) {
+      const k = nearest(u, u.cursor.left, u.cursor.top);
+      if (k < 0) {
+        tooltip.hidden = true;
+        return;
+      }
+      const points = model.payload.points;
+      const i = model.order[k];
+      const where = points.population_front[i] ? "on the population's Pareto front" : points.in_population[i] ? "in the population" : points.run_front[i] ? "on the run's Pareto front" : "not in the population";
+      setChildren(tooltip,
+        h("div", {}, h("b", { text: `Genome ${model.numbers[k]}` })),
+        h("div", {}, h("span", { class: "muted", text: `${model.payload.x_key}: ` }), formatNumber(model.xs[k])),
+        h("div", {}, h("span", { class: "muted", text: `${model.payload.y_key}: ` }), formatNumber(model.ys[k])),
+        h("div", { class: "muted", text: `${where} · ${label(points.insert_type[i])}` })
+      );
+      tooltip.hidden = false;
+      const overBox = u.over.getBoundingClientRect();
+      const hostBox = host.getBoundingClientRect();
+      const x = overBox.left - hostBox.left + u.valToPos(model.xs[k], "x");
+      const y = overBox.top - hostBox.top + u.valToPos(model.ys[k], "y");
+      const flip = x + tooltip.offsetWidth + 20 > hostBox.width;
+      tooltip.style.left = `${flip ? x - tooltip.offsetWidth - 14 : x + 14}px`;
+      tooltip.style.top = `${Math.max(0, y - tooltip.offsetHeight / 2)}px`;
+    }
+
+    function direction(higher) {
+      return higher ? "higher is better" : "lower is better";
+    }
+
+    function render(payload) {
+      if (plot) {
+        plot.destroy();
+        plot = null;
+      }
+      model = buildModel(payload);
+      const muted = token("--text-muted");
+      const population = slotColor(1);
+      const front = slotColor(2);
+      const surface = token("--surface-1");
+      setChildren(legend,
+        legendItem(withAlpha(muted, 0.6), "evaluated genome"),
+        legendItem(population, "in the population"),
+        legendItem(front, "population's Pareto front", true),
+        legendItem(muted, "run's Pareto front (dashed)", true)
+      );
+      empty.hidden = model.xs.length > 0;
+      empty.textContent = model.xs.length ? "" : `No genome has both ${payload.x_key} and ${payload.y_key} recorded.`;
+      if (!model.xs.length) return;
+
+      const markerSize = model.xs.length > 5000 ? 5 : 8;
+      plot = new uPlot(
+        {
+          width: Math.max(320, host.clientWidth),
+          height: genomeChartHeight(host),
+          scales: { x: { time: false } },
+          axes: [
+            axisStyle(`${payload.x_key} (${direction(payload.x_higher_is_better)})`),
+            { ...axisStyle(`${payload.y_key} (${direction(payload.y_higher_is_better)})`), size: 60 },
+          ],
+          series: [
+            { label: payload.x_key },
+            { label: "evaluated", stroke: muted, width: 0, paths: () => null, points: { show: true, size: markerSize - 2, width: 0, fill: withAlpha(muted, 0.45) } },
+            { label: "population", stroke: population, width: 0, paths: () => null, points: { show: true, size: markerSize, width: 1, stroke: surface, fill: population } },
+            { label: "run front", stroke: muted, width: 1.5, dash: [6, 4], spanGaps: true, points: { show: false } },
+            { label: "population front", stroke: front, width: 2, spanGaps: true, points: { show: true, size: markerSize + 1, width: 1, stroke: surface, fill: front } },
+          ],
+          legend: { show: false },
+          cursor: { drag: { x: true, y: true }, points: { show: false } },
+          hooks: { draw: [drawSelection], setCursor: [updateTooltip] },
+        },
+        model.data,
+        host
+      );
+      host.append(tooltip);
+
+      let pressed = null;
+      plot.over.addEventListener("mousedown", (event) => (pressed = [event.clientX, event.clientY]));
+      let backgroundClick = null;
+      plot.over.addEventListener("click", (event) => {
+        if (pressed && Math.hypot(event.clientX - pressed[0], event.clientY - pressed[1]) > 4) return;
+        const k = nearest(plot, plot.cursor.left, plot.cursor.top);
+        clearTimeout(backgroundClick);
+        if (k >= 0) config.onSelect(model.numbers[k]);
+        else backgroundClick = setTimeout(() => config.onClearSelection(), 300);
+      });
+      plot.over.addEventListener("dblclick", () => clearTimeout(backgroundClick));
+      plot.over.addEventListener("mouseleave", () => (tooltip.hidden = true));
+    }
+
+    const resize = () => {
+      if (!plot || !host.clientWidth) return;
+      const height = genomeChartHeight(host);
+      if (Math.abs(plot.width - host.clientWidth) > 2 || Math.abs(plot.height - height) > 2) plot.setSize({ width: host.clientWidth, height });
+    };
+    const resizeObserver = new ResizeObserver(resize);
+    resizeObserver.observe(host);
+    window.addEventListener("resize", resize);
+
+    return {
+      setData(payload) {
+        empty.classList.remove("error");
+        render(payload);
+      },
+      /** Replaces the chart with an error message (until the next `setData`). */
+      showError(message) {
+        if (plot) {
+          plot.destroy();
+          plot = null;
+        }
+        model = null;
+        tooltip.hidden = true;
+        empty.textContent = message;
+        empty.classList.add("error");
+        empty.hidden = false;
+      },
+      setSelected(genome) {
+        selected = genome;
+        if (plot) plot.redraw(false, false);
+      },
+      resize,
+      destroy() {
+        resizeObserver.disconnect();
+        window.removeEventListener("resize", resize);
+        if (plot) plot.destroy();
+      },
+    };
+  }
+
+  /**
    * A line chart of several series over a shared x axis, with an optional band per series.
    * `showPoints` marks every value, so a series recorded at only a few x values still shows.
    */
@@ -1336,7 +1541,11 @@
     const recordsTiming = (run.metrics || []).includes("turnaround_seconds");
     const islandCount = run.filter_options && run.filter_options.island ? run.filter_options.island.length : 0;
     const state = {
+      // "progress" or "genealogy" (the genome chart) or "pareto" (the Pareto chart)
       mode: "progress",
+      // the Pareto chart's axes; the server picks the run's objectives until chosen here
+      paretoX: null,
+      paretoY: null,
       yKey: keys.includes("loss") ? "loss" : keys[0] || "n_gates",
       encoding: "insert_type",
       // what coloring by island colors: "each" island its own color (offered only while the
@@ -1396,6 +1605,10 @@
     const filterRow = h("div", { class: "toolbar" });
     const chartControls = h("div", { class: "toolbar" });
     const chartNode = h("div");
+    // the Pareto chart, shown in place of the genome chart in "pareto" mode
+    const paretoNode = h("div");
+    paretoNode.hidden = true;
+    let paretoRequest = 0;
     // the run's search progress, shown above the genome chart
     const historyNode = h("div", { class: "search-progress" });
     historyNode.hidden = true;
@@ -1410,7 +1623,7 @@
     // The two columns always share one height; as the table grows the chart panel
     // stretches with it, and the chart stays in view inside it. The divider
     // between them trades width between the columns.
-    const chartPanel = h("section", { class: "card chart-panel", "aria-label": "Genome chart" }, h("div", { class: "chart-sticky" }, chartControls, historyNode, chartNode));
+    const chartPanel = h("section", { class: "card chart-panel", "aria-label": "Genome chart" }, h("div", { class: "chart-sticky" }, chartControls, historyNode, chartNode, paretoNode));
     const runBody = h("div", { class: "run-body" }, chartPanel);
     const columnResizer = createColumnResizer(runBody, chartPanel);
     runBody.append(columnResizer.node, h("div", { class: "run-main" }, detailNode, h("section", { class: "card table-card", "aria-label": "Genome table" }, tableToolbar, tableNode, tableStatus)));
@@ -1427,6 +1640,13 @@
       filters: state.filters,
       hideDeadEnds: state.hideDeadEnds,
       highlightLineage: state.highlightLineage,
+      onSelect: (genome) => toggleGenome(genome),
+      onClearSelection: () => {
+        if (state.selected !== null && state.selected !== undefined) location.hash = `#/run/${index}`;
+      },
+    });
+
+    const paretoChart = createParetoChart(paretoNode, {
       onSelect: (genome) => toggleGenome(genome),
       onClearSelection: () => {
         if (state.selected !== null && state.selected !== undefined) location.hash = `#/run/${index}`;
@@ -1632,21 +1852,99 @@
       );
     }
 
+    /** Shows the genome chart or the Pareto chart, whichever the chart mode asks for. */
+    function showChartMode() {
+      const pareto = state.mode === "pareto";
+      chartNode.hidden = pareto;
+      paretoNode.hidden = !pareto;
+      if (pareto) {
+        loadPareto();
+      } else {
+        chart.setOptions({ mode: state.mode });
+        refitChart();
+      }
+    }
+
+    /** Loads every genome's two Pareto objectives into the Pareto chart. */
+    async function loadPareto() {
+      if (state.mode !== "pareto") return;
+      const request = ++paretoRequest;
+      const query = new URLSearchParams();
+      if (state.paretoX) query.set("x", state.paretoX);
+      if (state.paretoY) query.set("y", state.paretoY);
+      try {
+        const payload = await api(`/api/runs/${index}/pareto?${query}`);
+        if (destroyed || request !== paretoRequest) return;
+        const chosen = state.paretoX === null || state.paretoY === null;
+        state.paretoX = payload.x_key;
+        state.paretoY = payload.y_key;
+        // the server chose the axes: show its choice in the pickers
+        if (chosen) renderChartControls();
+        paretoChart.setData(payload);
+        paretoChart.setSelected(state.selected);
+      } catch (error) {
+        if (destroyed || request !== paretoRequest) return;
+        paretoChart.showError(`Could not load the Pareto chart: ${error.message}`);
+      }
+    }
+
+    /** The Pareto chart's controls: the two objectives it plots. */
+    function paretoControls() {
+      const axis = (text, key, other, assign) =>
+        h(
+          "label",
+          {},
+          text,
+          select(
+            metricOptions(key).filter(([value]) => value !== other),
+            key,
+            (value) => {
+              assign(value);
+              loadPareto();
+            },
+            `Objective plotted ${text === "x" ? "across" : "up"} the Pareto chart`
+          )
+        );
+      const recorded = run.multi_objective && run.multi_objective.objectives ? run.multi_objective.objectives : [];
+      return [
+        state.paretoX === null ? null : axis("x", state.paretoX, state.paretoY, (value) => (state.paretoX = value)),
+        state.paretoY === null ? null : axis("y", state.paretoY, state.paretoX, (value) => (state.paretoY = value)),
+        allMetrics.length > primaryMetrics.length
+          ? checkbox("all metrics", state.showAllMetrics, (value) => {
+              state.showAllMetrics = value;
+              renderChartControls();
+            })
+          : null,
+        h("span", {
+          class: "meta",
+          text: recorded.length
+            ? `${run.multi_objective.algorithm} objectives: ${recorded.map((objective) => `${objective.name} (${objective.direction})`).join(", ")} · click a point to open it`
+            : "not a multi-objective run: the fronts are computed from the chosen keys · click a point to open it",
+        }),
+      ];
+    }
+
     function renderChartControls() {
       const yOptions = metricOptions(state.yKey);
+      const modes = segmented(
+        [
+          ["progress", "Progress"],
+          ["genealogy", "Genealogy"],
+          ["pareto", "Pareto"],
+        ],
+        state.mode,
+        (mode) => {
+          state.mode = mode;
+          renderChartControls();
+          showChartMode();
+        }
+      );
+      if (state.mode === "pareto") {
+        setChildren(chartControls, modes, ...paretoControls());
+        return;
+      }
       setChildren(chartControls,
-        segmented(
-          [
-            ["progress", "Progress"],
-            ["genealogy", "Genealogy"],
-          ],
-          state.mode,
-          (mode) => {
-            state.mode = mode;
-            renderChartControls();
-            chart.setOptions({ mode });
-          }
-        ),
+        modes,
         h(
           "label",
           {},
@@ -2245,6 +2543,7 @@
     async function selectGenome(genome) {
       state.selected = genome;
       chart.setSelected(genome);
+      paretoChart.setSelected(genome);
       highlightTableRow();
       renderTopology();
       if (genome === null || genome === undefined) {
@@ -2901,6 +3200,7 @@
         state.newGenomes += added;
         renderTableToolbar();
         await loadChart();
+        loadPareto();
         if (state.showHistory) loadHistory();
         if (timingNode.open) loadTiming();
       }
@@ -2931,6 +3231,7 @@
         columnResizer.destroy();
         historyObserver.disconnect();
         chart.destroy();
+        paretoChart.destroy();
         if (historyChart) historyChart.destroy();
         for (const timingChart of timingCharts) timingChart.destroy();
       },
