@@ -30,6 +30,10 @@ from src.metrics.mean_class_accuracy import MeanClassAccuracy
 from src.metrics.metric import Metric
 from src.trainer.supervised_trainer import SupervisedTrainer
 from src.utils.genome_archive import GenomeArchive
+from src.noise.pennylane_noise_model import (
+    PennyLaneNoiseModel,
+    noise_hyperparameters_from_args,
+)
 
 
 def build_parser(
@@ -84,6 +88,11 @@ def build_parser(
     # quantum dropout, encoder/decoder) are owned by CircuitGenome so every
     # entry point stays in sync.
     CircuitGenome.initialize_parser(parser)
+
+    # The simulated-noise flags (--noise_type, --noise_p_1q, ...,
+    # --noise_calibration, --noise_qubits) are owned by the noise model; all
+    # default to no noise.
+    PennyLaneNoiseModel.initialize_parser(parser)
 
     parser.add_argument(
         "--encoder_config",
@@ -309,6 +318,13 @@ def run(
 
     logger.info("Using PyTorch device: {}", device)
 
+    # Checked on every rank before any work, so bad noise flags stop the run at once.
+    try:
+        noise_hyperparameters = noise_hyperparameters_from_args(args)
+    except ValueError as error:
+        parser.error(str(error))
+    logger.info("Noise settings: {}", noise_hyperparameters)
+
     training_loader, validation_loader = load_data(args)
 
     # if training_loader.is_image and args.encoding != "cnn":
@@ -404,6 +420,9 @@ def run(
             "quantum_dropout": args.quantum_dropout,
             "quantum_dropout_type": args.quantum_dropout_type,
             "quantum_dropout_rate": args.quantum_dropout_rate,
+            # every genome carries the noise settings; they describe no noise
+            # unless noise flags were given
+            **noise_hyperparameters,
         }
 
         # The gate set and population strategy are built from `args` by their own

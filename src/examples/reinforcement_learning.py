@@ -61,6 +61,10 @@ from src.trainer.q_learning_trainer import QLearningTrainer
 from src.trainer.reinforce_trainer import ReinforceTrainer
 from src.utils.genome_archive import GenomeArchive
 from src.trainer.rl_trainer_registry import TRAINER_REGISTRY
+from src.noise.pennylane_noise_model import (
+    PennyLaneNoiseModel,
+    noise_hyperparameters_from_args,
+)
 
 # ---------------------------------------------------------------------
 # Command-line interface
@@ -113,6 +117,11 @@ def build_parser() -> argparse.ArgumentParser:
     # encoder/decoder, quantum dropout) are owned by CircuitGenome so every
     # entry point stays in sync.
     CircuitGenome.initialize_parser(parser)
+
+    # The simulated-noise flags (--noise_type, --noise_p_1q, ...,
+    # --noise_calibration, --noise_qubits) are owned by the noise model; all
+    # default to no noise.
+    PennyLaneNoiseModel.initialize_parser(parser)
 
     # The training-loop hyperparameters are owned by the RL trainer classes so
     # each flag lives with the code that reads it: the base trainer owns the
@@ -182,6 +191,13 @@ def main() -> None:
     logger.add(sys.stdout, level=args.logging_level)
     if args.save_run_log:
         logger.add(os.path.join(args.out_dir, "run.log"), level=args.logging_level)
+
+    # Checked on every rank before any work, so bad noise flags stop the run at once.
+    try:
+        noise_hyperparameters = noise_hyperparameters_from_args(args)
+    except ValueError as error:
+        parser.error(str(error))
+    logger.info("Noise settings: {}", noise_hyperparameters)
 
     # -----------------------------------------------------------------
     # Environment + trainer + objective
@@ -297,6 +313,9 @@ def main() -> None:
             "log_every": args.log_every,
             "ema_alpha": args.ema_alpha,
             "improvement_cutoff": args.improvement_cutoff,
+            # every genome carries the noise settings; they describe no noise
+            # unless noise flags were given
+            **noise_hyperparameters,
         }
 
         # -----------------------------------------------------------------

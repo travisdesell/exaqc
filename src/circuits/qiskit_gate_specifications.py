@@ -2,15 +2,22 @@ from src.circuits.gate_specifications import GateSpecification, GateSpecificatio
 
 qiskit_gate_specifications = GateSpecifications(target="qiskit")
 qiskit_gate_specifications["ccx"] = GateSpecification(
-    name="Toffoli", qubits=["control_qubit1", "control_qubit2", "target_qubit"]
+    cnot_count=6,
+    rot_count=0,
+    name="Toffoli",
+    qubits=["control_qubit1", "control_qubit2", "target_qubit"],
 )
 
 qiskit_gate_specifications["ccz"] = GateSpecification(
+    cnot_count=6,
+    rot_count=0,
     name="Symmetric",
     qubits=["control_qubit1", "control_qubit2", "target_qubit"],
 )
 
 qiskit_gate_specifications["ch"] = GateSpecification(
+    cnot_count=1,
+    rot_count=0,
     name="Controlled Hadamard",
     qubits=["control_qubit", "target_qubit"],
 )
@@ -62,6 +69,8 @@ qiskit_gate_specifications["csdg"] = GateSpecification(
 )
 
 qiskit_gate_specifications["cswap"] = GateSpecification(
+    cnot_count=7,
+    rot_count=0,
     name="Controlled SWAP (Fredkin)",
     qubits=["control_qubit", "target_qubit1", "target_qubit2"],
 )
@@ -126,6 +135,8 @@ qiskit_gate_specifications["id"] = GateSpecification(
 )
 
 qiskit_gate_specifications["iswap"] = GateSpecification(
+    cnot_count=2,
+    rot_count=0,
     name="iSWAP",
     qubits=["qubit1", "qubit2"],
 )

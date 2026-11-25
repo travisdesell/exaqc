@@ -6,18 +6,24 @@ pennylane_gate_specifications = GateSpecifications(target="pennylane")
 # Multi-controlled / controlled gates (native PL)
 # ======================================================
 pennylane_gate_specifications["ccx"] = GateSpecification(
+    cnot_count=6,
+    rot_count=0,
     name="Toffoli",
     qubits=["control_qubit1", "control_qubit2", "target_qubit"],
     pennylane_op="Toffoli",
 )
 
 pennylane_gate_specifications["ccz"] = GateSpecification(
+    cnot_count=6,
+    rot_count=0,
     name="CCZ",
     qubits=["control_qubit1", "control_qubit2", "target_qubit"],
     pennylane_op="CCZ",
 )
 
 pennylane_gate_specifications["ch"] = GateSpecification(
+    cnot_count=1,
+    rot_count=0,
     name="Controlled Hadamard",
     qubits=["control_qubit", "target_qubit"],
     pennylane_op="CH",
@@ -48,6 +54,8 @@ pennylane_gate_specifications["cz"] = GateSpecification(
 )
 
 pennylane_gate_specifications["cswap"] = GateSpecification(
+    cnot_count=7,
+    rot_count=0,
     name="Controlled SWAP (Fredkin)",
     qubits=["control_qubit", "target_qubit1", "target_qubit2"],
     pennylane_op="CSWAP",
@@ -364,6 +372,8 @@ pennylane_gate_specifications["rzx"] = GateSpecification(
 # iSWAP and SWAP
 # ======================================================
 pennylane_gate_specifications["iswap"] = GateSpecification(
+    cnot_count=2,
+    rot_count=0,
     name="iSWAP",
     qubits=["qubit1", "qubit2"],
     pennylane_op="ISWAP",

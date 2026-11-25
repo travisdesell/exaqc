@@ -62,10 +62,12 @@ classical layers train together with ordinary backpropagation and the standard P
   - [exaqc_dashboard](#exaqc_dashboard)
   - [exaqc_mcp](#exaqc_mcp)
   - [backfill_archive](#backfill_archive)
+  - [collect_calibration](#collect_calibration)
   - [classical_image_classification](#classical_image_classification)
   - [reinforcement_learning_fixed](#reinforcement_learning_fixed)
 - [Reproducing 2026 PPSN results](#reproducing-2026-ppsn-results)
 - [Contributing](#contributing)
+- [Citation](#citation)
 
 ---
 
@@ -870,6 +872,34 @@ runs the non-vision datasets locally, configured by the
 | `EPOCHS` | `30` | `--epochs` |
 | `IMPROVEMENT_CUTOFF` | `3` | `--improvement_cutoff` |
 | `BATCH_SIZE` | `3` | `--batch_size` |
+| `NOISE_TYPE` / `NOISE_P_1Q` / `NOISE_P_2Q` | unset | Synthetic noise: `--noise_type` / `--noise_p_1q` / `--noise_p_2q`, all three together or none |
+| `NOISE_CALIBRATION` / `NOISE_QUBITS` | unset | Chip noise: `--noise_calibration` / `--noise_qubits`, both together or none, and not with the synthetic variables |
+
+**Simulated noise.** By default circuits run on a perfect simulator. Any noise
+flag switches the circuits to a density-matrix simulator (`default.mixed` on
+`--target pennylane`, Qiskit Aer's `density_matrix` method with exact
+probabilities on `--target qiskit`) and adds a noise channel after every evolved
+gate while circuits are trained and scored; each genome records its noise
+settings as `noise_*` hyperparameters. Both targets add the same channels at the
+same points, so a genome scores the same under either. Noisy simulation is much
+slower, roughly the square of the noiseless cost.
+
+| Argument | Default | Description |
+|---|---|---|
+| `--noise_type` | `none` | `none`, `depolarizing`, `bit_flip`, `phase_flip`, `amplitude_damping`, `phase_damping`, `thermal_relaxation`, `mixed`, `ibm_backend`. `ibm_backend` requires `--noise_calibration` and `--noise_qubits` |
+| `--noise_p` | `0.0` | Error probability for gates without a size-specific rate |
+| `--noise_p_1q` / `--noise_p_2q` | = `--noise_p` | Error probability after one-qubit / multi-qubit gates |
+| `--noise_gamma` | `0.0` | Strength of the damping and `mixed` noise types |
+| `--noise_t1` / `--noise_t2` | `5e-05` / `7e-05` | Qubit T1 / T2 in seconds (thermal relaxation) |
+| `--noise_gate_time_1q` / `--noise_gate_time_2q` | `5e-08` / `3e-07` | Gate durations in seconds (thermal relaxation) |
+| `--noise_excited_state_population` | `0.0` | Thermal excited-state population (thermal relaxation) |
+| `--noise_after_encoding` | off | Also add the hand-set noise right after the input encoding. Chip noise (`--noise_calibration`) always adds it there |
+| `--noise_after_gates` | on | Add noise after each evolved gate (`--no-noise_after_gates` to disable) |
+| `--noise_before_measurement` | off | Also add the hand-set noise just before measurement. Chip noise (`--noise_calibration`) always adds each qubit's readout error there |
+| `--noise_calibration` | none | Gives each wire the rates and timings of its own physical qubit, read from a stored IBM calibration file written by [`collect_calibration`](#collect_calibration). Given as the file's path (`data/calibration/<chip>/<chip>_<date>.json`) or as `<chip>:<date>` (e.g. `ibm_fez:2026-11-06`), which uses that day's stored file or, if it is missing, fetches it once from IBM with the saved Qiskit account and stores it under that name; a failed fetch stops the run and prints the `collect_calibration` command to run by hand. Uses the calibrated `ibm_backend` channel; any other `--noise_type` is refused. Every genome records the file's path, chip, date and values. Requires `--noise_qubits` |
+| `--noise_qubits` | none | Comma-separated physical qubits of that file that wires 0, 1, ... map to (e.g. `10,11,12,13`); list exactly as many as each circuit has wires, the larger of `--input_qubits` and `--output_qubits`; consecutive qubits must be wired neighbours. Each genome is translated into the chip's own gates on these qubits, with moves where qubits are not wired together, and each gate is charged the noise of the chip gates it becomes. Requires `--noise_calibration` |
+| `--noise_transpile_level` | `2` | Chip noise: how hard Qiskit's translator shrinks each genome when turning it into the chip's gates (`0` to `3`). Use the same level as the real-chip run |
+| `--noise_transpile_seed` | `7` | Chip noise: seed for the translator's random choices, for repeatable runs |
 
 ### [`classification_moo`](./src/examples/classification_moo.py)
 
@@ -1039,6 +1069,15 @@ environments work only with `reinforce`, `actor_critic`/`a2c` and `ppo`.
 
 Plus the per-algorithm arguments in [Trainers](#trainers).
 
+**Simulated noise.** The `--noise_*` arguments documented under
+[`classification`](#classification) are accepted here too, with the same
+defaults and meaning: any noise flag moves the circuits onto the density-matrix
+simulator while policies are trained and scored, and every genome records its
+`noise_*` settings. For chip noise, `--noise_qubits` lists one physical qubit
+per circuit wire, the larger of `--input_qubits` and `--output_qubits`. Noisy
+simulation costs more here than in classification, since a policy's circuit
+runs once per environment step rather than once per sample.
+
 #### MuJoCo reward knobs
 
 The MuJoCo locomotion rewards are the sum of three terms, each exposed as a
@@ -1104,6 +1143,8 @@ same fixed trainer settings: `--algo ppo --learning_rate 0.0005
 | `IMPROVEMENT_CUTOFF` | `5` | `--improvement_cutoff`; 0 disables early stopping |
 | `LOG_EVERY` | `1` | `--log_every` |
 | `EVAL_SEED` | `50` | `--eval_seed`; set empty (`EVAL_SEED=`) to draw one per genome |
+| `NOISE_TYPE` / `NOISE_P_1Q` / `NOISE_P_2Q` | unset | Synthetic noise: `--noise_type` / `--noise_p_1q` / `--noise_p_2q`, all three together or none |
+| `NOISE_CALIBRATION` / `NOISE_QUBITS` | unset | Chip noise: `--noise_calibration` / `--noise_qubits`, both together or none, and not with the synthetic variables |
 
 ### [`refine_genome`](./src/examples/refine_genome.py)
 
@@ -1461,6 +1502,47 @@ search before backfilling its archive in place.
 | `--idle_minutes` | `10.0` | Refuse an archive whose latest genome was saved within this many minutes; `0` skips the check |
 | `--logging_level` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
 
+### [`collect_calibration`](./src/examples/collect_calibration.py)
+
+Saves a real IBM chip's calibration, raw, as one JSON file per chip and day. It
+is the step of the noise work that talks to IBM: the simulated-noise
+options of [`classification`](#classification) and
+[`reinforcement_learning`](#reinforcement_learning) (`--noise_calibration`,
+`--noise_qubits`) read the file it writes, one file per chip and date being
+the single source of noise values for a run. A run given
+`--noise_calibration <chip>:<date>` for a day not stored yet fetches that one
+file itself, with the same functions and the saved Qiskit account, so a
+cluster job needs an IBM account only then. The file holds the calibration exactly as IBM
+reports it (`BackendProperties.to_dict()`: per-qubit T1, T2 and readout error,
+per-gate error and duration) plus the chip's qubit count, basis gates and
+coupling map. Rerunning for a day already stored rewrites that day's file.
+
+```
+python3 -m src.examples.collect_calibration --chip ibm_fez ibm_kingston ibm_marrakesh --api_key_file ~/.ibm/quantum_apikey.json
+```
+
+writes `data/calibration/<chip>/<chip>_<YYYY-MM-DD>.json` for each chip. The
+file is named by the day asked for (today, or `--date`); the served
+calibration's own stamp is inside it as `calibration_date`, and on a day the
+chip was not recalibrated that stamp is an earlier day. Credentials come from a JSON file downloaded from IBM Cloud (its
+`apikey` field) or from the account saved once with
+`QiskitRuntimeService.save_account`; the key is used in memory only and never
+written to any output. Keep the key file outside the repository (`*apikey*.json`
+is git-ignored as a safety net). `--date` fetches the calibration as it stood
+at the end of a past day, and `--from_date` / `--to_date` a whole range of days,
+which is how a day-by-day series is filled in (about 1.5 MB per chip per day).
+
+| Argument | Default | Description |
+|---|---|---|
+| `--chip` | none | One or more IBM backend names, e.g. `ibm_fez ibm_kingston`; required unless `--list_chips` is given |
+| `--api_key_file` | none | JSON file from IBM Cloud with an `apikey` field (optionally a `crn` field); default: the saved Qiskit account |
+| `--instance` | none | Instance CRN; default: the `crn` in the key file, else the account's only instance |
+| `--date` | none | Past day (`YYYY-MM-DD`) whose end-of-day calibration to fetch; default: the current calibration |
+| `--from_date` | none | With `--to_date`: fetch every day from this one (inclusive), skipping days already stored; IBM serves at least a year back. Cannot be combined with `--date` |
+| `--to_date` | today | Last day of the `--from_date` range (inclusive) |
+| `--out_dir` | `data/calibration` | Archive root; files go to `<out_dir>/<chip>/<chip>_<date>.json` |
+| `--list_chips` | off | Print the backends the account can see and exit |
+
 ### [`classical_image_classification`](./src/examples/classical_image_classification.py)
 
 A **classical baseline**, with no quantum circuit and no evolution: it trains a
@@ -1591,3 +1673,36 @@ We use Google format for docstrings. See https://www.sphinx-doc.org/en/master/us
 
 > If you use an editor like `PyCharm` you can enable auto doc string comments by going to
 > Settings -> Tools -> Python Integrated Tools -> Docstrings -> Select Google
+
+---
+
+## Citation
+
+If you use EXAQC in your work, please cite:
+
+- Kar, Devroop, Daniel Krutz, and Travis Desell. "Evolutionary design of
+  parameterized quantum circuits for classification and reinforcement learning
+  tasks." *International Conference on Parallel Problem Solving from Nature*.
+  Cham: Springer Nature Switzerland, 2026.
+- Kar, Devroop, Daniel Krutz, and Travis Desell. "Investigating quantum circuit
+  designs using neuro-evolution." *Proceedings of the Genetic and Evolutionary
+  Computation Conference Companion*. 2026.
+
+```bibtex
+@inproceedings{kar2026evolutionary,
+  title={Evolutionary design of parameterized quantum circuits for classification and reinforcement learning tasks},
+  author={Kar, Devroop and Krutz, Daniel and Desell, Travis},
+  booktitle={International Conference on Parallel Problem Solving from Nature},
+  pages={284--302},
+  year={2026},
+  organization={Springer}
+}
+
+@inproceedings{kar2026investigating,
+  title={Investigating quantum circuit designs using neuro-evolution},
+  author={Kar, Devroop and Krutz, Daniel and Desell, Travis},
+  booktitle={Proceedings of the Genetic and Evolutionary Computation Conference Companion},
+  pages={541--544},
+  year={2026}
+}
+```

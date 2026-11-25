@@ -4,8 +4,9 @@ import argparse
 import bisect
 import os
 import json
+import warnings
 
-from typing import Any, Iterator
+from typing import Any, Iterator, TypeVar
 import matplotlib.pyplot as plt
 import pennylane as qml
 import torch
@@ -23,11 +24,39 @@ from qiskit_machine_learning.neural_networks import SamplerQNN
 from qiskit_machine_learning.connectors import TorchConnector
 
 from src.circuits.gate import Gate
+
 from src.circuits.decoder import DECODING_OPTIONS, Decoder
 from src.circuits.encoder import ENCODING_OPTIONS, Encoder
 from src.utils.draw_hybrid_model import draw_hybrid_model
 from src.utils import training_plots
 from src.dropout.quantum_dropout import apply_qubit_readout_dropout
+from src.noise.base_noise_model import BaseNoiseModel
+from src.noise.pennylane_noise_model import PennyLaneNoiseModel
+from src.noise.qiskit_noise_model import QiskitNoiseModel
+
+_NoiseModelT = TypeVar("_NoiseModelT", bound=PennyLaneNoiseModel)
+
+
+def _noise_model_as(
+    target_class: type[_NoiseModelT], noise_model: BaseNoiseModel | None
+) -> _NoiseModelT | None:
+    """Returns a noise model as the class one circuit target needs.
+
+    Args:
+        target_class: ``PennyLaneNoiseModel`` or ``QiskitNoiseModel``.
+        noise_model: Any noise model, or ``None``.
+
+    Returns:
+        ``None`` when ``noise_model`` is ``None``; ``noise_model`` itself when
+        it is exactly a ``target_class``; otherwise an equal model of
+        ``target_class`` rebuilt from its settings (``to_hyperparameters``).
+        The check is exact because ``QiskitNoiseModel`` subclasses
+        ``PennyLaneNoiseModel`` but appends to a Qiskit circuit instead.
+    """
+    if noise_model is None or type(noise_model) is target_class:
+        return noise_model
+    return target_class.from_hyperparameters(noise_model.to_hyperparameters())
+
 
 QUANTUM_INPUT_MODES = ["u3", "rx", "ry", "rz", "basis", "amplitude"]
 
@@ -50,6 +79,78 @@ QUANTUM_OUTPUT_MODES = ["probs", "expval"]
 #: batch an identical output (and therefore wrong losses and gradients). Naming
 #: the register to match keeps the supported per-sample path.
 QISKIT_CLASSICAL_REGISTER_NAME = "meas"
+
+
+class _DensityMatrixTorchLayer(qml.qnn.TorchLayer):
+    """A ``TorchLayer`` whose QNode returns a density matrix, read out as probs/expval.
+
+    PennyLane 0.41 (the version pinned on Intel macOS) cannot measure
+    ``qml.probs`` or ``qml.expval`` on ``default.mixed`` for a batch of torch
+    inputs that require grad: it calls ``.numpy()`` on them and raises
+    "Can't call numpy() on Tensor that requires grad". That is every noisy
+    training step, since the inputs come from the encoder. ``qml.density_matrix``
+    is unaffected, so the QNode measures the output wires' density matrix and
+    this layer reads the same values off its diagonal, differentiably:
+
+    - ``probs``: the diagonal itself, the probability of each output bit
+      string (first output wire most significant, as ``qml.probs``).
+    - ``expval``: ``<Z_i> = sum_b p(b) (1 - 2 b_i)`` for each output wire.
+
+    The trainable weights stay the layer's own ``weights`` parameter, so the
+    state-dict keys match a plain ``TorchLayer``.
+    """
+
+    def __init__(
+        self,
+        qnode: qml.QNode,
+        weight_shapes: dict[str, tuple[int, ...]],
+        output_mode: str,
+        n_outputs: int,
+    ) -> None:
+        """Wraps a density-matrix QNode.
+
+        Args:
+            qnode: The QNode, returning ``qml.density_matrix`` of the output
+                wires.
+            weight_shapes: As for ``qml.qnn.TorchLayer``.
+            output_mode: ``"probs"`` or ``"expval"``, the values to return.
+            n_outputs: How many output wires the density matrix covers.
+
+        Raises:
+            ValueError: If ``output_mode`` is neither ``"probs"`` nor
+                ``"expval"``.
+        """
+        if output_mode not in ("probs", "expval"):
+            raise ValueError(f"Unknown quantum_output_mode={output_mode}")
+        super().__init__(qnode, weight_shapes)
+        self.output_mode = output_mode
+        # signs[b, i] = 1 - 2 * (bit i of b), first wire most significant
+        signs = [
+            [1.0 - 2.0 * ((b >> (n_outputs - 1 - i)) & 1) for i in range(n_outputs)]
+            for b in range(2**n_outputs)
+        ]
+        self.register_buffer("_z_signs", torch.tensor(signs), persistent=False)
+
+    def forward(self, inputs: Tensor) -> Tensor:
+        """Runs the circuit and reads probabilities or expectations off ρ.
+
+        Args:
+            inputs: The quantum-circuit inputs, ``[n_quantum_inputs]`` or
+                ``[batch_size, n_quantum_inputs]``.
+
+        Returns:
+            ``[..., 2**n_outputs]`` probabilities in ``probs`` mode, or
+            ``[..., n_outputs]`` Pauli-Z expectations in ``expval`` mode.
+        """
+        with warnings.catch_warnings():
+            # TorchLayer casts ρ to the (real) input dtype; only the
+            # off-diagonal imaginary parts are dropped, which are not used
+            warnings.filterwarnings("ignore", message="Casting complex values to real")
+            rho = super().forward(inputs)
+        probs = torch.diagonal(rho, dim1=-2, dim2=-1).real
+        if self.output_mode == "probs":
+            return probs
+        return probs @ self._z_signs.to(probs.dtype)
 
 
 class CircuitGenome:
@@ -208,6 +309,8 @@ class CircuitGenome:
                 names the quantum framework (pennylane or qiskit).
         """
         self.genome_number = genome_number
+        if metadata is None:
+            metadata = {}
         self.metadata = metadata
         self.task = task
         self.task_target = task_target
@@ -675,6 +778,15 @@ class CircuitGenome:
         of the sorted gates) so that they can be tracked by the qiskit
         and pennylane models.
 
+        Args:
+            parametric: if True, gate parameter values become qiskit Parameter
+                symbols (for use with EstimatorQNN / SamplerQNN autodiff).
+                Use generate_qiskit_circuit_parametric() for the autodiff path
+                that returns both the circuit and the ordered Parameter list.
+            measure: if True (default), append a measurement for each output
+                qubit into a ClassicalRegister. Set False when the circuit
+                will be used inside a QNN that handles measurement itself.
+
         Returns:
             All the parameter values in this quantum circuit as a list of
             float values.
@@ -822,7 +934,7 @@ class CircuitGenome:
                 for name, tensor in self.hybrid_model.state_dict().items()
             }
 
-    def initialize_model(self) -> None:
+    def initialize_model(self, noise_model: BaseNoiseModel | None = None) -> None:
         """
         Will generate an appropriate pennylane or qiskit circuit for this
         circuit genome, given specified hyperparameters (which should be
@@ -830,6 +942,15 @@ class CircuitGenome:
         should be set to the model, which can take a tensor of input and
         calculate the outputs (which is wrapped in the forward method of
         CircuitGenome).
+
+        Noise is the same on both targets. By default it comes from the
+        genome's own ``noise_*`` hyperparameters (none when it has none).
+        Passing ``noise_model`` overrides them for this build only, so the same
+        genome can be run with or without noise: pass any noise model to run
+        with it, or a model with ``noise_type="none"`` (e.g.
+        ``PennyLaneNoiseModel()``) to run noiselessly. A model made for either
+        target is accepted and converted to the one this genome runs on. The
+        genome's recorded hyperparameters are not changed.
 
         This is idempotent: calling it again rebuilds the model from the
         genome's current gates and leaves it in the same state as a single
@@ -842,15 +963,26 @@ class CircuitGenome:
         to the gates are discarded -- re-initializing resets the model to the
         genome's own parameters.
 
+        Args:
+            noise_model: The noise to run with instead of the genome's
+                recorded noise settings, or ``None`` to use those settings.
+
+        Returns:
+            None. Sets ``self.torch_model`` and ``self.hybrid_model``.
+
         Raises:
             ValueError: If ``self.target`` is neither ``"pennylane"`` nor
                 ``"qiskit"``.
         """
 
         if self.target == "pennylane":
-            self.generate_pennylane_circuit()
+            self.generate_pennylane_circuit(
+                noise_model=_noise_model_as(PennyLaneNoiseModel, noise_model)
+            )
         elif self.target == "qiskit":
-            self.generate_qiskit_circuit()
+            self.generate_qiskit_circuit(
+                noise_model=_noise_model_as(QiskitNoiseModel, noise_model)
+            )
         else:
             raise ValueError(
                 f"Unknown target {self.target} for circuit genome model generation."
@@ -1117,20 +1249,100 @@ class CircuitGenome:
             }
 
         self.sort_gates()
+        
+    def generate_qiskit_circuit_parametric(self):
+        circuit = self.generate_qiskit_circuit(parametric=True, measure=False)
+
+        ordered = []
+        self.sort_gates()
+
+        for gate in self.gates:
+            if not gate.enabled:
+                continue
+
+            qparams = gate._get_qiskit_parameters()
+            for pname in sorted(qparams.keys()):
+                p = qparams[pname]
+                if p in circuit.parameters:
+                    ordered.append(p)
+
+        circuit_params = set(circuit.parameters)
+        ordered_params = set(ordered)
+
+        if circuit_params != ordered_params:
+            raise ValueError(
+                "Qiskit parameter mismatch:\n"
+                f"circuit-only: {[str(p) for p in circuit_params - ordered_params]}\n"
+                f"ordered-only: {[str(p) for p in ordered_params - circuit_params]}\n"
+                f"circuit params: {[str(p) for p in circuit_params]}\n"
+                f"ordered params: {[str(p) for p in ordered_params]}"
+            )
+
+        return circuit, ordered
+
+    # def generate_qiskit_circuit_parametric(
+    #     self,
+    # ) -> tuple[QuantumCircuit, list]:
+    #     """Build a parametric (autodiff-ready) qiskit circuit.
+
+    #     No measurements are appended; an EstimatorQNN / SamplerQNN downstream
+    #     is expected to attach observables. All trainable gate parameters become
+    #     qiskit Parameter symbols whose ordering is returned alongside the
+    #     circuit so the caller can bind values in the same order their
+    #     gradients are returned.
+
+    #     Returns:
+    #         (circuit, ordered_parameters): the parametric QuantumCircuit and
+    #         the list of qiskit Parameter symbols in the canonical order
+    #         (sorted by gate.innovation_number, then by param name).
+    #     """
+    #     circuit = self.generate_qiskit_circuit(parametric=True, measure=False)
+
+    #     ordered = []
+    #     self.sort_gates()
+    #     for gate in self.gates:
+    #         if not gate.enabled:
+    #             continue
+    #         qparams = gate._get_qiskit_parameters()
+    #         for pname in sorted(qparams.keys()):
+    #             ordered.append(qparams[pname])
+
+    #     return circuit, ordered
 
     def generate_pennylane_circuit(
         self,
-        device_name: str = "default.qubit",
+        device_name: str | None = None,
+        noise_model: PennyLaneNoiseModel | None = None,
     ) -> None:
-        """
-        Converts this genome into a PennyLane QNode-backed torch layer.
+        """Converts this genome into a PennyLane QNode-backed torch layer.
 
         Builds the PennyLane device and QNode implementing this circuit genome
-        and stores the resulting ``qml.qnn.TorchLayer`` on ``self.torch_model``
-        (this method has no return value).
+        and stores the resulting ``qml.qnn.TorchLayer`` on ``self.torch_model``.
+
+        Noise comes from ``noise_model`` when one is given, otherwise from the
+        genome's ``noise_*`` hyperparameters (see
+        :meth:`src.noise.base_noise_model.BaseNoiseModel.from_hyperparameters`).
+        A genome without them gets no noise and builds exactly as before. With
+        noise on, the circuit runs on ``default.mixed`` (a density-matrix
+        simulator), and noise channels are inserted after the input encoding,
+        after each applied gate, and before measurement, as the noise settings
+        enable.
 
         Args:
-            device_name: Name of the PennyLane device to use.
+            device_name: Name of the PennyLane device to use, or ``None`` to
+                choose automatically: ``default.qubit`` without noise and
+                ``default.mixed`` with it.
+            noise_model: The noise to run with, overriding the genome's
+                recorded settings; ``None`` uses those settings. A model with
+                ``noise_type="none"`` runs the circuit noiselessly.
+
+        Returns:
+            None. Sets ``self.total_qubits`` and ``self.torch_model``.
+
+        Raises:
+            ValueError: If ``device_name`` is ``"default.qubit"`` while the
+                noise model enables noise, since that device cannot represent
+                noisy (mixed) states.
         """
         # Create wire registers via qml.registers
         self.total_qubits = len(self.qubits)
@@ -1138,6 +1350,23 @@ class CircuitGenome:
         logger.info(
             f"input indexes: {self.input_indexes}, output_indexes: {self.output_indexes}"
         )
+
+        # Genomes without noise_* hyperparameters get noise_type "none", for
+        # which every hook below is a no-op.
+        if noise_model is None:
+            noise_model = PennyLaneNoiseModel.from_hyperparameters(self.hyperparameters)
+        if device_name is None:
+            device_name = noise_model.device_name()
+        elif noise_model.is_noisy() and device_name == "default.qubit":
+            raise ValueError(
+                "default.qubit cannot simulate noise; use default.mixed or pass "
+                "device_name=None to choose automatically."
+            )
+
+        # chip noise: translate this genome into the chip's own gates once, in
+        # the same gate order the circuit below runs them (no-op otherwise)
+        self.sort_gates()
+        noise_model.begin_circuit(self)
 
         # Instantiate PennyLane device
         dev = qml.device(
@@ -1148,12 +1377,42 @@ class CircuitGenome:
         output_mode = self.hyperparameters["quantum_output_mode"]
         logger.info(f"output mode is: {output_mode}")
 
+        # On default.mixed, measure the density matrix and read probs/expval
+        # off its diagonal (_DensityMatrixTorchLayer): PennyLane 0.41's
+        # probs/expval there fail on batched inputs that require grad.
+        measure_density_matrix = device_name == "default.mixed"
+
         # Define the QNode function
         @qml.qnode(dev, interface="torch", diff_method="backprop")
         def qnode_fn(
             inputs: Tensor,
             weights: Tensor,
+        ) -> (
+            qml.measurements.MeasurementProcess
+            | list[qml.measurements.MeasurementProcess]
         ):
+            """Runs the genome's circuit, with any configured noise, on inputs.
+
+            Args:
+                inputs: The quantum-circuit inputs, ``[n_quantum_inputs]`` or
+                    ``[batch_size, n_quantum_inputs]``.
+                weights: The flat gate-parameter vector, ordered as
+                    ``get_parameters_as_list`` returns it.
+
+            Returns:
+                The measurement: ``qml.probs`` over the output wires in
+                ``probs`` mode, or one ``qml.expval`` of Pauli-Z per output
+                wire in ``expval`` mode; on ``default.mixed``, the output
+                wires' ``qml.density_matrix`` in either mode, which the
+                surrounding ``_DensityMatrixTorchLayer`` turns into the same
+                values.
+
+            Raises:
+                ValueError: If the quantum input or output mode is unknown.
+            """
+
+            # start-up error of each qubit (chip noise only; no-op otherwise)
+            noise_model.before_input_encoding(range(self.total_qubits))
 
             # initialize the qubits given the specified input mode
             input_mode = self.hyperparameters["quantum_input_mode"]
@@ -1194,7 +1453,11 @@ class CircuitGenome:
             else:
                 raise ValueError(f"Unknown quantum_input_mode={input_mode}")
 
-            # Apply all gates in depth order
+            # 3️⃣ Noise to all inputs after encoding
+            if noise_model is not None:
+                noise_model.after_input_encoding(self.input_indexes)
+
+            # 4️⃣  Apply all gates in depth order
             self.sort_gates()
             offset = 0
             for gate in self.gates:
@@ -1205,7 +1468,16 @@ class CircuitGenome:
                     gate.add_to_pennylane_circuit(
                         self.qubits, weights=weights, offset=offset
                     )
+                    # noise only follows gates that actually ran; passing the
+                    # gate lets a multi-CNOT gate carry its full error
+                    noise_model.after_gate(gate.get_pennylane_wires(self.qubits), gate)
                 offset += len(gate.parameters)
+
+            noise_model.before_measurement(self.output_indexes)
+
+            if measure_density_matrix and output_mode in ("probs", "expval"):
+                # read out by _DensityMatrixTorchLayer (see its docstring)
+                return qml.density_matrix(wires=self.output_indexes)
 
             if output_mode == "probs":
                 return qml.probs(wires=self.output_indexes)
@@ -1225,9 +1497,16 @@ class CircuitGenome:
 
         weight_shapes = {"weights": (len(parameter_list),)}
 
-        self.torch_model = qml.qnn.TorchLayer(qnode_fn, weight_shapes)
+        if measure_density_matrix:
+            self.torch_model = _DensityMatrixTorchLayer(
+                qnode_fn, weight_shapes, output_mode, len(self.output_indexes)
+            )
+        else:
+            self.torch_model = qml.qnn.TorchLayer(qnode_fn, weight_shapes)
 
-    def generate_qiskit_circuit(self) -> None:
+    def generate_qiskit_circuit(
+        self, noise_model: QiskitNoiseModel | None = None
+    ) -> None:
         """
         Converts this genome into a usable qiskit instantiation.
 
@@ -1237,9 +1516,26 @@ class CircuitGenome:
         vectors are stored on ``self.qiskit_circuit`` / ``self.weight_vector``
         / ``self.qiskit_input_vector`` (this method has no return value).
 
+        Noise comes from ``noise_model`` when one is given, otherwise from the
+        genome's ``noise_*`` hyperparameters, exactly as on the pennylane
+        target: the same channels are appended at the same points (start-up,
+        after the input encoding, after each applied gate, before
+        measurement), and a noisy circuit runs on Qiskit Aer's density-matrix
+        simulator with exact probabilities. Without noise the circuit and its
+        sampler are unchanged.
+
         Of the readout modes in :data:`QUANTUM_OUTPUT_MODES`, this backend
         implements only ``"probs"``. The pennylane backend additionally
         implements ``"expval"``.
+
+        Args:
+            noise_model: The noise to run with, overriding the genome's
+                recorded settings; ``None`` uses those settings. A model with
+                ``noise_type="none"`` runs the circuit noiselessly.
+
+        Returns:
+            None. Sets ``self.torch_model``, ``self.qiskit_circuit``,
+            ``self.weight_vector`` and ``self.qiskit_input_vector``.
 
         Raises:
             NotImplementedError: If ``quantum_output_mode`` is a recognized mode
@@ -1266,6 +1562,19 @@ class CircuitGenome:
             len(self.output_qubits), name=QISKIT_CLASSICAL_REGISTER_NAME
         )
         circuit = QuantumCircuit(*quantum_registers, classical_register)
+
+        # Same noise, at the same points, as the pennylane target; for a
+        # genome without noise settings every hook below appends nothing.
+        if noise_model is None:
+            noise_model = QiskitNoiseModel.from_hyperparameters(self.hyperparameters)
+        # chip noise: translate the genome into the chip's gates once, in the
+        # order the gates are added below (no-op otherwise)
+        self.sort_gates()
+        noise_model.begin_circuit(self)
+        noise_model.bind_circuit(
+            circuit, [register[0] for register in quantum_registers]
+        )
+        noise_model.before_input_encoding(range(len(quantum_registers)))
 
         # initialize the qubits given the specified input mode
         input_mode = self.hyperparameters["quantum_input_mode"]
@@ -1295,8 +1604,7 @@ class CircuitGenome:
         else:
             raise ValueError(f"Unknown quantum_input_mode={input_mode}")
 
-        # make sure we apply the gates in the correct ordering by depth
-        self.sort_gates()
+        noise_model.after_input_encoding(self.input_indexes)
 
         # set up the qiskit weights ParameterVector
         parameter_list = self.get_parameters_as_list()
@@ -1314,7 +1622,22 @@ class CircuitGenome:
                 gate.add_to_qiskit_circuit(
                     register_dict, circuit, self.weight_vector, offset
                 )
+                # noise only follows gates that actually ran
+                noise_model.after_gate(gate.get_pennylane_wires(self.qubits), gate)
+            elif gate.parameters:
+                # A disabled or dropped gate's weights are still in
+                # weight_vector (the torch weights always hold every gate's
+                # parameters, as on pennylane), and SamplerQNN refuses weight
+                # parameters missing from the circuit. Keep them in it with
+                # rz(w) rz(-w): an exact identity, so outputs are unchanged
+                # and their gradients cancel to zero.
+                anchor = register_dict[tuple(gate.qubits[0])][0]
+                for i in range(len(gate.parameters)):
+                    circuit.rz(self.weight_vector[offset + i], anchor)
+                    circuit.rz(-self.weight_vector[offset + i], anchor)
             offset += len(gate.parameters)
+
+        noise_model.before_measurement(self.output_indexes)
 
         for output_index, input_index in enumerate(self.output_indexes):
             # print(f"measuring quantum_register[{input_index}] to classical_register[{output_index}]")
@@ -1339,6 +1662,8 @@ class CircuitGenome:
 
             qnn = SamplerQNN(
                 circuit=circuit,
+                # None (no noise) keeps SamplerQNN's default noiseless sampler
+                sampler=noise_model.sampler(),
                 input_params=inputs,
                 weight_params=self.weight_vector,
                 input_gradients=True,
