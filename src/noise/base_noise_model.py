@@ -477,8 +477,10 @@ class BaseNoiseModel(ABC):
                 "virtual rz and charged each card gate's own Pauli channel; waiting wires "
                 "get the card's idle channel. Every pair of wires counts as wired unless "
                 "--noise_calibration and --noise_qubits are also given, in which case only "
-                "that chip's wiring is used (its error rates are not). Sets --noise_type "
-                "device_card."
+                "that chip's wiring is used (its error rates are not). 'calibration' builds "
+                "the card from that chip instead (its gate errors, durations, T1 and T2, as "
+                "medians over the chosen qubits) when no simulated card is available. Sets "
+                "--noise_type device_card."
             ),
         )
         group.add_argument(
@@ -522,8 +524,11 @@ class BaseNoiseModel(ABC):
                 (:func:`src.noise.chip_noise.noise_hyperparameters_from_calibration`).
                 For device-card noise: if ``--noise_type device_card`` is given
                 without ``--noise_device_card``, ``--noise_device_card`` with
-                another noise type, or the card cannot be read
-                (:func:`src.noise.device_card.load_device_card`).
+                another noise type, the card cannot be read
+                (:func:`src.noise.device_card.load_device_card`), or
+                ``--noise_device_card calibration`` is given without
+                ``--noise_calibration`` (or its chosen qubits have no two-qubit
+                gate between them, :func:`src.noise.calibration_card.card_from_chip`).
         """
         placement = {
             "noise_after_encoding": args.noise_after_encoding,
@@ -567,22 +572,44 @@ class BaseNoiseModel(ABC):
                     "with --noise_device_card, --noise_calibration and --noise_qubits "
                     "go together (they set the wiring)."
                 )
-            from src.noise.device_card import load_device_card, wired_slot_pairs
+            from src.noise.device_card import (
+                CALIBRATION_CARD,
+                load_device_card,
+                wired_slot_pairs,
+            )
 
-            card = load_device_card(noise_device_card)
-            hp = {"noise_type": "device_card", "noise_device_card": card}
+            if noise_device_card == CALIBRATION_CARD and noise_calibration is None:
+                raise ValueError(
+                    f"--noise_device_card {CALIBRATION_CARD} builds the card from a chip; "
+                    "give --noise_calibration and --noise_qubits."
+                )
+            card = (
+                None
+                if noise_device_card == CALIBRATION_CARD
+                else load_device_card(noise_device_card)
+            )
             if noise_calibration is not None:
                 from src.noise.calibration.backends import load_raw_calibration
                 from src.noise.chip_noise import resolve_calibration
 
                 path = resolve_calibration(noise_calibration)
                 raw = load_raw_calibration(path)
+                if card is None:
+                    # no simulated card: build one from the chip's own numbers
+                    # (cls is the concrete model, which reads calibrations)
+                    from src.noise.calibration_card import card_from_chip
+
+                    chip = cls.from_calibration(raw, list(physical_qubits))
+                    card = card_from_chip(
+                        chip.per_qubit, raw["backend"]["name"], chip.calibration_date
+                    )
                 card["wired_pairs"] = wired_slot_pairs(raw, physical_qubits)
                 card["wiring"] = {
                     "chip": raw["backend"]["name"],
                     "calibration": str(path),
                     "qubits": list(physical_qubits),
                 }
+            hp = {"noise_type": "device_card", "noise_device_card": card}
             hp.update(placement)
             hp["noise_idle"] = getattr(args, "noise_idle", True)
             return cls.from_hyperparameters(hp)

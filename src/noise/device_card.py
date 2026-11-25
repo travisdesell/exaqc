@@ -50,6 +50,11 @@ if TYPE_CHECKING:
 #: (copied unchanged from ``arch_aware/device_cards`` on ``DrVogt/noise-model``).
 DEVICE_CARD_DIR = Path(__file__).resolve().parents[2] / "device_cards"
 
+#: The ``--noise_device_card`` value that builds the card from the chip named
+#: by ``--noise_calibration`` and ``--noise_qubits`` instead of reading a card
+#: file (see :mod:`src.noise.calibration_card`).
+CALIBRATION_CARD = "calibration"
+
 #: The gates genomes are translated into for device-card noise. ``rz`` is a
 #: virtual frame change (no pulse, no error, no time), as on real transmon
 #: hardware; the card's driven ``z``/``s``/``t`` entries are therefore never

@@ -304,6 +304,82 @@ def test_calibration_supplies_only_the_wiring(tmp_path: Path) -> None:
         )
 
 
+def test_card_from_chip_matches_the_chip_numbers() -> None:
+    """A calibration card's channels reproduce IBM's errors and durations."""
+
+    from src.noise.calibration_card import card_from_chip
+    from src.noise.device_card import gate_error_probability
+
+    per_qubit = {
+        "qubits": [3, 4],
+        "t1": [100e-6, 300e-6],
+        "t2": [80e-6, 120e-6],
+        "gate_error_1q": [2e-4, 4e-4],
+        "gate_time_1q": [30e-9, 40e-9],
+        "pairs": {"3-4": {"gate_error_2q": 5e-3, "gate_time_2q": 70e-9}},
+    }
+
+    card = card_from_chip(per_qubit, "ibm_test", "2026-11-06T12:00:00Z")
+
+    assert card["name"] == "calibration_ibm_test_2026-11-06"
+    assert card["gates"]["h"]["T_ns"] == pytest.approx(35.0)  # median time
+    assert card["gates"]["cx"]["T_ns"] == pytest.approx(70.0 + 2 * 35.0)
+    # average gate error 3e-4 (the median) is process error 3e-4 * 3 / 2
+    assert gate_error_probability(card, "h") == pytest.approx(4.5e-4)
+    error_cx = 1 - (1 - 5e-3) * (1 - 3e-4) ** 2
+    assert gate_error_probability(card, "cx") == pytest.approx(error_cx * 5 / 4)
+    for gate in ("h", "x", "cx"):
+        assert sum(card["gates"][gate]["pauli_error"].values()) == pytest.approx(1.0)
+    # idle: X/Y decay with T2 (median 100 us), Z with T1 (median 200 us)
+    assert card["idle"]["100.0"]["X"] == pytest.approx(math.exp(-100e-9 / 100e-6))
+    assert card["idle"]["100.0"]["Z"] == pytest.approx(math.exp(-100e-9 / 200e-6))
+
+    with pytest.raises(ValueError, match="no two-qubit gate"):
+        card_from_chip({**per_qubit, "pairs": {}}, "ibm_test", None)
+
+
+def test_calibration_card_flag_builds_rates_and_wiring_from_a_chip(
+    tmp_path: Path,
+) -> None:
+    """--noise_device_card calibration uses the chip's numbers and its wiring.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    fake_provider = pytest.importorskip("qiskit_ibm_runtime.fake_provider")
+    from src.noise.calibration.backends import (
+        fetch_raw_calibration,
+        save_raw_calibration,
+    )
+
+    raw = fetch_raw_calibration(fake_provider.FakeTorino())
+    calibration = str(save_raw_calibration(raw, tmp_path / "calibration"))
+
+    model = PennyLaneNoiseModel.from_args(
+        _parse(
+            [
+                "--noise_device_card",
+                "calibration",
+                "--noise_calibration",
+                calibration,
+                "--noise_qubits",
+                "0,1,2",
+            ]
+        )
+    )
+
+    card = model.device_card
+    assert model.noise_type == "device_card"
+    assert card["model"] == "ibm_calibration"
+    assert card["calibration"]["qubits"] == [0, 1, 2]
+    assert card["wired_pairs"] == [[0, 1], [1, 2]]
+    json.dumps(card)
+
+    with pytest.raises(ValueError, match="builds the card from a chip"):
+        PennyLaneNoiseModel.from_args(_parse(["--noise_device_card", "calibration"]))
+
+
 def _card_settings(tmp_path: Path, **overrides: Any) -> dict[str, Any]:
     """Device-card ``noise_*`` genome settings for the unit card.
 

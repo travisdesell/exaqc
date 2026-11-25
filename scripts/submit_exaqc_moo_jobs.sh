@@ -27,7 +27,9 @@
 #                    settings (breast_cancer 8/1, iris 4/2, seeds 6/2, wine 4/2)
 #   DEVICE_CARD      card name from device_cards/ or a card path (default
 #                    transmon_detuned_lindblad_markov); "none" for a noiseless
-#                    baseline. Part of the run name
+#                    baseline; "calibration" to build the card from the IBM
+#                    chip in NOISE_CALIBRATION / NOISE_QUBITS (both required).
+#                    Part of the run name
 #   ALGORITHM        nsga2 (default) or nsga3. Part of the run name
 #   OBJECTIVES, NOISE_IDLE, NOISE_CALIBRATION, NOISE_QUBITS,
 #   MAX_POPULATION_SIZE, NUMBER_GENOMES, EPOCHS, IMPROVEMENT_CUTOFF,
@@ -153,6 +155,15 @@ fi
 # runs under different cards, or a noiseless baseline, never share an archive.
 case "$DEVICE_CARD" in
     */*) CARD_TAG=$(basename "$DEVICE_CARD" .json | sed 's/^device_card_//') ;;
+    calibration)
+        # a card built from a chip is named by that chip and day
+        [ -n "${NOISE_CALIBRATION:-}" ] && [ -n "${NOISE_QUBITS:-}" ] ||
+            die "DEVICE_CARD=calibration needs NOISE_CALIBRATION and NOISE_QUBITS"
+        case "$NOISE_CALIBRATION" in
+            */*) CARD_TAG=calibration_$(basename "$NOISE_CALIBRATION" .json) ;;
+            *) CARD_TAG=calibration_$(printf '%s' "$NOISE_CALIBRATION" | tr ':' '_') ;;
+        esac
+        ;;
     *) CARD_TAG=$DEVICE_CARD ;;
 esac
 is_tag "$CARD_TAG" ||

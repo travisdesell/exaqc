@@ -190,6 +190,28 @@ def test_submit_names_jobs_and_archives_by_card_and_algorithm() -> None:
     assert words[words.index("-J") + 1] == name
     assert words[-4:] == ["wine", "4", "2", name]
 
+    chip = subprocess.run(
+        ["sh", str(SUBMIT_SCRIPT), "1", "1", "ibm", "iris"],
+        capture_output=True,
+        text=True,
+        env=_environment(
+            DEVICE_CARD="calibration",
+            NOISE_CALIBRATION="ibm_fez:2026-11-06",
+            NOISE_QUBITS="0,1,2,3",
+        ),
+        check=True,
+    )
+    assert "exaqc_moo_ibm_iris_calibration_ibm_fez_2026-11-06_nsga2_1" in chip.stdout
+
+    no_chip = subprocess.run(
+        ["sh", str(SUBMIT_SCRIPT), "1", "1", "ibm", "iris"],
+        capture_output=True,
+        text=True,
+        env=_environment(DEVICE_CARD="calibration"),
+        check=False,
+    )
+    assert no_chip.returncode != 0
+
     bad = subprocess.run(
         ["sh", str(SUBMIT_SCRIPT), "1", "1", "card", "mnist"],
         capture_output=True,

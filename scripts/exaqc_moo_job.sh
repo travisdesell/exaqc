@@ -37,6 +37,8 @@ VENV=${VENV:-${HOME}/envs/exaqc}
 #: The device card whose noise genomes are trained and scored under: a name
 #: from device_cards/ or a card file's path. "none" runs noiselessly (a baseline
 #: for the same search); the hardware objectives then cannot be used.
+#: "calibration" builds the card from the IBM chip named by NOISE_CALIBRATION
+#: and NOISE_QUBITS, for when no simulated card is available.
 DEVICE_CARD=${DEVICE_CARD:-transmon_detuned_lindblad_markov}
 
 #: Whether waiting wires get the card's idle channel (1) or not (0).
