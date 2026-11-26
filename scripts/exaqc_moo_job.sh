@@ -19,7 +19,7 @@
 #
 #SBATCH -J exaqc_moo
 #SBATCH -t 1-00:00:00
-#SBATCH -A neuroevolution -p tigris
+#SBATCH -A examm-rnn -p tigris
 #SBATCH --nodes=1
 #SBATCH --ntasks=144
 #SBATCH --ntasks-per-node=144
@@ -199,6 +199,6 @@ export PMIX_MCA_psec="^munge"
 
 spack load openmpi /ttqroyz
 
-source "${VENV}/bin/activate"
+source ".exaqc/bin/activate"
 
 srun "${COMMAND[@]}"
