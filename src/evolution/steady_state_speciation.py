@@ -190,14 +190,29 @@ class SteadyStateSpeciation(PopulationStrategy):
         Returns:
             None. Rebuilds ``species_list``, restores the insertion count, and
             resets the breeding and assignment cursors.
+
+        Raises:
+            ValueError: If any genome in ``state.population`` lacks
+                ``metadata["species_id"]``, so the held population cannot be
+                regrouped into species.
         """
+
+        missing = [
+            genome.genome_number
+            for genome in state.population
+            if genome.metadata.get("species_id") is None
+        ]
+        if missing:
+            raise ValueError(
+                "cannot restore speciation: "
+                f"{len(missing)} population genome(s) lack species_id "
+                f"(e.g. genome {missing[0]})"
+            )
 
         held: dict[int, list[CircuitGenome]] = {}
         for genome in state.population:
-            species_id = genome.metadata.get("species_id")
-            if species_id is None:
-                continue
-            held.setdefault(int(species_id), []).append(genome)
+            species_id = int(genome.metadata["species_id"])
+            held.setdefault(species_id, []).append(genome)
 
         self.species_list = []
         for species_id in sorted(held):

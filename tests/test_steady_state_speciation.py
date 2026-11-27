@@ -1,4 +1,4 @@
-"""Unit tests for historical-innovation speciation."""
+"""Unit tests for compatibility-distance speciation."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from src.evolution.steady_state_speciation import Species, SteadyStateSpeciation
 
 
 class MockGenome:
-    """Minimal genome with historical innovations and a loss fitness.
+    """Minimal genome with innovations and optional quantum/classical params.
 
     Args:
         genome_number: Unique identity used as the latest-representative key.
@@ -22,6 +22,10 @@ class MockGenome:
         enabled: Optional per-innovation enable flags; defaults to all True.
         target_metric: Optional target metric (unused by the strategy; kept for
             callers that still stamp fitness dicts).
+        gate_parameters: Optional enabled-gate parameter vectors, keyed by
+            innovation number (drives the quantum distance term).
+        classical: Optional classical encoder/decoder parameter vector (drives
+            the classical distance term).
     """
 
     def __init__(
@@ -31,6 +35,8 @@ class MockGenome:
         loss: float,
         enabled: list[bool] | None = None,
         target_metric: float | None = None,
+        gate_parameters: dict[int, list[float]] | None = None,
+        classical: list[float] | None = None,
     ) -> None:
         self.genome_number = genome_number
         self.innovations = list(innovations)
@@ -41,6 +47,11 @@ class MockGenome:
         if target_metric is not None:
             self.fitness["target_metric"] = target_metric
         self.metadata: dict[str, object] = {}
+        self._gate_parameters = {
+            int(innovation): list(values)
+            for innovation, values in (gate_parameters or {}).items()
+        }
+        self._classical = list(classical or [])
 
     def get_historical_gate_innovations(self) -> list[int]:
         """Returns sorted unique enabled innovation IDs.
@@ -70,26 +81,26 @@ class MockGenome:
         return frozenset(zip(self.innovations, self.enabled))
 
     def enabled_gate_parameters(self) -> dict[int, list[float]]:
-        """Returns no quantum parameters.
-
-        The mock exercises structure only, so the quantum term is zero.
+        """Returns quantum parameters for enabled gates.
 
         Returns:
-            An empty mapping.
+            Parameter vectors keyed by innovation number.
         """
 
-        return {}
+        return {
+            innovation: list(values)
+            for innovation, values in self._gate_parameters.items()
+            if innovation in self.get_historical_gate_innovations()
+        }
 
     def classical_parameters(self) -> list[float]:
-        """Returns no classical parameters.
-
-        The mock has no encoder or decoder, so the classical term is zero.
+        """Returns classical encoder/decoder parameters.
 
         Returns:
-            An empty list.
+            The classical parameter vector.
         """
 
-        return []
+        return list(self._classical)
 
 
 def compatible(
@@ -360,6 +371,83 @@ def test_restore_rebuilds_species_from_metadata() -> None:
     by_id = {species.species_id: species for species in restored.species_list}
     assert {g.genome_number for g in by_id[a.metadata["species_id"]].genomes} == {1, 2}
     assert {g.genome_number for g in by_id[c.metadata["species_id"]].genomes} == {3}
+
+
+def test_restore_rejects_population_genomes_without_species_id() -> None:
+    """``restore`` refuses a held genome that never recorded its species."""
+
+    from types import SimpleNamespace
+
+    pop = make_pop(max_population_size=4)
+    held = compatible(1, 0.2, 0)
+    # no insert: metadata has no species_id
+    with pytest.raises(ValueError, match="species_id"):
+        pop.restore(
+            SimpleNamespace(
+                population=[held],
+                inserted_genomes=1,
+                best_genome=held,
+                next_genome_number=2,
+            )
+        )
+
+
+def test_quantum_and_classical_distance_can_split_species() -> None:
+    """Matching enabled structure still splits when quantum/classical distance is large.
+
+    Disabled-gate masks differ so historical signatures are not treated as
+    duplicates, while enabled innovations stay ``{1, 2, 3}`` (``d_s = 0``).
+    """
+
+    enabled = [True, True, True, False]
+    params_zero = {1: [0.0], 2: [0.0], 3: [0.0]}
+
+    first = MockGenome(
+        1,
+        [1, 2, 3, 4],
+        loss=0.1,
+        enabled=enabled,
+        gate_parameters=params_zero,
+        classical=[0.0, 0.0],
+    )
+    # distinct signature via a different disabled innovation id
+    quantum_far = MockGenome(
+        2,
+        [1, 2, 3, 5],
+        loss=0.2,
+        enabled=enabled,
+        gate_parameters={1: [math.pi], 2: [0.0], 3: [0.0]},
+        classical=[0.0, 0.0],
+    )
+    classical_far = MockGenome(
+        3,
+        [1, 2, 3, 6],
+        loss=0.3,
+        enabled=enabled,
+        gate_parameters=params_zero,
+        classical=[1.0, 0.0],
+    )
+
+    # structure alone would join; a high quantum weight splits first and second
+    quantum_pop = make_pop(species_threshold=0.5, c_s=0.0, c_q=1.0, c_c=0.0)
+    quantum_pop.insert_genome(first)
+    quantum_pop.insert_genome(quantum_far)
+    assert len(quantum_pop.species_list) == 2
+
+    # a high classical weight splits first and third
+    classical_pop = make_pop(species_threshold=0.5, c_s=0.0, c_q=0.0, c_c=1.0)
+    classical_pop.insert_genome(
+        MockGenome(
+            1,
+            [1, 2, 3, 4],
+            loss=0.1,
+            enabled=enabled,
+            gate_parameters=params_zero,
+            classical=[0.0, 0.0],
+        )
+    )
+    classical_pop.insert_genome(classical_far)
+    assert len(classical_pop.species_list) == 2
 
 
 def test_run_info_records_speciation_config() -> None:

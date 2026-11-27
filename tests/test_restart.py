@@ -590,3 +590,62 @@ def test_an_excess_disjoint_speciation_archive_cannot_be_continued(tmp_path) -> 
             ),
             fail,
         )
+
+
+def test_a_mixed_neat_and_compatibility_archive_cannot_be_continued(
+    tmp_path,
+) -> None:
+    """Recording ``neat_c*`` refuses restart even when ``c_s`` is also present.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    run_dir = tmp_path / "mixed-speciation"
+    recorded = {
+        "population_strategy": "steady_state_speciation",
+        "max_population_size": 4,
+        "species_threshold": 0.6,
+        "neat_c1": 1.0,
+        "c_s": 1.0,
+        "c_q": 1.0,
+        "c_c": 1.0,
+        "number_genomes": 2,
+        "out_dir": str(run_dir),
+    }
+    archive = GenomeArchive.create(str(run_dir), arguments=recorded)
+    try:
+        archive.add_genome(
+            FakeGenome(
+                1,
+                fitness={},
+                gates=[{"innovation_number": 1, "enabled": True}],
+            ),
+            insertion=1,
+        )
+    finally:
+        archive.close()
+
+    def fail(message: str) -> None:
+        """Stops ``prepare`` with ``message``.
+
+        Args:
+            message: The explanation ``prepare`` refused with.
+
+        Raises:
+            SystemExit: Always, carrying ``message``.
+        """
+
+        raise SystemExit(message)
+
+    with pytest.raises(SystemExit, match="excess/disjoint"):
+        restart.prepare(
+            Namespace(
+                out_dir=str(run_dir),
+                restart="require",
+                number_genomes=2,
+                overwrite_archive=False,
+                force_restart=True,
+            ),
+            fail,
+        )

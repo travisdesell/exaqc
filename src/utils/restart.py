@@ -281,9 +281,10 @@ def _best_by(
 def obsolete_speciation_distance(state: RestartState) -> str | None:
     """Returns why a speciation archive cannot be continued, if it cannot.
 
-    Archives that recorded ``neat_c1``, ``neat_c2``, or ``neat_c3`` and not
-    ``c_s`` used the excess/disjoint distance. Continuing them would assign
-    later genomes with the three-component compatibility distance.
+    Archives that recorded ``neat_c1``, ``neat_c2``, or ``neat_c3`` used the
+    excess/disjoint distance. Continuing them would assign later genomes with
+    the three-component compatibility distance, even when ``c_s`` is also
+    present (a mixed record is still treated as obsolete).
 
     Args:
         state: The stopped run's state.
@@ -294,8 +295,6 @@ def obsolete_speciation_distance(state: RestartState) -> str | None:
     """
 
     if state.arguments.get("population_strategy") != "steady_state_speciation":
-        return None
-    if "c_s" in state.arguments:
         return None
     retired = [
         name for name in ("neat_c1", "neat_c2", "neat_c3") if name in state.arguments

@@ -108,9 +108,9 @@ run_classification \
   --intra_island_crossover_rate 0.5 \
   --topology fully_connected
 
-# 3) historical speciation
+# 3) compatibility-distance speciation
 run_classification \
-  "${OUT_DIR}/breast_speciation_i${POP_SIZE}_t${SPECIES_THRESHOLD}_${LOSS_LABEL}_${REPLICATE}" \
+  "${OUT_DIR}/breast_speciation_p${POP_SIZE}_t${SPECIES_THRESHOLD}_${LOSS_LABEL}_${REPLICATE}" \
   steady_state_speciation \
   --max_population_size "$POP_SIZE" \
   --species_threshold "$SPECIES_THRESHOLD"

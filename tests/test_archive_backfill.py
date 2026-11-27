@@ -9,6 +9,8 @@ summary columns format 7 added. These tests check that the backfill:
   formula, and leaves it ``NULL`` where it cannot be known;
 * rewrites nothing else, records itself in ``run_info``, and changes nothing
   when run again;
+* fills the summary ``species`` column from ``metadata["species_id"]`` when a
+  speciation run recorded one but the summary was left empty;
 * leaves the original untouched under ``--output_dir`` and refuses an archive a
   search may still be writing to.
 
@@ -403,6 +405,40 @@ def test_an_archive_written_at_format_7_needs_no_backfill(tmp_path: Path) -> Non
     assert result.updated == 0
     with GenomeArchive.open_readonly(run) as archive:
         assert BACKFILL_RUN_INFO_KEY not in archive.run_info()
+
+
+def test_backfill_fills_species_from_metadata(tmp_path: Path) -> None:
+    """A NULL summary ``species`` is restored from ``metadata["species_id"]``.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    run_dir = tmp_path / "speciation"
+    genome = _classification_genome(1, {"loss": 0.5, "target_metric": 0.5})
+    genome.serialized["metadata"]["species_id"] = 7
+    archive = GenomeArchive.create(
+        str(run_dir),
+        arguments={"population_strategy": "steady_state_speciation"},
+    )
+    try:
+        # omit species= so the summary column stays NULL while JSON records it
+        archive.add_genome(genome, insertion=1)
+    finally:
+        archive.close()
+
+    with GenomeArchive.open_readonly(str(run_dir)) as reader:
+        assert reader.connection.execute(
+            "SELECT species FROM genomes WHERE genome_number = 1"
+        ).fetchone() == (None,)
+
+    result = backfill_archive(str(run_dir), idle_minutes=0)
+    assert result.updated >= 1
+
+    with GenomeArchive.open_readonly(str(run_dir)) as reader:
+        assert reader.connection.execute(
+            "SELECT species FROM genomes WHERE genome_number = 1"
+        ).fetchone() == (7,)
 
 
 def test_the_backfill_is_recorded_in_run_info(tmp_path: Path) -> None:

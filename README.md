@@ -173,6 +173,8 @@ scripts of their own (see
 | `TOPOLOGY` | `2d_mesh 5 5` | `--topology` and its arguments, as one quoted value (`islands` only) |
 | `MAX_POPULATION_SIZE` | `30` | `--max_population_size` (`steady_state` and `steady_state_speciation`) |
 | `SPECIES_THRESHOLD` | `0.6` | `--species_threshold` (`steady_state_speciation` only; must be `> 0`) |
+| `C_S` / `C_Q` / `C_C` | `1.0` / `1.0` / `1.0` | `--c_s` / `--c_q` / `--c_c` (`steady_state_speciation` only; each `>= 0`) |
+| `INTER_SPECIES_PARENT_RATE` | `0.1` | `--inter_species_parent_rate` (`steady_state_speciation` only; in `[0, 1]`) |
 | `USE_ONLY` | `rx ry rz p u crx cry crz cp rxx ryy rzz cx cy cz` | `--use_only` gates, as one quoted value |
 | `BASE_DIR` | `./exaqc_runs` | Directory the default `OUT_DIR` is created in |
 | `OUT_DIR` | `<BASE_DIR>/<dataset, teacher or env>_<topology>_i<n_islands>`, `..._steady_state_p<max_population_size>`, or `..._speciation_p<max_population_size>_t<species_threshold>` | `--out_dir` |
@@ -1446,7 +1448,10 @@ Brings archives written before format 7 up to it, so older runs get the
 training-metric columns: `initial_metrics`, `best_metrics` and `last_metrics`, and
 `initial_fitness` with its generated `initial_loss`, `initial_target_metric` and
 `target_gain` (see [Working with a run's archive](#working-with-a-runs-archive)).
-Every genome's JSON is stored in the archive, so they are re-derived from it:
+It also fills the summary `species` column from each genome's
+`metadata["species_id"]` when a speciation run recorded one but the summary was
+left empty. Every genome's JSON is stored in the archive, so they are re-derived
+from it:
 
 ```
 python3 -m src.examples.backfill_archive ./artifacts/walker2d_1 ./artifacts/walker2d_2 --output_dir ./backfilled

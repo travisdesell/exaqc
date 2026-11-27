@@ -4,8 +4,9 @@ Archive format 7 added summary columns that runs written earlier hold only as
 ``NULL``: the training-metric projections (``initial_metrics``, ``best_metrics``
 and ``last_metrics``) and the inherited weights' fitness (``initial_fitness``,
 from which ``initial_loss``, ``initial_target_metric`` and ``target_gain`` are
-generated). Every genome's full JSON is stored in the archive, so they can be
-filled in afterwards:
+generated). Speciation archives may also lack a filled ``species`` summary
+column even after the column itself was added. Every genome's full JSON is
+stored in the archive, so they can be filled in afterwards:
 
 * the projections are re-derived from each genome's ``*_epoch_metrics`` and
   ``*_episode_metrics`` series exactly as a format-7 search records them;
@@ -14,7 +15,10 @@ filled in afterwards:
   from its episode-0 evaluation (the inherited weights, before training) with
   the fitness formula the search uses. Classification and teacher genomes never
   stored their epoch-0 *training* metrics, so theirs is left ``NULL`` rather
-  than guessed.
+  than guessed;
+* ``species`` is taken from ``metadata["species_id"]`` when present, matching
+  what :meth:`~src.utils.genome_archive.GenomeArchive.add_genome` records for a
+  speciation search.
 
 Nothing else a run recorded is rewritten -- not its fitness, its
 ``format_version`` or its old ``final_metrics`` column. What the backfill did is
@@ -76,6 +80,7 @@ _BACKFILLED_COLUMNS = (
     "best_metrics",
     "last_metrics",
     "initial_fitness",
+    "species",
 )
 
 
@@ -242,7 +247,7 @@ def initial_fitness_for(
 
 def _summary_values(
     genome: dict[str, Any], initial_fitness: dict[str, Any] | None
-) -> tuple[str, str, str, str | None]:
+) -> tuple[str, str, str, str | None, int | None]:
     """Encodes a genome's backfilled columns as ``add_genome`` stores them.
 
     Args:
@@ -250,12 +255,20 @@ def _summary_values(
         initial_fitness: Its inherited weights' fitness, if known.
 
     Returns:
-        The ``initial_metrics``, ``best_metrics``, ``last_metrics`` and
-        ``initial_fitness`` column values, as JSON text (``initial_fitness`` is
-        ``None`` when unknown).
+        The ``initial_metrics``, ``best_metrics``, ``last_metrics``,
+        ``initial_fitness`` and ``species`` column values. Metric and fitness
+        values are JSON text (``initial_fitness`` is ``None`` when unknown);
+        ``species`` is ``metadata["species_id"]`` as an ``int``, or ``None``.
     """
 
-    initial, best, last = _metric_projections(genome.get("metadata") or {})
+    metadata = genome.get("metadata") or {}
+    initial, best, last = _metric_projections(metadata)
+    species_id = metadata.get("species_id")
+    species: int | None
+    try:
+        species = None if species_id is None else int(species_id)
+    except (TypeError, ValueError):
+        species = None
     return (
         json.dumps(_finite_or_none(initial)),
         json.dumps(_finite_or_none(best)),
@@ -265,6 +278,7 @@ def _summary_values(
             if initial_fitness is not None
             else None
         ),
+        species,
     )
 
 
@@ -327,7 +341,7 @@ def backfill_archive(
         shared_file_system=bool(arguments.get("shared_file_system", False)),
         expect_existing=True,
     ) as archive:
-        batch: list[tuple[int, tuple[str, str, str, str | None]]] = []
+        batch: list[tuple[int, tuple[str, str, str, str | None, int | None]]] = []
 
         def flush() -> None:
             """Writes the batch's changed rows and empties it.

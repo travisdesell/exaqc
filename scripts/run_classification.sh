@@ -68,6 +68,15 @@ MAX_POPULATION_SIZE=${MAX_POPULATION_SIZE:-30}
 #: Compatibility-distance join threshold (POPULATION=steady_state_speciation).
 SPECIES_THRESHOLD=${SPECIES_THRESHOLD:-0.6}
 
+#: Compatibility-distance coefficients (POPULATION=steady_state_speciation).
+C_S=${C_S:-1.0}
+C_Q=${C_Q:-1.0}
+C_C=${C_C:-1.0}
+
+#: Fraction of multi-parent draws that mix two species
+#: (POPULATION=steady_state_speciation).
+INTER_SPECIES_PARENT_RATE=${INTER_SPECIES_PARENT_RATE:-0.1}
+
 #: Training epochs per genome.
 EPOCHS=${EPOCHS:-30}
 
@@ -125,6 +134,24 @@ require_positive_float() {
     esac
     awk -v t="$2" 'BEGIN { exit !(t > 0) }' ||
         die "$1 must be a positive number (> 0), but found: $2"
+}
+
+# Fails unless $2 is a finite number >= 0, naming it $1.
+require_nonnegative_float() {
+    case "$2" in
+        '' | *[!0-9.]* | *.*.*) die "$1 must be a non-negative number, but found: $2" ;;
+    esac
+    awk -v t="$2" 'BEGIN { exit !(t >= 0) }' ||
+        die "$1 must be a non-negative number, but found: $2"
+}
+
+# Fails unless $2 is a finite number in [0, 1], naming it $1.
+require_unit_interval() {
+    case "$2" in
+        '' | *[!0-9.]* | *.*.*) die "$1 must be a number in [0, 1], but found: $2" ;;
+    esac
+    awk -v t="$2" 'BEGIN { exit !(t >= 0 && t <= 1) }' ||
+        die "$1 must be a number in [0, 1], but found: $2"
 }
 
 # Fails unless $2 is one of the space-separated words in $3, naming it $1.
@@ -190,10 +217,18 @@ if [ "$POPULATION" = islands ]; then
 elif [ "$POPULATION" = steady_state_speciation ]; then
     require_positive MAX_POPULATION_SIZE "$MAX_POPULATION_SIZE"
     require_positive_float SPECIES_THRESHOLD "$SPECIES_THRESHOLD"
+    require_nonnegative_float C_S "$C_S"
+    require_nonnegative_float C_Q "$C_Q"
+    require_nonnegative_float C_C "$C_C"
+    require_unit_interval INTER_SPECIES_PARENT_RATE "$INTER_SPECIES_PARENT_RATE"
     POPULATION_ARGUMENTS=(
         steady_state_speciation
         --max_population_size "$MAX_POPULATION_SIZE"
         --species_threshold "$SPECIES_THRESHOLD"
+        --c_s "$C_S"
+        --c_q "$C_Q"
+        --c_c "$C_C"
+        --inter_species_parent_rate "$INTER_SPECIES_PARENT_RATE"
     )
     # e.g. ./exaqc_runs/iris_speciation_p30_t0.6
     DEFAULT_OUT_DIR=${BASE_DIR%/}/${DATASET}_speciation_p${MAX_POPULATION_SIZE}_t${SPECIES_THRESHOLD}
