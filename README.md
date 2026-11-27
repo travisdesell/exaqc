@@ -38,6 +38,7 @@ classical layers train together with ordinary backpropagation and the standard P
 - [Population strategies](#population-strategies)
   - [steady_state](#steady_state)
   - [islands](#islands)
+  - [steady_state_speciation](#steady_state_speciation)
   - [Choosing a population strategy](#choosing-a-population-strategy)
 - [Trainers](#trainers)
   - [SupervisedTrainer](#supervisedtrainer)
@@ -113,7 +114,7 @@ command-line arguments group the same way:
 | Piece | What it does | Where its arguments come from |
 |---|---|---|
 | **EXAQC** | Generates new genomes by mutation and crossover | [Search arguments](#search-command-line-arguments) |
-| **Population strategy** | Decides which genomes survive and become parents | [`steady_state`](#steady_state) / [`islands`](#islands) sub-command |
+| **Population strategy** | Decides which genomes survive and become parents | [`steady_state`](#steady_state) / [`islands`](#islands) / [`steady_state_speciation`](#steady_state_speciation) sub-command |
 | **Trainer** | Trains each genome once it is generated | [Trainers](#trainers) |
 | **Objective** | Calls the trainer for a genome and sets its `fitness` | The entry point itself |
 | **Genome archive** | Records every evaluated genome and the search history, the run's only output | [Run outputs](#run-outputs-genomearchive) |
@@ -141,35 +142,42 @@ linearly with the number of workers.
 
 ### Local run scripts
 
-[`scripts/run_classification.sh`](./scripts/run_classification.sh) and
+[`scripts/run_classification.sh`](./scripts/run_classification.sh),
+[`scripts/run_teacher.sh`](./scripts/run_teacher.sh) and
 [`scripts/run_rl.sh`](./scripts/run_rl.sh) run one search of
-[`classification`](#classification) or
+[`classification`](#classification), [`teacher`](#teacher) or
 [`reinforcement_learning`](#reinforcement_learning) on this machine through the
 local `mpiexec`. They take no arguments: every setting is an environment
 variable with a default, so a run changes only what it names:
 
 ```
 DATASET=wine POPULATION=steady_state bash scripts/run_classification.sh
+TEACHER=bell_out POPULATION=steady_state_speciation bash scripts/run_teacher.sh
 ENVIRONMENT=hopper TOPOLOGY="2d_mesh 4 5" N_ISLANDS=20 TAG=run2 bash scripts/run_rl.sh
 ```
 
-The variables both scripts share are below; each entry point's section lists its
-own. The 2026 PPSN experiments have scripts of their own (see
+The variables the scripts share are below; each entry point's section lists its
+own. Teacher has no encoder or decoder, so it ignores `ENCODING` / `DECODING`
+and restricts `QIM` to `rx` / `ry` / `rz`. The 2026 PPSN experiments have
+scripts of their own (see
 [Reproducing 2026 PPSN results](#reproducing-2026-ppsn-results)).
 
 | Variable | Default | Description |
 |---|---|---|
 | `N_PROCESSES` | `12` | MPI processes (`mpiexec -n`): one master plus the workers; at least 2 |
-| `INPUT_QUBITS` / `OUTPUT_QUBITS` | `5` / `5` | `--input_qubits` / `--output_qubits` |
-| `QIM` / `QOM` | `u3` / `probs` | `-qim` / `-qom` |
-| `ENCODING` / `DECODING` | `linear` / `linear` | `--encoding` (`identity`, `linear`) / `--decoding` (`clipped`, `linear`) |
-| `POPULATION` | `islands` | Population sub-command: `islands` or `steady_state` |
+| `INPUT_QUBITS` / `OUTPUT_QUBITS` | `5` / `5` (teacher: `2` / `2`) | `--input_qubits` / `--output_qubits` |
+| `QIM` / `QOM` | `u3` / `probs` (teacher: `ry` / `probs`) | `-qim` / `-qom` |
+| `ENCODING` / `DECODING` | `linear` / `linear` | `--encoding` (`identity`, `linear`) / `--decoding` (`clipped`, `linear`); classification and RL only |
+| `POPULATION` | `islands` | Population sub-command: `islands`, `steady_state` or `steady_state_speciation` |
 | `N_ISLANDS` / `MAX_ISLAND_SIZE` | `25` / `5` | `--n_islands` / `--max_island_size` (`islands` only; `--islands_to_extinct` is fixed at 1) |
 | `TOPOLOGY` | `2d_mesh 5 5` | `--topology` and its arguments, as one quoted value (`islands` only) |
-| `MAX_POPULATION_SIZE` | `30` | `--max_population_size` (`steady_state` only) |
+| `MAX_POPULATION_SIZE` | `30` | `--max_population_size` (`steady_state` and `steady_state_speciation`) |
+| `SPECIES_THRESHOLD` | `0.6` | `--species_threshold` (`steady_state_speciation` only; must be `> 0`) |
+| `C_S` / `C_Q` / `C_C` | `1.0` / `1.0` / `1.0` | `--c_s` / `--c_q` / `--c_c` (`steady_state_speciation` only; each `>= 0`) |
+| `INTER_SPECIES_PARENT_RATE` | `0.1` | `--inter_species_parent_rate` (`steady_state_speciation` only; in `[0, 1]`) |
 | `USE_ONLY` | `rx ry rz p u crx cry crz cp rxx ryy rzz cx cy cz` | `--use_only` gates, as one quoted value |
 | `BASE_DIR` | `./exaqc_runs` | Directory the default `OUT_DIR` is created in |
-| `OUT_DIR` | `<BASE_DIR>/<dataset or env>_<topology>_i<n_islands>`, or `..._steady_state_p<max_population_size>` | `--out_dir` |
+| `OUT_DIR` | `<BASE_DIR>/<dataset, teacher or env>_<topology>_i<n_islands>`, `..._steady_state_p<max_population_size>`, or `..._speciation_p<max_population_size>_t<species_threshold>` | `--out_dir` |
 | `TAG` | unset | Appended to the output directory as `_<TAG>` (letters, digits, `-` and `_`) |
 | `PYTHON` / `MPIEXEC` / `MPIEXEC_ARGS` | `python3` / `mpiexec` / `--oversubscribe` | Interpreter and launcher; clear `MPIEXEC_ARGS` for an MPI other than Open MPI |
 | `DRY_RUN` | unset | When set, print the command instead of running it |
@@ -298,6 +306,7 @@ arguments:
 ```
 python3 -m src.examples.classification <options...> steady_state --max_population_size 30
 python3 -m src.examples.classification <options...> islands --n_islands 10 --max_island_size 10 --topology ring
+python3 -m src.examples.classification <options...> steady_state_speciation --max_population_size 30 --species_threshold 0.6
 ```
 
 ### [`steady_state`](./src/evolution/steady_state_population.py)
@@ -347,6 +356,42 @@ slowly); a denser one converges faster. The available values are:
 Multi-word values take their arguments as separate tokens — for example
 `--topology 2d_mesh 3 4` arranges 12 islands in a 3×4 grid.
 
+### [`steady_state_speciation`](./src/evolution/steady_state_speciation.py)
+
+A single population with global capacity, partitioned into **species** by the
+compatibility distance on an offspring and a species representative. That
+distance is `c_s * d_s + c_q * d_q + c_c * d_c`: `d_s` is the square root of
+the number of **enabled** gate innovations present in exactly one genome,
+`d_q` is the Euclidean length of the shortest `2π` angle differences on
+enabled gates both genomes carry, and `d_c` is the Euclidean distance between
+trainable encoder and decoder parameters (weights and biases). Disabled gates
+do not enter. A task with no trainable classical component has `d_c = 0`.
+A new genome joins the first compatible species (`distance ≤ --species_threshold`)
+or starts its own; parents are drawn round-robin within a species, with a
+small chance of inter-species crossover. Capacity is enforced globally (worst
+non-singleton members are preferred for eviction). Species membership is stored
+on each genome as `metadata["species_id"]`; the search archive indexes that as
+the summary `species` column (alongside `island` for island searches) so the
+dashboard and MCP can filter and color by species the same way they do for
+islands. The archive's `run_info` records a `speciation` object with
+`max_population_size`, `species_threshold`, `c_s`, `c_q`, `c_c`,
+and `inter_species_parent_rate`. Parent-selection metadata uses
+`crossover_type` values `mutation`, `intra`, and `inter` (islands instead use
+`intra-island` / `inter-island`). The local run scripts accept
+`POPULATION=steady_state_speciation` (with `SPECIES_THRESHOLD`); a breast-cancer
+wrapper that also exercises this strategy alongside the others is
+[`scripts/run_breast_cancer_local.sh`](scripts/run_breast_cancer_local.sh)
+(`GENOMES`, `POP_SIZE`, `SPECIES_THRESHOLD`).
+
+| Argument | Default | Description |
+|---|---|---|
+| `--max_population_size` | `30` | Genomes retained across all species |
+| `--species_threshold` | `0.6` | Join a species iff the compatibility distance is at most this (must be `> 0`) |
+| `--c_s` | `1.0` | Coefficient on the structural distance |
+| `--c_q` | `1.0` | Coefficient on the quantum angular distance |
+| `--c_c` | `1.0` | Coefficient on the classical encoder and decoder distance |
+| `--inter_species_parent_rate` | `0.1` | Fraction of multi-parent requests that mix two species |
+
 ### Choosing a population strategy
 
 - **`steady_state` is the simpler default** and is what the published
@@ -355,8 +400,13 @@ Multi-word values take their arguments as separate tokens — for example
   near-identical fitness and structure. `--islands_to_extinct 0` disables
   extinction entirely, giving fully independent parallel searches; raising it
   increases how aggressively good material is shared.
-- **Total capacity is `n_islands × max_island_size`.** Keep that in the same
-  range as a steady-state population you would otherwise use.
+- **`steady_state_speciation` protects structural niches** inside one
+  population: dissimilar circuits can survive together even when a single
+  fitness ranking would wipe them. Raise `--species_threshold` to form fewer,
+  broader species; lower it for more, tighter niches. Keep
+  `--max_population_size` in the same range as a steady-state run.
+- **Total capacity for islands is `n_islands × max_island_size`.** Keep that in
+  the same range as a steady-state population you would otherwise use.
 - **`--topology` trades diversity against spread.** A sparse topology like
   `ring` keeps islands distinct and resists premature convergence, while a dense
   `fully_connected` topology spreads strong genomes fastest; `2d_mesh`, `tree`,
@@ -773,7 +823,9 @@ the rest -- `timing` (when it was generated, when its evaluation started and
 finished, and when it was inserted, plus under MPI `request_wait_seconds`: how
 long its worker waited for it), `evaluated_by` (rank, host and process id),
 for island searches the `target_island_status` it was generated under (a
-`repopulating` island draws its parents from its best neighbor), and the genome a discarded
+`repopulating` island draws its parents from its best neighbor), for speciation
+searches the `species_id` it was assigned (also indexed as the summary
+`species` column), and the genome a discarded
 genome `lost_to`. [`exaqc_mcp`](#exaqc_mcp) exposes the
 same queries to an agent.
 
@@ -888,6 +940,21 @@ mpiexec -n 12 python3 -m src.examples.teacher \
     --out_dir ./artifacts/half_adder \
     steady_state --max_population_size 30
 ```
+
+**Script.** [`scripts/run_teacher.sh`](./scripts/run_teacher.sh) runs a search
+locally, configured by the [shared variables](#local-run-scripts) and these. It
+fixes `-ms uniform 1 3 -ps uniform 5 5` and crossover rates of `0.1` (binary,
+n-ary and exponential).
+
+| Variable | Default | Description |
+|---|---|---|
+| `TEACHER` | `half_adder` | `--teacher` |
+| `LOSS` | `fidelity` | `--loss`: `fidelity`, `angle`, `kl` or `mse` |
+| `NUMBER_GENOMES` | `1000` | `--number_genomes` |
+| `EPOCHS` | `30` | `--epochs` |
+| `IMPROVEMENT_CUTOFF` | `3` | `--improvement_cutoff` |
+| `BATCH_SIZE` | `8` | `--batch_size` |
+| `N_TRAINING_SAMPLES` / `N_VALIDATION_SAMPLES` | `64` / `64` | `--n_training_samples` / `--n_validation_samples` |
 
 **Teachers.** `identity`, `x_out4`, `bell_out`, `copy_in_to_out`,
 `parity012_to_out4`, `input_controlled_bell`, `2layer_out_block`, `grover`,
@@ -1180,16 +1247,20 @@ Then open `http://127.0.0.1:8000/` in a browser. The page has:
   which would bury the handful of metrics anyone charts, so the pickers offer the
   shorter list until *all metrics* asks for the rest — nothing is hidden from a
   query, only from the dropdown. Genomes are colored by
-  insert type, operator family or island, with a line joining the genomes that
-  improved the best value and every parent-to-child link in the run (links fade
-  as they crowd the chart, so runs of tens of thousands of genomes stay legible).
+  insert type, operator family, island or species, with a line joining the
+  genomes that improved the best value and every parent-to-child link in the run
+  (links fade as they crowd the chart, so runs of tens of thousands of genomes
+  stay legible).
   Coloring by island gives each island its own color only while there are no
   more than seven; beyond that the chart colors around one *focus* island
   instead (a run with fewer islands can choose to as well). The focus follows
   the selected genome's island (the best genome's until one is selected) unless
   an island is picked from the *focus* menu. Its genomes get one color, the
   islands it draws parents from (its neighbors in `--topology`) a second, and
-  every other island is gray. The
+  every other island is gray. Coloring by species works the same way for a
+  speciation run (without neighbor highlighting, since species are not a fixed
+  graph): each species its own color while there are few enough, otherwise a
+  focus species versus the rest. The
   **Progress** view emphasizes the best-so-far line and the **Genealogy** view the
   links; either can highlight a genome's full lineage or hide genomes that had no
   children. On the right, a sortable, filterable table of the genomes that loads
@@ -1225,7 +1296,15 @@ Then open `http://127.0.0.1:8000/` in a browser. The page has:
   other. Rings mark the chart's focus island and its neighbors, and clicking an
   island colors the chart around it. While a genome is selected (and *highlight
   selected lineage* is on), arrows show where its ancestry crossed between
-  islands. A **Timing** section shows whether the MPI master kept up with its
+  islands. A speciation run also has a **Species** section: the species laid
+  out in a circle, each node sized by how many genomes it holds and shaded by
+  its best value of the charted metric, with an edge for every genome created
+  in one species from a parent in another. The recorded `--species_threshold`,
+  capacity, inter-species parent rate and `c_s` / `c_q` / `c_c` sit under the
+  graph, then a table of each species' size and best genome. Clicking a species
+  colors the chart around it. While a genome is selected (and *highlight
+  selected lineage* is on), arrows show where its ancestry crossed between
+  species. A **Timing** section shows whether the MPI master kept up with its
   workers: the whole run's genomes per second, the master's busy and idle shares
   and the mean time of each of its steps and insertion parts, and the workers'
   wait share and each genome's mean wait, evaluation, generation and turnaround
@@ -1320,7 +1399,7 @@ run, and says when a run's archive predates timing; `training_gain_summary`
 reports how much training changed a run's genomes -- the distribution of
 `target_gain`, the shares of genomes training improved or left unchanged, and both
 by quartile of the inherited weights' score, optionally grouped by `insert_type`,
-`island` or `generated_by` -- and needs an archive of format 7, or an older one
+`island`, `species` or `generated_by` -- and needs an archive of format 7, or an older one
 brought up to date with [`backfill_archive`](#backfill_archive); `genome_metrics` returns a genome's
 recorded training history, each series keyed by its own epoch or episode column;
 `list_runs` leaves out each run's command line unless `include_command_line` is
@@ -1369,7 +1448,10 @@ Brings archives written before format 7 up to it, so older runs get the
 training-metric columns: `initial_metrics`, `best_metrics` and `last_metrics`, and
 `initial_fitness` with its generated `initial_loss`, `initial_target_metric` and
 `target_gain` (see [Working with a run's archive](#working-with-a-runs-archive)).
-Every genome's JSON is stored in the archive, so they are re-derived from it:
+It also fills the summary `species` column from each genome's
+`metadata["species_id"]` when a speciation run recorded one but the summary was
+left empty. Every genome's JSON is stored in the archive, so they are re-derived
+from it:
 
 ```
 python3 -m src.examples.backfill_archive ./artifacts/walker2d_1 ./artifacts/walker2d_2 --output_dir ./backfilled
@@ -1505,10 +1587,12 @@ run would execute:
 DRY_RUN=1 TAG=1 bash scripts/run_ppsn2026_classification.sh iris
 ```
 
-Quantum teacher imitation:
+Quantum teacher imitation (local script; there is no separate PPSN teacher
+wrapper):
 
 ```
-sh scripts/run_teacher.sh 1 10 half_adder ./2026_ppsn_exaqc/teacher
+BASE_DIR=./2026_ppsn_exaqc/teacher TEACHER=half_adder POPULATION=steady_state \
+    TAG=1 bash scripts/run_teacher.sh
 ```
 
 The results can then be processed into the tables of mutation and crossover

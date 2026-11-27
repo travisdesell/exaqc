@@ -21,7 +21,9 @@ its number instead of training it, so a run takes seconds.
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -115,47 +117,77 @@ def _find_launcher() -> list[str] | str:
     )
 
 
-def run_search(out_dir: Path, number_genomes: int) -> subprocess.CompletedProcess[str]:
+def run_search(
+    out_dir: Path,
+    number_genomes: int,
+    population_args: list[str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     """Runs the driver under ``mpiexec``, continuing whatever is in ``out_dir``.
+
+    The launcher is started in its own session so a timeout can kill the whole
+    process group. Leaving orphaned MPI ranks behind is what turns one hung run
+    into a cascade of later timeouts on CI.
 
     Args:
         out_dir: The run's output directory.
         number_genomes: The total the run should end up having evaluated.
+        population_args: The population sub-command and its flags; defaults to a
+            small ``steady_state`` population.
 
     Returns:
         The finished process, with its output captured.
+
+    Raises:
+        subprocess.TimeoutExpired: If the run exceeds :data:`TIMEOUT_SECONDS`.
     """
 
-    return subprocess.run(
-        [
-            *mpiexec_command(),
-            "-n",
-            str(RANKS),
-            sys.executable,
-            "-m",
-            "tests.mpi_restart_driver",
-            "--mutation_strategy",
-            "uniform",
-            "1",
-            "2",
-            "--parent_strategy",
-            "uniform",
-            "2",
-            "3",
-            # the strategy flags above take any number of values, so a flag that
-            # takes exactly one has to end the list before the sub-command
-            "--out_dir",
-            str(out_dir),
-            "--number_genomes",
-            str(number_genomes),
-            "steady_state",
-            "--max_population_size",
-            "4",
-        ],
-        capture_output=True,
+    if population_args is None:
+        population_args = ["steady_state", "--max_population_size", "4"]
+
+    command = [
+        *mpiexec_command(),
+        "-n",
+        str(RANKS),
+        sys.executable,
+        "-m",
+        "tests.mpi_restart_driver",
+        "--mutation_strategy",
+        "uniform",
+        "1",
+        "2",
+        "--parent_strategy",
+        "uniform",
+        "2",
+        "3",
+        # the strategy flags above take any number of values, so a flag that
+        # takes exactly one has to end the list before the sub-command
+        "--out_dir",
+        str(out_dir),
+        "--number_genomes",
+        str(number_genomes),
+        *population_args,
+    ]
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=TIMEOUT_SECONDS,
         cwd=Path(__file__).resolve().parent.parent,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as timed_out:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        stdout, stderr = process.communicate()
+        timed_out.stdout = stdout
+        timed_out.stderr = stderr
+        raise timed_out
+    return subprocess.CompletedProcess(
+        args=command, returncode=process.returncode, stdout=stdout, stderr=stderr
     )
 
 
@@ -286,3 +318,62 @@ def test_the_driver_records_what_a_restart_needs(tmp_path) -> None:
     assert innovations is not None
     # the run's own record is JSON, so a restart reads it back as it was written
     assert json.loads(json.dumps(arguments)) == arguments
+
+
+def test_a_distributed_speciation_run_continues_across_a_restart(tmp_path) -> None:
+    """Continuing an MPI speciation run keeps numbering and restores species.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+    """
+
+    out_dir = tmp_path / "speciation"
+    population_args = [
+        "steady_state_speciation",
+        "--max_population_size",
+        "4",
+        "--species_threshold",
+        "0.6",
+        "--c_s",
+        "1.0",
+        "--c_q",
+        "1.0",
+        "--c_c",
+        "1.0",
+    ]
+
+    assert_ran(run_search(out_dir, number_genomes=6, population_args=population_args))
+    stopped = archive_state(out_dir)
+    assert len(stopped["numbers"]) >= 6
+
+    with GenomeArchive.open_readonly(str(out_dir)) as reader:
+        species_before = {
+            number: species
+            for number, species in reader.connection.execute(
+                "SELECT genome_number, species FROM genomes WHERE species IS NOT NULL"
+            )
+        }
+        assert species_before
+        assert reader.run_info()["arguments"]["population_strategy"] == (
+            "steady_state_speciation"
+        )
+
+    assert_ran(
+        run_search(
+            out_dir,
+            number_genomes=stopped["insertions"] + 4,
+            population_args=population_args,
+        )
+    )
+    continued = archive_state(out_dir)
+
+    assert continued["insertions"] > stopped["insertions"]
+    assert set(stopped["numbers"]) <= set(continued["numbers"])
+    assert continued["restarts"] == 1
+    with GenomeArchive.open_readonly(str(out_dir)) as reader:
+        for number, species in species_before.items():
+            row = reader.connection.execute(
+                "SELECT species FROM genomes WHERE genome_number = ?",
+                (number,),
+            ).fetchone()
+            assert row is not None and row[0] == species

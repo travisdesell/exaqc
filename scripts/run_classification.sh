@@ -14,6 +14,7 @@
 #   USE_ONLY="rx ry rz cx cy cz" OUT_DIR=./exaqc_runs/rxyz_cxyz bash scripts/run_classification.sh
 #   BASE_DIR=~/Data/exaqc_runs bash scripts/run_classification.sh
 #   POPULATION=steady_state MAX_POPULATION_SIZE=30 bash scripts/run_classification.sh
+#   POPULATION=steady_state_speciation SPECIES_THRESHOLD=0.6 bash scripts/run_classification.sh
 #   TAG=run2 bash scripts/run_classification.sh
 #
 # The 2026 PPSN runs are reproduced by scripts/run_ppsn2026_classification.sh
@@ -48,7 +49,7 @@ QOM=${QOM:-probs}
 ENCODING=${ENCODING:-linear}
 DECODING=${DECODING:-linear}
 
-#: The population strategy: islands or steady_state.
+#: The population strategy: islands, steady_state, or steady_state_speciation.
 POPULATION=${POPULATION:-islands}
 
 #: Islands, and genomes per island (POPULATION=islands).
@@ -60,8 +61,21 @@ MAX_ISLAND_SIZE=${MAX_ISLAND_SIZE:-5}
 #: src/evolution/topology.py validates the arguments.
 TOPOLOGY=${TOPOLOGY:-2d_mesh 5 5}
 
-#: Genomes the population keeps (POPULATION=steady_state).
+#: Genomes the population keeps (POPULATION=steady_state or
+#: steady_state_speciation).
 MAX_POPULATION_SIZE=${MAX_POPULATION_SIZE:-30}
+
+#: Compatibility-distance join threshold (POPULATION=steady_state_speciation).
+SPECIES_THRESHOLD=${SPECIES_THRESHOLD:-0.6}
+
+#: Compatibility-distance coefficients (POPULATION=steady_state_speciation).
+C_S=${C_S:-1.0}
+C_Q=${C_Q:-1.0}
+C_C=${C_C:-1.0}
+
+#: Fraction of multi-parent draws that mix two species
+#: (POPULATION=steady_state_speciation).
+INTER_SPECIES_PARENT_RATE=${INTER_SPECIES_PARENT_RATE:-0.1}
 
 #: Training epochs per genome.
 EPOCHS=${EPOCHS:-30}
@@ -112,6 +126,34 @@ require_positive() {
     [ "$2" -gt 0 ] || die "$1 must be a positive integer, but found: $2"
 }
 
+# Fails unless $2 is a finite number greater than 0, naming it $1.
+# Matches SteadyStateSpeciation: species_threshold must be > 0.
+require_positive_float() {
+    case "$2" in
+        '' | *[!0-9.]* | *.*.*) die "$1 must be a positive number, but found: $2" ;;
+    esac
+    awk -v t="$2" 'BEGIN { exit !(t > 0) }' ||
+        die "$1 must be a positive number (> 0), but found: $2"
+}
+
+# Fails unless $2 is a finite number >= 0, naming it $1.
+require_nonnegative_float() {
+    case "$2" in
+        '' | *[!0-9.]* | *.*.*) die "$1 must be a non-negative number, but found: $2" ;;
+    esac
+    awk -v t="$2" 'BEGIN { exit !(t >= 0) }' ||
+        die "$1 must be a non-negative number, but found: $2"
+}
+
+# Fails unless $2 is a finite number in [0, 1], naming it $1.
+require_unit_interval() {
+    case "$2" in
+        '' | *[!0-9.]* | *.*.*) die "$1 must be a number in [0, 1], but found: $2" ;;
+    esac
+    awk -v t="$2" 'BEGIN { exit !(t >= 0 && t <= 1) }' ||
+        die "$1 must be a number in [0, 1], but found: $2"
+}
+
 # Fails unless $2 is one of the space-separated words in $3, naming it $1.
 require_choice() {
     case " $3 " in
@@ -130,7 +172,7 @@ require_choice QIM "$QIM" "u3 rx ry rz basis amplitude"
 require_choice QOM "$QOM" "probs expval"
 require_choice ENCODING "$ENCODING" "identity linear"
 require_choice DECODING "$DECODING" "clipped linear"
-require_choice POPULATION "$POPULATION" "islands steady_state"
+require_choice POPULATION "$POPULATION" "islands steady_state steady_state_speciation"
 require_positive EPOCHS "$EPOCHS"
 require_whole_number IMPROVEMENT_CUTOFF "$IMPROVEMENT_CUTOFF"
 require_positive BATCH_SIZE "$BATCH_SIZE"
@@ -172,6 +214,24 @@ if [ "$POPULATION" = islands ]; then
     )
     # e.g. ./exaqc_runs/iris_2d_mesh_5_5_i25
     DEFAULT_OUT_DIR=${BASE_DIR%/}/${DATASET}_${TOPOLOGY_TAG}_i${N_ISLANDS}
+elif [ "$POPULATION" = steady_state_speciation ]; then
+    require_positive MAX_POPULATION_SIZE "$MAX_POPULATION_SIZE"
+    require_positive_float SPECIES_THRESHOLD "$SPECIES_THRESHOLD"
+    require_nonnegative_float C_S "$C_S"
+    require_nonnegative_float C_Q "$C_Q"
+    require_nonnegative_float C_C "$C_C"
+    require_unit_interval INTER_SPECIES_PARENT_RATE "$INTER_SPECIES_PARENT_RATE"
+    POPULATION_ARGUMENTS=(
+        steady_state_speciation
+        --max_population_size "$MAX_POPULATION_SIZE"
+        --species_threshold "$SPECIES_THRESHOLD"
+        --c_s "$C_S"
+        --c_q "$C_Q"
+        --c_c "$C_C"
+        --inter_species_parent_rate "$INTER_SPECIES_PARENT_RATE"
+    )
+    # e.g. ./exaqc_runs/iris_speciation_p30_t0.6
+    DEFAULT_OUT_DIR=${BASE_DIR%/}/${DATASET}_speciation_p${MAX_POPULATION_SIZE}_t${SPECIES_THRESHOLD}
 else
     require_positive MAX_POPULATION_SIZE "$MAX_POPULATION_SIZE"
     POPULATION_ARGUMENTS=(steady_state --max_population_size "$MAX_POPULATION_SIZE")

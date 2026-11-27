@@ -887,6 +887,7 @@ class EXAQC:
                 genome,
                 insertion=self.inserted_genomes,
                 island=genome.metadata.get("island_id"),
+                species=genome.metadata.get("species_id"),
             )
 
         with self.insert_timer.time("population_events"):

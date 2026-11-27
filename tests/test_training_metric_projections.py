@@ -437,6 +437,19 @@ def test_training_gain_summary_reports_what_training_added(tmp_path: Path) -> No
     assert by_operator["add_gate"]["improved"] == 1.0
     assert by_operator["clone"]["unchanged"] == 1.0
 
+    connection = sqlite3.connect(tmp_path / "runs" / "gains" / ARCHIVE_FILENAME)
+    connection.executemany(
+        "UPDATE genomes SET species = ? WHERE genome_number = ?",
+        [(0, 1), (0, 2), (1, 3), (1, 4)],
+    )
+    connection.commit()
+    connection.close()
+    by_species = {
+        row["group"]: row["n"]
+        for row in tools.training_gain_summary("gains", group_by="species")["rows"]
+    }
+    assert by_species == {0: 2, 1: 2}
+
     with pytest.raises(ValueError, match="group_by"):
         tools.training_gain_summary("gains", group_by="loss")
 

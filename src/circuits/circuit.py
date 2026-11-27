@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import math
 import os
 import json
 
@@ -50,6 +51,60 @@ QUANTUM_OUTPUT_MODES = ["probs", "expval"]
 #: batch an identical output (and therefore wrong losses and gradients). Naming
 #: the register to match keeps the supported per-sample path.
 QISKIT_CLASSICAL_REGISTER_NAME = "meas"
+
+
+def _gate_parameter_float(value: object) -> float:
+    """Returns a stored gate parameter as a finite float.
+
+    Args:
+        value: A gate parameter, a real number or a scalar tensor.
+
+    Returns:
+        ``value`` as a finite float.
+
+    Raises:
+        ValueError: If ``value`` is not a finite real number.
+    """
+
+    if isinstance(value, bool):
+        raise ValueError(f"gate parameter {value!r} is not a real number")
+    if isinstance(value, (int, float)):
+        number = float(value)
+    else:
+        detach = getattr(value, "detach", None)
+        if not callable(detach):
+            raise ValueError(f"gate parameter {value!r} is not a real number")
+        tensor = detach()
+        numel = getattr(tensor, "numel", None)
+        if not callable(numel) or numel() != 1:
+            raise ValueError(f"gate parameter {value!r} is not a real number")
+        number = float(tensor.reshape(-1)[0].item())
+    if not math.isfinite(number):
+        raise ValueError(f"gate parameter {value!r} is not a finite real number")
+    return number
+
+
+def _trainable_parameter_values(stage: object) -> list[float]:
+    """Flattens a stage's trainable parameters in module order.
+
+    Args:
+        stage: An encoder or decoder. ``None`` and non-modules contribute
+            nothing.
+
+    Returns:
+        The stage's ``requires_grad`` parameters as a flat list of floats,
+        weights and biases included and buffers excluded.
+    """
+
+    if not isinstance(stage, torch.nn.Module):
+        return []
+    values: list[float] = []
+    for parameter in stage.parameters():
+        if not bool(parameter.requires_grad):
+            continue
+        flat = parameter.detach().reshape(-1)
+        values.extend(float(item) for item in flat.tolist())
+    return values
 
 
 class CircuitGenome:
@@ -373,6 +428,103 @@ class CircuitGenome:
         gates = [gate.innovation_number for gate in self.gates if gate.enabled]
         gates.sort()
         return gates
+
+    def get_historical_gate_innovations(self) -> list[int]:
+        """Returns sorted unique innovation IDs of enabled gates.
+
+        Speciation distance uses this set, so disabled gates are left out.
+        Duplicate identity still uses :meth:`get_historical_gate_signature`,
+        which keeps every record's enable bit.
+
+        Returns:
+            Sorted unique innovation numbers over enabled gates in ``self.gates``.
+        """
+
+        return sorted({gate.innovation_number for gate in self.gates if gate.enabled})
+
+    def get_historical_gate_signature(self) -> frozenset[tuple[int, bool]]:
+        """Returns ``(innovation_number, enabled)`` pairs for every gate record.
+
+        Used by speciation for duplicate identity. If the
+        same innovation appears enabled and disabled, both pairs are kept.
+
+        Returns:
+            A frozenset of innovation/enable pairs over ``self.gates``.
+        """
+
+        return frozenset((gate.innovation_number, gate.enabled) for gate in self.gates)
+
+    def _shallowest_enabled_gates(self) -> dict[int, Gate]:
+        """Returns the shallowest enabled gate for each innovation number.
+
+        Returns:
+            A mapping from innovation number to the enabled gate of smallest
+            depth. Equal depths keep the earlier gate in ``self.gates``.
+        """
+
+        shallowest: dict[int, Gate] = {}
+        for gate in self.gates:
+            if not gate.enabled:
+                continue
+            current = shallowest.get(gate.innovation_number)
+            if current is None or gate.depth < current.depth:
+                shallowest[gate.innovation_number] = gate
+        return shallowest
+
+    def enabled_gate_parameters(self) -> dict[int, list[float]]:
+        """Returns enabled-gate parameter values, one vector per innovation.
+
+        Disabled gates are omitted. When several enabled gates share an
+        innovation number, the shallowest (smallest depth) is kept. Values
+        follow the gate's parameter-dict order, which is the specification
+        order.
+
+        Returns:
+            A mapping from innovation number to that gate's parameter values.
+
+        Raises:
+            ValueError: If a stored parameter is not a finite real number.
+        """
+
+        return {
+            innovation: [
+                _gate_parameter_float(value) for value in gate.parameters.values()
+            ]
+            for innovation, gate in self._shallowest_enabled_gates().items()
+        }
+
+    def enabled_gate_parameter_names(self) -> dict[int, list[str]]:
+        """Returns enabled-gate parameter names, one list per innovation.
+
+        The gate chosen for each innovation is the same one
+        :meth:`enabled_gate_parameters` reads, and the names are in the same
+        order as those values.
+
+        Returns:
+            A mapping from innovation number to that gate's parameter names.
+        """
+
+        return {
+            innovation: list(gate.parameters.keys())
+            for innovation, gate in self._shallowest_enabled_gates().items()
+        }
+
+    def classical_parameters(self) -> list[float]:
+        """Returns trainable encoder parameters, then decoder parameters.
+
+        A missing stage, or a stage that is not a ``torch.nn.Module``,
+        contributes nothing. Buffers are excluded. Within one run the encoder
+        and decoder architectures are fixed, so two genomes share this order.
+
+        Returns:
+            A flat list of finite floats. Empty when neither stage is trainable.
+        """
+
+        encoder = getattr(self, "encoder", None)
+        decoder = getattr(self, "decoder", None)
+        return _trainable_parameter_values(encoder) + _trainable_parameter_values(
+            decoder
+        )
 
     def has_same_gates(self, other: CircuitGenome) -> bool:
         """
