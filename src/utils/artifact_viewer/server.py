@@ -445,8 +445,9 @@ def higher_is_better(key: str) -> bool:
     return "loss" not in key.lower()
 
 
-#: Circuit-size and hardware-cost keys (the device card's ``p_fail``,
-#: ``total_time_ns`` and ``n_entanglers``), which a multi-objective search
+#: Circuit-size, hardware-cost and noise-cost keys (the device card's
+#: ``p_fail``, ``total_time_ns`` and ``n_entanglers``; ``classification_moo``'s
+#: ``noise_gap`` and ``noise_gap_accuracy``), which a multi-objective search
 #: minimizes even though their names do not say ``loss`` (see
 #: :func:`pareto_higher_is_better`).
 SIZE_KEYS = frozenset(
@@ -459,6 +460,8 @@ SIZE_KEYS = frozenset(
         "p_fail",
         "total_time_ns",
         "n_entanglers",
+        "noise_gap",
+        "noise_gap_accuracy",
     }
 )
 
@@ -942,17 +945,23 @@ class RunRegistry:
 
 
 def render_genome_image(
-    archive_path: str, genome_number: int, kind: str
+    archive_path: str, genome_number: int, kind: str, show_noise: bool = False
 ) -> bytes | None:
     """Renders one of a stored genome's images.
 
     This runs in the render worker process, so it imports the plotting and
     quantum stacks itself.
 
+    A genome evolved under simulated noise rebuilds its circuit with that noise,
+    whose channels would fill the diagram; unless ``show_noise`` asks for them,
+    the diagram is drawn from the noiseless circuit (the genome's gates are the
+    same either way).
+
     Args:
         archive_path: The archive holding the genome.
         genome_number: The genome to draw.
         kind: ``"diagram"`` or ``"training"``.
+        show_noise: Whether a diagram draws the genome's noise channels.
 
     Returns:
         The PNG bytes, or ``None`` if the image could not be drawn (for example
@@ -974,7 +983,11 @@ def render_genome_image(
     from src.utils.genome_rendering import render_diagram_png, render_training_png
 
     with GenomeArchive.open_readonly(archive_path) as reader:
-        genome = CircuitGenome.from_dict(reader.get_genome_dict(genome_number))
+        serialized = reader.get_genome_dict(genome_number)
+    if not show_noise:
+        # noise_type "none" builds the circuit without any noise channel
+        serialized.setdefault("hyperparameters", {})["noise_type"] = "none"
+    genome = CircuitGenome.from_dict(serialized)
 
     return (
         render_diagram_png(genome) if kind == "diagram" else render_training_png(genome)
@@ -1011,13 +1024,22 @@ class RenderService:
         self._inline_lock = threading.Lock()
         self._cache_size = cache_size
 
-    def render(self, archive_path: str, genome_number: int, kind: str) -> bytes | None:
+    def render(
+        self,
+        archive_path: str,
+        genome_number: int,
+        kind: str,
+        show_noise: bool = False,
+    ) -> bytes | None:
         """Returns a genome image, rendering it if it is not cached.
 
         Args:
             archive_path: The archive holding the genome.
             genome_number: The genome to draw.
             kind: ``"diagram"`` or ``"training"``.
+            show_noise: Whether a diagram draws the genome's noise channels
+                (see :func:`render_genome_image`); each choice is cached
+                separately.
 
         Returns:
             The PNG bytes, or ``None`` if the image could not be drawn.
@@ -1027,7 +1049,13 @@ class RenderService:
             ValueError: If ``kind`` is not an image kind.
         """
 
-        key = (archive_path, int(genome_number), kind)
+        # the noise switch only changes diagrams, so training plots share one entry
+        key = (
+            archive_path,
+            int(genome_number),
+            kind,
+            bool(show_noise) and kind == "diagram",
+        )
 
         with self._lock:
             if key in self._cache:
@@ -1051,11 +1079,11 @@ class RenderService:
                 self._cache.popitem(last=False)
         return image
 
-    def _submit(self, key: tuple[str, int, str]) -> Future:
+    def _submit(self, key: tuple[str, int, str, bool]) -> Future:
         """Starts rendering an image.
 
         Args:
-            key: ``(archive_path, genome_number, kind)``.
+            key: ``(archive_path, genome_number, kind, show_noise)``.
 
         Returns:
             A future resolving to the rendered image.
@@ -1964,13 +1992,16 @@ class ArtifactViewer:
                 reader.get_genome_dict(genome_number), ensure_ascii=False, indent=4
             ).encode("utf-8")
 
-    def image(self, index: int, genome_number: int, kind: str) -> bytes | None:
+    def image(
+        self, index: int, genome_number: int, kind: str, show_noise: bool = False
+    ) -> bytes | None:
         """Returns one of a genome's rendered images.
 
         Args:
             index: The run's index.
             genome_number: The genome.
             kind: ``"diagram"`` or ``"training"``.
+            show_noise: Whether a diagram draws the genome's noise channels.
 
         Returns:
             The PNG bytes, or ``None`` if the image could not be drawn.
@@ -1980,7 +2011,9 @@ class ArtifactViewer:
             ValueError: If ``kind`` is not an image kind.
         """
 
-        return self.renderer.render(self.run(index).archive_path, genome_number, kind)
+        return self.renderer.render(
+            self.run(index).archive_path, genome_number, kind, show_noise
+        )
 
     def ancestry_payload(
         self, index: int, genome_number: int, depth: int

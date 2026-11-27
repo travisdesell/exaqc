@@ -273,7 +273,9 @@ def viewer_url(tmp_path, monkeypatch) -> Iterator[str]:
 
     rendered: list[tuple[str, int, str]] = []
 
-    def fake_render(archive_path: str, genome_number: int, kind: str) -> bytes | None:
+    def fake_render(
+        archive_path: str, genome_number: int, kind: str, show_noise: bool = False
+    ) -> bytes | None:
         """Pretends to render: diagrams are PNG bytes, training plots are missing."""
         rendered.append((archive_path, genome_number, kind))
         with GenomeArchive.open_readonly(archive_path) as reader:
@@ -911,11 +913,14 @@ def test_render_service_caches_and_shares_renders(monkeypatch) -> None:
         monkeypatch: Used to replace image rendering with a counter.
     """
 
-    calls: list[tuple[str, int, str]] = []
+    calls: list[tuple[str, int, str, bool]] = []
     monkeypatch.setattr(
         server,
         "render_genome_image",
-        lambda path, number, kind: calls.append((path, number, kind)) or b"png",
+        lambda path, number, kind, show_noise: calls.append(
+            (path, number, kind, show_noise)
+        )
+        or b"png",
     )
 
     service = RenderService(processes=0, cache_size=1)
@@ -926,7 +931,60 @@ def test_render_service_caches_and_shares_renders(monkeypatch) -> None:
     service.render("a.sqlar", 2, "diagram")
     service.render("a.sqlar", 1, "diagram")  # evicted by the cache size of one
     assert len(calls) == 3
+
+    # a diagram with noise channels is a separate image; a training plot is not
+    service.render("a.sqlar", 1, "diagram", show_noise=True)
+    assert calls[-1] == ("a.sqlar", 1, "diagram", True)
+    service.render("a.sqlar", 1, "training", show_noise=True)
+    assert calls[-1] == ("a.sqlar", 1, "training", False)
     service.close()
+
+
+def test_diagrams_leave_out_noise_unless_asked(tmp_path, monkeypatch) -> None:
+    """A noisy genome's diagram is built noiselessly unless show_noise is set.
+
+    Args:
+        tmp_path: pytest per-test temporary directory (auto-removed).
+        monkeypatch: Used to capture the genome the diagram is drawn from.
+    """
+
+    from src.utils import genome_rendering
+
+    genome = FakeGenome(1, loss=0.5, target_metric=0.6, parents=[0], generated_by=[])
+    genome.serialized["hyperparameters"]["noise_type"] = "depolarizing"
+    build_run(tmp_path / "noisy", [genome])
+    archive = str(tmp_path / "noisy" / ARCHIVE_FILENAME)
+
+    drawn: list[str] = []
+    monkeypatch.setattr(
+        genome_rendering,
+        "render_diagram_png",
+        lambda g: drawn.append(g.hyperparameters["noise_type"]) or b"png",
+    )
+    monkeypatch.setattr(
+        "src.circuits.circuit.CircuitGenome.from_dict",
+        classmethod(lambda cls, d: _Stub(d["hyperparameters"])),
+    )
+
+    assert server.render_genome_image(archive, 1, "diagram") == b"png"
+    assert server.render_genome_image(archive, 1, "diagram", show_noise=True) == b"png"
+    assert drawn == ["none", "depolarizing"]
+
+
+class _Stub:
+    """Stands in for a genome built from a serialized dict, keeping its settings."""
+
+    def __init__(self, hyperparameters: dict[str, Any]) -> None:
+        """Keeps the genome's hyperparameters.
+
+        Args:
+            hyperparameters: The serialized genome's hyperparameters.
+
+        Returns:
+            None. Sets ``hyperparameters``.
+        """
+
+        self.hyperparameters = hyperparameters
 
 
 def test_ancestry_includes_the_seed(viewer_url: str) -> None:

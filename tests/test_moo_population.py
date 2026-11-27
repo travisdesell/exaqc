@@ -307,3 +307,100 @@ def test_structural_fitness_counts_enabled_gates_only() -> None:
     )
 
     assert structural_fitness(genome) == {"n_enabled_gates": 2.0, "n_parameters": 1.0}
+
+
+@pytest.mark.parametrize("noisy", [True, False])
+def test_noise_gap_compares_a_trained_genome_with_its_noiseless_self(
+    noisy: bool,
+) -> None:
+    """A noisy genome records its noise gap; a noiseless one records none.
+
+    The noiseless re-score uses the same best weights, so the gap is the
+    difference between the recorded (noisy) validation metrics and that
+    re-score.
+
+    Args:
+        noisy: Whether the genome runs with depolarizing noise.
+    """
+
+    import torch
+
+    from src.examples.classification_moo import MultiObjectiveClassificationObjective
+    from src.metrics.mean_class_accuracy import MeanClassAccuracy
+    from tests.supervised_trainer_test_utils import (
+        build_classification_genome,
+        cross_entropy_on_logits,
+        make_balanced_binary_dataloaders,
+    )
+
+    torch.manual_seed(0)
+    genome, n_features = build_classification_genome(
+        genome_number=1,
+        target="pennylane",
+        complexity="shallow",
+        encoder_name="linear",
+        decoder_name="linear",
+        epochs=1,
+    )
+    if noisy:
+        genome.hyperparameters.update(noise_type="depolarizing", noise_p=0.2)
+    train, validation = make_balanced_binary_dataloaders(n_features=n_features)
+    objective = MultiObjectiveClassificationObjective(
+        training_dataloader=train,
+        validation_dataloader=validation,
+        training_loss_function=cross_entropy_on_logits,
+        validation_loss_function=cross_entropy_on_logits,
+        metrics={"mean_class_accuracy": MeanClassAccuracy(n_labels=2)},
+    )
+
+    objective(genome)
+
+    if not noisy:
+        assert "noise_gap" not in genome.fitness
+        return
+    assert {"noise_gap", "noise_gap_accuracy"} <= set(genome.fitness)
+    assert genome.fitness["noise_gap"] != 0.0  # 20% depolarizing changes the loss
+    assert "noise_gap" not in genome.metadata.get("initial_fitness", {})
+    parse_objectives(["loss", "noise_gap"])  # selectable
+
+
+def test_noise_gap_needs_noise(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Choosing noise_gap for a noiseless run stops before any work.
+
+    Args:
+        monkeypatch: Used to set the command line.
+    """
+
+    import sys
+
+    from src.examples import classification_moo
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "classification_moo",
+            "-ms",
+            "uniform",
+            "1",
+            "3",
+            "-ps",
+            "uniform",
+            "5",
+            "5",
+            "--dataset",
+            "iris",
+            "--input_qubits",
+            "4",
+            "--output_qubits",
+            "2",
+            "--objectives",
+            "loss",
+            "noise_gap",
+            "--out_dir",
+            "unused",
+            "nsga2",
+        ],
+    )
+    with pytest.raises(SystemExit):
+        classification_moo.main()

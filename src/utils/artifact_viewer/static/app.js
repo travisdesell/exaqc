@@ -38,6 +38,8 @@
   const COLUMN_RESIZE_STEP_LARGE = 10;
   /** Where this browser remembers the chart column's width. */
   const CHART_WIDTH_STORAGE_KEY = "exaqc-artifacts.chartWidth";
+  /** Where this browser remembers whether circuit diagrams show noise channels. */
+  const SHOW_NOISE_STORAGE_KEY = "exaqc-artifacts.showNoise";
   /** A run whose last genome was saved this recently (seconds) is shown as live. */
   const LIVE_WINDOW_S = 120;
   /** Radius (CSS px) within which hovering or clicking picks a chart point. */
@@ -83,6 +85,38 @@
     const offset = host.getBoundingClientRect().top - sticky.getBoundingClientRect().top;
     // 60px: where the chart sticks below the top bar; 44px: the panel's padding and a margin below
     return Math.max(320, window.innerHeight - 60 - offset - 44);
+  }
+
+  /** Whether a genome was evolved under simulated noise (its noise_type is set and not "none"). */
+  function genomeIsNoisy(genome) {
+    const type = genome && genome.hyperparameters ? genome.hyperparameters.noise_type : null;
+    return Boolean(type) && type !== "none";
+  }
+
+  /** A short name for a noisy genome's noise: its device card, chip, or noise type. */
+  function noiseLabel(genome) {
+    const hp = genome.hyperparameters;
+    if (hp.noise_type === "device_card" && hp.noise_device_card) return `device card ${hp.noise_device_card.name}`;
+    if (hp.noise_type === "ibm_backend" && hp.noise_chip) return `${hp.noise_chip} chip`;
+    return label(hp.noise_type);
+  }
+
+  /** Whether this browser asked diagrams to show noise channels (off by default, or when storage is unavailable). */
+  function readShowNoise() {
+    try {
+      return localStorage.getItem(SHOW_NOISE_STORAGE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  /** Remembers in this browser whether diagrams show noise channels. */
+  function storeShowNoise(value) {
+    try {
+      localStorage.setItem(SHOW_NOISE_STORAGE_KEY, value ? "1" : "0");
+    } catch {
+      // storage can be unavailable (private windows, blocked site data): the choice just isn't remembered
+    }
   }
 
   /** The chart column width (percent) this browser last chose, or null if none (or storage is unavailable). */
@@ -2611,20 +2645,41 @@
 
       function renderTab(tab) {
         if (tab === "diagram" || tab === "training") {
+          // a genome evolved under simulated noise can draw its noise channels too
+          const noisy = tab === "diagram" && genomeIsNoisy(genome);
+          const showNoise = noisy && readShowNoise();
+          const url = `/api/runs/${index}/genomes/${number}/${tab}.png${showNoise ? "?noise=1" : ""}`;
           const frame = h("div", { class: "image-frame" }, notice(tab === "diagram" ? "Drawing the architecture diagram…" : "Drawing the training plot…"));
           const image = h("img", { alt: `Genome ${number} ${tab === "diagram" ? "architecture diagram" : "training plot"}` });
           image.addEventListener("load", () => setChildren(frame, image));
           image.addEventListener("error", async () => {
             let message = "The image could not be drawn.";
             try {
-              await api(`/api/runs/${index}/genomes/${number}/${tab}.png`);
+              await api(url);
             } catch (error) {
               message = error.message;
             }
             setChildren(frame, notice(message));
           });
-          image.src = `/api/runs/${index}/genomes/${number}/${tab}.png`;
-          return [frame];
+          image.src = url;
+          if (!noisy) return [frame];
+          const toggle = h(
+            "div",
+            { class: "toolbar" },
+            segmented(
+              [
+                ["clean", "Circuit only"],
+                ["noise", "With noise"],
+              ],
+              showNoise ? "noise" : "clean",
+              (value) => {
+                storeShowNoise(value === "noise");
+                showTab("diagram");
+              }
+            ),
+            h("span", { class: "meta", text: `evolved under ${noiseLabel(genome)} noise` })
+          );
+          return [toggle, frame];
         }
         if (tab === "metrics") return renderMetrics(series);
         if (tab === "fitness") return renderFitness(summary, genome);

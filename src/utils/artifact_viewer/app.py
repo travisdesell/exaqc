@@ -284,6 +284,15 @@ def create_app(viewer: ArtifactViewer, mcp_server: Any | None = None) -> Starlet
     def api_genome_image(request: Request) -> Response:
         """Serves a genome's rendered diagram or training plot.
 
+        A diagram is drawn without the genome's noise channels unless the
+        ``noise=1`` query parameter asks for them.
+
+        Args:
+            request: The request, with an optional ``noise`` query key.
+
+        Returns:
+            The PNG.
+
         Raises:
             KeyError: If the image kind is unknown or the image could not be
                 drawn.
@@ -293,7 +302,10 @@ def create_app(viewer: ArtifactViewer, mcp_server: Any | None = None) -> Starlet
         if kind not in IMAGE_KINDS:
             raise KeyError(f"There is no {kind!r} image.")
         image = viewer.image(
-            request.path_params["run"], request.path_params["genome"], kind
+            request.path_params["run"],
+            request.path_params["genome"],
+            kind,
+            show_noise=_query(request).get("noise") in ("1", "true"),
         )
         if image is None:
             if kind == "training":

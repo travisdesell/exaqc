@@ -555,21 +555,36 @@ def get_uci_dataloaders(
     training_size: float = 0.8,
     batch_size: int = 1,
     seed: int = 0,
+    test_fraction: float = 0.0,
+    validation_fraction: float = 0.1,
 ) -> tuple[DataLoader, DataLoader]:
     """Builds fully batched UCI dataloaders.
 
     Using ``batch_size=1`` preserves sample-by-sample execution while retaining
     the same leading-batch-dimension contract used by image datasets.
 
+    Without a test set (``test_fraction`` 0) the rows are split
+    ``training_size`` / rest into training and validation, as always. With one,
+    ``test_fraction`` of the rows is set aside first and ``validation_fraction``
+    of all rows is then taken from the remainder, so ``test_fraction=0.1``,
+    ``validation_fraction=0.1`` gives an 80/10/10 split. Every split is
+    stratified by class and seeded by ``seed``, and the normalization is fitted
+    on the training rows only, so validation and test rows never shape it.
+
     Args:
         dataset: UCI dataset name.
         normalize: One of ``none``, ``zscore``, or ``minmax``.
-        training_size: Fraction used for training.
+        training_size: Fraction used for training when there is no test set.
         batch_size: Batch size. Use one for per-sample execution.
         seed: Split seed.
+        test_fraction: Fraction of all rows held out as a test set, never seen
+            by the search; 0 for none.
+        validation_fraction: Fraction of all rows used for validation when
+            there is a test set (ignored otherwise).
 
     Returns:
-        Training loader, validation loader, and dataset specification.
+        Training and validation loaders. The training loader's ``test_loader``
+        attribute holds the test loader, or ``None`` without a test set.
 
     Raises:
         ValueError: If arguments are invalid.
@@ -578,13 +593,28 @@ def get_uci_dataloaders(
         raise ValueError("normalize must be one of 'none', 'zscore', or 'minmax'.")
     if batch_size <= 0:
         raise ValueError("batch_size must be positive.")
+    if not 0.0 <= test_fraction < 1.0:
+        raise ValueError("test_fraction must be in [0, 1).")
+    if test_fraction > 0.0 and not (
+        0.0 < validation_fraction and test_fraction + validation_fraction < 1.0
+    ):
+        raise ValueError(
+            "with a test set, validation_fraction must be positive and "
+            "test_fraction + validation_fraction must be below 1."
+        )
 
     x, y = get_uci_dataset(dataset)
+    x = np.asarray(x, dtype=np.float64)
 
-    if normalize == "minmax":
-        x = MinMaxScaler().fit_transform(x) * math.pi
+    x_test = y_test = None
+    if test_fraction > 0.0:
+        # the test rows come off first, so they stay the same whatever the
+        # validation fraction is
+        x, x_test, y, y_test = train_test_split(
+            x, y, test_size=test_fraction, random_state=seed, stratify=y
+        )
+        training_size = 1.0 - validation_fraction / (1.0 - test_fraction)
 
-    x = x.astype(np.float32)
     x_train, x_validation, y_train, y_validation = train_test_split(
         x,
         y,
@@ -593,11 +623,21 @@ def get_uci_dataloaders(
         stratify=y,
     )
 
-    if normalize == "zscore":
+    # Fitted on the training rows only, then applied to every partition.
+    held_out = [x_validation] + ([x_test] if x_test is not None else [])
+    if normalize == "minmax":
+        scaler = MinMaxScaler().fit(x_train)
+        x_train = scaler.transform(x_train) * math.pi
+        held_out = [scaler.transform(part) * math.pi for part in held_out]
+    elif normalize == "zscore":
         mean = np.mean(x_train, axis=0)
         std = np.std(x_train, axis=0)
         x_train = (x_train - mean) / (std + 1e-8)
-        x_validation = (x_validation - mean) / (std + 1e-8)
+        held_out = [(part - mean) / (std + 1e-8) for part in held_out]
+    x_train = x_train.astype(np.float32)
+    x_validation = held_out[0].astype(np.float32)
+    if x_test is not None:
+        x_test = held_out[1].astype(np.float32)
 
     training_dataset = ClassificationDataset(x_train, y_train)
     validation_dataset = ClassificationDataset(
@@ -660,6 +700,17 @@ def get_uci_dataloaders(
         labels=validation_dataset.y.long(),
         data_spec=data_spec,
     )
+
+    training_loader.test_loader = None
+    if x_test is not None:
+        test_dataset = ClassificationDataset(x_test, y_test)
+        test_loader = DataLoader(
+            test_dataset, batch_size=batch_size, num_workers=0, shuffle=False
+        )
+        _attach_loader_metadata(
+            test_loader, labels=test_dataset.y.long(), data_spec=data_spec
+        )
+        training_loader.test_loader = test_loader
 
     return training_loader, validation_loader
 

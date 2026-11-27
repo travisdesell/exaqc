@@ -841,8 +841,9 @@ mpiexec -n 12 python3 -m src.examples.classification \
 | `--improvement_cutoff` | `3` | Epochs without validation improvement before stopping, 0 to disable |
 | `--batch_size` | `5` | Samples per gradient step |
 | `--validation_batch_size` | = `--batch_size` | Validation batch size |
-| `--validation_fraction` | `0.1` | Held-out fraction when no fixed split exists |
-| `--normalization` | `minmax` | `none`, `zscore`, `minmax` |
+| `--validation_fraction` | `0.1` | Validation fraction: of an image dataset's training split, or of a UCI dataset's rows when `--test_fraction` is given (a UCI dataset without a test set always splits 80/20) |
+| `--test_fraction` | `0.0` | UCI only: fraction of the rows set aside first as a test set the search never sees (`0.1` with `--validation_fraction 0.1` gives 80/10/10); each genome's best weights are scored on it after training and recorded as `test_loss` / `test_accuracy`, never used for selection |
+| `--normalization` | `minmax` | `none`, `zscore`, `minmax`; fitted on the training rows only |
 | `--training_samples` / `--validation_samples` | all | Cap the splits for quick runs |
 | `--data_dir` | `data` | Where datasets are stored |
 | `--download_dataset` | on | Download image datasets if missing |
@@ -857,7 +858,28 @@ before the circuit; tabular data must *not* use it. `--encoding identity` passes
 features straight through, so the feature count must equal the circuit's input
 width — pair it with `-qim amplitude`, which absorbs many features into few
 qubits. `--decoding clipped` normalises circuit outputs into class scores and
-suits `probs`. Fitness records `loss` and `target_metric` (mean class accuracy).
+suits `probs`. Fitness records `loss` and `target_metric` (mean class accuracy),
+each the average of the best epoch's training and validation values.
+
+**Held-out test set.** By default a UCI dataset is split 80/20 into training
+and validation, and both shape the search. For results on data the search never
+saw, add `--test_fraction 0.1 --validation_fraction 0.1`: a stratified 80/10/10
+split whose test rows are set aside first, so they do not change with the
+validation fraction. Training, early stopping and selection still use only
+training and validation; each genome's best weights are then scored once on the
+test rows, adding `test_loss` and `test_accuracy` (mean class accuracy) to its
+fitness. Report them per run with
+
+```
+python3 -m src.analysis.test_metrics_report --runs ./artifacts/genome_archives/* --csv test_metrics.csv
+```
+
+which prints each run's best genome by `loss` (or, for a
+[`classification_moo`](#classification_moo) run, its final population's Pareto
+front over the recorded objectives and that front's best by the first
+objective) with its test metrics, the mean and standard deviation of the best
+genomes' test accuracy and loss across runs, and with `--csv` every reported
+row. Image datasets do not take `--test_fraction` yet.
 
 **Script.** [`scripts/run_classification.sh`](./scripts/run_classification.sh)
 runs the non-vision datasets locally, configured by the
@@ -948,7 +970,14 @@ they do for a single-objective run. Under
 three hardware keys computed from the card without simulating anything:
 `p_fail` (the chance that any card gate or wait errs, assuming independent
 errors), `total_time_ns` (the circuit's duration on the card's device) and
-`n_entanglers` (its `cx` count, routing moves included).
+`n_entanglers` (its `cx` count, routing moves included). Under any noise
+(a device card, chip noise or a synthetic `--noise_type`) it also records how
+much the noise actually costs the trained genome: its best weights are scored
+once more on the validation set without noise, giving `noise_gap` (validation
+loss with noise minus without) and `noise_gap_accuracy` (validation accuracy
+without noise minus with). Both are lower-is-better, near 0 when the noise
+barely matters, and can dip below 0 by chance (a decoder trained under noise
+may do slightly worse without it); the extra pass is noiseless and cheap.
 
 ```
 python3 -m src.examples.classification_moo \
@@ -964,7 +993,7 @@ python3 -m src.examples.classification_moo \
 
 | Argument | Default | Description |
 |---|---|---|
-| `--objectives` | `loss:1 n_enabled_gates:1` | Two or more of `loss`, `target_metric`, `n_enabled_gates`, `n_parameters`, `p_fail`, `total_time_ns`, `n_entanglers` as `NAME:SIGN` (the last three need `--noise_device_card`); sign `1` minimizes, `-1` maximizes, a bare name minimizes. Like `-ms`/`-ps` it takes every value up to the next flag, so keep another flag between it and the sub-command |
+| `--objectives` | `loss:1 n_enabled_gates:1` | Two or more of `loss`, `target_metric`, `n_enabled_gates`, `n_parameters`, `p_fail`, `total_time_ns`, `n_entanglers`, `noise_gap`, `noise_gap_accuracy` as `NAME:SIGN` (`p_fail`, `total_time_ns` and `n_entanglers` need `--noise_device_card`; the two noise gaps need any noise); sign `1` minimizes, `-1` maximizes, a bare name minimizes. Like `-ms`/`-ps` it takes every value up to the next flag, so keep another flag between it and the sub-command |
 | `nsga2` / `nsga3` | *required* | Population sub-command |
 | `--max_population_size` | `30` | Genomes kept after each insertion (both sub-commands) |
 | `--tournament_size` | `2` | Genomes sampled per parent-selection tournament (both) |
@@ -1013,6 +1042,7 @@ ALGORITHM=nsga3 OBJECTIVES="loss:1 p_fail:1 total_time_ns:1" sh scripts/submit_e
 | `MAX_POPULATION_SIZE` / `NUMBER_GENOMES` | `30` / `2000` | `--max_population_size` / `--number_genomes` |
 | `EPOCHS` / `IMPROVEMENT_CUTOFF` / `BATCH_SIZE` | `30` / `3` / `3` | Trainer settings |
 | `TRAINING_SAMPLES` / `VALIDATION_SAMPLES` | unset (all) | `--training_samples` / `--validation_samples`, the main knob for a quicker noisy run |
+| `TEST_FRACTION` / `VALIDATION_FRACTION` | unset / `0.1` | `--test_fraction` / `--validation_fraction`, passed only when `TEST_FRACTION` is set (e.g. `TEST_FRACTION=0.1` for an 80/10/10 split with held-out test metrics) |
 | `N_TASKS` | `144` | MPI ranks on the one node (`--ntasks`) |
 | `TIME_LIMIT` / `ACCOUNT` | the job script's (`1-00:00:00` / `neuroevolution`) | Slurm `-t` / `-A` |
 | `LOG_DIR` / `ARCHIVE_DIR` / `VENV` | `~/logs/exaqc_moo` / `~/genome_archives` / `~/envs/exaqc` | Slurm logs, archives, and the venv the job activates |
@@ -1376,7 +1406,10 @@ Then open `http://127.0.0.1:8000/` in a browser. The page has:
   table: its diagram, training plot, fitness, gates,
   parents, children, ancestry graph and ready-to-run `refine_genome` /
   `visualize_rl` / `evaluate` commands, with a **Download JSON** button for the
-  genome itself. A **Metrics** tab lists whatever the genome recorded while
+  genome itself. The diagram shows the circuit's gates only; for a genome
+  evolved under simulated noise, a **Circuit only / With noise** toggle (circuit
+  only by default, remembered by the browser) also draws the noise its circuit
+  was trained with. A **Metrics** tab lists whatever the genome recorded while
   training, one table per series: per-epoch training and validation metrics for
   classification and teacher genomes, per-episode training and evaluation
   metrics for reinforcement learning. Nothing is hard-coded per task — nested

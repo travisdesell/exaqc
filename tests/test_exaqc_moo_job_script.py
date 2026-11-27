@@ -42,6 +42,8 @@ _SETTINGS: tuple[str, ...] = (
     "DECODING",
     "TRAINING_SAMPLES",
     "VALIDATION_SAMPLES",
+    "TEST_FRACTION",
+    "VALIDATION_FRACTION",
     "INPUT_QUBITS",
     "OUTPUT_QUBITS",
     "N_TASKS",
@@ -149,6 +151,10 @@ def test_noiseless_baseline_and_settings_reach_the_command() -> None:
     assert args.epochs == 5
     assert args.training_samples == 100
     assert args.max_population_size == 12
+    assert args.test_fraction == 0.0  # no test set unless TEST_FRACTION asks
+
+    split = _parsed(TEST_FRACTION="0.1")
+    assert (split.test_fraction, split.validation_fraction) == (0.1, 0.1)
 
 
 @pytest.mark.parametrize(

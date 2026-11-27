@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 from typing import Any
 
+import torch
 from torch.utils.data import DataLoader
 
 from src.circuits.circuit import CircuitGenome
@@ -52,6 +53,7 @@ class ClassificationObjective(Objective):
         validation_loss_function: Any,
         metrics: dict[str, Metric],
         device: str | None = None,
+        test_dataloader: DataLoader | None = None,
     ) -> None:
         """Initializes the classification objective.
 
@@ -66,6 +68,10 @@ class ClassificationObjective(Objective):
             validation_loss_function: Validation loss function.
             metrics: Evaluation metrics.
             device: PyTorch device to train on, or ``None`` to auto-select.
+            test_dataloader: Optional held-out test loader. When given, each
+                genome's best weights are scored on it after training and
+                recorded as ``test_loss`` / ``test_accuracy``; selection never
+                uses them.
 
         Returns:
             None. Sets ``trainer``.
@@ -77,6 +83,17 @@ class ClassificationObjective(Objective):
             validation_loss_function=validation_loss_function,
             metrics=metrics,
             device=device,
+            testing_dataloader=test_dataloader,
+            testing_loss_function=(
+                None
+                if test_dataloader is None
+                else torch.nn.CrossEntropyLoss(
+                    # class-balanced like the validation loss, when the loader
+                    # carries its class weights
+                    weight=getattr(test_dataloader, "label_weights", None),
+                    reduction="mean",
+                )
+            ),
         )
 
     def __call__(self, genome: CircuitGenome) -> None:
@@ -90,7 +107,10 @@ class ClassificationObjective(Objective):
             of the best training and validation loss) and a ``"target_metric"``
             holding the corresponding mean class accuracy, and
             ``genome.metadata["initial_fitness"]``: the same fitness for the
-            inherited weights, before any training.
+            inherited weights, before any training. With a test set, the
+            fitness also records ``test_loss`` and ``test_accuracy`` (mean class
+            accuracy) of the best weights on it, and the full metrics go to
+            ``genome.metadata["testing_metrics"]``.
         """
         self.trainer.train(genome)
 
@@ -98,6 +118,12 @@ class ClassificationObjective(Objective):
             genome.metadata["best_training_metrics"],
             genome.metadata["best_validation_metrics"],
         )
+        if self.trainer.testing_dataloader is not None:
+            # scored once, on the best weights the trainer restored; recorded
+            # only, never part of what selection compares
+            test = self.trainer.test(genome)
+            genome.fitness["test_loss"] = float(test["loss"])
+            genome.fitness["test_accuracy"] = float(test["mean_class_accuracy"]["mean"])
         initial_training = genome.metadata.get("initial_training_metrics")
         initial_validation = genome.metadata.get("initial_validation_metrics")
         if initial_training is not None and initial_validation is not None:
@@ -141,9 +167,20 @@ def load_data(
             dataset-loading fields).
 
     Returns:
-        Training and validation dataloaders.
+        Training and validation dataloaders. For a UCI dataset with a
+        ``test_fraction`` above 0, the training loader's ``test_loader``
+        attribute holds the held-out test loader (``None`` otherwise).
+
+    Raises:
+        ValueError: If a test set is asked for on an image dataset (they are
+            not split for one yet).
     """
+    test_fraction = float(getattr(args, "test_fraction", 0.0) or 0.0)
     if args.dataset in IMAGE_DATASETS:
+        if test_fraction > 0.0:
+            raise ValueError(
+                "--test_fraction is only supported for the UCI datasets so far."
+            )
         training_loader, validation_loader = get_image_dataloaders(
             args.dataset,
             data_dir=args.data_dir,
@@ -157,6 +194,7 @@ def load_data(
             num_workers=args.num_workers,
             pin_memory=args.pin_memory,
         )
+        training_loader.test_loader = None
         return training_loader, validation_loader
 
     training_loader, validation_loader = get_uci_dataloaders(
@@ -164,5 +202,7 @@ def load_data(
         normalize=args.normalization,
         batch_size=args.batch_size,
         seed=args.seed,
+        test_fraction=test_fraction,
+        validation_fraction=args.validation_fraction,
     )
     return training_loader, validation_loader

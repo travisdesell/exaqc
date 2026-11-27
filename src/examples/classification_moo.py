@@ -12,7 +12,9 @@ Every genome's fitness holds the standard classification keys (``loss`` and
 (``--noise_device_card``) it also holds the card's simulation-free hardware
 keys ``p_fail`` (the chance that any gate or wait errs), ``total_time_ns`` (the
 circuit's duration) and ``n_entanglers`` (its ``cx`` count, routing included).
-Any of these can be chosen as an objective with ``--objectives NAME:SIGN``,
+Under any noise it holds ``noise_gap`` and ``noise_gap_accuracy``: how much
+worse the trained genome's validation loss and accuracy are with the noise
+than without it. Any of these can be chosen as an objective with ``--objectives NAME:SIGN``,
 where a sign of ``1`` minimizes and ``-1`` maximizes. The default minimizes
 loss and the number of enabled gates.
 
@@ -46,15 +48,21 @@ from src.utils.restart import RestartState
 #: Fitness keys computed from a genome's structure rather than from training.
 STRUCTURAL_OBJECTIVES: tuple[str, ...] = ("n_enabled_gates", "n_parameters")
 
+#: How much the noise costs a trained genome: validation loss with noise minus
+#: without, and validation accuracy without noise minus with (both lower is
+#: better). Recorded only for genomes run with noise.
+NOISE_GAP_OBJECTIVES: tuple[str, ...] = ("noise_gap", "noise_gap_accuracy")
+
 #: Every fitness key a multi-objective classification genome records, and so
 #: every name ``--objectives`` accepts. The hardware objectives
 #: (:data:`~src.noise.device_card.HARDWARE_OBJECTIVES`) are recorded only
-#: under ``--noise_device_card``.
+#: under ``--noise_device_card``, the noise gap only under any noise.
 AVAILABLE_OBJECTIVES: tuple[str, ...] = (
     "loss",
     "target_metric",
     *STRUCTURAL_OBJECTIVES,
     *HARDWARE_OBJECTIVES,
+    *NOISE_GAP_OBJECTIVES,
 )
 
 #: The objectives used when ``--objectives`` is not given.
@@ -129,16 +137,66 @@ class MultiObjectiveClassificationObjective(ClassificationObjective):
             None. Sets ``genome.fitness`` (and
             ``genome.metadata["initial_fitness"]``, when the trainer recorded
             the inherited weights' metrics) to the classification fitness plus
-            ``n_enabled_gates`` and ``n_parameters``, and under device-card
-            noise ``p_fail``, ``total_time_ns`` and ``n_entanglers``.
+            ``n_enabled_gates`` and ``n_parameters``, under device-card
+            noise ``p_fail``, ``total_time_ns`` and ``n_entanglers``, and
+            under any noise ``noise_gap`` and ``noise_gap_accuracy`` (see
+            :meth:`noise_gap_fitness`).
         """
 
         super().__call__(genome)
 
-        structure = {**structural_fitness(genome), **hardware_fitness(genome)}
+        structure = {
+            **structural_fitness(genome),
+            **hardware_fitness(genome),
+            **self.noise_gap_fitness(genome),
+        }
         genome.fitness.update(structure)
         if genome.metadata.get("initial_fitness") is not None:
-            genome.metadata["initial_fitness"].update(structure)
+            # the inherited weights were only scored with noise, so their
+            # noise gap is unknown
+            genome.metadata["initial_fitness"].update(
+                {k: v for k, v in structure.items() if k not in NOISE_GAP_OBJECTIVES}
+            )
+
+    def noise_gap_fitness(self, genome: CircuitGenome) -> dict[str, float]:
+        """Measures how much a trained noisy genome's noise actually costs it.
+
+        The genome's best weights are rebuilt without any noise and scored on
+        the validation set once more; the gap is taken against the validation
+        metrics the noisy training recorded for the same weights. One extra
+        noiseless validation pass per genome.
+
+        Args:
+            genome: A genome this objective has just trained.
+
+        Returns:
+            ``noise_gap`` (validation loss with noise minus without; lower is
+            better, near 0 when the noise barely matters) and
+            ``noise_gap_accuracy`` (validation mean class accuracy without
+            noise minus with; lower is better), or nothing when the genome runs
+            without noise.
+        """
+
+        if not PennyLaneNoiseModel.from_hyperparameters(
+            genome.hyperparameters
+        ).is_noisy():
+            return {}
+        trainer = self.trainer
+        # the same genome, best weights included, built without its noise
+        clean = CircuitGenome.from_dict(genome.to_dict())
+        clean.initialize_model(noise_model=PennyLaneNoiseModel())
+        clean.hybrid_model.to(trainer.device)
+        noiseless = trainer.get_metrics(
+            clean,
+            dataloader=trainer.validation_dataloader,
+            loss_function=trainer.validation_loss_function,
+        )
+        noisy = genome.metadata["best_validation_metrics"]
+        return {
+            "noise_gap": float(noisy["loss"]) - float(noiseless["loss"]),
+            "noise_gap_accuracy": float(noiseless["mean_class_accuracy"]["mean"])
+            - float(noisy["mean_class_accuracy"]["mean"]),
+        }
 
 
 def add_population_strategies(parser: argparse.ArgumentParser) -> None:
@@ -190,7 +248,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Objectives to optimize, as NAME:SIGN with sign 1 to minimize or -1 to "
             f"maximize (a bare NAME minimizes). Names: {', '.join(AVAILABLE_OBJECTIVES)} "
-            f"({', '.join(HARDWARE_OBJECTIVES)} need --noise_device_card). "
+            f"({', '.join(HARDWARE_OBJECTIVES)} need --noise_device_card; "
+            f"{', '.join(NOISE_GAP_OBJECTIVES)} need any noise). "
             "At least two are required. Like -ms and -ps, it takes every value up to "
             "the next flag, so do not put it directly before the nsga2/nsga3 sub-command."
         ),
@@ -295,6 +354,17 @@ def main() -> None:
     if needs_card and args.noise_device_card is None:
         parser.error(
             f"{', '.join(needs_card)} come from a device card; give --noise_device_card."
+        )
+    needs_noise = [o.name for o in objectives if o.name in NOISE_GAP_OBJECTIVES]
+    noiseless = (
+        args.noise_device_card is None
+        and args.noise_calibration is None
+        and args.noise_type == "none"
+    )
+    if needs_noise and noiseless:
+        parser.error(
+            f"{', '.join(needs_noise)} compare a noisy genome with its noiseless self; "
+            "give a noise setting (e.g. --noise_device_card or --noise_type)."
         )
 
     classification.run(

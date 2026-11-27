@@ -15,7 +15,8 @@
 # (described where they are read below): DEVICE_CARD, NOISE_IDLE,
 # NOISE_CALIBRATION, NOISE_QUBITS, OBJECTIVES, ALGORITHM, MAX_POPULATION_SIZE,
 # NUMBER_GENOMES, EPOCHS, IMPROVEMENT_CUTOFF, BATCH_SIZE, QIM, QOM, ENCODING,
-# DECODING, TRAINING_SAMPLES, VALIDATION_SAMPLES, DRY_RUN, ARCHIVE_DIR and VENV.
+# DECODING, TRAINING_SAMPLES, VALIDATION_SAMPLES, TEST_FRACTION,
+# VALIDATION_FRACTION, DRY_RUN, ARCHIVE_DIR and VENV.
 #
 #SBATCH -J exaqc_moo
 #SBATCH -t 1-00:00:00
@@ -88,6 +89,12 @@ DECODING=${DECODING:-linear}
 TRAINING_SAMPLES=${TRAINING_SAMPLES:-}
 VALIDATION_SAMPLES=${VALIDATION_SAMPLES:-}
 
+#: Held-out test set (UCI): the fraction of rows set aside before the search
+#: (passed to --test_fraction, with --validation_fraction VALIDATION_FRACTION),
+#: e.g. TEST_FRACTION=0.1 for an 80/10/10 split. Unset, there is no test set.
+TEST_FRACTION=${TEST_FRACTION:-}
+VALIDATION_FRACTION=${VALIDATION_FRACTION:-0.1}
+
 if [ $# -ne 4 ]; then
     echo "usage: $0 <dataset> <input_qubits> <output_qubits> <run_name>" >&2
     exit 2
@@ -153,6 +160,15 @@ fi
 SAMPLE_ARGUMENTS=()
 [ -z "$TRAINING_SAMPLES" ] || SAMPLE_ARGUMENTS+=(--training_samples "$TRAINING_SAMPLES")
 [ -z "$VALIDATION_SAMPLES" ] || SAMPLE_ARGUMENTS+=(--validation_samples "$VALIDATION_SAMPLES")
+if [ -n "$TEST_FRACTION" ]; then
+    case "$TEST_FRACTION$VALIDATION_FRACTION" in
+        *[!0-9.]* | *..*)
+            echo "error: TEST_FRACTION and VALIDATION_FRACTION must be decimal fractions, but found: $TEST_FRACTION / $VALIDATION_FRACTION" >&2
+            exit 2
+            ;;
+    esac
+    SAMPLE_ARGUMENTS+=(--test_fraction "$TEST_FRACTION" --validation_fraction "$VALIDATION_FRACTION")
+fi
 
 # --objectives, -ms and -ps take any number of values, so another flag always
 # follows each of them, and the population sub-command comes last.

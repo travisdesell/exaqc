@@ -126,7 +126,24 @@ def build_parser(
         "--validation_fraction",
         type=float,
         default=0.1,
-        help="Fraction of the training data held out for validation when no fixed split exists.",
+        help=(
+            "Fraction held out for validation: of an image dataset's training split, or "
+            "of a UCI dataset's rows when --test_fraction is given (a UCI dataset without "
+            "a test set always splits 80/20)."
+        ),
+    )
+
+    parser.add_argument(
+        "--test_fraction",
+        type=float,
+        default=0.0,
+        help=(
+            "UCI datasets only: fraction of the rows set aside first as a test set the "
+            "search never sees (e.g. 0.1 with --validation_fraction 0.1 gives an "
+            "80/10/10 split). Each genome's best weights are scored on it after training "
+            "and recorded as test_loss / test_accuracy; selection never uses them. 0 for "
+            "no test set."
+        ),
     )
 
     parser.add_argument(
@@ -325,7 +342,10 @@ def run(
         parser.error(str(error))
     logger.info("Noise settings: {}", noise_hyperparameters)
 
-    training_loader, validation_loader = load_data(args)
+    try:
+        training_loader, validation_loader = load_data(args)
+    except ValueError as error:
+        parser.error(str(error))
 
     # if training_loader.is_image and args.encoding != "cnn":
     #     parser.error("Image datasets require --encoding cnn in this implementation.")
@@ -348,6 +368,8 @@ def run(
         ),
         metrics=metrics,
         device=args.device,
+        # held out from the search: scored and recorded only (--test_fraction)
+        test_dataloader=getattr(training_loader, "test_loader", None),
     )
 
     def build_exaqc() -> EXAQC:
