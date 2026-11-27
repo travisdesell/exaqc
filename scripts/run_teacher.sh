@@ -113,6 +113,16 @@ require_positive() {
     [ "$2" -gt 0 ] || die "$1 must be a positive integer, but found: $2"
 }
 
+# Fails unless $2 is a finite number greater than 0, naming it $1.
+# Matches SteadyStateSpeciation: species_threshold must be > 0.
+require_positive_float() {
+    case "$2" in
+        '' | *[!0-9.]* | *.*.*) die "$1 must be a positive number, but found: $2" ;;
+    esac
+    awk -v t="$2" 'BEGIN { exit !(t > 0) }' ||
+        die "$1 must be a positive number (> 0), but found: $2"
+}
+
 # Fails unless $2 is one of the space-separated words in $3, naming it $1.
 require_choice() {
     case " $3 " in
@@ -176,9 +186,7 @@ if [ "$POPULATION" = islands ]; then
     DEFAULT_OUT_DIR=${BASE_DIR%/}/${TEACHER}_${TOPOLOGY_TAG}_i${N_ISLANDS}
 elif [ "$POPULATION" = steady_state_speciation ]; then
     require_positive MAX_POPULATION_SIZE "$MAX_POPULATION_SIZE"
-    case "$SPECIES_THRESHOLD" in
-        '' | *[!0-9.]* | *.*.*) die "SPECIES_THRESHOLD must be a non-negative number, but found: $SPECIES_THRESHOLD" ;;
-    esac
+    require_positive_float SPECIES_THRESHOLD "$SPECIES_THRESHOLD"
     POPULATION_ARGUMENTS=(
         steady_state_speciation
         --max_population_size "$MAX_POPULATION_SIZE"

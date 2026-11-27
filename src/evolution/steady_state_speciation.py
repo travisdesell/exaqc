@@ -79,7 +79,10 @@ class SteadyStateSpeciation(PopulationStrategy):
             "--species_threshold",
             type=float,
             default=0.6,
-            help="Join a species iff the compatibility distance is at most this threshold.",
+            help=(
+                "Join a species iff the compatibility distance is at most this "
+                "threshold (must be > 0)."
+            ),
         )
         parser.add_argument(
             "--c_s",

@@ -23,6 +23,18 @@ DATASET="breast_cancer"
 INPUT_QUBITS=8
 OUTPUT_QUBITS=1
 
+# Matches SteadyStateSpeciation: species_threshold must be a finite number > 0.
+case "$SPECIES_THRESHOLD" in
+  '' | *[!0-9.]* | *.*.*)
+    echo "error: SPECIES_THRESHOLD must be a positive number, but found: $SPECIES_THRESHOLD" >&2
+    exit 2
+    ;;
+esac
+awk -v t="$SPECIES_THRESHOLD" 'BEGIN { exit !(t > 0) }' || {
+  echo "error: SPECIES_THRESHOLD must be a positive number (> 0), but found: $SPECIES_THRESHOLD" >&2
+  exit 2
+}
+
 if [[ -x "$REPO_ROOT/.venv/bin/python" ]]; then
   PY="$REPO_ROOT/.venv/bin/python"
 else

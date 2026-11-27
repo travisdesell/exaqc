@@ -172,7 +172,7 @@ scripts of their own (see
 | `N_ISLANDS` / `MAX_ISLAND_SIZE` | `25` / `5` | `--n_islands` / `--max_island_size` (`islands` only; `--islands_to_extinct` is fixed at 1) |
 | `TOPOLOGY` | `2d_mesh 5 5` | `--topology` and its arguments, as one quoted value (`islands` only) |
 | `MAX_POPULATION_SIZE` | `30` | `--max_population_size` (`steady_state` and `steady_state_speciation`) |
-| `SPECIES_THRESHOLD` | `0.6` | `--species_threshold` (`steady_state_speciation` only) |
+| `SPECIES_THRESHOLD` | `0.6` | `--species_threshold` (`steady_state_speciation` only; must be `> 0`) |
 | `USE_ONLY` | `rx ry rz p u crx cry crz cp rxx ryy rzz cx cy cz` | `--use_only` gates, as one quoted value |
 | `BASE_DIR` | `./exaqc_runs` | Directory the default `OUT_DIR` is created in |
 | `OUT_DIR` | `<BASE_DIR>/<dataset, teacher or env>_<topology>_i<n_islands>`, `..._steady_state_p<max_population_size>`, or `..._speciation_p<max_population_size>_t<species_threshold>` | `--out_dir` |
@@ -384,7 +384,7 @@ wrapper that also exercises this strategy alongside the others is
 | Argument | Default | Description |
 |---|---|---|
 | `--max_population_size` | `30` | Genomes retained across all species |
-| `--species_threshold` | `0.6` | Join a species iff the compatibility distance is at most this |
+| `--species_threshold` | `0.6` | Join a species iff the compatibility distance is at most this (must be `> 0`) |
 | `--c_s` | `1.0` | Coefficient on the structural distance |
 | `--c_q` | `1.0` | Coefficient on the quantum angular distance |
 | `--c_c` | `1.0` | Coefficient on the classical encoder and decoder distance |
